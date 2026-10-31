@@ -208,7 +208,7 @@ impl AppState {
     /// answering unusably, #826) gives no verses plus a warning for the
     /// operator, so the main text still loads during a service; any other
     /// error still fails the load.
-    async fn secondary_verse_lookup(
+    pub(super) async fn secondary_verse_lookup(
         &self,
         translation: &BibleTranslation,
         book: &str,
@@ -463,11 +463,22 @@ impl AppState {
 
     pub async fn set_bible_preferences(&self, prefs: BiblePreferences) -> anyhow::Result<()> {
         let key = "bible-preferences";
+        // #851 P3: a new character limit regenerates the sermons from today on;
+        // an unreadable stored row counts as a change.
+        let previous_limit = self
+            .get_bible_preferences()
+            .await
+            .ok()
+            .map(|preferences| preferences.character_limit);
         let json = serde_json::to_string(&prefs)?;
         self.repository.set_app_setting(key, &json).await?;
         self.live_hub.publish(LiveEvent::BiblePreferencesChanged {
             character_limit: prefs.character_limit,
         });
+        if previous_limit != Some(prefs.character_limit) {
+            self.regenerate_future_sermons(super::sermons::local_today())
+                .await;
+        }
         Ok(())
     }
 

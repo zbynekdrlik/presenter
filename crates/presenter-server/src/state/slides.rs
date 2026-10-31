@@ -15,8 +15,8 @@ mod edit_ops;
 // see that binary's `scorer` module. `compose_bible_slides`/
 // `PasteSlidesError` are NOT used there and stay `pub(crate)` — minimal
 // widening only, per the #680 design comment's own enumerated surface.
-pub(crate) use compose::compose_bible_slides;
 pub use compose::{compose_bible_items_into_slides, BibleItem, ComposedBibleSlide};
+pub(crate) use compose::{compose_bible_slides, compose_bible_slides_labelled, SlideLabels};
 pub(crate) use edit_ops::PasteSlidesError;
 
 #[cfg(test)]

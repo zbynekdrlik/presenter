@@ -51,6 +51,7 @@ mod osc;
 mod presentation_lock;
 mod presentations;
 mod seed;
+pub(crate) mod sermons;
 mod slide_stage_layout;
 // `pub` (not `pub(crate)`): the #680 `ai_eval` Layer-1 scorer reuses the REAL
 // `compose_bible_items_into_slides`/`BibleItem`/`ComposedBibleSlide` (all

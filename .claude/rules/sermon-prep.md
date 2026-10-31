@@ -77,3 +77,33 @@ paths:
   new state in memory; the repository is dumb on purpose.
 - Slides are written with `presentations::bible_slide_to_active_model` (`pub(super)`), never a
   second row mapping.
+
+## Slide generation and the commit path (P3, `state/sermons/{generate,commit}.rs`)
+
+- Each item: `render_item` → one `BiblePassage` per kept verse (stored book name and code,
+  rendered text) → `compose_bible_slides_labelled` with `item_label(...)`, so #828 holds
+  unchanged (LONGER of main/secondary in `chars()`, a lone oversized verse stays whole). An
+  all-struck item produces 0 slides.
+- **Slide ids are `Uuid::new_v5(item_id, "slide/{n}")`** (`stable_slide_id`): unchanged items keep
+  their ids across every regeneration, so a tablet/console selection survives an edit elsewhere;
+  `SermonItemView::slide_ids` / the slide → item map are derived from `slide_count`, not stored.
+- **Secondary line** = the sermon's `secondary_translation_code` (default at creation: the Bible
+  preference's secondary): the FULL verses of the KEPT verse numbers (no deletions mapped
+  across languages), label = the SECONDARY translation's book name + plain-number runs
+  ("Hebrews 11:1, 3 (KJV)"). Read through `AppState::secondary_verse_lookup` (`pub(super)`):
+  an unavailable NLT → slides without the line + a `warnings` entry, never a failed write; NLT
+  text stored this way is bounded to the sermon's verses.
+- A translation uninstalled after the snapshot renders from the snapshot with a stand-in
+  (`translation_or_code`): label "(GONE)" style short code, no failure.
+- `commit_sermon(SermonChange)`: generate → `save_sermon_change` (409 when stale) → publish
+  `LiveEvent::BibleSlidesChanged { presentation_id }` (no new variant, `companion/variables.rs`
+  untouched) → ONE INFO `presenter::bible::sermon` "sermon write" line with `op`, `sermon_id`,
+  `item_id`, `revision`, `items`, `slides`, `author`, `client_ip` (both `&str`, quoted — client
+  controlled), `ms`, `warning`. `SermonOp` gets a variant only with the write that constructs it.
+- **Character limit**: `set_bible_preferences` with a NEW `character_limit` (an unreadable stored
+  row counts as new) runs `regenerate_future_sermons(local_today())`: every sermon dated today or
+  later, current revision, one retry on a conflict, WARN on failure, never failing the
+  preference write. Same limit → no pass.
+- Dev2's `presenter-dev.service.d/gst-debug.conf` lists `presenter::bible::show=info` but not
+  `presenter::bible::sermon`, so dev's journal shows no sermon lines; check T8 on SNV
+  (`journalctl -u presenter | grep presenter::bible::sermon`).
