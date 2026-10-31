@@ -3109,7 +3109,7 @@ test.describe("Bible workflow fixes (issue #256)", () => {
     });
     await navigateToBible(page);
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
-    const create = page.locator('[data-role="presentation-create"]');
+    const create = biblePanel(page).locator('[data-role="presentation-create"]');
     const toast = page.locator('[data-role="toast"]');
 
     await create.click();
