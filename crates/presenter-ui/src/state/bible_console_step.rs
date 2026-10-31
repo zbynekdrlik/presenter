@@ -26,8 +26,9 @@ pub fn step_target(
             Step::Next => walk.get(position + 1),
             Step::Prev => position.checked_sub(1).and_then(|p| walk.get(p)),
         };
-        if let Some(target) = neighbour {
-            return rebase(target, structure);
+        // A verse this translation lacks is stepped over.
+        if let Some(target) = neighbour.and_then(|target| rebase(target, structure)) {
+            return Some(target);
         }
     }
     let segment = current.segment;
@@ -188,6 +189,17 @@ mod tests {
         let next =
             step_target(&current, &walked, &structure, Step::Next).expect("the second verse");
         assert_eq!(next.label, "Matúš 5:5");
+    }
+
+    #[test]
+    fn a_walked_verse_the_translation_lacks_is_stepped_over() {
+        let structure = seb();
+        let mut walked = walk("zid 13 24", &structure);
+        let mut missing = walked[0].clone();
+        missing.segment = Segment::verses(13, 26, 26);
+        walked.push(missing);
+        let next = step_target(&walked[0], &walked, &structure, Step::Next);
+        assert_eq!(next.map(|t| t.label), Some("Hebrejom 13:25".to_string()));
     }
 
     #[test]

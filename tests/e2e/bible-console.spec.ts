@@ -1296,3 +1296,40 @@ test("desktop: ▶ before a show keeps the focus on ZOBRAZIŤ for the next Space
     await context.close();
   }
 });
+
+test("a verse typed after the end of a book shows as usual", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
+    await showButton(page).tap();
+    await expect(showButton(page)).toHaveText("KONIEC KNIHY");
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await expect(showButton(page)).toHaveText("ZOBRAZIŤ");
+    await showButton(page).tap();
+    await expect.poll(() => shows.length).toBe(2);
+    expect(shows[1]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)" });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: a load from the old inputs after the end of a book frees the button", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
+    await showButton(page).click();
+    await expect(showButton(page)).toHaveText("KONIEC KNIHY");
+    await page.locator('[data-role="book-filter"]').fill("Rimanom");
+    await page.locator('[data-role="book-item"]').first().click();
+    await page.locator('[data-role="load-button"]').click();
+    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
+    await expect(showButton(page)).toHaveText("ZOBRAZIŤ");
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await expect(showButton(page)).toHaveAttribute("aria-disabled", "false");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});

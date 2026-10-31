@@ -110,7 +110,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 node_ref=show_button
                 disabled=move || c.target.with(Option::is_none)
                 aria-disabled=move || {
-                    if c.can_show.get() || failed.get() { "false" } else { "true" }
+                    let retry = failed.get() && !c.showing.get();
+                    if c.can_show.get() || retry { "false" } else { "true" }
                 }
                 on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
                 on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()

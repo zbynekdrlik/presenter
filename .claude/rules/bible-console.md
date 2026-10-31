@@ -78,8 +78,8 @@ paths:
   clear; a load from the old inputs drops it itself (the input may not change). The primary is
   `disabled` only with no target; every wait is `aria-disabled`, so the focus stays for the next
   Enter or Space. No dead tap: over a failed preview it reads "SKÚSIŤ ZNOVA" and asks again, past
-  the book's last verse it reads "KONIEC KNIHY" (`at_end`, cleared by ◀, typing or an old-inputs
-  load) and refuses. ◀ / ▶ refuse while a show is on its way: the show moves on from the preview
+  the book's last verse it reads "KONIEC KNIHY" (`at_end`, cleared by ◀, typing, an old-inputs
+  load, or a translation that goes on past it: `recheck_end`) and refuses. ◀ / ▶ refuse while a show is on its way: the show moves on from the preview
   when it lands, a step in between skips a part.
 - **iOS keyboard:** `state::keyboard_inset` writes `body`'s `--kb-inset` from the visual
   viewport (0 when pinch-zoomed); the phone bar uses `bottom: var(--kb-inset)`; the tab bar hides

@@ -88,8 +88,8 @@ impl Preview {
     }
 }
 
-/// A row or chip the operator tapped: valid for the input and the main
-/// translation it was tapped in, never after either changed.
+/// A row, chip or step: valid for the input it was made in, never after that
+/// changed. `main` is the translation of `target`; another one rebases it.
 #[derive(Debug, Clone, PartialEq)]
 struct Picked {
     input: String,
@@ -279,6 +279,15 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             c.picked.set(None);
         }
         c.focus_show.set(false);
+    });
+
+    // The book's end belongs to the translation: another one may go on.
+    Effect::new(move |previous: Option<Option<String>>| {
+        let main = c.main.get();
+        if previous.is_some_and(|before| before != main) {
+            stepping::recheck_end(c);
+        }
+        main
     });
 
     Effect::new(move |_| {

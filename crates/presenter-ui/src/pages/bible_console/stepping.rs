@@ -75,6 +75,19 @@ pub(super) fn advance_after_show(c: Console) {
     }
 }
 
+/// After a translation switch: if this translation has a verse past the one
+/// that ended the book, the preview goes on to it.
+pub(super) fn recheck_end(c: Console) {
+    if !c.at_end.get_untracked() {
+        return;
+    }
+    if let Some(next) = untrack(|| neighbour(c, Step::Next)) {
+        c.at_end.set(false);
+        let (input, current) = (c.input.get_untracked(), c.target.get_untracked());
+        land(c, input, current, next);
+    }
+}
+
 fn land(c: Console, input: String, current: Option<PreviewTarget>, next: Move) {
     match next {
         Move::Target(target) => pin(c, input, Some(target)),
