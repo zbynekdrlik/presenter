@@ -31,3 +31,18 @@ paths:
 - **E2E idioms:** a failed request is a malformed 200 (`not-json`); a race holds the request with
   `page.route` and releases it after the competing input is confirmed; a request is never
   unrouted before it answered.
+
+- **Only the primary button sends** (`show`): enabled while `can_show` (the preview shows the
+  current key, no show in flight); it posts exactly the previewed slide (`trigger_request`).
+- **The inline ZOBRAZIŤ** on the preview card exists only while the field has focus and prevents
+  `pointerdown` / `mousedown`'s default: the field keeps focus (the iOS keyboard stays) and the
+  button never disappears under a blur re-render before its `click`.
+- **On-air strip = server truth:** `BibleSlide` / `BibleCleared`, the console's own show answer,
+  `GET /bible/active-slide` on mount and on `visibilitychange` → visible (a locked phone's socket
+  may have missed the event). Visibility in E2E: `Object.defineProperty(document,
+  "visibilityState", …)` + a dispatched `visibilitychange`.
+- **Phone layout:** the Live tab hides the slide grid; the sticky bar works only because every
+  ancestor up to `.operator__panel--bible` has `overflow: visible` — a new `overflow` on the
+  catalog or the tab panel breaks it.
+- **Errors:** a failed preview shows inline (Enter retries); a failed show shows inline AND a
+  toast; neither changes the strip.
