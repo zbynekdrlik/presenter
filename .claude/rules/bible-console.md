@@ -20,7 +20,9 @@ paths:
 - **Row keys carry label + detail.** A translation switch renames a row with the same passage; a
   keyed `<For>` never re-renders an unchanged key (ui skill #496).
 - **`Picked`** (a tapped row / chip / search hit, a step) is valid only for the input AND the main
-  translation it was made in; otherwise the first row is the target.
+  translation it was made in; otherwise the first row is the target. One effect clears it on every
+  input or main change (a comparison alone brings it back when the same text is typed again), and
+  disarms `focus_show` with it: Enter arms that only with a target, any later edit cancels.
 - **Stale answers are dropped.** `preview_key` = passage + main + secondary + character limit; a
   `/bible/resolve` answer is applied only while it still equals the target's key (slow Wi-Fi).
 - **Settle markers, never timing:** `[data-role=bible-console]` `data-preview-state` /
@@ -32,6 +34,8 @@ paths:
   `page.route` and releases it after the competing input is confirmed; a request is never
   unrouted before it answered.
 
+- **Zhasnúť lives in the on-air strip**, at the other end of the page from ZOBRAZIŤ: the strip's
+  `min-height` keeps its place, so a second tap on a split verse never clears the wall.
 - **No layout shift under a press:** ZOBRAZIŤ and Zhasnúť prevent `pointerdown` / `mousedown`'s
   default too. A blur removes the inline button, everything below moves up and the click lands on
   nothing: on a short verse the first tap with the keyboard open was lost (a long one hid it, the
@@ -42,8 +46,9 @@ paths:
   `pointerdown` / `mousedown`'s default: the field keeps focus (the iOS keyboard stays) and the
   button never disappears under a blur re-render before its `click`.
 - **On-air strip = server truth:** `BibleSlide` / `BibleCleared`, the console's own show answer,
-  `GET /bible/active-slide` on mount and on `visibilitychange` → visible (a locked phone's socket
-  may have missed the event). Visibility in E2E: `Object.defineProperty(document,
+  `GET /bible/active-slide` on mount, on a reconnect and on `visibilitychange` → visible (a locked
+  phone's socket may have missed the event). An answer is dropped when the signal changed while it
+  was on its way. Visibility in E2E: `Object.defineProperty(document,
   "visibilityState", …)` + a dispatched `visibilitychange`.
 - **Phone layout:** the Live tab hides the slide grid; the sticky bar works only because every
   ancestor up to `.operator__panel--bible` has `overflow: visible` — a new `overflow` on the
@@ -57,5 +62,6 @@ The grid holds the current target only. The console empties it the moment its ta
 no card of an older verse stays tappable while a new one loads or fails. A load from the old inputs
 bumps `classic_loads` (the console clears its field and lets go); the console bumps `console_takes`
 on every new target, and an old-inputs answer that started before it is dropped. The 300 ms
-auto-load skips too when the console took over during its wait: it would bump `classic_loads` and
-wipe what is being typed.
+auto-load skips too when the console took over during its wait, and when it is only the echo of a
+translation switch (`translation_echo`: `list_books` re-sets chapter and verse, `set` always
+notifies) while `console_owns_grid`: it would bump `classic_loads` and wipe what is being typed.

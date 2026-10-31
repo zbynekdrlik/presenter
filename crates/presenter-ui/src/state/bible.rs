@@ -37,6 +37,11 @@ pub struct BibleState {
     /// Bumped whenever the console takes the grid: an older answer for the
     /// old inputs is dropped.
     pub console_takes: RwSignal<u32>,
+    /// The verse console's target fills the grid, not the old inputs.
+    pub console_owns_grid: RwSignal<bool>,
+    /// The next chapter / verse write only re-states the old inputs after a
+    /// translation switch; nobody asked for a load.
+    pub translation_echo: RwSignal<bool>,
 
     // -- Translations --
     pub translations: RwSignal<Vec<BibleTranslation>>,
@@ -126,6 +131,8 @@ impl BibleState {
             character_limit: RwSignal::new(320),
             classic_loads: RwSignal::new(0),
             console_takes: RwSignal::new(0),
+            console_owns_grid: RwSignal::new(false),
+            translation_echo: RwSignal::new(false),
 
             loaded_passages_history: RwSignal::new(Vec::new()),
             drag_source_idx: RwSignal::new(None),

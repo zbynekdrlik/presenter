@@ -22,7 +22,7 @@ pub(super) fn ConsoleField(console: Console) -> impl IntoView {
                 if let Some(field) = c.field.get_untracked() {
                     let _ = field.blur();
                 }
-            } else {
+            } else if c.target_key.with_untracked(Option::is_some) {
                 c.focus_show.set(true);
             }
         }

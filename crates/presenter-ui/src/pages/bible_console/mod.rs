@@ -11,7 +11,7 @@ mod on_air;
 mod preview;
 mod results;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gloo_timers::callback::Timeout;
@@ -28,6 +28,7 @@ use crate::state::AppContext;
 
 use actions::ConsoleActions;
 use field::ConsoleField;
+pub use on_air::refresh as refresh_on_air;
 use on_air::OnAirStrip;
 use preview::ConsolePreview;
 use results::ConsoleResults;
@@ -216,23 +217,29 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
     let classic_loads = bs.classic_loads;
     let ctx = use_ctx!(AppContext);
     let pending: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
-    let owns_grid = Rc::new(Cell::new(false));
+    let owns_grid = bs.console_owns_grid;
     let clear_grid = move || {
         grid.set(Vec::new());
         grid_selection.set(Default::default());
     };
 
-    {
-        let owns_grid = Rc::clone(&owns_grid);
-        Effect::new(move |previous: Option<u32>| {
-            let loads = classic_loads.get();
-            if previous.is_some_and(|before| before != loads) {
-                owns_grid.set(false);
-                c.input.set(String::new());
-            }
-            loads
-        });
-    }
+    Effect::new(move |previous: Option<u32>| {
+        let loads = classic_loads.get();
+        if previous.is_some_and(|before| before != loads) {
+            owns_grid.set(false);
+            c.input.set(String::new());
+        }
+        loads
+    });
+
+    // What was tapped or asked for belongs to the input it was done in, also
+    // when the same text is typed again later.
+    Effect::new(move |_| {
+        c.input.track();
+        c.main.track();
+        c.picked.set(None);
+        c.focus_show.set(false);
+    });
 
     Effect::new(move |_| {
         let key = c.target_key.get();
@@ -240,7 +247,9 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         let Some(key) = key else {
             pending.borrow_mut().take();
             c.preview.set(Preview::Empty);
-            if owns_grid.replace(false) {
+            c.show_error.set(None);
+            if owns_grid.get_untracked() {
+                owns_grid.set(false);
                 clear_grid();
             }
             return;

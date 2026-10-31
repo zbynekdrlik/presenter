@@ -1,9 +1,8 @@
-//! Zhasnúť and the sticky action bar (spec §7.1 items 6–7). ZOBRAZIŤ is the
-//! only control that sends to the wall; Zhasnúť is outlined red, shown only
-//! while something is on air, and never next to it. Stepping (◀ / ĎALŠÍ / ▶)
-//! comes with B2b. A press on either keeps the focus in the field: a blur
-//! removes the preview's own button, these move up under the finger and the
-//! click lands on nothing.
+//! The sticky action bar (spec §7.1 item 7). ZOBRAZIŤ is the only control that
+//! sends to the wall; Zhasnúť lives in the on-air strip, never near it.
+//! Stepping (◀ / ĎALŠÍ / ▶) comes with B2b. A press keeps the focus in the
+//! field: a blur removes the preview's own button, this one moves up under the
+//! finger and the click lands on nothing.
 
 use leptos::prelude::*;
 
@@ -14,8 +13,6 @@ use crate::state::AppContext;
 pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
     let c = console;
     let ctx = use_ctx!(AppContext);
-    let on_air = ctx.active_bible_slide;
-    let clearing = RwSignal::new(false);
     let show_button = NodeRef::<leptos::html::Button>::new();
 
     // Desktop Enter asked for ZOBRAZIŤ's focus: give it once it is enabled,
@@ -31,26 +28,6 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
         }
     });
 
-    let on_clear = {
-        let ctx = ctx.clone();
-        move |_| {
-            if clearing.get_untracked() {
-                return;
-            }
-            clearing.set(true);
-            let ctx = ctx.clone();
-            leptos::task::spawn_local(async move {
-                match crate::api::bible::clear_broadcast().await {
-                    Ok(()) => {
-                        ctx.active_bible_slide.set(None);
-                        ctx.active_bible_broadcast.set(None);
-                    }
-                    Err(e) => ctx.show_toast(&format!("Verš sa nezhasol: {e}"), "error"),
-                }
-                clearing.set(false);
-            });
-        }
-    };
     let label = move || {
         if c.showing.get() {
             return "Zobrazujem\u{2026}".to_string();
@@ -64,19 +41,6 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
     };
 
     view! {
-        <Show when=move || on_air.with(Option::is_some)>
-            <button
-                type="button"
-                class="console-clear-live"
-                data-role="console-clear-live"
-                disabled=move || clearing.get()
-                on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
-                on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
-                on:click=on_clear.clone()
-            >
-                "Zhasnúť verš"
-            </button>
-        </Show>
         {move || {
             c.show_error
                 .get()

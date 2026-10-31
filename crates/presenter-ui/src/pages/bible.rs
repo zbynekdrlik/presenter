@@ -161,6 +161,7 @@ pub fn BiblePage() -> impl IntoView {
         let books_translation = bs.books_translation;
         let selected_book = bs.selected_book;
         let selected_chapter = bs.selected_chapter;
+        let translation_echo = bs.translation_echo;
         let verse_start = bs.verse_start;
         let verse_end = bs.verse_end;
         Effect::new(move || {
@@ -205,6 +206,7 @@ pub fn BiblePage() -> impl IntoView {
                                 chapter_count,
                                 verse_counts,
                             }));
+                            translation_echo.set(true);
                             selected_chapter.set(clamped.chapter);
                             verse_start.set(clamped.verse_start);
                             verse_end.set(clamped.verse_end);
@@ -252,10 +254,15 @@ pub fn BiblePage() -> impl IntoView {
             let bs_for_timer = bs_inner.clone();
             let ctx_for_timer = ctx_inner.clone();
             let console_takes = bs_for_timer.console_takes;
+            let console_owns_grid = bs_for_timer.console_owns_grid;
             let taken_at_start = console_takes.get_untracked();
+            let echo = bs_for_timer.translation_echo.get_untracked();
+            bs_for_timer.translation_echo.set(false);
             let new_timer = gloo_timers::callback::Timeout::new(300, move || {
-                // The console took the grid during the wait (#850).
-                if console_takes.get_untracked() == taken_at_start {
+                // The console took the grid during the wait, or holds it over
+                // a translation switch (#850).
+                let console_keeps = echo && console_owns_grid.get_untracked();
+                if console_takes.get_untracked() == taken_at_start && !console_keeps {
                     load_passage(&bs_for_timer, &ctx_for_timer, false);
                 }
             });

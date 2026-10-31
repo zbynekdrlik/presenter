@@ -2,7 +2,9 @@
 //! the server — whoever put it there. `AppContext::active_bible_slide` is fed
 //! by the operator WS (`BibleSlide` / `BibleCleared`), by this console's own
 //! shows, and re-read from `GET /bible/active-slide` on mount and whenever the
-//! page becomes visible again (a locked phone's socket may have missed it).
+//! page becomes visible again or the socket reconnects (either may have missed
+//! it). Zhasnúť sits here, the whole page away from ZOBRAZIŤ: the strip keeps
+//! its height, so it appears under nobody's finger.
 
 use leptos::prelude::*;
 use presenter_core::BibleSlideOutput;
@@ -26,17 +28,41 @@ pub(super) fn setup_on_air_sync(on_air: RwSignal<Option<BibleSlideOutput>>) {
     on_visible.forget();
 }
 
-fn refresh(on_air: RwSignal<Option<BibleSlideOutput>>) {
+/// Re-read the wall. An answer older than a change made while it was on its
+/// way (a live event, a show, a clear) is dropped.
+pub fn refresh(on_air: RwSignal<Option<BibleSlideOutput>>) {
+    let asked_over = on_air.get_untracked();
     leptos::task::spawn_local(async move {
         if let Ok(output) = crate::api::bible::get_active_slide_output().await {
-            on_air.set(output);
+            if on_air.with_untracked(|now| *now == asked_over) {
+                on_air.set(output);
+            }
         }
     });
 }
 
 #[component]
 pub(super) fn OnAirStrip() -> impl IntoView {
-    let on_air = use_ctx!(AppContext).active_bible_slide;
+    let ctx = use_ctx!(AppContext);
+    let on_air = ctx.active_bible_slide;
+    let clearing = RwSignal::new(false);
+    let on_clear = move |_| {
+        if clearing.get_untracked() {
+            return;
+        }
+        clearing.set(true);
+        let ctx = ctx.clone();
+        leptos::task::spawn_local(async move {
+            match crate::api::bible::clear_broadcast().await {
+                Ok(()) => {
+                    ctx.active_bible_slide.set(None);
+                    ctx.active_bible_broadcast.set(None);
+                }
+                Err(e) => ctx.show_toast(&format!("Verš sa nezhasol: {e}"), "error"),
+            }
+            clearing.set(false);
+        });
+    };
     let parts = move || on_air.with(|output| output.as_ref().map(on_air_parts));
     view! {
         <div
@@ -48,7 +74,7 @@ pub(super) fn OnAirStrip() -> impl IntoView {
             {move || match parts() {
                 Some((reference, codes)) => {
                     view! {
-                        <span>
+                        <span class="console-on-air__text">
                             "Na stene: "
                             <b data-role="console-on-air-reference">{reference}</b>
                         </span>
@@ -60,6 +86,19 @@ pub(super) fn OnAirStrip() -> impl IntoView {
                 }
                 None => view! { <span>"Na stene: nič"</span> }.into_any(),
             }}
+            <Show when=move || on_air.with(Option::is_some)>
+                <button
+                    type="button"
+                    class="console-clear-live"
+                    data-role="console-clear-live"
+                    disabled=move || clearing.get()
+                    on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
+                    on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
+                    on:click=on_clear.clone()
+                >
+                    "Zhasnúť verš"
+                </button>
+            </Show>
         </div>
     }
 }

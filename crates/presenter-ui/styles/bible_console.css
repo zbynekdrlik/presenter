@@ -16,8 +16,11 @@
 /* ── On-air strip ── */
 .console-on-air {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
+  box-sizing: border-box;
+  min-height: 62px; /* Zhasnúť's 44 px: its arrival moves nothing below */
   padding: 8px 10px;
   border-radius: 10px;
   background: #1e293b;
@@ -33,8 +36,25 @@
 .console-on-air[data-live="true"] b {
   color: #ffffff;
 }
+.console-on-air__text {
+  flex: 1;
+  min-width: 0;
+}
 .console-on-air__codes {
   white-space: nowrap;
+}
+
+.console-clear-live {
+  flex: none;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid #fca5a5;
+  border-radius: 12px;
+  background: transparent;
+  color: #fecaca;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 /* ── Field ── */
@@ -197,17 +217,7 @@
   cursor: pointer;
 }
 
-/* ── Zhasnúť + the sticky action bar ── */
-.console-clear-live {
-  min-height: 44px;
-  margin-top: 8px;
-  border: 1px solid #7f1d1d;
-  border-radius: 12px;
-  background: transparent;
-  color: #fca5a5;
-  font: inherit;
-  cursor: pointer;
-}
+/* ── The sticky action bar ── */
 .console-bar {
   position: sticky;
   bottom: 0;
