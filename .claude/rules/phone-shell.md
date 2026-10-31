@@ -49,3 +49,5 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
   alone leaves the old `display: none` rules winning.
 - **E2E:** profiles `PHONE_360` (360×740), `PHONE_390`, `PHONE_LANDSCAPE` in `support.ts`;
   `(pointer: coarse)` needs `hasTouch` (ui skill #569); tap with `.tap()`.
+
+- **Toasts (#875):** the `Toast` component owns the lifetime (one restarting 3.5 s timer), callers only set the message. On the phone's Bible Live tab the toast sits above `.console-bar` (`bible_console.css`), never over its buttons.

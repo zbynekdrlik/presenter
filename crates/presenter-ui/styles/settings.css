@@ -385,7 +385,6 @@ body.settings {
 
 .settings__toast[data-visible="true"] {
   opacity: 1;
-  pointer-events: auto;
   transform: translateY(0);
 }
 

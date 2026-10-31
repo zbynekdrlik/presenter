@@ -35,10 +35,6 @@ pub fn LibraryList() -> impl IntoView {
                     // Show error toast on API failure
                     toast_variant.set("error".to_string());
                     toast_message.set(Some(format!("Failed to load presentations: {e}")));
-                    gloo_timers::callback::Timeout::new(3_500, move || {
-                        toast_message.set(None);
-                    })
-                    .forget();
                 }
             }
             is_loading_presentations.set(false);
