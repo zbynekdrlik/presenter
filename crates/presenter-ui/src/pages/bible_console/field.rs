@@ -68,6 +68,7 @@ pub(super) fn ConsoleField(console: Console) -> impl IntoView {
                 prop:value=move || c.input.get()
                 on:input=move |ev| {
                     c.after_show.set(false);
+                    c.at_end.set(false);
                     c.input.set(event_target_value(&ev));
                 }
                 on:keydown=on_keydown

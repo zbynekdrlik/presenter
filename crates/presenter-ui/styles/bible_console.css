@@ -255,6 +255,7 @@
 .console-bar__show:disabled,
 .console-bar__show[aria-disabled="true"],
 .console-bar__step:disabled,
+.console-bar__step[aria-disabled="true"],
 .console-clear-live:disabled {
   opacity: 0.45;
   cursor: default;
@@ -294,13 +295,14 @@ body.operator[data-shell="phone"]:has(.console-field__input:focus) .phone-tabs {
   display: none;
 }
 body.operator[data-shell="phone"]:has(.console-field__input:focus) .console-bar {
-  bottom: var(--kb-inset, 0px);
+  bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
 }
 /* Landscape: the tabs are a rail on the left, see phone_shell.css. */
 @media (orientation: landscape) and (min-width: 560px) {
   body.operator[data-shell="phone"] .console-bar {
     left: calc(64px + env(safe-area-inset-left));
-    bottom: var(--kb-inset, 0px);
+    right: env(safe-area-inset-right);
+    bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
   }
 }
 body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,

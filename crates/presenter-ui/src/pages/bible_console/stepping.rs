@@ -44,11 +44,16 @@ pub(super) fn neighbour(c: Console, step: Step) -> Option<Move> {
     })
 }
 
-/// ◀ / ▶: move the preview; nothing goes to the wall.
+/// ◀ / ▶: move the preview; nothing goes to the wall. Not while a show is on
+/// its way: it moves on from the preview when it lands, a part would be skipped.
 pub(super) fn apply_move(c: Console, step: Step) {
+    if c.showing.get_untracked() {
+        return;
+    }
     let Some(next) = untrack(|| neighbour(c, step)) else {
         return;
     };
+    c.at_end.set(false);
     let (input, current) = (c.input.get_untracked(), c.target.get_untracked());
     land(c, input, current, next);
 }
@@ -62,8 +67,11 @@ pub(super) fn advance_after_show(c: Console) {
     c.input.set(String::new());
     match next {
         Some(next) => land(c, String::new(), current, next),
-        // The end of the book: keep showing what is on the wall.
-        None => pin(c, String::new(), current),
+        // The end of the book: the preview stays on the verse on the wall.
+        None => {
+            c.at_end.set(true);
+            pin(c, String::new(), current);
+        }
     }
 }
 

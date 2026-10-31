@@ -19,10 +19,12 @@ paths:
   snapshots). Components only wire signals.
 - **Row keys carry label + detail.** A translation switch renames a row with the same passage; a
   keyed `<For>` never re-renders an unchanged key (ui skill #496).
-- **`Picked`** (a tapped row / chip / search hit, a step) is valid only for the input AND the main
-  translation it was made in; otherwise the first row is the target. One effect clears it on every
-  input or main change (a comparison alone brings it back when the same text is typed again), and
-  disarms `focus_show` with it: Enter arms that only with a target, any later edit cancels.
+- **`Picked`** (a tapped row / chip / search hit, a step) is valid only for the input it was made
+  in; otherwise the first row is the target. It outlives a translation switch through
+  `bible_console_step::rebase` (new book name; a translation without that verse falls back to the
+  rows), and a walk compares by code + segment, never the renamed target. One effect clears it on
+  every input change (a comparison alone brings it back when the same text is typed again), and
+  disarms `focus_show`, on a main change too: Enter arms that only with a target, any later edit cancels.
 - **Stale answers are dropped.** `preview_key` = passage + main + secondary + character limit; a
   `/bible/resolve` answer is applied only while it still equals the target's key (slow Wi-Fi).
 - **Settle markers, never timing:** `[data-role=bible-console]` `data-preview-state` /
@@ -73,9 +75,12 @@ paths:
   `Picked` for the current input); after a show `advance_after_show` clears the field, pins the
   next target for the empty input and sets `after_show` → "ĎALŠÍ: …". Typing resets it. The
   input effect keeps a `Picked` made for the value the input just took, or the pin dies with the
-  clear; a load from the old inputs drops it itself (the input may not change). While `after_show`
-  the primary is `aria-disabled` during the next load, never `disabled`: the focus stays for the
-  next Enter or Space.
+  clear; a load from the old inputs drops it itself (the input may not change). The primary is
+  `disabled` only with no target; every wait is `aria-disabled`, so the focus stays for the next
+  Enter or Space. No dead tap: over a failed preview it reads "SKÚSIŤ ZNOVA" and asks again, past
+  the book's last verse it reads "KONIEC KNIHY" (`at_end`, cleared by ◀, typing or an old-inputs
+  load) and refuses. ◀ / ▶ refuse while a show is on its way: the show moves on from the preview
+  when it lands, a step in between skips a part.
 - **iOS keyboard:** `state::keyboard_inset` writes `body`'s `--kb-inset` from the visual
   viewport (0 when pinch-zoomed); the phone bar uses `bottom: var(--kb-inset)`; the tab bar hides
   while the console field has focus (`:has()`, iOS 15.4+). Playwright cannot open an iPhone

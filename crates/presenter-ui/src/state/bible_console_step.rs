@@ -4,7 +4,7 @@
 //! past them it is the verse before / after, across chapter bounds, never
 //! into another book. Pure — host-tested.
 
-use presenter_core::bible::resolver::{segment_label, Segment, Step, Versification};
+use presenter_core::bible::resolver::{segment_label, BookRef, Segment, Step, Versification};
 
 use super::bible_console::PreviewTarget;
 
@@ -17,13 +17,17 @@ pub fn step_target(
     structure: &Versification,
     step: Step,
 ) -> Option<PreviewTarget> {
-    if let Some(position) = walk.iter().position(|target| target == current) {
+    // By code and segment: a translation switch renames the book, not the walk.
+    let walked = |target: &PreviewTarget| {
+        target.book.code == current.book.code && target.segment == current.segment
+    };
+    if let Some(position) = walk.iter().position(walked) {
         let neighbour = match step {
             Step::Next => walk.get(position + 1),
             Step::Prev => position.checked_sub(1).and_then(|p| walk.get(p)),
         };
         if let Some(target) = neighbour {
-            return Some(target.clone());
+            return rebase(target, structure);
         }
     }
     let segment = current.segment;
@@ -45,6 +49,25 @@ pub fn step_target(
             label: segment_label(&current.book.name, &segment),
             segment,
         }
+    })
+}
+
+/// `target` in the translation of `structure`: the same passage under that
+/// translation's book name, `None` when the translation does not have it.
+pub fn rebase(target: &PreviewTarget, structure: &Versification) -> Option<PreviewTarget> {
+    let book = structure.book(&target.book.code)?;
+    let segment = target.segment;
+    let verses = book.verse_count(segment.chapter)?;
+    if segment.verse_end.or(segment.verse_start).unwrap_or(0) > verses {
+        return None;
+    }
+    Some(PreviewTarget {
+        book: BookRef {
+            name: book.name.clone(),
+            ..target.book.clone()
+        },
+        label: segment_label(&book.name, &segment),
+        segment,
     })
 }
 
@@ -127,6 +150,44 @@ mod tests {
     fn a_step_never_leaves_the_book() {
         assert_eq!(labels("zid 13 25", 1, Step::Next), ["-"]);
         assert_eq!(labels("zid 1 1", 1, Step::Prev), ["-"]);
+    }
+
+    fn renamed(target: &PreviewTarget, name: &str) -> PreviewTarget {
+        let mut other = target.clone();
+        other.book.name = name.to_string();
+        other
+    }
+
+    #[test]
+    fn rebase_renames_the_book_and_keeps_the_passage() {
+        let structure = seb();
+        let target = renamed(&walk("zid 11 2", &structure)[0], "Židom");
+        let rebased = rebase(&target, &structure).expect("Hebrews 11:2 exists");
+        assert_eq!(rebased.label, "Hebrejom 11:2");
+        assert_eq!(rebased.book.name, "Hebrejom");
+        assert_eq!(rebased.segment, target.segment);
+    }
+
+    #[test]
+    fn rebase_refuses_what_the_translation_does_not_have() {
+        let structure = seb();
+        let mut target = walk("zid 13 25", &structure)[0].clone();
+        target.segment = Segment::verses(13, 26, 26);
+        assert_eq!(rebase(&target, &structure), None);
+        target.segment = Segment::verses(14, 1, 1);
+        assert_eq!(rebase(&target, &structure), None);
+        target.book.code = "NOPE".to_string();
+        assert_eq!(rebase(&target, &structure), None);
+    }
+
+    #[test]
+    fn a_walk_goes_on_under_another_book_name() {
+        let structure = seb();
+        let walked: Vec<PreviewTarget> = walk("mt 5:3.5", &structure);
+        let current = renamed(&walked[0], "Matthew");
+        let next =
+            step_target(&current, &walked, &structure, Step::Next).expect("the second verse");
+        assert_eq!(next.label, "Matúš 5:5");
     }
 
     #[test]

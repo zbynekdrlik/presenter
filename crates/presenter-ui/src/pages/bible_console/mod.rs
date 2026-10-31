@@ -25,6 +25,7 @@ use crate::state::bible_console::{
     console_view, preview_key, resolve_request, trigger_request, versification, ConsoleView,
     PreviewTarget,
 };
+use crate::state::bible_console_step::rebase;
 use crate::state::AppContext;
 
 use actions::ConsoleActions;
@@ -71,6 +72,10 @@ impl Preview {
             Self::Ready { slides, index, .. } => slides.get(*index),
             _ => None,
         }
+    }
+
+    fn failed_for(&self, wanted: &str) -> bool {
+        matches!(self, Self::Failed { key, .. } if key == wanted)
     }
 
     fn state(&self) -> &'static str {
@@ -123,6 +128,8 @@ struct Console {
     walk: RwSignal<Vec<PreviewTarget>>,
     /// The last show came from here: the primary button reads "ĎALŠÍ: …".
     after_show: RwSignal<bool>,
+    /// The last verse of the book was shown; there is no next one to offer.
+    at_end: RwSignal<bool>,
 }
 
 impl Console {
@@ -139,11 +146,21 @@ impl Console {
             let translation = main.get().unwrap_or_default();
             input.with(|text| structure.with(|s| console_view(&lookup(text, s), &translation)))
         });
-        let target = Memo::new(move |_| match picked.get() {
-            Some(p) if input.with(|text| *text == p.input) && main.get() == p.main => {
-                Some(p.target)
-            }
-            _ => view.with(|v| v.default_target().cloned()),
+        // A pick outlives a translation switch, in the new translation's words
+        // (spec §7.1 1b: the preview re-resolves); a translation without that
+        // verse falls back to the rows.
+        let target = Memo::new(move |_| {
+            picked
+                .get()
+                .filter(|p| input.with(|text| *text == p.input))
+                .and_then(|p| {
+                    if main.get() == p.main {
+                        Some(p.target)
+                    } else {
+                        structure.with(|s| rebase(&p.target, s))
+                    }
+                })
+                .or_else(|| view.with(|v| v.default_target().cloned()))
         });
         let target_key = Memo::new(move |_| {
             let target = target.get()?;
@@ -161,7 +178,8 @@ impl Console {
             preview.with(|p| matches!(p, Preview::Ready { .. }) && p.key() == key.as_deref())
         });
         let showing = RwSignal::new(false);
-        let can_show = Memo::new(move |_| ready.get() && !showing.get());
+        let at_end = RwSignal::new(false);
+        let can_show = Memo::new(move |_| ready.get() && !showing.get() && !at_end.get());
         Self {
             input,
             field: NodeRef::new(),
@@ -181,6 +199,7 @@ impl Console {
             structure,
             walk: RwSignal::new(Vec::new()),
             after_show: RwSignal::new(false),
+            at_end,
         }
     }
 }
@@ -239,6 +258,7 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         if previous.is_some_and(|before| before != loads) {
             owns_grid.set(false);
             c.after_show.set(false);
+            c.at_end.set(false);
             c.picked.set(None);
             c.input.set(String::new());
         }
@@ -247,13 +267,14 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
 
     // What was tapped or asked for belongs to the input it was done in, also
     // when the same text is typed again later. A show pins the next part for
-    // the field it just emptied, that one stays.
+    // the field it just emptied, that one stays. A translation switch keeps
+    // it too, but cancels a waiting Enter.
     Effect::new(move |_| {
-        let (input, main) = (c.input.get(), c.main.get());
-        let pinned = c.picked.with_untracked(|p| {
-            p.as_ref()
-                .is_some_and(|p| p.input == input && p.main == main)
-        });
+        let input = c.input.get();
+        c.main.track();
+        let pinned = c
+            .picked
+            .with_untracked(|p| p.as_ref().is_some_and(|p| p.input == input));
         if !pinned {
             c.picked.set(None);
         }
@@ -327,11 +348,19 @@ fn failed(ctx: &AppContext, key: String, message: String) -> Preview {
 }
 
 /// ZOBRAZIŤ: send the previewed slide to the wall, then preview the next part
-/// (`stepping::advance_after_show`), so the next tap shows it.
+/// (`stepping::advance_after_show`), so the next tap shows it. Over a preview
+/// that failed it asks again: no tap is a dead one, the keyboard may be away.
 fn show(c: Console, ctx: AppContext) {
     let Some(key) = c.target_key.get_untracked() else {
         return;
     };
+    if c.at_end.get_untracked() {
+        return;
+    }
+    if c.preview.with_untracked(|p| p.failed_for(&key)) {
+        c.retry.update(|n| *n = n.wrapping_add(1));
+        return;
+    }
     let ready = c.preview.with_untracked(|p| {
         (p.key() == Some(key.as_str()))
             .then(|| p.slide().cloned())

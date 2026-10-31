@@ -6,7 +6,8 @@
 //! finger and the click lands on nothing. A show in flight only marks it busy
 //! (`show` refuses a second one): `disabled` would drop the keyboard focus, and
 //! Space would then go to the global search instead of the next part; the
-//! same goes for the wait while the next verse loads after a show. A held
+//! same goes for every wait while a verse loads: `disabled` only with nothing
+//! to show. Over a failed preview the primary asks again. A held
 //! Enter or Space sends nothing: Enter in the field brought the focus here, and its
 //! auto-repeat would show the verse.
 
@@ -37,6 +38,7 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
         }
     });
 
+    let failed = Memo::new(move |_| c.preview.with(|p| matches!(p, Preview::Failed { .. })));
     let split = move || {
         c.preview.with(|p| match p {
             Preview::Ready { slides, index, .. } if slides.len() > 1 => {
@@ -49,6 +51,12 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
         if c.showing.get() {
             return "Zobrazujem\u{2026}".to_string();
         }
+        if c.at_end.get() {
+            return "KONIEC KNIHY".to_string();
+        }
+        if failed.get() {
+            return "SKÚSIŤ ZNOVA".to_string();
+        }
         let part = split()
             .map(|(i, n)| format!(" {i}/{n}"))
             .unwrap_or_default();
@@ -57,6 +65,7 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
             _ => format!("ZOBRAZIŤ{part}"),
         }
     };
+    let step_busy = move || if c.showing.get() { "true" } else { "false" };
     let prev = Memo::new(move |_| neighbour(c, Step::Prev));
     let next = Memo::new(move |_| neighbour(c, Step::Next));
     let step_text = move |step: Option<Move>| match step {
@@ -85,6 +94,7 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 type="button"
                 class="console-bar__step"
                 data-role="console-prev"
+                aria-disabled=step_busy
                 aria-label="Predošlý"
                 disabled=move || prev.with(Option::is_none)
                 on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
@@ -98,8 +108,10 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 class="console-bar__show"
                 data-role="console-show"
                 node_ref=show_button
-                disabled=move || !c.ready.get() && !c.after_show.get()
-                aria-disabled=move || if c.can_show.get() { "false" } else { "true" }
+                disabled=move || c.target.with(Option::is_none)
+                aria-disabled=move || {
+                    if c.can_show.get() || failed.get() { "false" } else { "true" }
+                }
                 on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
                 on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:keydown=|ev: web_sys::KeyboardEvent| {
@@ -118,6 +130,7 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 type="button"
                 class="console-bar__step"
                 data-role="console-next"
+                aria-disabled=step_busy
                 aria-label="Ďalší"
                 disabled=move || next.with(Option::is_none)
                 on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
