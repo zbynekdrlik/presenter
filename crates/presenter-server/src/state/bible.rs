@@ -51,7 +51,10 @@ fn legacy_slide_output(
         legacy_translation_reference(
             &passage.reference,
             secondary.book.as_deref(),
-            secondary.translation_code.as_deref(),
+            secondary
+                .text
+                .as_ref()
+                .and(secondary.translation_code.as_deref()),
         ),
         broadcast.triggered_at,
     )

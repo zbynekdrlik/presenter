@@ -43,7 +43,7 @@ paths:
   refuses a second send. A failed show's inline error is set only while its verse is still the
   target; the toast always.
 - **A held key never sends:** the desktop Enter moves the focus to ZOBRAZIŤ and its auto-repeat
-  lands there, so the button drops `keydown` with `repeat` set. E2E: a second `keyboard.down`
+  lands there, so the button drops an Enter or Space `keydown` with `repeat` set. E2E: a second `keyboard.down`
   without an `up` is the repeat.
 - **Whoever sends is on the strip:** `/bible/trigger` (Companion, AI) stores the wall output and
   publishes `BibleSlide` too; only its Resolume path stays legacy until A2b.
@@ -59,7 +59,7 @@ paths:
 - **On-air strip = server truth:** `BibleSlide` / `BibleCleared`, the console's own show answer,
   `GET /bible/active-slide` on mount, on a reconnect and on `visibilitychange` → visible (a locked
   phone's socket may have missed the event). An answer is dropped when the signal changed while it
-  was on its way; the show's own answer never replaces a later `triggered_at`. Visibility in E2E: `Object.defineProperty(document,
+  was on its way; the show's own answer never replaces a later `triggered_at`, and over an empty strip (maybe a clear) the server is asked. Visibility in E2E: `Object.defineProperty(document,
   "visibilityState", …)` + a dispatched `visibilitychange`.
 - **Phone layout:** the Live tab hides the slide grid; the sticky bar works only because every
   ancestor up to `.operator__panel--bible` has `overflow: visible` — a new `overflow` on the

@@ -326,15 +326,15 @@ fn show(c: Console, ctx: AppContext) {
     leptos::task::spawn_local(async move {
         match api::trigger_slide(&request).await {
             Ok(resp) => {
-                // A verse sent while the answer travelled is the wall's truth.
-                ctx.active_bible_slide.update(|now| {
-                    if now
-                        .as_ref()
-                        .is_none_or(|on_air| on_air.triggered_at <= resp.output.triggered_at)
-                    {
-                        *now = Some(resp.output);
+                // A verse sent while the answer travelled is the wall's truth;
+                // an empty strip may be a clear, so the server decides.
+                match ctx.active_bible_slide.get_untracked() {
+                    None => refresh_on_air(ctx.active_bible_slide),
+                    Some(on_air) if on_air.triggered_at <= resp.output.triggered_at => {
+                        ctx.active_bible_slide.set(Some(resp.output));
                     }
-                });
+                    Some(_) => {}
+                }
                 c.show_error.set(None);
                 c.preview.update(|p| {
                     if let Preview::Ready {

@@ -5,7 +5,7 @@
 //! finger and the click lands on nothing. A show in flight only marks it busy
 //! (`show` refuses a second one): `disabled` would drop the keyboard focus, and
 //! Space would then go to the global search instead of the next part. A held
-//! key sends nothing: Enter in the field brought the focus here, and its
+//! Enter or Space sends nothing: Enter in the field brought the focus here, and its
 //! auto-repeat would show the verse.
 
 use leptos::prelude::*;
@@ -67,7 +67,7 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
                 on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:keydown=|ev: web_sys::KeyboardEvent| {
-                    if ev.repeat() {
+                    if ev.repeat() && matches!(ev.key().as_str(), "Enter" | " ") {
                         ev.prevent_default();
                     }
                 }
