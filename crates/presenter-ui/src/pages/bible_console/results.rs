@@ -1,28 +1,19 @@
-//! Result rows, the hint and the preview status (spec §7.1 item 3, §5.7). A
-//! tap on a row previews it; a book-only row completes the field. Nothing here
-//! sends to the wall.
+//! Result rows, alternative chips and the hint (spec §7.1 item 3, §5.7). A tap
+//! on a row or an alternative previews it; a fix or a book chip rewrites the
+//! field. Nothing here sends to the wall.
 
 use leptos::prelude::*;
 
-use super::{Console, Picked, Preview};
+use super::{Console, Picked};
 use crate::state::bible_console::{ConsoleRow, RowTarget};
 
 #[component]
 pub(super) fn ConsoleResults(console: Console) -> impl IntoView {
     let c = console;
     let rows = move || c.view.with(|v| v.rows.clone());
+    let chips = move || c.view.with(|v| v.chips.clone());
+    let has_chips = move || c.view.with(|v| !v.chips.is_empty());
     let hint = move || c.view.with(|v| v.hint.clone());
-    let status = move || {
-        c.preview.with(|p| match p {
-            Preview::Loading { .. } => Some(("console-status", "Načítavam\u{2026}".to_string())),
-            Preview::Failed { message, .. } => Some(("console-preview-error", message.clone())),
-            Preview::Ready {
-                warning: Some(text),
-                ..
-            } => Some(("console-preview-warning", text.clone())),
-            _ => None,
-        })
-    };
 
     view! {
         <div class="console-results" data-role="console-results">
@@ -31,6 +22,18 @@ pub(super) fn ConsoleResults(console: Console) -> impl IntoView {
                 key=|row| row.key.clone()
                 children=move |row| view! { <ResultButton console=c row=row role="console-row" /> }
             />
+            <Show when=has_chips>
+                <div class="console-chips" data-role="console-chips">
+                    <span class="console-chips__label">"Alebo"</span>
+                    <For
+                        each=chips
+                        key=|row| row.key.clone()
+                        children=move |row| {
+                            view! { <ResultButton console=c row=row role="console-alt-chip" /> }
+                        }
+                    />
+                </div>
+            </Show>
             {move || {
                 hint()
                     .map(|text| {
@@ -41,16 +44,7 @@ pub(super) fn ConsoleResults(console: Console) -> impl IntoView {
                         }
                     })
             }}
-            {move || {
-                status()
-                    .map(|(role, text)| {
-                        view! {
-                            <p class="console-status" data-role=role role="status">
-                                {text}
-                            </p>
-                        }
-                    })
-            }}
+
         </div>
     }
 }

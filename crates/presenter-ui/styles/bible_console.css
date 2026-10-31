@@ -13,6 +13,30 @@
   gap: 0.75rem;
 }
 
+/* ── On-air strip ── */
+.console-on-air {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+.console-on-air[data-live="true"] {
+  background: #3b1418;
+  border-color: #dc2626;
+  color: #fecaca;
+}
+.console-on-air[data-live="true"] b {
+  color: #ffffff;
+}
+.console-on-air__codes {
+  white-space: nowrap;
+}
+
 /* ── Field ── */
 .console-field {
   position: relative;
@@ -48,7 +72,7 @@
   cursor: pointer;
 }
 
-/* ── Rows, hint, status ── */
+/* ── Rows, chips, hint ── */
 .console-results {
   display: flex;
   flex-direction: column;
@@ -82,28 +106,157 @@
   font-size: 0.75rem;
   white-space: nowrap;
 }
-.console-hint,
-.console-status {
+.console-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.console-chips__label {
+  color: #94a3b8;
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.console-chip {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: #1d3a5f;
+  color: #cfe2ff;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.console-chip[aria-pressed="true"] {
+  outline: 1.5px solid #3b82f6;
+}
+.console-hint {
   margin: 0;
   padding: 8px 10px;
   border-radius: 10px;
-  font-size: 0.85rem;
-}
-.console-hint {
   background: #3a2a10;
   color: #fcd9a0;
-}
-.console-status {
-  color: #94a3b8;
-}
-.console-status[data-role="console-preview-error"] {
-  color: #fca5a5;
-}
-.console-status[data-role="console-preview-warning"] {
-  color: #fcd9a0;
+  font-size: 0.85rem;
 }
 
-/* ── Phone shell: the console replaces the book / chapter / verse inputs ── */
+/* ── Preview card ── */
+.console-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #273449;
+}
+.console-preview[hidden] {
+  display: none;
+}
+.console-preview p {
+  margin: 0;
+}
+.console-preview__reference {
+  font-weight: 650;
+}
+.console-preview__main {
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+.console-preview__secondary {
+  color: #9cc3ff;
+  font-style: italic;
+  border-top: 1px solid #334155;
+  padding-top: 7px;
+}
+.console-preview__status,
+.console-preview__position {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+.console-preview__warning {
+  color: #fcd9a0;
+  font-size: 0.8rem;
+}
+.console-preview__error,
+.console-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+.console-preview__show {
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: #3b82f6;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+/* ── Zhasnúť + the sticky action bar ── */
+.console-clear-live {
+  min-height: 44px;
+  margin-top: 8px;
+  border: 1px solid #7f1d1d;
+  border-radius: 12px;
+  background: transparent;
+  color: #fca5a5;
+  font: inherit;
+  cursor: pointer;
+}
+.console-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 8px 0;
+  background: var(--operator-panel);
+}
+.console-bar__show {
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: #3b82f6;
+  color: #ffffff;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.console-bar__show:disabled,
+.console-clear-live:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── Phone shell: the console IS the Bible Live tab ── */
 body.operator[data-shell="phone"] .bible__classic {
   display: none;
+}
+body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"]
+  .operator__panel--bible
+  .operator__slides-column {
+  display: none;
+}
+/* The bar sticks to the panel, the phone's one scroll container. */
+body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible {
+  position: static;
+  padding: 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+body.operator[data-shell="phone"] .console-bar {
+  background: var(--operator-bg);
+}
+body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,
+body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
+  overflow: visible;
 }

@@ -1,12 +1,14 @@
 //! The verse console (#850 B2a, spec §7): one field that understands any way
 //! of writing a reference (the core resolver runs on every keystroke, in the
-//! browser) and the passage's slides loaded while typing. Phone and desktop
-//! share it; on a phone it replaces the old Live-tab inputs, on a desktop it
-//! sits above them until B2c removes them. The slides land in the existing
-//! grid (`bs.slides`), whose cards show on a tap in Live mode; the preview
-//! card and ZOBRAZIŤ follow in the next unit (B2a-4).
+//! browser), a preview that loads while typing, and ZOBRAZIŤ — the only
+//! control that sends to the wall. Phone and desktop share it; on a phone it
+//! replaces the old Live-tab inputs, on a desktop it sits above them until
+//! B2c removes them.
 
+mod actions;
 mod field;
+mod on_air;
+mod preview;
 mod results;
 
 use std::cell::RefCell;
@@ -19,10 +21,15 @@ use presenter_core::bible::resolver::{lookup, Versification};
 use crate::api::bible::{self as api, BibleSlideDto};
 use crate::state::bible::BibleState;
 use crate::state::bible_console::{
-    console_view, preview_key, resolve_request, versification, ConsoleView, PreviewTarget,
+    console_view, preview_key, resolve_request, trigger_request, versification, ConsoleView,
+    PreviewTarget,
 };
+use crate::state::AppContext;
 
+use actions::ConsoleActions;
 use field::ConsoleField;
+use on_air::OnAirStrip;
+use preview::ConsolePreview;
 use results::ConsoleResults;
 
 /// The wait after the last keystroke before the preview request (spec §7.2).
@@ -101,6 +108,13 @@ struct Console {
     retry: RwSignal<u32>,
     /// The main translation the books (and so the rows) come from.
     main: Memo<Option<String>>,
+    showing: RwSignal<bool>,
+    show_error: RwSignal<Option<String>>,
+    field_focused: RwSignal<bool>,
+    /// Desktop Enter: move focus to ZOBRAZIŤ once it is enabled (#819 rule).
+    focus_show: RwSignal<bool>,
+    /// ZOBRAZIŤ is enabled: the preview is ready and no show is in flight.
+    can_show: Memo<bool>,
 }
 
 impl Console {
@@ -138,6 +152,8 @@ impl Console {
             let key = target_key.get();
             preview.with(|p| matches!(p, Preview::Ready { .. }) && p.key() == key.as_deref())
         });
+        let showing = RwSignal::new(false);
+        let can_show = Memo::new(move |_| ready.get() && !showing.get());
         Self {
             input,
             field: NodeRef::new(),
@@ -149,6 +165,11 @@ impl Console {
             ready,
             retry: RwSignal::new(0),
             main,
+            showing,
+            show_error: RwSignal::new(None),
+            field_focused: RwSignal::new(false),
+            focus_show: RwSignal::new(false),
+            can_show,
         }
     }
 }
@@ -158,6 +179,7 @@ pub fn BibleConsole() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let console = Console::new(&bs);
     setup_auto_preview(console, &bs);
+    on_air::setup_on_air_sync(use_ctx!(AppContext).active_bible_slide);
     let c = console;
 
     view! {
@@ -170,8 +192,11 @@ pub fn BibleConsole() -> impl IntoView {
                 c.preview.with(|p| p.slide().map(|s| s.bible_main_reference.clone()))
             }
         >
+            <OnAirStrip />
             <ConsoleField console=console />
             <ConsoleResults console=console />
+            <ConsolePreview console=console />
+            <ConsoleActions console=console />
         </section>
     }
 }
@@ -210,6 +235,7 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             limit.get_untracked(),
         );
         c.preview.set(Preview::Loading { key: key.clone() });
+        c.show_error.set(None);
         let timer = Timeout::new(PREVIEW_DELAY_MS, move || {
             leptos::task::spawn_local(async move {
                 let answer = api::resolve_slides(&request).await;
@@ -239,5 +265,50 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             });
         });
         *pending.borrow_mut() = Some(timer);
+    });
+}
+
+/// ZOBRAZIŤ: send the previewed slide to the wall. A split verse advances to
+/// its next part, so the next tap shows it.
+fn show(c: Console, ctx: AppContext) {
+    let Some(key) = c.target_key.get_untracked() else {
+        return;
+    };
+    let ready = c.preview.with_untracked(|p| {
+        (p.key() == Some(key.as_str()))
+            .then(|| p.slide().cloned())
+            .flatten()
+    });
+    let (Some(slide), false) = (ready, c.showing.get_untracked()) else {
+        return;
+    };
+    let request = trigger_request(&slide, &c.main.get_untracked().unwrap_or_default());
+    c.showing.set(true);
+    leptos::task::spawn_local(async move {
+        match api::trigger_slide(&request).await {
+            Ok(resp) => {
+                ctx.active_bible_slide.set(Some(resp.output));
+                c.show_error.set(None);
+                c.preview.update(|p| {
+                    if let Preview::Ready {
+                        key: k,
+                        slides,
+                        index,
+                        ..
+                    } = p
+                    {
+                        if *k == key && *index + 1 < slides.len() {
+                            *index += 1;
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                let message = format!("Verš sa nezobrazil: {e}");
+                c.show_error.set(Some(message.clone()));
+                ctx.show_toast(&message, "error");
+            }
+        }
+        c.showing.set(false);
     });
 }

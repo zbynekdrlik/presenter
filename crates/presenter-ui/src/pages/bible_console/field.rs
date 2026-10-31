@@ -1,7 +1,8 @@
 //! The console field (spec §7.1 item 2): any way of writing a reference.
-//! Enter / "Go" closes the phone keyboard (and retries a failed preview);
-//! Escape clears, and blurs when already empty. It never autofocuses on a
-//! phone (the keyboard would cover the screen).
+//! Enter / "Go" closes the phone keyboard (and retries a failed preview); on
+//! a desktop it moves focus to ZOBRAZIŤ, so Enter again shows. Escape clears,
+//! and blurs when already empty. It never autofocuses on a phone (the
+//! keyboard would cover the screen).
 
 use leptos::prelude::*;
 
@@ -21,6 +22,8 @@ pub(super) fn ConsoleField(console: Console) -> impl IntoView {
                 if let Some(field) = c.field.get_untracked() {
                     let _ = field.blur();
                 }
+            } else {
+                c.focus_show.set(true);
             }
         }
         "Escape" => {
@@ -65,6 +68,8 @@ pub(super) fn ConsoleField(console: Console) -> impl IntoView {
                 prop:value=move || c.input.get()
                 on:input=move |ev| c.input.set(event_target_value(&ev))
                 on:keydown=on_keydown
+                on:focus=move |_| c.field_focused.set(true)
+                on:blur=move |_| c.field_focused.set(false)
             />
             <Show when=move || c.input.with(|text| !text.is_empty())>
                 <button
