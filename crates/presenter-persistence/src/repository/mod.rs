@@ -60,7 +60,10 @@ mod video_source;
 #[cfg(test)]
 mod video_source_tests;
 
-pub use bible::{NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SERMON_NOT_FOUND};
+pub use bible::{
+    NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,
+    SERMON_CONFLICT, SERMON_NOT_FOUND,
+};
 pub use interpreter_tips::NewInterpreterTip;
 pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;

@@ -14,7 +14,10 @@ mod presentations;
 mod query;
 mod sermons;
 
-pub use sermons::{NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SERMON_NOT_FOUND};
+pub use sermons::{
+    NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,
+    SERMON_CONFLICT, SERMON_NOT_FOUND,
+};
 
 #[cfg(test)]
 mod tests;

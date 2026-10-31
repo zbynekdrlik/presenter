@@ -260,7 +260,7 @@ fn model_to_bible_slide(model: bible_slide::Model) -> anyhow::Result<BiblePresen
     })
 }
 
-fn bible_slide_to_active_model(
+pub(super) fn bible_slide_to_active_model(
     slide: &BiblePresentationSlide,
     presentation_id: &str,
 ) -> anyhow::Result<bible_slide::ActiveModel> {

@@ -67,3 +67,13 @@ paths:
 - `BiblePresentationSummary` / `BiblePresentation` carry `sermon_date: Option<NaiveDate>`
   (`skip_serializing_if = "Option::is_none"`): filled by `sermon_dates()` / `sermon_date_of()`.
   A new literal of either struct must name the field (E0063 is CI-only).
+- **`save_sermon_change` is the ONE sermon write** (spec §7.5): one transaction whose FIRST
+  statement is the conditional `UPDATE bible_sermons SET revision = revision + 1 … WHERE
+  revision = expected` — a write lock at once, so a concurrent writer waits (busy_timeout)
+  and then finds the revision moved → `Conflict(SERMON_CONFLICT)` → 409; a missing row →
+  `NotFound(SERMON_NOT_FOUND)` → 404. Never read-then-update: two deferred readers upgrading
+  to writers deadlock into SQLITE_BUSY (500), not 409. Then it replaces the presentation name,
+  ALL items (order = position) and ALL slides (orders normalized) — the state computes the full
+  new state in memory; the repository is dumb on purpose.
+- Slides are written with `presentations::bible_slide_to_active_model` (`pub(super)`), never a
+  second row mapping.
