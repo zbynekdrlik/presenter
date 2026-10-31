@@ -2,15 +2,10 @@
 //! and the AI item-stream composer (`compose_bible_items_into_slides`), plus the
 //! data types and private formatting helpers they share. No `AppState` access.
 
+use presenter_core::bible::sermon::translation_short_code;
 use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef, SlideMetadata};
 use presenter_core::{BiblePassage, BibleTranslation, Slide, SlideContent, SlideGroup, SlideText};
 use std::collections::{BTreeSet, HashMap};
-
-/// Extracts the short translation code from a full translation code.
-/// E.g., "eng-kjv" → "KJV", "sk-roh" → "ROH"
-fn translation_short_code(code: &str) -> String {
-    code.rsplit('-').next().unwrap_or(code).to_uppercase()
-}
 
 /// Typed input for the AI-facing bible composer. A stream of these is
 /// produced by the LLM after it edits DB verses against the sermon text,
@@ -421,6 +416,15 @@ impl BibleSlideFrame<'_> {
     }
 }
 
+/// The labels every slide of one composed passage carries (#851 P3): the live
+/// path builds them from the verse range, a sermon item passes its computed
+/// `16a`-style label and the secondary book's plain-number label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SlideLabels {
+    pub(crate) main: String,
+    pub(crate) translation: Option<String>,
+}
+
 pub(crate) fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
@@ -437,32 +441,59 @@ pub(crate) fn compose_bible_slides(
 
     // The full reference label appears on all slides (includes translation
     // code). A secondary translation gets its own label.
-    let reference_label = build_reference_label(
-        &first.reference.book,
-        chapter,
-        full_verse_start,
-        full_verse_end,
-        &main_translation.code,
-    );
-    let translation_reference_label = secondary_translation.and_then(|t| {
-        let secondary_book = secondary_book_name(main_passages, secondary_lookup)?;
-        Some(build_reference_label(
-            secondary_book,
+    let labels = SlideLabels {
+        main: build_reference_label(
+            &first.reference.book,
             chapter,
             full_verse_start,
             full_verse_end,
-            &t.code,
-        ))
-    });
+            &main_translation.code,
+        ),
+        translation: secondary_translation.and_then(|t| {
+            let secondary_book = secondary_book_name(main_passages, secondary_lookup)?;
+            Some(build_reference_label(
+                secondary_book,
+                chapter,
+                full_verse_start,
+                full_verse_end,
+                &t.code,
+            ))
+        }),
+    };
+    compose_bible_slides_labelled(
+        main_translation,
+        secondary_translation,
+        main_passages,
+        secondary_lookup,
+        character_limit,
+        labels,
+    )
+}
+
+/// The live composer with the caller's labels (#851 P3): one line
+/// `"{verse}. {text}"` per passage, a new slide when the LONGER of the main and
+/// the translation text would pass `character_limit` characters (#828), a lone
+/// oversized verse kept whole (#434).
+pub(crate) fn compose_bible_slides_labelled(
+    main_translation: &BibleTranslation,
+    secondary_translation: Option<&BibleTranslation>,
+    main_passages: &[BiblePassage],
+    secondary_lookup: &HashMap<u16, BiblePassage>,
+    character_limit: u32,
+    labels: SlideLabels,
+) -> anyhow::Result<Vec<Slide>> {
+    let Some(first) = main_passages.first() else {
+        return Ok(Vec::new());
+    };
     let frame = BibleSlideFrame {
         main_translation,
         secondary_translation,
         book: first.reference.book.clone(),
         book_code: first.reference.book_code.clone(),
         book_number: first.reference.book_number,
-        chapter,
-        reference_label,
-        translation_reference_label,
+        chapter: first.reference.chapter,
+        reference_label: labels.main,
+        translation_reference_label: labels.translation,
     };
 
     let limit = character_limit as usize;

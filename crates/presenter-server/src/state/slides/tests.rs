@@ -1,3 +1,4 @@
+use super::compose::{compose_bible_slides_labelled, SlideLabels};
 use super::{compose_bible_items_into_slides, compose_bible_slides, BibleItem, ComposedBibleSlide};
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 use std::collections::HashMap;
@@ -840,4 +841,87 @@ fn compose_mixed_gap_renders_as_comma_list() {
             i
         );
     }
+}
+
+fn bible(slide: &presenter_core::Slide) -> &presenter_core::slide::BibleSlideMetadata {
+    slide
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.bible.as_ref())
+        .expect("bible metadata")
+}
+
+#[test]
+fn labelled_composer_puts_the_given_labels_on_every_slide() {
+    let seb = test_translation("slk-seb");
+    let kjv = test_translation("eng-kjv");
+    let passages = vec![
+        test_passage("Hebrejom", 11, 1, "Viera je zárukou toho, v čo dúfame"),
+        test_passage(
+            "Hebrejom",
+            11,
+            3,
+            "Vierou poznávame, že svety vznikli slovom.",
+        ),
+    ];
+    let labels = SlideLabels {
+        main: "Hebrejom 11:1a, 3 (SEB)".to_string(),
+        translation: Some("Hebrews 11:1, 3 (KJV)".to_string()),
+    };
+
+    let slides =
+        compose_bible_slides_labelled(&seb, Some(&kjv), &passages, &HashMap::new(), 40, labels)
+            .expect("compose");
+
+    assert_eq!(slides.len(), 2, "40 chars hold one verse per slide");
+    for slide in &slides {
+        assert_eq!(slide.content.stage.value(), "Hebrejom 11:1a, 3 (SEB)");
+        let meta = bible(slide);
+        assert_eq!(
+            meta.main_reference_label.as_deref(),
+            Some("Hebrejom 11:1a, 3 (SEB)")
+        );
+        assert_eq!(
+            meta.translation_reference_label.as_deref(),
+            Some("Hebrews 11:1, 3 (KJV)")
+        );
+        assert_eq!(meta.secondary_translation_code.as_deref(), Some("eng-kjv"));
+    }
+    assert_eq!(
+        slides[0].content.main.value(),
+        "1. Viera je zárukou toho, v čo dúfame"
+    );
+    assert_eq!(bible(&slides[1]).verses[0].start, 3);
+}
+
+#[test]
+fn labelled_composer_splits_by_the_longer_text_and_keeps_a_lone_verse_whole() {
+    let seb = test_translation("slk-seb");
+    let kjv = test_translation("eng-kjv");
+    let passages = vec![
+        test_passage("Hebrejom", 11, 2, "Krátky verš."),
+        test_passage("Hebrejom", 11, 3, "Ďalší krátky."),
+    ];
+    let mut lookup = HashMap::new();
+    for (verse, text) in [
+        (2, "For by it the elders obtained a good report."),
+        (3, "Through faith we understand the worlds were framed."),
+    ] {
+        lookup.insert(verse, test_passage("Hebrews", 11, verse, text));
+    }
+    let labels = || SlideLabels {
+        main: "Hebrejom 11:2-3 (SEB)".to_string(),
+        translation: Some("Hebrews 11:2-3 (KJV)".to_string()),
+    };
+
+    let split = compose_bible_slides_labelled(&seb, Some(&kjv), &passages, &lookup, 60, labels())
+        .expect("compose");
+    let lone =
+        compose_bible_slides_labelled(&seb, None, &passages[..1], &HashMap::new(), 5, labels())
+            .expect("compose");
+
+    // The SEB lines fit 60 chars together, the KJV lines (102) do not.
+    assert_eq!(split.len(), 2);
+    assert_eq!(lone.len(), 1);
+    assert_eq!(lone[0].content.main.value(), "2. Krátky verš.");
 }

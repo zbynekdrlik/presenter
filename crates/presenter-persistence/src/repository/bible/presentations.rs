@@ -48,6 +48,7 @@ impl Repository {
             .into_iter()
             .map(|r| (r.presentation_id, r.slide_count as usize))
             .collect();
+        let sermon_dates = self.sermon_dates().await?;
 
         let mut summaries = Vec::with_capacity(presentations.len());
         for model in presentations {
@@ -58,6 +59,7 @@ impl Repository {
                 id: BiblePresentationId::from_uuid(uuid),
                 name: model.name,
                 slide_count,
+                sermon_date: sermon_dates.get(&model.id).copied(),
             });
         }
         Ok(summaries)
@@ -75,6 +77,7 @@ impl Repository {
         else {
             return Ok(None);
         };
+        let sermon_date = self.sermon_date_of(&id_str).await?;
 
         let slide_models = bible_slide::Entity::find()
             .filter(bible_slide::Column::PresentationId.eq(id_str))
@@ -92,6 +95,7 @@ impl Repository {
             name: model.name,
             slides,
             created_at: model.created_at.into(),
+            sermon_date,
         }))
     }
 
@@ -117,6 +121,7 @@ impl Repository {
             name: trimmed.to_string(),
             slides: Vec::new(),
             created_at: now,
+            sermon_date: None,
         })
     }
 

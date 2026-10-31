@@ -48,3 +48,22 @@ paths:
   `#[test]` bodies; a helper-only body fails it).
 - After P1 merges: `/mutation-sweep` (`gh workflow run mutation-full.yml --ref main`); a survivor
   under `bible/sermon/` is P1 work, killed on `dev` with a test, never a follow-up ticket.
+
+## Persistence (P2a, P2b)
+
+- **A sermon IS a Bible presentation**: `bible_sermons.presentation_id` → `bible_presentations(id)`
+  ON DELETE CASCADE; the title is the presentation's name; deleting the presentation (Prepared
+  tab, AI tool, `/ui/study`) removes the sermon and its items.
+- **Deliberately NO foreign key from `bible_sermon_items.translation_code`** (spec §5.7): every
+  Bible re-import deletes the translation row and re-inserts it, and a cascading key would
+  delete the items. Items keep a text snapshot (`source_json`). The re-import test
+  `a_reimport_leaves_slides_sermons_and_items_byte_identical` fails if a key sneaks in.
+- Migration `m20261014_000003_bible_sermons.rs` is raw SQL (`IF NOT EXISTS`), like
+  `m20260410_000001_separate_bible`, so it reads like the spec; never edit it after it ran on
+  SNV/PP — the next change is a new migration.
+- Entities live in `entities/sermon.rs` (re-exported from `entities`: `bible_sermon`,
+  `bible_sermon_item`) because `entities.rs` sits at 927 production lines. String keys are
+  `auto_increment = false` and written with `Entity::insert(..).exec` (database skill #658).
+- `BiblePresentationSummary` / `BiblePresentation` carry `sermon_date: Option<NaiveDate>`
+  (`skip_serializing_if = "Option::is_none"`): filled by `sermon_dates()` / `sermon_date_of()`.
+  A new literal of either struct must name the field (E0063 is CI-only).

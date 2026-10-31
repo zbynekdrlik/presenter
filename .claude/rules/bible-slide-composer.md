@@ -55,3 +55,14 @@ server, so the badge and the split always agree.
   `resolume/legacy_bible_tests.rs`, not the over-long `resolume/tests.rs` (#487);
   reuse `tests::setup_bible_driver` (`pub(super)`, the 16-clip Arena with every
   Bible lane clip) instead of copying the arena/driver helpers.
+
+## Caller labels: `compose_bible_slides_labelled` (#851 P2a)
+
+`compose_bible_slides` is a thin wrapper: it builds today's integer-range labels and calls
+`compose_bible_slides_labelled(main, secondary, passages, lookup, limit, SlideLabels { main,
+translation })`, which holds the whole #828 loop. A sermon item passes its computed label
+("Hebrejom 11:1a (SEB)") and the secondary book's plain-number label; the line format stays
+`"{verse}. {text}"` (the integer verse prefixes the line, the label carries the letter). A new
+caller with its own labels calls the labelled form; never fork the loop. "(SEB)" comes from
+`presenter_core::bible::sermon::translation_short_code` (one copy for the composer and the
+sermon labels).

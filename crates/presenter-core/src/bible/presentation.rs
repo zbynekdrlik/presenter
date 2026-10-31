@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::id::{BiblePresentationId, BibleSlideId};
@@ -12,6 +12,9 @@ pub struct BiblePresentation {
     pub name: String,
     pub slides: Vec<BiblePresentationSlide>,
     pub created_at: DateTime<Utc>,
+    /// The service date when the presentation is a sermon (#851 §7.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sermon_date: Option<NaiveDate>,
 }
 
 /// A single bible slide within a `BiblePresentation`.
@@ -34,6 +37,9 @@ pub struct BiblePresentationSummary {
     pub id: BiblePresentationId,
     pub name: String,
     pub slide_count: usize,
+    /// The service date when the presentation is a sermon (#851 §7.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sermon_date: Option<NaiveDate>,
 }
 
 #[cfg(test)]
@@ -71,6 +77,7 @@ mod tests {
             name: "Test".to_string(),
             slides: vec![],
             created_at: DateTime::<Utc>::from_timestamp(0, 0).unwrap(),
+            sermon_date: None,
         };
         let json = serde_json::to_string(&pres).unwrap();
         assert!(json.contains(r#""createdAt""#));
