@@ -941,6 +941,14 @@ test("desktop: a held Enter stops at ZOBRAZIŤ, a held key never steps a split p
 
     await page.keyboard.press("Enter");
     await expect.poll(() => shows.length).toBe(1);
+
+    // Only the keys that send are held back: a held Tab walks past the button.
+    await field.focus();
+    for (let press = 0; press < 8; press += 1) {
+      await page.keyboard.down("Tab");
+    }
+    await page.keyboard.up("Tab");
+    await expect(showButton(page)).not.toBeFocused();
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -976,6 +984,37 @@ test("a show answered after a newer verse never puts the older one back on the s
     await answered;
     await expect(showButton(page)).not.toHaveText("Zobrazujem…");
     await expect(reference).toHaveText("Hebrejom 11:3");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a clear that overtakes the show's answer leaves the strip empty", async ({ browser, request }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reachedServer = false;
+    await page.route("**/bible/trigger-slide", async (route) => {
+      const response = await route.fetch();
+      reachedServer = true;
+      await held;
+      await route.fulfill({ response });
+    });
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect.poll(() => reachedServer).toBe(true);
+    expect((await request.post(new URL("/bible/clear", baseURL).toString(), { data: {} })).ok()).toBeTruthy();
+    const onAir = page.locator('[data-role="console-on-air"]');
+    await expect(onAir).toHaveText("Na stene: nič");
+    const reread = page.waitForResponse("**/bible/active-slide");
+    release();
+    await reread;
+    await expect(showButton(page)).not.toHaveText("Zobrazujem…");
+    await expect(onAir).toHaveAttribute("data-live", "false");
     expect(errors).toEqual([]);
   } finally {
     await context.close();
