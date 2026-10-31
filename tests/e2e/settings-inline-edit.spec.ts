@@ -116,6 +116,8 @@ async function waitForToast(page: Page, expected: string | RegExp): Promise<void
   const toast = page.locator('[data-role="settings-toast"]');
   await expect(toast).toHaveAttribute('data-visible', 'true', { timeout: 20_000 });
   await expect(toast).toHaveText(expected);
+  // Never in the way of what is under it (#875).
+  await expect(toast).toHaveCSS('pointer-events', 'none');
   await expect(toast).toHaveAttribute('data-visible', 'false');
 }
 
