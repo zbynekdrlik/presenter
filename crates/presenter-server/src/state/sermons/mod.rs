@@ -9,6 +9,9 @@
 
 mod commit;
 mod generate;
+mod view;
+
+pub(crate) use view::{SermonDetail, SermonItemView, SermonList, SermonSlideView};
 
 use chrono::NaiveDate;
 

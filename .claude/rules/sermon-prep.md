@@ -107,3 +107,24 @@ paths:
 - Dev2's `presenter-dev.service.d/gst-debug.conf` lists `presenter::bible::show=info` but not
   `presenter::bible::sermon`, so dev's journal shows no sermon lines; check T8 on SNV
   (`journalctl -u presenter | grep presenter::bible::sermon`).
+
+## The API (P4a–P4d, `router/bible/sermons.rs`, `state/sermons/{view,write,snapshot,maintain,guard}.rs`)
+
+- JSON camelCase, query parameters snake_case (the one exception, `DELETE …/items/{id}?expectedRevision=`,
+  accepts `expected_revision` too). Every write carries `expectedRevision` and answers the full
+  `SermonDetail`; `warnings` is filled only on a write answer.
+- **`sermon_error` is the ONE place a sermon handler turns an error into a response** — every
+  state call ends `.map_err(sermon_error)?`: WARN log with the cause (spec §12), then
+  `SermonRefusal` → 422 (from P4b) and everything else through the central
+  `From<anyhow::Error> for AppError` (404 `NotFound`, 409 `Conflict`, 502/503 NLT, else 500).
+  A 400 is decided in the handler (`translation or refreshSource is required`); axum's own
+  rejections give 400 (bad UUID path) / 422 (bad JSON).
+- `sourceChanged` (view.rs) = some snapshot verse differs from the database text now, or is
+  gone (read through `bible_passage_range`). A re-import never regenerates sermon slides.
+- `router/access_identity.rs` `access_email(headers, peer)`: `Cf-Access-Authenticated-User-Email`
+  only from a loopback peer (cloudflared) or no peer (tests) — the #793 `extract_client_ip`
+  rule; trimmed, lower case, must contain `@`, ≤ 254 chars. A LABEL (stored as `author_email`
+  on create, logged on every write), never a permission. `GET /bible/study/identity` →
+  `{"email": … | null}` (lives here until D4 creates `router/bible/study.rs`).
+- Router tests drive `build_router(state)` with `oneshot`; a LAN peer is simulated by inserting
+  `ConnectInfo(SocketAddr)` into the request extensions.

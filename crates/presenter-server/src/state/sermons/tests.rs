@@ -373,3 +373,97 @@ async fn a_new_character_limit_regenerates_future_sermons_only() {
         "same limit, no pass"
     );
 }
+
+// ---- #851 P4a: the sermon reads ---------------------------------------------
+
+fn date(text: &str) -> chrono::NaiveDate {
+    chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").expect("date")
+}
+
+#[tokio::test]
+async fn the_detail_names_items_and_owns_their_slides() {
+    let state = hebrews().await;
+    let cut = item(1..=1, &[(1, &[7, 8, 9, 10, 11])]);
+    let id = stored_sermon(&state, local_today(), vec![cut, item(2..=3, &[])]).await;
+    state.regenerate_future_sermons(local_today()).await;
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+
+    assert_eq!(detail.sermon.revision, 2);
+    let labels: Vec<&str> = detail
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Hebrejom 11:1a (SEB)", "Hebrejom 11:2-3 (SEB)"]);
+    assert_eq!(
+        detail.items[0].rendered_text,
+        "1. Viera je zárukou toho, v čo dúfame"
+    );
+    let owners: Vec<Uuid> = detail.slides.iter().map(|slide| slide.item_id).collect();
+    assert_eq!(
+        owners,
+        [detail.items[0].record.id, detail.items[1].record.id]
+    );
+    assert_eq!(detail.items[0].slide_ids, [detail.slides[0].slide.id]);
+    assert!(detail.items.iter().all(|item| !item.source_changed));
+    assert!(detail.warnings.is_empty());
+    let unknown = state
+        .sermon_detail(BiblePresentationId::new())
+        .await
+        .expect("detail");
+    assert!(unknown.is_none());
+}
+
+#[tokio::test]
+async fn a_changed_database_text_flags_the_item_and_keeps_its_snapshot() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=2, &[])]).await;
+
+    seed(
+        &state,
+        "slk-seb",
+        "sk",
+        "Hebrejom",
+        &[SEB[0], "Iné znenie druhého verša.", SEB[2]],
+    )
+    .await;
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert!(detail.items[0].source_changed);
+    assert_eq!(
+        detail.items[0].record.source[1].text, SEB[1],
+        "the snapshot stays"
+    );
+}
+
+#[tokio::test]
+async fn the_list_carries_the_server_dates_and_today_lists_todays_sermons() {
+    let state = hebrews().await;
+    let today = local_today();
+    let tomorrow = today.checked_add_days(Days::new(1)).expect("tomorrow");
+    let todays = stored_sermon(&state, today, Vec::new()).await;
+    stored_sermon(&state, tomorrow, Vec::new()).await;
+
+    let list = state.list_sermons(date("2026-10-14")).await.expect("list");
+    let on: Vec<BiblePresentationId> = state
+        .sermons_on(today)
+        .await
+        .expect("today")
+        .into_iter()
+        .map(|detail| detail.sermon.id)
+        .collect();
+
+    assert_eq!(list.today, date("2026-10-14"));
+    assert_eq!(list.default_service_date, date("2026-10-18"));
+    assert_eq!(list.sermons.len(), 2);
+    assert_eq!(on, [todays]);
+}
