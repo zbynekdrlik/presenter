@@ -8,7 +8,7 @@ use super::handlers::translation_short_code;
 /// reference with the SECONDARY translation's book name — "1 John 1:1-3 (KJV)",
 /// not the main "1 Ján 1:1-3 (KJV)". Without a secondary book the main name
 /// stays; without a secondary translation the text is empty.
-pub(super) fn legacy_translation_reference(
+pub(crate) fn legacy_translation_reference(
     reference: &presenter_core::BibleReference,
     secondary_book: Option<&str>,
     secondary_translation_code: Option<&str>,

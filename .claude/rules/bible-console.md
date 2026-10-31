@@ -42,6 +42,11 @@ paths:
   `<body>`, and the next Space goes to the global search, not to the next part. `show` itself
   refuses a second send. A failed show's inline error is set only while its verse is still the
   target; the toast always.
+- **A held key never sends:** the desktop Enter moves the focus to ZOBRAZIŤ and its auto-repeat
+  lands there, so the button drops `keydown` with `repeat` set. E2E: a second `keyboard.down`
+  without an `up` is the repeat.
+- **Whoever sends is on the strip:** `/bible/trigger` (Companion, AI) stores the wall output and
+  publishes `BibleSlide` too; only its Resolume path stays legacy until A2b.
 - **No layout shift under a press:** ZOBRAZIŤ and Zhasnúť prevent `pointerdown` / `mousedown`'s
   default too. A blur removes the inline button, everything below moves up and the click lands on
   nothing: on a short verse the first tap with the keyboard open was lost (a long one hid it, the

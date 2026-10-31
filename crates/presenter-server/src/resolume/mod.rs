@@ -30,6 +30,7 @@ mod latency_tests;
 #[cfg(test)]
 mod legacy_bible_tests;
 mod legacy_reference;
+pub(crate) use legacy_reference::legacy_translation_reference;
 mod mapping_refresh;
 #[cfg(test)]
 mod mapping_refresh_tests;
