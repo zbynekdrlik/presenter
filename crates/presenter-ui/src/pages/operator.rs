@@ -97,11 +97,13 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         let presentations = ctx.presentations;
         let selected_library_id = ctx.selected_library_id;
         let stage_text_mode = ctx.stage_text_mode;
+        let active_bible_slide = ctx.active_bible_slide;
         let connected_before = std::cell::Cell::new(false);
         Effect::new(move || {
             let state = ws_state.get();
             if state == ws::WsState::Connected {
                 if connected_before.get() {
+                    crate::pages::bible_console::refresh_on_air(active_bible_slide);
                     leptos::task::spawn_local(async move {
                         if let Ok(libs) = crate::api::libraries::list_libraries().await {
                             libraries.set(libs);
@@ -610,6 +612,12 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
             if let Some(active) = crate::utils::window::document().active_element() {
                 let tag = active.tag_name();
                 if tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" {
+                    return;
+                }
+                // Space presses a focused ZOBRAZIŤ like any button (spec §7.3).
+                if key == " "
+                    && active.get_attribute("data-role").as_deref() == Some("console-show")
+                {
                     return;
                 }
             }

@@ -1,0 +1,274 @@
+/* The verse console (#850 B2a, spec §7.1; mockup bible-phone-and-study-v2).
+   Phone and desktop share it; every control is at least 44 px. */
+
+.console {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bible__classic {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* ── On-air strip ── */
+.console-on-air {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 62px; /* Zhasnúť's 44 px or two lines: a verse's arrival moves nothing below */
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+.console-on-air[data-live="true"] {
+  background: #3b1418;
+  border-color: #dc2626;
+  color: #fecaca;
+}
+.console-on-air[data-live="true"] b {
+  color: #ffffff;
+}
+.console-on-air__text {
+  flex: 1;
+  min-width: 0;
+}
+.console-on-air__codes {
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.console-clear-live {
+  flex: none;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid #fca5a5;
+  border-radius: 12px;
+  background: transparent;
+  color: #fecaca;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* ── Field ── */
+.console-field {
+  position: relative;
+  display: flex;
+}
+.console-field__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0 52px 0 12px;
+  border: 1.5px solid #334155;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 16px;
+}
+.console-field__input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.console-field__clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+/* ── Rows, chips, hint ── */
+.console-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.console-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #e2e8f0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.console-row[aria-pressed="true"] {
+  background: #1e3a8a;
+  outline: 1.5px solid #3b82f6;
+}
+.console-row__label {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.console-row__detail {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.console-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.console-chips__label {
+  color: #94a3b8;
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.console-chip {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: #1d3a5f;
+  color: #cfe2ff;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.console-chip[aria-pressed="true"] {
+  outline: 1.5px solid #3b82f6;
+}
+.console-hint {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #3a2a10;
+  color: #fcd9a0;
+  font-size: 0.85rem;
+}
+
+/* ── Preview card ── */
+.console-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #273449;
+}
+.console-preview[hidden] {
+  display: none;
+}
+.console-preview p {
+  margin: 0;
+}
+.console-preview__reference {
+  font-weight: 650;
+}
+.console-preview__main {
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+.console-preview__secondary {
+  color: #9cc3ff;
+  font-style: italic;
+  border-top: 1px solid #334155;
+  padding-top: 7px;
+}
+.console-preview__status,
+.console-preview__position {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+.console-preview__warning {
+  color: #fcd9a0;
+  font-size: 0.8rem;
+}
+.console-preview__error,
+.console-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+.console-preview__show {
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: #3b82f6;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+/* ── The sticky action bar ── */
+.console-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 8px 0;
+  background: var(--operator-panel);
+}
+.console-bar__show {
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: #3b82f6;
+  color: #ffffff;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.console-bar__show:disabled,
+.console-bar__show[aria-disabled="true"],
+.console-clear-live:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── Phone shell: the console IS the Bible Live tab ── */
+body.operator[data-shell="phone"] .bible__classic {
+  display: none;
+}
+body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"]
+  .operator__panel--bible
+  .operator__slides-column {
+  display: none;
+}
+/* The bar sticks to the panel, the phone's one scroll container. */
+body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible {
+  position: static;
+  padding: 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+body.operator[data-shell="phone"] .console-bar {
+  background: var(--operator-bg);
+}
+body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,
+body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
+  overflow: visible;
+}

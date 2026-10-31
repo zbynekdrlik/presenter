@@ -662,6 +662,14 @@ async fn trigger_bible_passage_publishes_event_and_state() {
         }
         other => panic!("unexpected live event: {other:?}"),
     }
+    match rx.recv().await.unwrap() {
+        LiveEvent::BibleSlide { output } => {
+            assert_eq!(output.main_reference, "John 3:16 (TEST)");
+            assert_eq!(output.main_text, "16. For God so loved");
+            assert_eq!(state.active_bible_slide_output().await, Some(output));
+        }
+        other => panic!("expected the wall output, got {other:?}"),
+    }
 
     state.clear_bible_broadcast().await;
     match rx.recv().await.unwrap() {
@@ -670,6 +678,45 @@ async fn trigger_bible_passage_publishes_event_and_state() {
     }
 
     assert!(state.active_bible_broadcast().await.is_none());
+    assert!(state.active_bible_slide_output().await.is_none());
+}
+
+#[tokio::test]
+async fn trigger_bible_passage_without_secondary_text_has_no_secondary_reference() {
+    let state = AppState::in_memory().await.unwrap();
+    let translation = BibleTranslation::new("test", "Test", "en");
+    let reference = BibleReference::new("John", 3, 16, 16).unwrap();
+    let passage = BiblePassage::new(
+        reference.clone(),
+        translation.clone(),
+        "For God so loved".to_string(),
+    );
+    let batch = BibleIngestionBatch::new(translation, vec![passage]).unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .unwrap();
+    state
+        .set_bible_preferences(presenter_core::BiblePreferences {
+            secondary_translation: Some("test".to_string()),
+            ..presenter_core::BiblePreferences::default()
+        })
+        .await
+        .unwrap();
+
+    let overrides = crate::state::bible::BibleTriggerOverrides {
+        main_text: None,
+        translation_text: Some(String::new()),
+    };
+    state
+        .trigger_bible_passage("test", &reference, overrides)
+        .await
+        .unwrap();
+
+    let output = state.active_bible_slide_output().await.unwrap();
+    assert_eq!(output.secondary_text, "");
+    assert_eq!(output.secondary_reference, "");
 }
 
 #[test]

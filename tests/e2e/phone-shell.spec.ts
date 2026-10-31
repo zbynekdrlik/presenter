@@ -249,10 +249,16 @@ test("a phone on Piesne never mounts the stage-preview iframe (no second app)", 
   }
 });
 
-test("the Bible tab works on a phone today: 'zid' finds Hebrejom (resolver fallback)", async ({
+// #850 B2a-2: on a phone the console replaced these inputs; the desktop keeps
+// them (and this fallback) until B2c.
+test("desktop: the old Find-book filter reads 'zid' as Hebrejom (resolver fallback)", async ({
   browser,
 }) => {
-  const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator/bible");
+  const { context, page, errors } = await open(
+    browser,
+    { viewport: { width: 1280, height: 800 } },
+    "/ui/operator/bible",
+  );
   try {
     const main = page.locator('[data-role="main-translation"]');
     await main.selectOption("slk-seb");

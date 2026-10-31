@@ -4,9 +4,10 @@ use super::bible_show_log::{log_bible_show, BibleShowOrigin};
 use super::AppState;
 use crate::bible_remote::RemoteBibleError;
 use crate::live::LiveEvent;
-use crate::resolume::BibleUpdate;
+use crate::resolume::{legacy_translation_reference, BibleUpdate};
 use chrono::Utc;
 use presenter_bible::BibleImportSummary;
+use presenter_core::bible::sermon::translation_short_code;
 use presenter_core::{
     slide::BibleSlideMetadata, BibleBroadcast, BiblePreferences, BiblePresentation,
     BiblePresentationId, BiblePresentationSlide, BiblePresentationSummary, BibleReference,
@@ -30,6 +31,33 @@ struct TriggerSecondary {
     text: Option<String>,
     translation_code: Option<String>,
     book: Option<String>,
+}
+
+/// What a legacy trigger put on the wall, so `/bible/active-slide` and every
+/// `BibleSlide` reader (the console's on-air strip) see it too.
+fn legacy_slide_output(
+    broadcast: &BibleBroadcast,
+    secondary: &TriggerSecondary,
+) -> BibleSlideOutput {
+    let passage = &broadcast.passage;
+    BibleSlideOutput::new(
+        passage.text.clone(),
+        format!(
+            "{} ({})",
+            passage.reference.to_human_readable(),
+            translation_short_code(&passage.translation.code)
+        ),
+        secondary.text.clone().unwrap_or_default(),
+        legacy_translation_reference(
+            &passage.reference,
+            secondary.book.as_deref(),
+            secondary
+                .text
+                .as_ref()
+                .and(secondary.translation_code.as_deref()),
+        ),
+        broadcast.triggered_at,
+    )
 }
 
 /// What [`AppState::generate_bible_slides`] produced. `secondary_warning`
@@ -462,13 +490,19 @@ impl AppState {
             .await?;
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
+        let output = legacy_slide_output(&broadcast, &secondary);
         {
             let mut guard = self.bible.broadcast.write().await;
             *guard = Some(broadcast.clone());
         }
+        {
+            let mut guard = self.bible.slide_output.write().await;
+            *guard = Some(output.clone());
+        }
         self.live_hub.publish(LiveEvent::Bible {
             broadcast: broadcast.clone(),
         });
+        self.live_hub.publish(LiveEvent::BibleSlide { output });
         self.resolume_registry
             .bible_update(BibleUpdate {
                 passage: Some(broadcast.clone()),

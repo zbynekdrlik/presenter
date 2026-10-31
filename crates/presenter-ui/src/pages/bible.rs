@@ -5,6 +5,7 @@ use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
+use super::bible_console::BibleConsole;
 use super::bible_controls::SelectionControls;
 use super::bible_prepared::{BiblePreparedTab, BiblePresentationModal, BibleSettingsTab};
 use super::bible_reference::ReferenceInputs;
@@ -160,6 +161,7 @@ pub fn BiblePage() -> impl IntoView {
         let books_translation = bs.books_translation;
         let selected_book = bs.selected_book;
         let selected_chapter = bs.selected_chapter;
+        let translation_echo = bs.translation_echo;
         let verse_start = bs.verse_start;
         let verse_end = bs.verse_end;
         Effect::new(move || {
@@ -204,6 +206,7 @@ pub fn BiblePage() -> impl IntoView {
                                 chapter_count,
                                 verse_counts,
                             }));
+                            translation_echo.set(true);
                             selected_chapter.set(clamped.chapter);
                             verse_start.set(clamped.verse_start);
                             verse_end.set(clamped.verse_end);
@@ -250,8 +253,18 @@ pub fn BiblePage() -> impl IntoView {
             // Replace any pending timer with a new one.
             let bs_for_timer = bs_inner.clone();
             let ctx_for_timer = ctx_inner.clone();
+            let console_takes = bs_for_timer.console_takes;
+            let console_owns_grid = bs_for_timer.console_owns_grid;
+            let taken_at_start = console_takes.get_untracked();
+            let echo = bs_for_timer.translation_echo.get_untracked();
+            bs_for_timer.translation_echo.set(false);
             let new_timer = gloo_timers::callback::Timeout::new(300, move || {
-                load_passage(&bs_for_timer, &ctx_for_timer, false);
+                // The console took the grid during the wait, or holds it over
+                // a translation switch (#850).
+                let console_keeps = echo && console_owns_grid.get_untracked();
+                if console_takes.get_untracked() == taken_at_start && !console_keeps {
+                    load_passage(&bs_for_timer, &ctx_for_timer, false);
+                }
             });
             *pending.borrow_mut() = Some(new_timer);
         });
@@ -387,11 +400,16 @@ fn BibleLiveTab() -> impl IntoView {
             data-visible=move || if bible_tab.get() == "live" { "true" } else { "false" }
         >
             <TranslationSelectors />
-            <BookFilter />
-            <BookList />
-            <ReferenceInputs />
-            <LoadButton />
-            <SelectionControls />
+            <BibleConsole />
+            // The book / chapter / verse inputs: hidden in the phone shell
+            // (phone_shell.css), removed in B2c (#850).
+            <div class="bible__classic" data-role="bible-classic">
+                <BookFilter />
+                <BookList />
+                <ReferenceInputs />
+                <LoadButton />
+                <SelectionControls />
+            </div>
         </div>
     }
 }
@@ -696,7 +714,10 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     let selected_ids = bs.selected_slide_ids;
     let toast_message = ctx.toast_message;
     let toast_variant = ctx.toast_variant;
+    let console_takes = bs.console_takes;
+    let taken_at_start = console_takes.get_untracked();
 
+    bs.classic_loads.update(|n| *n += 1);
     loading.set(true);
     selected_ids.set(std::collections::HashSet::new());
 
@@ -733,7 +754,13 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     let history_signal = bs.loaded_passages_history;
     let warning_ctx = ctx.clone();
     leptos::task::spawn_local(async move {
-        match bible::resolve_slides(&req).await {
+        let answer = bible::resolve_slides(&req).await;
+        // The console took the grid while this was on its way (#850).
+        if console_takes.get_untracked() != taken_at_start {
+            loading.set(false);
+            return;
+        }
+        match answer {
             Ok(resp) => {
                 // #826: the slides loaded, but without the secondary text
                 // (its remote source is down) — always tell the operator.
