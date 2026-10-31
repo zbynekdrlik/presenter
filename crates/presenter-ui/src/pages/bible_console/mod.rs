@@ -326,7 +326,15 @@ fn show(c: Console, ctx: AppContext) {
     leptos::task::spawn_local(async move {
         match api::trigger_slide(&request).await {
             Ok(resp) => {
-                ctx.active_bible_slide.set(Some(resp.output));
+                // A verse sent while the answer travelled is the wall's truth.
+                ctx.active_bible_slide.update(|now| {
+                    if now
+                        .as_ref()
+                        .is_none_or(|on_air| on_air.triggered_at <= resp.output.triggered_at)
+                    {
+                        *now = Some(resp.output);
+                    }
+                });
                 c.show_error.set(None);
                 c.preview.update(|p| {
                     if let Preview::Ready {
