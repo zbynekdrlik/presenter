@@ -1020,3 +1020,35 @@ test("a clear that overtakes the show's answer leaves the strip empty", async ({
     await context.close();
   }
 });
+
+test("a show with a deaf socket and a failing re-read still reaches the strip", async ({ browser }) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  try {
+    let deaf = false;
+    await page.routeWebSocket(/\/live\/ws/, (ws) => {
+      const server = ws.connectToServer();
+      server.onMessage((message) => {
+        if (deaf) return;
+        ws.send(message);
+      });
+    });
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+
+    deaf = true;
+    await page.route("**/bible/active-slide", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+    );
+    await showButton(page).tap();
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    await expect(page.locator('[data-role="console-clear-live"]')).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
