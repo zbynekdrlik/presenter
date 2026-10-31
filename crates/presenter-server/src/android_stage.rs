@@ -643,6 +643,18 @@ mod tests {
     use presenter_core::AndroidStageDisplayId;
     use uuid::Uuid;
 
+    /// The watchdog's expected code and the built APK's stay in lockstep (#879):
+    /// a drift never upgrades the TVs, or reinstalls the app on every pass.
+    #[test]
+    fn expected_version_code_matches_the_built_apk() {
+        let gradle = include_str!("../../../android/presenter-stage/app/build.gradle.kts");
+        let line = format!("versionCode = {EXPECTED_STAGE_APK_VERSION_CODE}\n");
+        assert!(
+            gradle.contains(&line),
+            "expected `{line}` in build.gradle.kts"
+        );
+    }
+
     #[tokio::test]
     async fn launch_now_errors_on_unknown_id() {
         let registry = AndroidStageRegistry::new();

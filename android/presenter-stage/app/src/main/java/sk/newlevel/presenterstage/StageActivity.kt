@@ -140,7 +140,7 @@ class StageActivity : android.app.Activity() {
     }
 
     override fun onPause() {
-        wifiLock?.release()
+        wifiLock?.takeIf { it.isHeld }?.release()
         webView.onPause()
         super.onPause()
     }
