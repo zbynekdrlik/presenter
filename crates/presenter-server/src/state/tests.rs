@@ -665,7 +665,7 @@ async fn trigger_bible_passage_publishes_event_and_state() {
     match rx.recv().await.unwrap() {
         LiveEvent::BibleSlide { output } => {
             assert_eq!(output.main_reference, "John 3:16 (TEST)");
-            assert_eq!(output.main_text, "For God so loved");
+            assert_eq!(output.main_text, "16. For God so loved");
             assert_eq!(state.active_bible_slide_output().await, Some(output));
         }
         other => panic!("expected the wall output, got {other:?}"),
