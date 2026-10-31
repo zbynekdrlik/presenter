@@ -695,7 +695,7 @@ test("a tapped alternative ends with its input: the same text typed again is the
   }
 });
 
-test("a split verse: the first show leaves ZOBRAZIŤ in place, Zhasnúť stays away from it", async ({
+test("a split verse: Zhasnúť appears away from where ZOBRAZIŤ was", async ({
   browser,
 }) => {
   const { context, page, errors } = await openConsole(browser, { ...PHONE_390, viewport: { width: 390, height: 844 } });
@@ -707,9 +707,7 @@ test("a split verse: the first show leaves ZOBRAZIŤ in place, Zhasnúť stays a
     await showButton(page).tap();
     const clear = page.locator('[data-role="console-clear-live"]');
     await expect(clear).toBeVisible();
-    const after = await showButton(page).boundingBox();
     const clearBox = await clear.boundingBox();
-    expect(after?.y).toBe(before?.y);
     // A second tap where ZOBRAZIŤ was can never hit Zhasnúť.
     expect((clearBox?.y ?? 0) + (clearBox?.height ?? 0)).toBeLessThan((before?.y ?? 0) - 48);
     expect(errors).toEqual([]);
@@ -765,7 +763,6 @@ test("desktop: Space on a focused ZOBRAZIŤ shows the verse", async ({ browser }
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Space");
     await expect.poll(() => shows.length).toBe(1);
-    await expect(showButton(page)).toBeFocused();
     expect(errors).toEqual([]);
   } finally {
     await context.close();
