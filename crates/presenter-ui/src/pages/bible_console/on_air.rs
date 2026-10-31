@@ -3,8 +3,9 @@
 //! by the operator WS (`BibleSlide` / `BibleCleared`), by this console's own
 //! shows, and re-read from `GET /bible/active-slide` on mount and whenever the
 //! page becomes visible again or the socket reconnects (either may have missed
-//! it). Zhasnúť sits here, the whole page away from ZOBRAZIŤ: the strip keeps
-//! its height, so it appears under nobody's finger.
+//! it). Zhasnúť sits here, the whole page away from ZOBRAZIŤ, so it appears
+//! under nobody's finger. The strip holds two lines of text at its own height;
+//! the codes run on with the reference to stay within them.
 
 use leptos::prelude::*;
 use presenter_core::BibleSlideOutput;
@@ -77,9 +78,9 @@ pub(super) fn OnAirStrip() -> impl IntoView {
                         <span class="console-on-air__text">
                             "Na stene: "
                             <b data-role="console-on-air-reference">{reference}</b>
-                        </span>
-                        <span class="console-on-air__codes" data-role="console-on-air-codes">
-                            {codes}
+                            <span class="console-on-air__codes" data-role="console-on-air-codes">
+                                {codes}
+                            </span>
                         </span>
                     }
                         .into_any()

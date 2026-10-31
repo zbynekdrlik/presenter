@@ -2,7 +2,9 @@
 //! sends to the wall; Zhasnúť lives in the on-air strip, never near it.
 //! Stepping (◀ / ĎALŠÍ / ▶) comes with B2b. A press keeps the focus in the
 //! field: a blur removes the preview's own button, this one moves up under the
-//! finger and the click lands on nothing.
+//! finger and the click lands on nothing. A show in flight only marks it busy
+//! (`show` refuses a second one): `disabled` would drop the keyboard focus, and
+//! Space would then go to the global search instead of the next part.
 
 use leptos::prelude::*;
 
@@ -58,7 +60,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 class="console-bar__show"
                 data-role="console-show"
                 node_ref=show_button
-                disabled=move || !c.can_show.get()
+                disabled=move || !c.ready.get()
+                aria-disabled=move || if c.showing.get() { "true" } else { "false" }
                 on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
                 on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click={

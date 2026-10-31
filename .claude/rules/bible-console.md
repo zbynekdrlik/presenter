@@ -34,8 +34,14 @@ paths:
   `page.route` and releases it after the competing input is confirmed; a request is never
   unrouted before it answered.
 
-- **Zhasnúť lives in the on-air strip**, at the other end of the page from ZOBRAZIŤ: the strip's
-  `min-height` keeps its place, so a second tap on a split verse never clears the wall.
+- **Zhasnúť lives in the on-air strip**, at the other end of the page from ZOBRAZIŤ, so a second
+  tap on a split verse never clears the wall. The strip's `min-height` holds two lines of text and
+  the codes run on with the reference (a separate flex item left it three lines at 360 px); only a
+  reference longer than that, a long verse list, moves the field.
+- **A show in flight is `aria-disabled`, never `disabled`:** a disabled button drops the focus to
+  `<body>`, and the next Space goes to the global search, not to the next part. `show` itself
+  refuses a second send. A failed show's inline error is set only while its verse is still the
+  target; the toast always.
 - **No layout shift under a press:** ZOBRAZIŤ and Zhasnúť prevent `pointerdown` / `mousedown`'s
   default too. A blur removes the inline button, everything below moves up and the click lands on
   nothing: on a short verse the first tap with the keyboard open was lost (a long one hid it, the

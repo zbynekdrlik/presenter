@@ -344,7 +344,9 @@ fn show(c: Console, ctx: AppContext) {
             }
             Err(e) => {
                 let message = format!("Verš sa nezobrazil: {e}");
-                c.show_error.set(Some(message.clone()));
+                if c.target_key.get_untracked().as_deref() == Some(key.as_str()) {
+                    c.show_error.set(Some(message.clone()));
+                }
                 ctx.show_toast(&message, "error");
             }
         }

@@ -20,7 +20,7 @@
   justify-content: space-between;
   gap: 8px;
   box-sizing: border-box;
-  min-height: 62px; /* Zhasnúť's 44 px: its arrival moves nothing below */
+  min-height: 62px; /* Zhasnúť's 44 px or two lines: a verse's arrival moves nothing below */
   padding: 8px 10px;
   border-radius: 10px;
   background: #1e293b;
@@ -41,6 +41,7 @@
   min-width: 0;
 }
 .console-on-air__codes {
+  margin-left: 6px;
   white-space: nowrap;
 }
 
@@ -241,6 +242,7 @@
   cursor: pointer;
 }
 .console-bar__show:disabled,
+.console-bar__show[aria-disabled="true"],
 .console-clear-live:disabled {
   opacity: 0.45;
   cursor: default;
