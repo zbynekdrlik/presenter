@@ -863,7 +863,21 @@ test("a show that fails after its verse left says so in a toast, not on the empt
     await page.locator('[data-role="console-clear-field"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
     release();
-    await expect(page.locator('[data-role="toast"]')).toHaveAttribute("data-visible", "true");
+    const toast = page.locator('[data-role="toast"]');
+    await expect(toast).toHaveAttribute("data-visible", "true");
+    // Above the bar, whose buttons it would hide (#875).
+    const [toastBox, barBox] = await Promise.all([
+      toast.boundingBox(),
+      page.locator('[data-role="console-bar"]').boundingBox(),
+    ]);
+    expect(toastBox!.y + toastBox!.height).toBeLessThanOrEqual(barBox!.y);
+    // The same with the field focused: the tab bar goes and the bar drops.
+    await page.locator('[data-role="console-field"]').focus();
+    const [focusedToast, focusedBar] = await Promise.all([
+      toast.boundingBox(),
+      page.locator('[data-role="console-bar"]').boundingBox(),
+    ]);
+    expect(focusedToast!.y + focusedToast!.height).toBeLessThanOrEqual(focusedBar!.y);
     await expect(page.locator('[data-role="console-show-error"]')).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {

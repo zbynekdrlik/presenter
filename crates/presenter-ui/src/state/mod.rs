@@ -221,10 +221,6 @@ pub fn show_toast_on(
 ) {
     toast_variant.set(variant.to_string());
     toast.set(Some(msg.to_string()));
-    gloo_timers::callback::Timeout::new(3_500, move || {
-        toast.set(None);
-    })
-    .forget();
 }
 
 impl Default for AppContext {

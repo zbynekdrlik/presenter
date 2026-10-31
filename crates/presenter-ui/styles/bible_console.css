@@ -305,6 +305,19 @@ body.operator[data-shell="phone"]:has(.console-field__input:focus) .console-bar 
     bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
   }
 }
+/* A toast never covers the bar's buttons. */
+body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"] .operator__toast {
+  bottom: calc(132px + env(safe-area-inset-bottom));
+}
+body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"]:has(.console-field__input:focus)
+  .operator__toast {
+  bottom: calc(max(var(--kb-inset, 0px), env(safe-area-inset-bottom)) + 72px);
+}
+@media (orientation: landscape) and (min-width: 560px) {
+  body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"] .operator__toast {
+    bottom: calc(max(var(--kb-inset, 0px), env(safe-area-inset-bottom)) + 72px);
+  }
+}
 body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,
 body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   overflow: visible;

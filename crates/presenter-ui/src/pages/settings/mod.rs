@@ -30,6 +30,7 @@ mod row_status;
 mod trash;
 mod video_sources;
 
+use crate::components::toast::hide_after_last_message;
 use ableton::AbletonCard;
 use android::AndroidCard;
 use companion::CompanionCard;
@@ -82,7 +83,8 @@ pub(super) fn capitalize(s: &str) -> String {
 /// Shared toast handle threaded into every card. `RwSignal` is `Copy + Send +
 /// Sync`, so this passes cleanly into Leptos `For`/event closures (a plain
 /// closure prop is neither `Send` nor `Sync`). Mirrors the old `showToast`
-/// helper: shows a message + variant, then auto-hides after `TOAST_HIDE_MS`.
+/// helper: shows a message + variant; `hide_after_last_message` hides it after
+/// `TOAST_HIDE_MS`.
 #[derive(Clone, Copy)]
 pub(super) struct ToastHandle {
     message: RwSignal<String>,
@@ -95,11 +97,6 @@ impl ToastHandle {
         self.state.set(variant.to_string());
         self.message.set(msg.to_string());
         self.visible.set(true);
-        let visible = self.visible;
-        gloo_timers::callback::Timeout::new(TOAST_HIDE_MS, move || {
-            visible.set(false);
-        })
-        .forget();
     }
 }
 
@@ -135,6 +132,7 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
         visible: RwSignal::new(false),
         state: RwSignal::new(String::from("info")),
     };
+    hide_after_last_message(toast.message, toast.visible, TOAST_HIDE_MS);
 
     // The standalone page is the sole owner of `data-role="toast"`. When embedded
     // in the operator shell, the operator already renders its own

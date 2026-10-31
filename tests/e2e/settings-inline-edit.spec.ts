@@ -116,6 +116,8 @@ async function waitForToast(page: Page, expected: string | RegExp): Promise<void
   const toast = page.locator('[data-role="settings-toast"]');
   await expect(toast).toHaveAttribute('data-visible', 'true', { timeout: 20_000 });
   await expect(toast).toHaveText(expected);
+  // Never in the way of what is under it (#875).
+  await expect(toast).toHaveCSS('pointer-events', 'none');
   await expect(toast).toHaveAttribute('data-visible', 'false');
 }
 
@@ -148,6 +150,25 @@ function resolumeRow(page: Page, id: string) {
 function androidRow(page: Page, id: string) {
   return page.locator(`[data-role="android-display-list"] li[data-id="${id}"]`);
 }
+
+test('#875 a second settings toast gets its full time', async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await gotoOperatorSettings(page);
+  const save = page.locator('[data-role="ableset-submit"]');
+  const toast = page.locator('[data-role="settings-toast"]');
+
+  await save.click();
+  await expect(toast).toHaveAttribute('data-visible', 'true', { timeout: 20_000 });
+  await page.waitForTimeout(2_500);
+  await save.click();
+  await expect(save).toBeEnabled();
+  // Past the moment the first toast would have ended.
+  await page.waitForTimeout(2_500);
+  await expect(toast).toHaveAttribute('data-visible', 'true');
+  await expect(toast).toHaveAttribute('data-visible', 'false');
+  expect(errors).toEqual([]);
+});
 
 test('#819 Resolume: Edit opens in the clicked row, Cancel restores, Save persists', async ({
   page,

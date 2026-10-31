@@ -8,6 +8,7 @@
 import { test, expect } from "@playwright/test";
 import {
   assertTwoColumnLayout,
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -3092,6 +3093,45 @@ test.describe("Bible workflow fixes (issue #256)", () => {
       }
     }
 
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("#875 a toast goes away by itself, and a new one gets its full time", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    attachConsoleErrorCollector(page, consoleMessages);
+    const names: string[] = [];
+    page.on("dialog", (dialog) => {
+      const name = `Toast ${Date.now()}`;
+      names.push(name);
+      void dialog.accept(name);
+    });
+    await navigateToBible(page);
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+    const create = biblePanel(page).locator('[data-role="presentation-create"]');
+    const toast = page.locator('[data-role="toast"]');
+
+    await create.click();
+    await expect(toast).toHaveAttribute("data-visible", "true");
+    await expect(toast).toHaveAttribute("data-visible", "false");
+
+    // The second toast outlives the moment the first one would have ended.
+    await create.click();
+    await expect(toast).toHaveAttribute("data-visible", "true");
+    await page.waitForTimeout(2_500);
+    await create.click();
+    await expect(toast).toContainText(names[2]);
+    await page.waitForTimeout(2_000);
+    await expect(toast).toHaveAttribute("data-visible", "true");
+    await expect(toast).toHaveAttribute("data-visible", "false");
+
+    const stored: { id: string; name: string }[] = await (
+      await page.request.get(`${baseURL}/bible/presentations`)
+    ).json();
+    for (const presentation of stored.filter((p) => names.includes(p.name))) {
+      await page.request.delete(`${baseURL}/bible/presentations/${presentation.id}`);
+    }
     expect(consoleMessages).toEqual([]);
   });
 });

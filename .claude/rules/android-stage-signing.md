@@ -41,3 +41,10 @@ TVs holding an APK signed with the old key still won't match once → one final 
 (handled by #734's watchdog; and with `EXPECTED_STAGE_APK_VERSION_CODE` unbumped the watchdog
 treats the installed copy as up-to-date and won't even attempt it until a real versionCode bump).
 From then on all builds share the committed key → clean `adb install -r` upgrades forever.
+
+## Every APK change is a versionCode bump (#879)
+
+The watchdog ships an APK only over a higher `versionCode`; `build.gradle.kts` and
+`EXPECTED_STAGE_APK_VERSION_CODE` stay equal (a test in `android_stage.rs` reads the gradle file).
+The Wi-Fi lock is held only on screen (`onResume`..`onPause`); check it live with
+`adb -s <tv> shell dumpsys wifi | grep presenter-stage`.
