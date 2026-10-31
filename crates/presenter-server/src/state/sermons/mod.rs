@@ -10,9 +10,11 @@
 mod commit;
 mod generate;
 mod guard;
+mod snapshot;
 mod view;
 mod write;
 
+pub(crate) use snapshot::ItemRange;
 pub(crate) use view::{SermonDetail, SermonItemView, SermonList, SermonSlideView};
 pub(crate) use write::SermonDraft;
 
@@ -43,6 +45,8 @@ impl SermonOrigin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SermonOp {
     Create,
+    Add,
+    Edit,
     Delete,
     Regenerate,
 }
@@ -51,6 +55,8 @@ impl SermonOp {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Create => "create",
+            Self::Add => "add",
+            Self::Edit => "edit",
             Self::Delete => "delete",
             Self::Regenerate => "regenerate",
         }

@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use presenter_core::bible::sermon::{ItemEdits, SourceVerse};
@@ -21,7 +21,7 @@ use super::super::access_identity::access_email;
 use super::super::integrations::extract_client_ip;
 use super::super::AppError;
 use crate::state::sermons::{
-    local_today, SermonDetail, SermonDraft, SermonItemView, SermonList, SermonOrigin,
+    local_today, ItemRange, SermonDetail, SermonDraft, SermonItemView, SermonList, SermonOrigin,
     SermonRefusal, SermonSlideView,
 };
 use crate::state::AppState;
@@ -34,6 +34,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/bible/sermons", get(list_sermons).post(create_sermon))
         .route("/bible/sermons/today", get(todays_sermons))
         .route("/bible/sermons/{id}", get(get_sermon).delete(delete_sermon))
+        .route("/bible/sermons/{id}/items", post(add_item))
+        .route("/bible/sermons/{id}/items/{item_id}/edits", put(put_edits))
         .route("/bible/study/identity", get(identity))
 }
 
@@ -122,6 +124,26 @@ struct CreateSermonRequest {
     default_translation: Option<String>,
     #[serde(default, deserialize_with = "double_option")]
     secondary_translation: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddItemRequest {
+    expected_revision: i64,
+    #[serde(default)]
+    position: Option<usize>,
+    translation: String,
+    book_code: String,
+    chapter: u16,
+    verse_start: u16,
+    verse_end: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditsRequest {
+    expected_revision: i64,
+    verses: ItemEdits,
 }
 
 /// serde double-`Option`: an ABSENT field is `None`, an explicit `null` is
@@ -306,6 +328,55 @@ async fn delete_sermon(
         .await
         .map_err(sermon_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
+async fn add_item(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<AddItemRequest>,
+) -> SermonResult {
+    let range = ItemRange {
+        translation: body.translation,
+        book_code: body.book_code,
+        chapter: body.chapter,
+        verse_start: body.verse_start,
+        verse_end: body.verse_end,
+    };
+    let detail = state
+        .add_sermon_item(
+            BiblePresentationId::from_uuid(id),
+            body.expected_revision,
+            body.position,
+            &range,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
+async fn put_edits(
+    State(state): State<AppState>,
+    Path((id, item_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<EditsRequest>,
+) -> SermonResult {
+    let detail = state
+        .set_sermon_item_edits(
+            BiblePresentationId::from_uuid(id),
+            item_id,
+            body.expected_revision,
+            &body.verses,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
 }
 
 #[instrument(skip_all)]

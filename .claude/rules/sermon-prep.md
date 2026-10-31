@@ -141,3 +141,10 @@ paths:
 - `DELETE /bible/sermons/{id}` deletes only a sermon (a plain presentation is 404 there).
 - The presentation DTOs carry `sermonDate` (skipped when `None`), so the operator UI (H1) can
   render sermons read-only.
+- **A write's shape** (`write.rs`, `maintain.rs`): `load_sermon` (404) → `check_revision` (409 BEFORE
+  any snapshot read) → compute the new item list in memory → `commit_and_view` (generation +
+  the in-transaction revision check + the detail with the write's warnings).
+- **`snapshot_item(ItemRange)`** checks, in this order: range sane → ≤ 60 verses (`end - start`
+  only after `end ≥ start`, no underflow) → not the NLT → translation installed → book code
+  canonical → the rows cover exactly `start..=end` (first `verse_start`, last `verse_end`).
+  One chapter per item: the client splits a cross-chapter selection.

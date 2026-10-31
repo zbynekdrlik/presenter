@@ -280,3 +280,72 @@ async fn a_sermons_slides_refuse_the_presentation_slide_routes() {
     let (_, detail) = call(&app, "GET", &uri, None, &[]).await;
     assert_eq!(detail["sermonDate"], json!(local_today()));
 }
+
+// ---- #851 P4c: add and edit items ----------------------------------------------
+
+async fn new_sermon(app: &Router) -> Value {
+    let body = json!({ "serviceDate": local_today(), "defaultTranslation": "slk-seb" });
+    let (status, sermon) = call(app, "POST", "/bible/sermons", Some(body), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{sermon}");
+    sermon
+}
+
+#[tokio::test]
+async fn add_and_edit_an_item_over_http() {
+    let app = app().await;
+    let id = new_sermon(&app).await["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let items = format!("/bible/sermons/{id}/items");
+    let item = json!({ "expectedRevision": 0, "translation": "slk-seb", "bookCode": "HEB",
+        "chapter": 11, "verseStart": 1, "verseEnd": 1 });
+
+    let (status, added) = call(&app, "POST", &items, Some(item), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(added["items"][0]["label"], "Hebrejom 11:1 (SEB)");
+    let item_id = added["items"][0]["id"]
+        .as_str()
+        .expect("item id")
+        .to_string();
+    let edits = json!({ "expectedRevision": 1,
+        "verses": { "1": { "deleted": [7, 8, 9, 10, 11], "emphasized": [0] } } });
+    let uri = format!("/bible/sermons/{id}/items/{item_id}/edits");
+    let (status, edited) = call(&app, "PUT", &uri, Some(edits), &[]).await;
+
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["revision"], 2);
+    assert_eq!(edited["items"][0]["label"], "Hebrejom 11:1a (SEB)");
+    assert_eq!(
+        edited["slides"][0]["mainText"],
+        "1. VIERA je zárukou toho, v čo dúfame"
+    );
+}
+
+#[tokio::test]
+async fn item_refusals_are_422_409_and_404() {
+    let app = app().await;
+    let id = new_sermon(&app).await["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let items = format!("/bible/sermons/{id}/items");
+    let nlt = json!({ "expectedRevision": 0, "translation": "eng-nlt", "bookCode": "HEB",
+        "chapter": 11, "verseStart": 1, "verseEnd": 1 });
+    let stale = json!({ "expectedRevision": 7, "translation": "slk-seb", "bookCode": "HEB",
+        "chapter": 11, "verseStart": 1, "verseEnd": 1 });
+
+    let (status, body) = call(&app, "POST", &items, Some(nlt), &[]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body["message"],
+        "NLT sa do kázne neukladá — vyber iný preklad"
+    );
+    let (status, body) = call(&app, "POST", &items, Some(stale), &[]).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["message"], "sermon changed on another device");
+    let edits = json!({ "expectedRevision": 0, "verses": {} });
+    let missing = format!("/bible/sermons/{id}/items/{}/edits", Uuid::new_v4());
+    let (status, _) = call(&app, "PUT", &missing, Some(edits), &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

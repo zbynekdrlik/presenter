@@ -634,3 +634,166 @@ async fn sermon_slides_are_read_only_on_the_presentation_paths() {
     assert_eq!(detail.sermon.title, "Nový názov");
     assert_eq!(detail.slides.len(), slides.len());
 }
+
+// ---- #851 P4c: add and edit items --------------------------------------------
+
+fn range(translation: &str, book_code: &str, verses: std::ops::RangeInclusive<u16>) -> ItemRange {
+    ItemRange {
+        translation: translation.to_string(),
+        book_code: book_code.to_string(),
+        chapter: 11,
+        verse_start: *verses.start(),
+        verse_end: *verses.end(),
+    }
+}
+
+#[tokio::test]
+async fn an_added_item_snapshots_the_text_and_owns_its_slides() {
+    let state = hebrews().await;
+    let sermon = new_sermon(&state).await;
+
+    let detail = state
+        .add_sermon_item(
+            sermon.sermon.id,
+            0,
+            None,
+            &range("slk-seb", "HEB", 1..=3),
+            &preacher(),
+        )
+        .await
+        .expect("add");
+
+    assert_eq!(detail.sermon.revision, 1);
+    let item = &detail.items[0];
+    let texts: Vec<&str> = item.record.source.iter().map(|v| v.text.as_str()).collect();
+    assert_eq!(texts, SEB);
+    assert_eq!(item.record.book_name, "Hebrejom");
+    assert_eq!(item.label, "Hebrejom 11:1-3 (SEB)");
+    assert!(!item.source_changed);
+    assert_eq!(detail.slides.len(), 1);
+    assert_eq!(detail.slides[0].item_id, item.record.id);
+    assert_eq!(item.slide_ids, [detail.slides[0].slide.id]);
+    assert!(item.rendered_text.starts_with("1. Viera je zárukou"));
+}
+
+#[tokio::test]
+async fn item_refusals_name_the_problem_in_slovak() {
+    let state = hebrews().await;
+    let id = new_sermon(&state).await.sermon.id;
+    let cases = [
+        (
+            range(NLT_CODE, "HEB", 1..=1),
+            "NLT sa do kázne neukladá — vyber iný preklad",
+        ),
+        (
+            range("slk-seb", "HEB", 1..=61),
+            "Položka môže mať najviac 60 veršov",
+        ),
+        (
+            range("slk-seb", "HEB", 1..=5),
+            "HEB 11:1-5 nie je celé v preklade SEB",
+        ),
+        (range("slk-seb", "XYZ", 1..=1), "Neznáma kniha XYZ"),
+        (
+            range("slk-xyz", "HEB", 1..=1),
+            "Preklad slk-xyz nie je nainštalovaný",
+        ),
+        (range("slk-seb", "HEB", 3..=2), "Neplatný rozsah veršov"),
+    ];
+
+    for (bad, message) in cases {
+        let err = state
+            .add_sermon_item(id, 0, None, &bad, &preacher())
+            .await
+            .expect_err("refused");
+        assert_eq!(refusal(&err).as_deref(), Some(message), "{bad:?}");
+    }
+    let unchanged = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert_eq!(unchanged.sermon.revision, 0);
+}
+
+#[tokio::test]
+async fn edits_are_normalized_and_a_bad_index_is_refused() {
+    let state = hebrews().await;
+    let id = new_sermon(&state).await.sermon.id;
+    let added = state
+        .add_sermon_item(id, 0, None, &range("slk-seb", "HEB", 1..=1), &preacher())
+        .await
+        .expect("add");
+    let item_id = added.items[0].record.id;
+    let mut edits = ItemEdits::default();
+    edits.0.insert(
+        1,
+        VerseEdits {
+            deleted: vec![11, 10, 9, 8, 7],
+            emphasized: vec![0, 7],
+        },
+    );
+
+    let edited = state
+        .set_sermon_item_edits(id, item_id, 1, &edits, &preacher())
+        .await
+        .expect("edit");
+
+    let stored = &edited.items[0];
+    assert_eq!(
+        stored.record.edits.verse(1),
+        Some(&VerseEdits {
+            deleted: vec![7, 8, 9, 10, 11],
+            emphasized: vec![0],
+        })
+    );
+    assert_eq!(stored.label, "Hebrejom 11:1a (SEB)");
+    assert_eq!(
+        edited.slides[0].slide.main.value(),
+        "1. VIERA je zárukou toho, v čo dúfame"
+    );
+    let mut bad = ItemEdits::default();
+    bad.0.insert(
+        1,
+        VerseEdits {
+            deleted: vec![40],
+            emphasized: Vec::new(),
+        },
+    );
+    let err = state
+        .set_sermon_item_edits(id, item_id, 2, &bad, &preacher())
+        .await
+        .expect_err("index past the verse");
+    assert_eq!(
+        refusal(&err).as_deref(),
+        Some("Verš 1 nemá slovo s indexom 40")
+    );
+}
+
+#[tokio::test]
+async fn a_stale_revision_is_refused_before_anything_changes() {
+    let state = hebrews().await;
+    let id = new_sermon(&state).await.sermon.id;
+    state
+        .add_sermon_item(id, 0, None, &range("slk-seb", "HEB", 1..=1), &preacher())
+        .await
+        .expect("add");
+
+    let err = state
+        .add_sermon_item(id, 0, None, &range("slk-seb", "HEB", 2..=2), &preacher())
+        .await
+        .expect_err("stale");
+
+    assert!(matches!(
+        err.downcast_ref::<presenter_persistence::RepositoryError>(),
+        Some(presenter_persistence::RepositoryError::Conflict(
+            presenter_persistence::SERMON_CONFLICT
+        ))
+    ));
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert_eq!((detail.sermon.revision, detail.items.len()), (1, 1));
+}
