@@ -59,7 +59,7 @@ microphones). Each implements `CardItem` for its DTO (id, key, label, `address()
 copy — buttons, delete question, tooltips, editor texts — plus the form's config),
 and builds the card-specific row parts (`RowParts`: status badge + aside, meta
 lines, warning, extra buttons). What the editor edits is the card's `EditorForm`
-(#852 C1b-1): `connection_form::ConnectionForm` (label / host / port / extra field
+(#852 C1b-1): `connection_form::ConnectionForm` (label / host / port
 / "Enabled", config `ConnectionSpec`) for the connection cards. A new kind of item
 gets its own `EditorForm` (values, `validate`, `render_fields`), never fields
 bolted onto `DraftValues`; `host_editor.rs` holds only the shared editor (state machine,
@@ -72,10 +72,9 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
 - **Edit** renders the editor IN the row; "+ Add …" renders it as the first `<li>`
   (`<role>-new-item`). `EditTarget` = Closed / New / Item(id). The draft lives at
   CARD level (`ListEditor`), outside the keyed rows, so a poll can never reset typing.
-- A card's extra field (Android's launch package) is part of the draft
-  (`DraftValues.extra`, `ConnectionSpec.extra`): `open_*` loads it, `begin_save`
-  validates it via `validate_draft`. Never a separate signal with its own paths.
-- Field `data-role`s (`host-label`, `android-component`, …) and the message ids
+- What a stage TV opens is never asked for (#879): the server launches the Presenter Stage
+  app, `launchComponent` is optional in the API (create = ours, update = the stored one stays).
+- Field `data-role`s (`host-label`, `android-label`, …) and the message ids
   (`resolume-form-status`, `android-form-status`) stay unique ONLY because one
   editor per card is open. Keep it that way, or the #459 aria-describedby specs
   break.
@@ -190,8 +189,7 @@ same lock, so a locked trigger can never open the editor:
   disabled and Escape is ignored (`ListEditor::cancel`). The late result can then
   never land on a different editor.
 - **`unsaved`** — the draft differs from what the editor was opened with (the
-  `dirty` Memo: the form's current `Values` != `loaded`, every field incl. the
-  extra one). Every OTHER trigger is locked, with the card's
+  `dirty` Memo: the form's current `Values` != `loaded`, every field). Every OTHER trigger is locked, with the card's
   `EditorSpec.unsaved_title` ("Save or cancel the open editor first" on the
   connection cards). Typing the stored value back unlocks again.
 - **`open`** — the trigger's own editor is already open ("+ Add" while adding).

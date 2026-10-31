@@ -1,5 +1,5 @@
 //! #852 C1b: the connection form of the Resolume and Android list cards — label,
-//! host, port, the card's optional extra field (Android's launch package) and
+//! host, port and
 //! "Enabled" — as an `host_editor::EditorForm`. Split out of `host_editor` (#819),
 //! which keeps only the editor state machine every list card shares; the
 //! markup, the `data-role`s, the copy and the checks are the #819 ones.
@@ -44,19 +44,6 @@ pub(super) fn validate_connection(
     })
 }
 
-/// A card's own extra text field in the editor (Android's launch package). Its value
-/// is part of the draft like every other field.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ExtraField {
-    pub(super) caption: &'static str,
-    pub(super) role: &'static str,
-    pub(super) placeholder: &'static str,
-    /// The value a new item starts with.
-    pub(super) default: &'static str,
-    /// The message when it is left empty.
-    pub(super) empty_message: &'static str,
-}
-
 /// What a connection editor holds: the values it was opened with, and what is on
 /// screen. The two differ exactly when the editor has unsaved changes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -66,8 +53,6 @@ pub(super) struct DraftValues {
     /// The port as typed (the input's text), validated only on save.
     pub(super) port: String,
     pub(super) enabled: bool,
-    /// The card's extra field (Android's launch package); empty when it has none.
-    pub(super) extra: String,
 }
 
 /// A validated connection submission.
@@ -75,27 +60,13 @@ pub(super) struct DraftValues {
 pub(super) struct Submission {
     pub(super) fields: ConnectionFields,
     pub(super) enabled: bool,
-    /// The trimmed extra field; empty when the card has none.
-    pub(super) extra: String,
 }
 
-/// Validate an editor's values: the shared fields first, then the card's extra field
-/// (required when the card has one), in the order the operator sees them.
-pub(super) fn validate_draft(
-    values: &DraftValues,
-    extra: Option<&ExtraField>,
-) -> Result<Submission, &'static str> {
-    let fields = validate_connection(&values.label, &values.host, &values.port)?;
-    let extra_value = values.extra.trim();
-    if let Some(field) = extra {
-        if extra_value.is_empty() {
-            return Err(field.empty_message);
-        }
-    }
+/// Validate an editor's values.
+pub(super) fn validate_draft(values: &DraftValues) -> Result<Submission, &'static str> {
     Ok(Submission {
-        fields,
+        fields: validate_connection(&values.label, &values.host, &values.port)?,
         enabled: values.enabled,
-        extra: extra_value.to_string(),
     })
 }
 
@@ -112,20 +83,14 @@ pub(super) struct ConnectionSpec {
     pub(super) host_placeholder: &'static str,
     /// The port a new item starts with.
     pub(super) default_port: u16,
-    pub(super) extra: Option<ExtraField>,
 }
 
 /// The values a new connection starts with: blank label and host, the card's
-/// port, enabled, the extra field's default.
+/// port, enabled.
 pub(super) fn connection_new_values(spec: &ConnectionSpec) -> DraftValues {
     DraftValues {
         port: spec.default_port.to_string(),
         enabled: true,
-        extra: spec
-            .extra
-            .map(|e| e.default)
-            .unwrap_or_default()
-            .to_string(),
         ..DraftValues::default()
     }
 }
@@ -137,7 +102,6 @@ pub(super) struct ConnectionForm {
     host: RwSignal<String>,
     port: RwSignal<String>,
     enabled: RwSignal<bool>,
-    extra: RwSignal<String>,
     spec: ConnectionSpec,
 }
 
@@ -152,7 +116,6 @@ impl EditorForm for ConnectionForm {
             host: RwSignal::new(String::new()),
             port: RwSignal::new(String::new()),
             enabled: RwSignal::new(true),
-            extra: RwSignal::new(String::new()),
             spec,
         }
     }
@@ -166,7 +129,6 @@ impl EditorForm for ConnectionForm {
         self.host.set(values.host.clone());
         self.port.set(values.port.clone());
         self.enabled.set(values.enabled);
-        self.extra.set(values.extra.clone());
     }
 
     fn values(self) -> DraftValues {
@@ -175,7 +137,6 @@ impl EditorForm for ConnectionForm {
             host: self.host.get(),
             port: self.port.get(),
             enabled: self.enabled.get(),
-            extra: self.extra.get(),
         }
     }
 
@@ -185,12 +146,11 @@ impl EditorForm for ConnectionForm {
             host: self.host.get_untracked(),
             port: self.port.get_untracked(),
             enabled: self.enabled.get_untracked(),
-            extra: self.extra.get_untracked(),
         }
     }
 
     fn validate(self, values: &DraftValues) -> Result<Submission, &'static str> {
-        validate_draft(values, self.spec.extra.as_ref())
+        validate_draft(values)
     }
 
     fn render_fields(
@@ -201,45 +161,38 @@ impl EditorForm for ConnectionForm {
     ) -> AnyView {
         let role = move |field: &str| format!("{}-{field}", spec.role);
         let aria_invalid = move || invalid.get().to_string();
-        let extra = self
-            .spec
-            .extra
-            .map(|field| render_extra_field(field, spec.message_id, self.extra, invalid));
         view! {
-            <>
-                <div class="settings__form-row settings__form-row--connection">
-                    <label>
-                        <span>"Label"</span>
-                        <input type="text" node_ref=first data-role=role("label")
-                            placeholder=self.spec.label_placeholder required
-                            aria-required="true"
-                            aria-describedby=spec.message_id
-                            aria-invalid=aria_invalid
-                            prop:value=move || self.label.get()
-                            on:input=move |ev| self.label.set(event_target_value(&ev)) />
-                    </label>
-                    <label>
-                        <span>"Hostname or DNS"</span>
-                        <input type="text" data-role=role("host") placeholder=self.spec.host_placeholder required
-                            aria-required="true"
-                            aria-describedby=spec.message_id
-                            aria-invalid=aria_invalid
-                            prop:value=move || self.host.get()
-                            on:input=move |ev| self.host.set(event_target_value(&ev)) />
-                    </label>
-                    <label class="settings__form-control--small">
-                        <span>"Port"</span>
-                        // No native min/max/required — see `validate_connection` (#455).
-                        <input type="number" data-role=role("port")
-                            aria-required="true"
-                            aria-describedby=spec.message_id
-                            aria-invalid=aria_invalid
-                            prop:value=move || self.port.get()
-                            on:input=move |ev| self.port.set(event_target_value(&ev)) />
-                    </label>
-                </div>
-                {extra}
-            </>
+            <div class="settings__form-row settings__form-row--connection">
+                <label>
+                    <span>"Label"</span>
+                    <input type="text" node_ref=first data-role=role("label")
+                        placeholder=self.spec.label_placeholder required
+                        aria-required="true"
+                        aria-describedby=spec.message_id
+                        aria-invalid=aria_invalid
+                        prop:value=move || self.label.get()
+                        on:input=move |ev| self.label.set(event_target_value(&ev)) />
+                </label>
+                <label>
+                    <span>"Hostname or DNS"</span>
+                    <input type="text" data-role=role("host") placeholder=self.spec.host_placeholder required
+                        aria-required="true"
+                        aria-describedby=spec.message_id
+                        aria-invalid=aria_invalid
+                        prop:value=move || self.host.get()
+                        on:input=move |ev| self.host.set(event_target_value(&ev)) />
+                </label>
+                <label class="settings__form-control--small">
+                    <span>"Port"</span>
+                    // No native min/max/required — see `validate_connection` (#455).
+                    <input type="number" data-role=role("port")
+                        aria-required="true"
+                        aria-describedby=spec.message_id
+                        aria-invalid=aria_invalid
+                        prop:value=move || self.port.get()
+                        on:input=move |ev| self.port.set(event_target_value(&ev)) />
+                </label>
+            </div>
         }
         .into_any()
     }
@@ -257,33 +210,11 @@ impl EditorForm for ConnectionForm {
     }
 }
 
-/// The card's extra text field (Android's launch package), on its own row.
-fn render_extra_field(
-    field: ExtraField,
-    message_id: &'static str,
-    value: RwSignal<String>,
-    invalid: Signal<bool>,
-) -> impl IntoView {
-    view! {
-        <div class="settings__form-row">
-            <label>
-                <span>{field.caption}</span>
-                <input type="text" data-role=field.role placeholder=field.placeholder required
-                    aria-required="true"
-                    aria-describedby=message_id
-                    aria-invalid=move || invalid.get().to_string()
-                    prop:value=move || value.get()
-                    on:input=move |ev| value.set(event_target_value(&ev)) />
-            </label>
-        </div>
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         connection_new_values, validate_connection, validate_draft, ConnectionFields,
-        ConnectionSpec, DraftValues, ExtraField, Submission,
+        ConnectionSpec, DraftValues, Submission,
     };
 
     #[test]
@@ -322,32 +253,16 @@ mod tests {
         }
     }
 
-    const PACKAGE: ExtraField = ExtraField {
-        caption: "Launch Package",
-        role: "android-component",
-        placeholder: "com.tcl.browser",
-        default: "com.tcl.browser",
-        empty_message: "Launch component cannot be empty.",
-    };
-
-    fn values(label: &str, port: &str, extra: &str) -> DraftValues {
-        DraftValues {
-            label: label.into(),
-            host: "sd1l.lan".into(),
-            port: port.into(),
-            enabled: false,
-            extra: extra.into(),
-        }
-    }
-
     #[test]
-    fn the_extra_field_is_part_of_the_submission_and_required_when_the_card_has_one() {
-        // Round 2, item 7: Android's launch package is validated like every field.
+    fn a_draft_becomes_a_trimmed_submission() {
+        let values = DraftValues {
+            label: "Stage ".into(),
+            host: "sd1l.lan".into(),
+            port: "5555".into(),
+            enabled: false,
+        };
         assert_eq!(
-            validate_draft(
-                &values("Stage", "5555", "  com.example/.Main "),
-                Some(&PACKAGE)
-            ),
+            validate_draft(&values),
             Ok(Submission {
                 fields: ConnectionFields {
                     label: "Stage".into(),
@@ -355,32 +270,16 @@ mod tests {
                     port: 5555,
                 },
                 enabled: false,
-                extra: "com.example/.Main".into(),
             })
-        );
-        assert_eq!(
-            validate_draft(&values("Stage", "5555", "   "), Some(&PACKAGE)),
-            Err("Launch component cannot be empty.")
-        );
-        // The shared fields come first, in screen order.
-        assert_eq!(
-            validate_draft(&values("Stage", "99999", ""), Some(&PACKAGE)),
-            Err("Port must be between 1 and 65535.")
-        );
-        // A card without an extra field never rejects (or sends) one.
-        assert_eq!(
-            validate_draft(&values("Stage", "5555", ""), None).map(|s| s.extra),
-            Ok(String::new())
         );
     }
 
     #[test]
-    fn a_new_connection_starts_with_the_cards_port_and_extra_default() {
+    fn a_new_connection_starts_with_the_cards_port() {
         let android = ConnectionSpec {
             label_placeholder: "Stage Left",
             host_placeholder: "sd1l.lan",
             default_port: 5555,
-            extra: Some(PACKAGE),
         };
         assert_eq!(
             connection_new_values(&android),
@@ -389,15 +288,7 @@ mod tests {
                 host: String::new(),
                 port: "5555".into(),
                 enabled: true,
-                extra: "com.tcl.browser".into(),
             }
         );
-        let resolume = ConnectionSpec {
-            default_port: 8090,
-            extra: None,
-            ..android
-        };
-        assert_eq!(connection_new_values(&resolume).port, "8090");
-        assert_eq!(connection_new_values(&resolume).extra, "");
     }
 }

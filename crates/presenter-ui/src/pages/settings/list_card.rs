@@ -73,7 +73,7 @@ pub(super) trait CardItem: Clone + Send + Sync + 'static {
 /// `<role>-delete`.
 pub(super) struct CardText<F: EditorForm> {
     pub(super) editor: EditorSpec,
-    /// The card's form config (placeholders, the extra field, the new item's port).
+    /// The card's form config (placeholders, the new item's port).
     pub(super) form: F::Config,
     /// `data-role` of the `<ul>`.
     pub(super) list_role: &'static str,

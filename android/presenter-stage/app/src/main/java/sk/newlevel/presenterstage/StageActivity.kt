@@ -1,7 +1,9 @@
 package sk.newlevel.presenterstage
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -33,6 +35,7 @@ class StageActivity : android.app.Activity() {
     private lateinit var webView: WebView
     private val handler = Handler(Looper.getMainLooper())
     private var currentUrl: String? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,7 +80,23 @@ class StageActivity : android.app.Activity() {
             }
         }
 
+        wifiLock = createWifiLock()
         loadFromIntent(intent)
+    }
+
+    /**
+     * A stage on Wi-Fi must not sleep between packets: power save adds up to
+     * ~100 ms to a text change (#879, SD3). The lock does nothing on a wired TV.
+     */
+    @Suppress("DEPRECATION")
+    private fun createWifiLock(): WifiManager.WifiLock? {
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        return wifi?.createWifiLock(mode, "presenter-stage")?.apply { setReferenceCounted(false) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -117,9 +136,11 @@ class StageActivity : android.app.Activity() {
         super.onResume()
         enterImmersive()
         webView.onResume()
+        wifiLock?.acquire()
     }
 
     override fun onPause() {
+        wifiLock?.takeIf { it.isHeld }?.release()
         webView.onPause()
         super.onPause()
     }

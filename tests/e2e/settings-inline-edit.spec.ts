@@ -382,7 +382,7 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     label: `InlineTv${stamp}`,
     host: 'tv-inline.invalid',
     port: 5555,
-    launchComponent: 'com.tcl.browser',
+    launchComponent: 'com.example/.Main',
     isEnabled: false,
   });
   const addedLabel = `AddedTv${stamp}`;
@@ -393,7 +393,7 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     const row = androidRow(page, display.id);
     await expect(row.locator('.settings__host-label')).toHaveText(display.label);
 
-    // Edit opens IN the row with the display's values, including the launch package.
+    // Edit opens IN the row with the display's values; the launch package is not asked for (#879).
     await page.locator(`[data-role="android-edit"][data-id="${display.id}"]`).click();
     const editor = row.locator('[data-role="android-editor"]');
     await expect(editor).toBeVisible();
@@ -401,24 +401,22 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     await expect(editor.locator('[data-role="android-label"]')).toHaveValue(display.label);
     await expect(editor.locator('[data-role="android-host"]')).toHaveValue('tv-inline.invalid');
     await expect(editor.locator('[data-role="android-port"]')).toHaveValue('5555');
-    await expect(editor.locator('[data-role="android-component"]')).toHaveValue('com.tcl.browser');
+    await expect(editor.locator('[data-role="android-component"]')).toHaveCount(0);
     await expect(editor).toBeInViewport();
 
-    // The launch package is part of the draft (round 2, item 7): changing only it is an
-    // unsaved change, so "+ Add display" is locked until Save or Cancel.
+    // An unsaved change locks "+ Add display" until Save or Cancel.
     const androidAdd = page.locator('[data-role="android-add"]');
     await expect(androidAdd).toBeEnabled();
-    await editor.locator('[data-role="android-component"]').fill('com.discarded/.Main');
+    await editor.locator('[data-role="android-label"]').fill(`${display.label}Discarded`);
     await expect(androidAdd).toBeDisabled();
     await expect(androidAdd).toHaveAttribute('data-lock', 'unsaved');
 
     // Cancel restores.
-    await editor.locator('[data-role="android-label"]').fill(`${display.label}Discarded`);
     await page.click('[data-role="android-cancel"]');
     await expect(androidAdd).toBeEnabled();
     await expect(page.locator('[data-role="android-editor"]')).toHaveCount(0);
     await expect(row.locator('.settings__host-label')).toHaveText(display.label);
-    await expect(row.locator('[data-role="android-component-value"]')).toHaveText('com.tcl.browser');
+    await expect(row.locator('[data-role="android-component-value"]')).toHaveCount(0);
     expect((await androidDisplay(page, display.id)).label).toBe(display.label);
 
     // Save persists — API read-back.
@@ -427,12 +425,10 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     await page.fill('[data-role="android-label"]', savedLabel);
     await page.fill('[data-role="android-host"]', 'tv-saved.invalid');
     await page.fill('[data-role="android-port"]', '5566');
-    await page.fill('[data-role="android-component"]', 'com.example/.Main');
     await page.click('[data-role="android-submit"]');
     await waitForToast(page, 'Saved Android stage display.');
     await expect(page.locator('[data-role="android-editor"]')).toHaveCount(0);
     await expect(row.locator('.settings__host-label')).toHaveText(savedLabel);
-    await expect(row.locator('[data-role="android-component-value"]')).toHaveText('com.example/.Main');
     const saved = await androidDisplay(page, display.id);
     expect(saved.label).toBe(savedLabel);
     expect(saved.host).toBe('tv-saved.invalid');
@@ -449,7 +445,7 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
       page.locator('[data-role="android-display-list"] > li').first(),
     ).toHaveAttribute('data-role', 'android-new-item');
     await expect(newItem.locator('[data-role="android-port"]')).toHaveValue('5555');
-    await expect(newItem.locator('[data-role="android-component"]')).toHaveValue('com.tcl.browser');
+    await expect(newItem.locator('[data-role="android-component"]')).toHaveCount(0);
     await newItem.locator('[data-role="android-label"]').fill(`${addedLabel}Cancelled`);
     await page.click('[data-role="android-cancel"]');
     await expect(page.locator('[data-role="android-new-item"]')).toHaveCount(0);
@@ -473,7 +469,7 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     addedId = added!.id;
     expect(added!.host).toBe('tv-added.invalid');
     expect(added!.port).toBe(5555);
-    expect(added!.launchComponent).toBe('com.tcl.browser');
+    expect(added!.launchComponent).toBe('sk.newlevel.presenterstage');
     await expect(androidRow(page, added!.id).locator('.settings__host-label')).toHaveText(addedLabel);
   } finally {
     await deleteVia(page, `${ANDROID_DISPLAYS}/${display.id}`);

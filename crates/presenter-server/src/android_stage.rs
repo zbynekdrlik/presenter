@@ -45,7 +45,7 @@ const KIOSK_PACKAGES_TO_SUPPRESS: &[&str] = &["com.tcl.browser", "com.fullykiosk
 /// TV's copy is older — so bumping the app's versionCode (and this constant)
 /// actually ships the new APK to TVs that already have an older one. Without this
 /// comparison, an already-installed (but stale) app would never be upgraded.
-const EXPECTED_STAGE_APK_VERSION_CODE: i64 = 1;
+const EXPECTED_STAGE_APK_VERSION_CODE: i64 = 2;
 
 /// Validate that a configured stage URL is a well-formed `http(s)://` URL before
 /// it is spliced into the `am start -a VIEW -d <url>` adb args (which reach the
@@ -642,6 +642,18 @@ mod tests {
     use super::*;
     use presenter_core::AndroidStageDisplayId;
     use uuid::Uuid;
+
+    /// The watchdog's expected code and the built APK's stay in lockstep (#879):
+    /// a drift never upgrades the TVs, or reinstalls the app on every pass.
+    #[test]
+    fn expected_version_code_matches_the_built_apk() {
+        let gradle = include_str!("../../../android/presenter-stage/app/build.gradle.kts");
+        let line = format!("versionCode = {EXPECTED_STAGE_APK_VERSION_CODE}\n");
+        assert!(
+            gradle.contains(&line),
+            "expected `{line}` in build.gradle.kts"
+        );
+    }
 
     #[tokio::test]
     async fn launch_now_errors_on_unknown_id() {

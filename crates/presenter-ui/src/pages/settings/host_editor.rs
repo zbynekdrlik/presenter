@@ -11,7 +11,7 @@
 //! [`ListEditor`] is the card's editor state machine; the card plumbing around it
 //! (fetch / save / delete / rows) is `list_card`. What the editor edits is the
 //! card's [`EditorForm`] (#852 C1b): `connection_form::ConnectionForm` — label,
-//! host, port, an optional extra field, "Enabled" — for Resolume and Android,
+//! host, port, "Enabled" — for Resolume and Android,
 //! `listen_form::MicForm` for the microphones. The draft lives at CARD level, outside
 //! the keyed `<For>` rows, so the 5 s status poll can never reset what the
 //! operator is typing. Its guards ([`trigger_lock`], round 2):
@@ -77,7 +77,7 @@ pub(super) trait EditorForm: Copy + Send + Sync + 'static {
     /// A validated submission.
     type Submission: 'static;
     /// What differs between two cards using the same form (placeholders, the
-    /// extra field, the new item's port).
+    /// new item's port).
     type Config: Copy + Send + Sync + 'static;
 
     /// The form's signals (created once per card).
@@ -714,28 +714,23 @@ mod tests {
         assert_eq!(TriggerLock::Open.data_lock(), "open");
     }
 
-    fn values(label: &str, port: &str, extra: &str) -> DraftValues {
+    fn values(label: &str, port: &str) -> DraftValues {
         DraftValues {
             label: label.into(),
             host: "sd1l.lan".into(),
             port: port.into(),
             enabled: false,
-            extra: extra.into(),
         }
     }
 
     #[test]
     fn the_draft_is_dirty_only_when_it_differs_from_what_was_loaded() {
-        let loaded = values("Stage", "5555", "com.tcl.browser");
+        let loaded = values("Stage", "5555");
         let open = EditTarget::Item("d1".into());
         assert!(!is_dirty(&open, &loaded, &loaded));
         // A closed editor is never dirty, whatever its stale signals hold.
-        assert!(!is_dirty(
-            &EditTarget::Closed,
-            &values("x", "1", ""),
-            &loaded
-        ));
-        // Every field counts, the extra field included.
+        assert!(!is_dirty(&EditTarget::Closed, &values("x", "1"), &loaded));
+        // Every field counts.
         let changed = [
             DraftValues {
                 label: "Other".into(),
@@ -751,10 +746,6 @@ mod tests {
             },
             DraftValues {
                 enabled: true,
-                ..loaded.clone()
-            },
-            DraftValues {
-                extra: "com.example/.Main".into(),
                 ..loaded.clone()
             },
         ];

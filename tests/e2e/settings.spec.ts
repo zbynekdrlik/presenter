@@ -36,7 +36,6 @@ const selectors = {
   androidLabel: '[data-role="android-label"]',
   androidHost: '[data-role="android-host"]',
   androidPort: '[data-role="android-port"]',
-  androidComponent: '[data-role="android-component"]',
   androidEnabled: '[data-role="android-enabled"]',
   androidSubmit: '[data-role="android-submit"]',
   androidList: '[data-role="android-display-list"]',
@@ -403,10 +402,6 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page.fill(selectors.androidLabel, label);
   await page.fill(selectors.androidHost, 'test-stage.invalid');
   await page.fill(selectors.androidPort, '5555');
-  await page.fill(
-    selectors.androidComponent,
-    'com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity'
-  );
   await page.check(selectors.androidEnabled);
   await page.click(selectors.androidSubmit);
   await waitForToast(page, 'Added Android stage display.');
@@ -429,7 +424,6 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page.fill(selectors.androidLabel, updatedLabel);
   await page.fill(selectors.androidHost, 'other-stage.invalid');
   await page.fill(selectors.androidPort, '5566');
-  await page.fill(selectors.androidComponent, 'com.example/.Main');
   await page.uncheck(selectors.androidEnabled);
   await page.click(selectors.androidSubmit);
   await waitForToast(page, 'Saved Android stage display.');
@@ -444,7 +438,7 @@ test('android stage launchers CRUD', async ({ page }) => {
   expect(updated!.port).toBe(5566);
   expect(
     updated!.launchComponent ?? updated!.launch_component
-  ).toBe('com.example/.Main');
+  ).toBe('sk.newlevel.presenterstage');
 
   // Delete the display.
   page.once('dialog', (dialog) => dialog.accept());
@@ -614,7 +608,6 @@ test('#455 out-of-range port is rejected, not silently saved', async ({ page }) 
   await page.fill(selectors.androidLabel, androidLabel);
   await page.fill(selectors.androidHost, 'stage.invalid');
   await page.fill(selectors.androidPort, '99999');
-  await page.fill(selectors.androidComponent, 'com.tcl.browser');
   await page.check(selectors.androidEnabled);
   await page.click(selectors.androidSubmit);
 

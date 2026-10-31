@@ -57,8 +57,10 @@ pub(crate) struct AndroidStageDisplayRequest {
     host: String,
     #[serde(default = "default_android_stage_port")]
     port: u16,
-    #[serde(default = "default_android_stage_launch_component")]
-    launch_component: String,
+    /// Absent (the Settings form): a new display gets our stage app, an update
+    /// keeps what is stored (#879).
+    #[serde(default)]
+    launch_component: Option<String>,
     #[serde(default = "super::default_true")]
     is_enabled: bool,
 }
@@ -66,16 +68,11 @@ pub(crate) struct AndroidStageDisplayRequest {
 const fn default_android_stage_port() -> u16 {
     DEFAULT_ADB_PORT
 }
-fn default_android_stage_launch_component() -> String {
-    DEFAULT_LAUNCH_PACKAGE.to_string()
-}
 
-fn normalize_launch_component(component: &str) -> String {
-    let trimmed = component.trim();
-    if trimmed.is_empty() {
-        DEFAULT_LAUNCH_PACKAGE.to_string()
-    } else {
-        trimmed.to_string()
+fn normalize_launch_component(component: Option<&str>) -> String {
+    match component.map(str::trim) {
+        Some(trimmed) if !trimmed.is_empty() => trimmed.to_string(),
+        _ => DEFAULT_LAUNCH_PACKAGE.to_string(),
     }
 }
 
@@ -106,7 +103,9 @@ pub(crate) async fn create_android_stage_display(
 ) -> Result<Json<AndroidStageDisplayDto>, AppError> {
     let draft = AndroidStageDisplayDraft::new(payload.label, payload.host)
         .with_port(payload.port)
-        .with_launch_component(normalize_launch_component(&payload.launch_component))
+        .with_launch_component(normalize_launch_component(
+            payload.launch_component.as_deref(),
+        ))
         .with_enabled(payload.is_enabled);
     let actor = extract_actor(&headers);
     let display = state
@@ -123,20 +122,23 @@ pub(crate) async fn update_android_stage_display(
     Path(id): Path<Uuid>,
     Json(payload): Json<AndroidStageDisplayRequest>,
 ) -> Result<Json<AndroidStageDisplayDto>, AppError> {
+    let id = AndroidStageDisplayId::from_uuid(id);
+    let stored = state
+        .list_android_stage_displays()
+        .await?
+        .into_iter()
+        .find(|display| display.id == id)
+        .map(|display| display.launch_component);
+    let launch_component = payload.launch_component.or(stored);
     let draft = AndroidStageDisplayDraft::new(payload.label, payload.host)
         .with_port(payload.port)
-        .with_launch_component(normalize_launch_component(&payload.launch_component))
+        .with_launch_component(normalize_launch_component(launch_component.as_deref()))
         .with_enabled(payload.is_enabled);
     let actor = extract_actor(&headers);
     // #633: `RepositoryError::NotFound` maps to 404 by default via the
     // centralized `From<anyhow::Error> for AppError`.
     let display = state
-        .update_android_stage_display(
-            AndroidStageDisplayId::from_uuid(id),
-            draft,
-            SettingsAuditSource::HttpSetter,
-            &actor,
-        )
+        .update_android_stage_display(id, draft, SettingsAuditSource::HttpSetter, &actor)
         .await?;
     let status = state.android_stage_status_for(display.id).await;
     Ok(Json(AndroidStageDisplayDto::from_display(display, status)))

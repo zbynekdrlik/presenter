@@ -40,7 +40,6 @@ static TEXT: CardText<ConnectionForm> = CardText {
         host_placeholder: "resolume.lan",
         // Arena's default web-server port.
         default_port: 8090,
-        extra: None,
     },
     list_role: "resolume-host-list",
     add_text: "+ Add connection",
@@ -99,7 +98,6 @@ impl CardItem for ResolumeHostDto {
             host: self.host.clone(),
             port: self.port.to_string(),
             enabled: self.is_enabled,
-            extra: String::new(),
         }
     }
 
