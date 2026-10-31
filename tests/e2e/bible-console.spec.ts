@@ -873,7 +873,7 @@ test("a show that fails after its verse left says so in a toast, not on the empt
 test("phone: the first verse on the wall moves neither the field nor ZOBRAZIŤ", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_360);
   try {
-    await page.locator('[data-role="secondary-translation"]').selectOption({ index: 2 });
+    await page.locator('[data-role="secondary-translation"]').selectOption("eng-kjv");
     const field = page.locator('[data-role="console-field"]');
     await field.fill("1 tes 5 16-18");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
