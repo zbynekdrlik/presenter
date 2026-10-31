@@ -40,7 +40,6 @@ const selectors = {
   androidLabel: '[data-role="android-label"]',
   androidHost: '[data-role="android-host"]',
   androidPort: '[data-role="android-port"]',
-  androidComponent: '[data-role="android-component"]',
   androidStatusId: 'android-form-status',
   // Companion card.
   companionPort: '[data-role="feature-companion-port"]',
@@ -120,7 +119,6 @@ test('settings required inputs carry aria-required across all cards', async ({ p
     selectors.androidLabel,
     selectors.androidHost,
     selectors.androidPort,
-    selectors.androidComponent,
     // Companion
     selectors.companionPort,
     // Video sources (toast-driven, aria-required only)
@@ -147,7 +145,6 @@ test('settings required inputs carry aria-required across all cards', async ({ p
     selectors.androidLabel,
     selectors.androidHost,
     selectors.androidPort,
-    selectors.androidComponent,
     selectors.companionPort,
   ]) {
     await assertDescribedByReachable(page, sel);
@@ -199,7 +196,6 @@ test('aria-invalid flips on a rejected submit and the described-by status carrie
   await page.fill(selectors.androidLabel, `Aria Display ${Date.now()}`);
   await page.fill(selectors.androidHost, 'stage.invalid');
   await page.fill(selectors.androidPort, '99999');
-  await page.fill(selectors.androidComponent, 'com.tcl.browser');
   await page.locator('[data-role="android-submit"]').click();
 
   const androidStatus = page.locator(`#${selectors.androidStatusId}`);
@@ -208,7 +204,6 @@ test('aria-invalid flips on a rejected submit and the described-by status carrie
   await expect(page.locator(selectors.androidLabel)).toHaveAttribute('aria-invalid', 'true');
   await expect(page.locator(selectors.androidHost)).toHaveAttribute('aria-invalid', 'true');
   await expect(page.locator(selectors.androidPort)).toHaveAttribute('aria-invalid', 'true');
-  await expect(page.locator(selectors.androidComponent)).toHaveAttribute('aria-invalid', 'true');
 
   expect(consoleMessages).toEqual([]);
 });

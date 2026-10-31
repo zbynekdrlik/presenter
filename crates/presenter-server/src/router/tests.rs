@@ -2786,6 +2786,46 @@ async fn delete_resolume_host_endpoint_missing_host_returns_404() {
 }
 
 #[tokio::test]
+async fn android_display_without_a_launch_component_gets_ours_and_an_update_keeps_the_stored_one() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let base = "/integrations/android-stage/displays";
+
+    // The Settings form sends no launch package at all (#879).
+    let added: TestAndroidDisplayDto = send_json(
+        &app,
+        axum::http::Method::POST,
+        base,
+        json!({ "label": "Stage New", "host": "new-stage.invalid" }),
+    )
+    .await;
+    assert_eq!(
+        added.launch_component,
+        presenter_core::DEFAULT_LAUNCH_PACKAGE
+    );
+
+    let custom: TestAndroidDisplayDto = send_json(
+        &app,
+        axum::http::Method::POST,
+        base,
+        json!({
+            "label": "Stage Custom",
+            "host": "custom-stage.invalid",
+            "launchComponent": "com.example/.Main"
+        }),
+    )
+    .await;
+    let updated: TestAndroidDisplayDto = send_json(
+        &app,
+        axum::http::Method::PUT,
+        &format!("{base}/{}", custom.id),
+        json!({ "label": "Stage Renamed", "host": "custom-stage.invalid" }),
+    )
+    .await;
+    assert_eq!(updated.label, "Stage Renamed");
+    assert_eq!(updated.launch_component, "com.example/.Main");
+}
+
+#[tokio::test]
 async fn update_android_stage_display_endpoint_missing_display_returns_404() {
     let app = build_router(AppState::in_memory().await.unwrap());
     let random_id = uuid::Uuid::new_v4();
