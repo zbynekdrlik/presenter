@@ -12,6 +12,7 @@ import {
   type BrowserContextOptions,
   type Page,
   type Request,
+  type WebSocketRoute,
 } from "@playwright/test";
 import {
   assertMinFontSize,
@@ -627,6 +628,192 @@ test("desktop: type → Enter → Enter shows the verse", async ({ browser }) =>
     await page.keyboard.press("Enter");
     await expect.poll(() => shows.length).toBe(1);
     expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)" });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: Enter on an empty field leaves the typing after it alone", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.press("Enter");
+    // Slow enough for "zid 1" to load on the way: Hebrejom 1 must not take the focus.
+    await field.pressSequentially("zid 11:1", { delay: 250 });
+    await expect(field).toBeFocused();
+    await expect(field).toHaveValue("zid 11:1");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:1 (SEB)");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: a translation switch keeps the console's verse over a book in the old inputs", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    await page.locator('[data-role="book-filter"]').fill("Rimanom");
+    await page.locator('[data-role="book-item"]').first().click();
+    await page.locator('[data-role="load-button"]').click();
+    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
+
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await page.locator('[data-role="main-translation"]').selectOption("slk-roh");
+    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+      "data-books-translation",
+      "slk-roh",
+    );
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:1 (ROH)");
+    // Longer than the old inputs' 300 ms auto-load, which must not fire.
+    await page.waitForTimeout(600);
+    await expect(page.locator('[data-role="console-field"]')).toHaveValue("zid 11 1");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:1 (ROH)");
+    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Židom 11:1");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a tapped alternative ends with its input: the same text typed again is the first row", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await lookUp(page, "jan 3 16", "Ján 3:16 (SEB)");
+    await page.locator('[data-role="console-alt-chip"][data-kind="alternative"]').tap();
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "1 Ján 3:16 (SEB)");
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await lookUp(page, "jan 3 16", "Ján 3:16 (SEB)");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a split verse: the first show leaves ZOBRAZIŤ in place, Zhasnúť stays away from it", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, { ...PHONE_390, viewport: { width: 390, height: 844 } });
+  try {
+    await page.locator('[data-role="console-field"]').fill("zid 11 1-3");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    await page.locator('[data-role="console-field"]').blur();
+    const before = await showButton(page).boundingBox();
+    await showButton(page).tap();
+    const clear = page.locator('[data-role="console-clear-live"]');
+    await expect(clear).toBeVisible();
+    const after = await showButton(page).boundingBox();
+    const clearBox = await clear.boundingBox();
+    expect(after?.y).toBe(before?.y);
+    // A second tap where ZOBRAZIŤ was can never hit Zhasnúť.
+    expect((clearBox?.y ?? 0) + (clearBox?.height ?? 0)).toBeLessThan((before?.y ?? 0) - 48);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a visible phone whose socket dropped reads the wall again on reconnect", async ({ browser, request }) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  try {
+    const sockets: WebSocketRoute[] = [];
+    let dying: WebSocketRoute | null = null;
+    await page.routeWebSocket(/\/live\/ws/, (ws: WebSocketRoute) => {
+      sockets.push(ws);
+      const server = ws.connectToServer();
+      server.onMessage((message) => {
+        if (ws === dying) return; // what the hub publishes now is lost
+        ws.send(message);
+      });
+    });
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    await expect.poll(() => sockets.length).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __presenterLiveConnected: () => boolean }).__presenterLiveConnected())).toBe(true);
+
+    dying = sockets[sockets.length - 1];
+    await request.post(new URL("/bible/trigger-slide", baseURL).toString(), {
+      data: { mainText: "Viera je podstatou", mainReference: "Hebrejom 11:1 (SEB)" },
+    });
+    await dying.close({ code: 4000, reason: "reset" });
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1", {
+      timeout: 20_000,
+    });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: Space on a focused ZOBRAZIŤ shows the verse", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.pressSequentially("zid 11 1");
+    await field.press("Enter");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect.poll(() => shows.length).toBe(1);
+    await expect(showButton(page)).toBeFocused();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a failed show's message leaves with the verse it was about", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await page.route("**/bible/trigger-slide", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+    );
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect(page.locator('[data-role="console-show-error"]')).toBeVisible();
+    await page.locator('[data-role="console-clear-field"]').tap();
+    await expect(page.locator('[data-role="console-show-error"]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a slow re-read of the wall never replaces a newer live event", async ({ browser, request }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let asked = false;
+    await page.route("**/bible/active-slide", async (route) => {
+      asked = true;
+      await held;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+    });
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect.poll(() => asked).toBe(true);
+    await request.post(new URL("/bible/trigger-slide", baseURL).toString(), {
+      data: { mainText: "Viera je podstatou", mainReference: "Hebrejom 11:1 (SEB)" },
+    });
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    const answered = page.waitForResponse("**/bible/active-slide");
+    release();
+    await answered;
+    await page.waitForTimeout(100);
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
     expect(errors).toEqual([]);
   } finally {
     await context.close();
