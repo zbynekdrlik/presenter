@@ -67,6 +67,20 @@ paths:
 - **Errors:** a failed preview shows inline (Enter retries); a failed show shows inline AND a
   toast; neither changes the strip.
 
+- **Stepping** (`state::bible_console_step`, `pages/bible_console/stepping.rs`): split slides →
+  the typed segments (`walk`, kept while the field is empty after a show) → the neighbouring
+  verse via `Versification::step`, never into another book. ◀ / ▶ only move the preview (a
+  `Picked` for the current input); after a show `advance_after_show` clears the field, pins the
+  next target for the empty input and sets `after_show` → "ĎALŠÍ: …". Typing resets it. The
+  input effect keeps a `Picked` made for the value the input just took, or the pin dies with the
+  clear; a load from the old inputs drops it itself (the input may not change). While `after_show`
+  the primary is `aria-disabled` during the next load, never `disabled`: the focus stays for the
+  next Enter or Space.
+- **iOS keyboard:** `state::keyboard_inset` writes `body`'s `--kb-inset` from the visual
+  viewport (0 when pinch-zoomed); the phone bar uses `bottom: var(--kb-inset)`; the tab bar hides
+  while the console field has focus (`:has()`, iOS 15.4+). Playwright cannot open an iPhone
+  keyboard — the inline ZOBRAZIŤ is the guaranteed path.
+
 ## One owner of `bs.slides` (until B2c)
 
 The grid holds the current target only. The console empties it the moment its target changes, so

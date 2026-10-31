@@ -1,7 +1,9 @@
 pub mod bible;
 pub mod bible_console;
+pub mod bible_console_step;
 pub mod bible_range;
 pub mod interpreter;
+pub mod keyboard_inset;
 pub mod operator;
 pub mod phone_shell;
 pub mod session;

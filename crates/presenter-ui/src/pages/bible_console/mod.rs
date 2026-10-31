@@ -10,6 +10,7 @@ mod field;
 mod on_air;
 mod preview;
 mod results;
+mod stepping;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -116,6 +117,12 @@ struct Console {
     focus_show: RwSignal<bool>,
     /// ZOBRAZIŤ is enabled: the preview is ready and no show is in flight.
     can_show: Memo<bool>,
+    /// The main translation's structure (rows and stepping).
+    structure: Memo<Versification>,
+    /// The typed passage's segments; ◀ / ▶ walk them before the verses.
+    walk: RwSignal<Vec<PreviewTarget>>,
+    /// The last show came from here: the primary button reads "ĎALŠÍ: …".
+    after_show: RwSignal<bool>,
 }
 
 impl Console {
@@ -171,6 +178,9 @@ impl Console {
             field_focused: RwSignal::new(false),
             focus_show: RwSignal::new(false),
             can_show,
+            structure,
+            walk: RwSignal::new(Vec::new()),
+            after_show: RwSignal::new(false),
         }
     }
 }
@@ -180,6 +190,7 @@ pub fn BibleConsole() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let console = Console::new(&bs);
     setup_auto_preview(console, &bs);
+    stepping::setup_walk(console);
     on_air::setup_on_air_sync(use_ctx!(AppContext).active_bible_slide);
     let c = console;
 
@@ -227,17 +238,25 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         let loads = classic_loads.get();
         if previous.is_some_and(|before| before != loads) {
             owns_grid.set(false);
+            c.after_show.set(false);
+            c.picked.set(None);
             c.input.set(String::new());
         }
         loads
     });
 
     // What was tapped or asked for belongs to the input it was done in, also
-    // when the same text is typed again later.
+    // when the same text is typed again later. A show pins the next part for
+    // the field it just emptied, that one stays.
     Effect::new(move |_| {
-        c.input.track();
-        c.main.track();
-        c.picked.set(None);
+        let (input, main) = (c.input.get(), c.main.get());
+        let pinned = c.picked.with_untracked(|p| {
+            p.as_ref()
+                .is_some_and(|p| p.input == input && p.main == main)
+        });
+        if !pinned {
+            c.picked.set(None);
+        }
         c.focus_show.set(false);
     });
 
@@ -307,8 +326,8 @@ fn failed(ctx: &AppContext, key: String, message: String) -> Preview {
     Preview::Failed { key, message }
 }
 
-/// ZOBRAZIŤ: send the previewed slide to the wall. A split verse advances to
-/// its next part, so the next tap shows it.
+/// ZOBRAZIŤ: send the previewed slide to the wall, then preview the next part
+/// (`stepping::advance_after_show`), so the next tap shows it.
 fn show(c: Console, ctx: AppContext) {
     let Some(key) = c.target_key.get_untracked() else {
         return;
@@ -339,19 +358,9 @@ fn show(c: Console, ctx: AppContext) {
                     refresh_on_air(ctx.active_bible_slide);
                 }
                 c.show_error.set(None);
-                c.preview.update(|p| {
-                    if let Preview::Ready {
-                        key: k,
-                        slides,
-                        index,
-                        ..
-                    } = p
-                    {
-                        if *k == key && *index + 1 < slides.len() {
-                            *index += 1;
-                        }
-                    }
-                });
+                if c.target_key.get_untracked().as_deref() == Some(key.as_str()) {
+                    stepping::advance_after_show(c);
+                }
             }
             Err(e) => {
                 let message = format!("Verš sa nezobrazil: {e}");

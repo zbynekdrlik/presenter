@@ -110,6 +110,7 @@ web-sys = { version = "0.3", features = [
     "Url",
     "UrlSearchParams",
     "VisibilityState",
+    "VisualViewport",
     "WebSocket",
     "Window",
 ] }

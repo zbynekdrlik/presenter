@@ -421,7 +421,8 @@ test("a long passage shows part by part: ZOBRAZIŤ 1/n, then 2/n", async ({ brow
     expect(count).toBeGreaterThan(1);
     await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 1/${count}`);
     await showButton(page).tap();
-    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 2/${count}`);
+    // #850 B2b: after a show the primary button offers the next part.
+    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 3:16-21 2/${count}`);
     await expect(preview).toHaveAttribute("data-slide-index", "2");
     await showButton(page).tap();
     await expect.poll(() => shows.length).toBe(2);
@@ -831,13 +832,13 @@ test("desktop: the keyboard steps a split passage, the focus stays on ZOBRAZIŤ"
     await field.press("Enter");
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 2/${count}`);
+    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 11:1-20 2/${count}`);
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 3/${count}`);
+    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 11:1-20 3/${count}`);
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 4/${count}`);
+    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 11:1-20 4/${count}`);
     expect(shows).toHaveLength(3);
     expect(errors).toEqual([]);
   } finally {
@@ -1047,6 +1048,129 @@ test("a show with a deaf socket and a failing re-read still reaches the strip", 
     await showButton(page).tap();
     await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
     await expect(page.locator('[data-role="console-clear-live"]')).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("ĎALŠÍ: after a show the field clears and one tap shows the next verse (S6)", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const preview = page.locator('[data-role="console-preview"]');
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect(page.locator('[data-role="console-field"]')).toHaveValue("");
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await expect(preview).toHaveAttribute("data-reference", "Hebrejom 11:2 (SEB)");
+    await expect(preview).toHaveAttribute("data-ready", "true");
+    await showButton(page).tap(); // next verse = 1 tap
+    await expect.poll(() => shows.length).toBe(2);
+    expect(shows[1]).toMatchObject({ mainReference: "Hebrejom 11:2 (SEB)" });
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("◀ / ▶ move only the preview, across a chapter end, never past the book", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const preview = page.locator('[data-role="console-preview"]');
+    const prev = page.locator('[data-role="console-prev"]');
+    const next = page.locator('[data-role="console-next"]');
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await expect(prev).toHaveText("◀ 10:39");
+    await expect(next).toHaveText("11:2 ▶");
+    await assertMinTapTarget(page.locator('[data-role="console-bar"] button'), 44);
+    await next.tap();
+    await expect(preview).toHaveAttribute("data-reference", "Hebrejom 11:2 (SEB)");
+    await prev.tap();
+    await expect(preview).toHaveAttribute("data-reference", "Hebrejom 11:1 (SEB)");
+    await prev.tap();
+    await expect(preview).toHaveAttribute("data-reference", "Hebrejom 10:39 (SEB)");
+
+    await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
+    await expect(next).toBeDisabled();
+    expect(shows).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a verse list is walked verse by verse, then the verse after it", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await lookUp(page, "mt 5:3.5.7", "Matúš 5:3 (SEB)");
+    for (const nextLabel of ["ĎALŠÍ: 5:5", "ĎALŠÍ: 5:7", "ĎALŠÍ: 5:8"]) {
+      await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+      await showButton(page).tap();
+      await expect(showButton(page)).toHaveText(nextLabel);
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("while typing on a phone the tab bar steps aside for the keyboard", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const tabs = page.locator('[data-role="phone-tab-bar"]');
+    await expect(tabs).toBeVisible();
+    await page.locator('[data-role="console-field"]').tap();
+    await expect(tabs).toBeHidden();
+    await page.locator('[data-role="console-field"]').press("Enter"); // "Go" closes the keyboard
+    await expect(tabs).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: Enter, Enter, Space walks verse by verse, the focus stays on the button", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.pressSequentially("zid 11 1");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    await field.press("Enter");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await expect(showButton(page)).toBeFocused();
+    expect(shows).toMatchObject([
+      { mainReference: "Hebrejom 11:1 (SEB)" },
+      { mainReference: "Hebrejom 11:2 (SEB)" },
+    ]);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: a load from the old inputs after a show lets the next verse go", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).click();
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await page.locator('[data-role="book-filter"]').fill("Rimanom");
+    await page.locator('[data-role="book-item"]').first().click();
+    await page.locator('[data-role="load-button"]').click();
+    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
+    await expect(showButton(page)).toHaveText("ZOBRAZIŤ");
     expect(errors).toEqual([]);
   } finally {
     await context.close();
