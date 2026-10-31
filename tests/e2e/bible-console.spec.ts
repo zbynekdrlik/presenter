@@ -905,7 +905,9 @@ test("a verse sent past the console, by Companion or the AI, is on the strip wit
 
     // The next one replaces it, also over a verse the console itself showed.
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    const shown = page.waitForResponse("**/bible/trigger-slide");
     await showButton(page).tap();
+    await shown;
     const next = { translation: "slk-seb", book: "Hebrejom", chapter: 11, verseStart: 3 };
     expect((await request.post(trigger, { data: next })).ok()).toBeTruthy();
     await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:3");
@@ -939,6 +941,41 @@ test("desktop: a held Enter stops at ZOBRAZIŤ, a held key never steps a split p
 
     await page.keyboard.press("Enter");
     await expect.poll(() => shows.length).toBe(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a show answered after a newer verse never puts the older one back on the strip", async ({
+  browser,
+  request,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reachedServer = false;
+    await page.route("**/bible/trigger-slide", async (route) => {
+      const response = await route.fetch();
+      reachedServer = true;
+      await held;
+      await route.fulfill({ response });
+    });
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect.poll(() => reachedServer).toBe(true);
+    const next = { translation: "slk-seb", book: "Hebrejom", chapter: 11, verseStart: 3 };
+    expect((await request.post(new URL("/bible/trigger", baseURL).toString(), { data: next })).ok()).toBeTruthy();
+    const reference = page.locator('[data-role="console-on-air-reference"]');
+    await expect(reference).toHaveText("Hebrejom 11:3");
+    const answered = page.waitForResponse("**/bible/trigger-slide");
+    release();
+    await answered;
+    await expect(showButton(page)).not.toHaveText("Zobrazujem…");
+    await expect(reference).toHaveText("Hebrejom 11:3");
     expect(errors).toEqual([]);
   } finally {
     await context.close();
