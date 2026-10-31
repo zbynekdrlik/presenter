@@ -292,3 +292,10 @@ by `CardItem::key`) with unit tests for this.
 - The E2E layout guard (`settings-inline-edit.spec.ts`) checks that the Companion
   card is under 300 px, no form-row label is over 90 px, and a list row is under
   160 px.
+
+## Toast timing (#875)
+
+Every toast's timer restarts on each message: the operator `Toast` owns its own, settings and the
+stream editor call `toast::hide_after_last_message` once where the signals are made. Never a
+`Timeout…forget()` per call. On prod, "Scan" on the video sources card is a read-only way to raise a
+settings toast (it only GETs the status).
