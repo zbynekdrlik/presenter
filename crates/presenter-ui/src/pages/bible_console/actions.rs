@@ -1,7 +1,9 @@
 //! Zhasnúť and the sticky action bar (spec §7.1 items 6–7). ZOBRAZIŤ is the
 //! only control that sends to the wall; Zhasnúť is outlined red, shown only
 //! while something is on air, and never next to it. Stepping (◀ / ĎALŠÍ / ▶)
-//! comes with B2b.
+//! comes with B2b. A press on either keeps the focus in the field: a blur
+//! removes the preview's own button, these move up under the finger and the
+//! click lands on nothing.
 
 use leptos::prelude::*;
 
@@ -68,6 +70,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 class="console-clear-live"
                 data-role="console-clear-live"
                 disabled=move || clearing.get()
+                on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
+                on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click=on_clear.clone()
             >
                 "Zhasnúť verš"
@@ -91,6 +95,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 data-role="console-show"
                 node_ref=show_button
                 disabled=move || !c.can_show.get()
+                on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
+                on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click={
                     let ctx = ctx.clone();
                     move |_| show(c, ctx.clone())

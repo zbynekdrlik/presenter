@@ -32,6 +32,10 @@ paths:
   `page.route` and releases it after the competing input is confirmed; a request is never
   unrouted before it answered.
 
+- **No layout shift under a press:** ZOBRAZIŤ and Zhasnúť prevent `pointerdown` / `mousedown`'s
+  default too. A blur removes the inline button, everything below moves up and the click lands on
+  nothing: on a short verse the first tap with the keyboard open was lost (a long one hid it, the
+  sticky bar does not move).
 - **Only the primary button sends** (`show`): enabled while `can_show` (the preview shows the
   current key, no show in flight); it posts exactly the previewed slide (`trigger_request`).
 - **The inline ZOBRAZIŤ** on the preview card exists only while the field has focus and prevents
@@ -52,4 +56,6 @@ paths:
 The grid holds the current target only. The console empties it the moment its target changes, so
 no card of an older verse stays tappable while a new one loads or fails. A load from the old inputs
 bumps `classic_loads` (the console clears its field and lets go); the console bumps `console_takes`
-on every new target, and an old-inputs answer that started before it is dropped.
+on every new target, and an old-inputs answer that started before it is dropped. The 300 ms
+auto-load skips too when the console took over during its wait: it would bump `classic_loads` and
+wipe what is being typed.

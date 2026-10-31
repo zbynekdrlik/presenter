@@ -251,8 +251,13 @@ pub fn BiblePage() -> impl IntoView {
             // Replace any pending timer with a new one.
             let bs_for_timer = bs_inner.clone();
             let ctx_for_timer = ctx_inner.clone();
+            let console_takes = bs_for_timer.console_takes;
+            let taken_at_start = console_takes.get_untracked();
             let new_timer = gloo_timers::callback::Timeout::new(300, move || {
-                load_passage(&bs_for_timer, &ctx_for_timer, false);
+                // The console took the grid during the wait (#850).
+                if console_takes.get_untracked() == taken_at_start {
+                    load_passage(&bs_for_timer, &ctx_for_timer, false);
+                }
             });
             *pending.borrow_mut() = Some(new_timer);
         });
