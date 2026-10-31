@@ -262,6 +262,7 @@ test("a failed load says so inline and Enter tries again", async ({ browser }) =
     await expect(page.locator('[data-role="console-preview-error"]')).toContainText(
       "Náhľad sa nenačítal",
     );
+    await expect(page.locator('[data-role="toast"]')).toContainText("Náhľad sa nenačítal");
     await page.unroute("**/bible/resolve");
     await field.press("Enter");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
@@ -305,6 +306,100 @@ test("desktop: the console sits above the old inputs and feeds the slide grid", 
     await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
     await expect(page.locator('[data-role="book-filter"]')).toBeVisible();
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
+      "Hebrejom 11:1 (SEB)",
+    );
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: the grid never keeps an older verse a card tap could send", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const cards = page.locator('[data-role="slide-card"]');
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await expect(cards.first()).toContainText("Hebrejom 11:1 (SEB)");
+
+    // A reference that does not exist: nothing of Hebrews stays on offer.
+    const field = page.locator('[data-role="console-field"]');
+    await field.fill("zid 14");
+    await expect(cards).toHaveCount(0);
+
+    // While the next passage loads, the grid is empty.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/bible/resolve", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await field.fill("rim 8 28");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "loading");
+    await expect(cards).toHaveCount(0);
+    release();
+    await expect(cards.first()).toContainText("Rimanom 8:28 (SEB)");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: a load from the old inputs takes the grid, the console lets go", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const cards = page.locator('[data-role="slide-card"]');
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+
+    await page.locator('[data-role="book-filter"]').fill("Rimanom");
+    await page.locator('[data-role="book-item"]').first().click();
+    await page.locator('[data-role="load-button"]').click();
+    await expect(cards.first()).toContainText("Rimanom 1:1 (SEB)");
+    await expect(page.locator('[data-role="console-field"]')).toHaveValue("");
+
+    // A later translation or limit change has no console target to reload.
+    await page.locator('[data-role="secondary-translation"]').selectOption({ index: 2 });
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
+    await expect(cards.first()).toContainText("Rimanom 1:1");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: an old-inputs answer that lands after the console took over is dropped", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let heldCount = 0;
+    await page.route("**/bible/resolve", async (route) => {
+      const body = route.request().postDataJSON() as { bookCode?: string };
+      if (body.bookCode === "ROM") {
+        heldCount += 1;
+        await held;
+      }
+      await route.continue();
+    });
+    await page.locator('[data-role="book-filter"]').fill("Rimanom");
+    await page.locator('[data-role="book-item"]').first().click();
+    await page.locator('[data-role="load-button"]').click();
+    await expect.poll(() => heldCount).toBe(1);
+
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    const late = page.waitForResponse(
+      (res) =>
+        new URL(res.url()).pathname === "/bible/resolve" &&
+        (res.request().postDataJSON() as { bookCode?: string }).bookCode === "ROM",
+    );
+    release();
+    await (await late).finished();
     await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
       "Hebrejom 11:1 (SEB)",
     );
