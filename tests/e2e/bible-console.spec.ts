@@ -471,7 +471,8 @@ test("a second tap while the show is on its way sends nothing more", async ({ br
     });
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await showButton(page).tap();
-    await expect(showButton(page)).toBeDisabled();
+    // Busy, not `disabled`: a disabled button would lose the keyboard focus.
+    await expect(showButton(page)).toHaveAttribute("aria-disabled", "true");
     await expect(showButton(page)).toHaveText("Zobrazujem…");
     await showButton(page).tap({ force: true });
     const answered = page.waitForResponse((res) => new URL(res.url()).pathname === "/bible/trigger-slide");
@@ -811,6 +812,79 @@ test("a slow re-read of the wall never replaces a newer live event", async ({ br
     await answered;
     await page.waitForTimeout(100);
     await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: the keyboard steps a split passage, the focus stays on ZOBRAZIŤ", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.pressSequentially("zid 11 1-20");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    const count = Number(await page.locator('[data-role="console-preview"]').getAttribute("data-slide-count"));
+    expect(count).toBeGreaterThan(3);
+    await field.press("Enter");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 2/${count}`);
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 3/${count}`);
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 4/${count}`);
+    expect(shows).toHaveLength(3);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a show that fails after its verse left says so in a toast, not on the empty console", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/bible/trigger-slide", async (route) => {
+      await held;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    });
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect(showButton(page)).toHaveText("Zobrazujem…");
+    await page.locator('[data-role="console-clear-field"]').tap();
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
+    release();
+    await expect(page.locator('[data-role="toast"]')).toHaveAttribute("data-visible", "true");
+    await expect(page.locator('[data-role="console-show-error"]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("phone: the first verse on the wall moves neither the field nor ZOBRAZIŤ", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_360);
+  try {
+    await page.locator('[data-role="secondary-translation"]').selectOption({ index: 2 });
+    const field = page.locator('[data-role="console-field"]');
+    await field.fill("1 tes 5 16-18");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
+    await field.blur();
+    const fieldBefore = await field.boundingBox();
+    const showBefore = await showButton(page).boundingBox();
+    await showButton(page).tap();
+    await expect(page.locator('[data-role="console-clear-live"]')).toBeVisible();
+    await expect(page.locator('[data-role="console-on-air-codes"]')).toContainText("+");
+    expect((await field.boundingBox())?.y).toBe(fieldBefore?.y);
+    expect((await showButton(page).boundingBox())?.y).toBe(showBefore?.y);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
