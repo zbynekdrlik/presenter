@@ -61,5 +61,5 @@ book change. Three traps:
 `.bible__classic`, which the phone shell hides (`styles/bible_console.css`). The desktop keeps
 them — and the book filter's autofocus, which `wasm-bible-keyboard-nav.spec.ts` pins — until B2c
 removes them. When no stored name contains the filter text, `BibleState::filtered_books` falls
-back to `resolver::resolve_book_name` (`zid` → Hebrejom, #850 U1). `bible.rs` sits at 800
+back to `resolver::resolve_book_name` (`zid` → Hebrejom, #850 U1). `bible.rs` sits at 809
 production lines: every new console piece goes into `pages/bible_console/`.

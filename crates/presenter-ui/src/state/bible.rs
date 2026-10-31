@@ -30,6 +30,14 @@ pub struct LoadedPassage {
 /// Bible page specific state.
 #[derive(Clone)]
 pub struct BibleState {
+    // -- Who fills `slides`: the verse console or the old inputs (#850) --
+    /// Bumped by every load from the old inputs: the console lets go of the
+    /// grid and clears its field.
+    pub classic_loads: RwSignal<u32>,
+    /// Bumped whenever the console takes the grid: an older answer for the
+    /// old inputs is dropped.
+    pub console_takes: RwSignal<u32>,
+
     // -- Translations --
     pub translations: RwSignal<Vec<BibleTranslation>>,
     pub selected_translation: RwSignal<Option<String>>,
@@ -116,6 +124,8 @@ impl BibleState {
             active_presentation_slides: RwSignal::new(Vec::new()),
 
             character_limit: RwSignal::new(320),
+            classic_loads: RwSignal::new(0),
+            console_takes: RwSignal::new(0),
 
             loaded_passages_history: RwSignal::new(Vec::new()),
             drag_source_idx: RwSignal::new(None),

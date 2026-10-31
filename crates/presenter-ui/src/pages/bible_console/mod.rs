@@ -11,7 +11,7 @@ mod on_air;
 mod preview;
 mod results;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gloo_timers::callback::Timeout;
@@ -204,19 +204,45 @@ pub fn BibleConsole() -> impl IntoView {
 /// Request the current target 150 ms after it last changed; a newer target
 /// cancels the timer and an answer for an older key is dropped (a slow church
 /// Wi-Fi must never put a stale verse in front of the operator). The slides go
-/// to the grid too, so the desktop column and the phone list stay in step.
+/// to the grid too, which only ever holds the current target: it empties when
+/// the target changes, or a card tap would send the older verse. A load from
+/// the old inputs takes the grid back and clears the field.
 fn setup_auto_preview(c: Console, bs: &BibleState) {
     let secondary = bs.secondary_translation;
     let limit = bs.character_limit;
     let grid = bs.slides;
     let grid_selection = bs.selected_slide_ids;
+    let console_takes = bs.console_takes;
+    let classic_loads = bs.classic_loads;
+    let ctx = use_ctx!(AppContext);
     let pending: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
+    let owns_grid = Rc::new(Cell::new(false));
+    let clear_grid = move || {
+        grid.set(Vec::new());
+        grid_selection.set(Default::default());
+    };
+
+    {
+        let owns_grid = Rc::clone(&owns_grid);
+        Effect::new(move |previous: Option<u32>| {
+            let loads = classic_loads.get();
+            if previous.is_some_and(|before| before != loads) {
+                owns_grid.set(false);
+                c.input.set(String::new());
+            }
+            loads
+        });
+    }
+
     Effect::new(move |_| {
         let key = c.target_key.get();
         c.retry.track();
         let Some(key) = key else {
             pending.borrow_mut().take();
             c.preview.set(Preview::Empty);
+            if owns_grid.replace(false) {
+                clear_grid();
+            }
             return;
         };
         let current = c.preview.with_untracked(|p| {
@@ -235,6 +261,10 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             limit.get_untracked(),
         );
         c.preview.set(Preview::Loading { key: key.clone() });
+        owns_grid.set(true);
+        console_takes.update(|n| *n += 1);
+        clear_grid();
+        let ctx = ctx.clone();
         c.show_error.set(None);
         let timer = Timeout::new(PREVIEW_DELAY_MS, move || {
             leptos::task::spawn_local(async move {
@@ -253,19 +283,19 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
                             warning: resp.warning,
                         }
                     }
-                    Ok(_) => Preview::Failed {
-                        key,
-                        message: "Pre tento odkaz preklad nemá text".to_string(),
-                    },
-                    Err(e) => Preview::Failed {
-                        key,
-                        message: format!("Náhľad sa nenačítal: {e}"),
-                    },
+                    Ok(_) => failed(&ctx, key, "Pre tento odkaz preklad nemá text".to_string()),
+                    Err(e) => failed(&ctx, key, format!("Náhľad sa nenačítal: {e}")),
                 });
             });
         });
         *pending.borrow_mut() = Some(timer);
     });
+}
+
+/// A preview that did not load says so inline and in a toast (spec §7.2).
+fn failed(ctx: &AppContext, key: String, message: String) -> Preview {
+    ctx.show_toast(&message, "error");
+    Preview::Failed { key, message }
 }
 
 /// ZOBRAZIŤ: send the previewed slide to the wall. A split verse advances to

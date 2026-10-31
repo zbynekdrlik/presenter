@@ -46,3 +46,10 @@ paths:
   catalog or the tab panel breaks it.
 - **Errors:** a failed preview shows inline (Enter retries); a failed show shows inline AND a
   toast; neither changes the strip.
+
+## One owner of `bs.slides` (until B2c)
+
+The grid holds the current target only. The console empties it the moment its target changes, so
+no card of an older verse stays tappable while a new one loads or fails. A load from the old inputs
+bumps `classic_loads` (the console clears its field and lets go); the console bumps `console_takes`
+on every new target, and an old-inputs answer that started before it is dropped.

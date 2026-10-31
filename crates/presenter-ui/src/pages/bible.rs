@@ -702,7 +702,10 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     let selected_ids = bs.selected_slide_ids;
     let toast_message = ctx.toast_message;
     let toast_variant = ctx.toast_variant;
+    let console_takes = bs.console_takes;
+    let taken_at_start = console_takes.get_untracked();
 
+    bs.classic_loads.update(|n| *n += 1);
     loading.set(true);
     selected_ids.set(std::collections::HashSet::new());
 
@@ -739,7 +742,13 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     let history_signal = bs.loaded_passages_history;
     let warning_ctx = ctx.clone();
     leptos::task::spawn_local(async move {
-        match bible::resolve_slides(&req).await {
+        let answer = bible::resolve_slides(&req).await;
+        // The console took the grid while this was on its way (#850).
+        if console_takes.get_untracked() != taken_at_start {
+            loading.set(false);
+            return;
+        }
+        match answer {
             Ok(resp) => {
                 // #826: the slides loaded, but without the secondary text
                 // (its remote source is down) — always tell the operator.
