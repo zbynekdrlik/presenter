@@ -8,6 +8,7 @@
 import { test, expect } from "@playwright/test";
 import {
   assertTwoColumnLayout,
+  attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -3126,10 +3127,10 @@ test.describe("Bible workflow fixes (issue #256)", () => {
     await expect(toast).toHaveAttribute("data-visible", "false");
 
     const stored: { id: string; name: string }[] = await (
-      await page.request.get("/bible/presentations")
+      await page.request.get(`${baseURL}/bible/presentations`)
     ).json();
     for (const presentation of stored.filter((p) => names.includes(p.name))) {
-      await page.request.delete(`/bible/presentations/${presentation.id}`);
+      await page.request.delete(`${baseURL}/bible/presentations/${presentation.id}`);
     }
     expect(consoleMessages).toEqual([]);
   });
