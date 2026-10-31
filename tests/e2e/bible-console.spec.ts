@@ -1176,3 +1176,123 @@ test("desktop: a load from the old inputs after a show lets the next verse go", 
     await context.close();
   }
 });
+
+test("▶ during a slow show moves nothing: the next part is never skipped", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/bible/trigger-slide", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.locator('[data-role="console-field"]').fill("jan 3 16-21");
+    const preview = page.locator('[data-role="console-preview"]');
+    await expect(preview).toHaveAttribute("data-ready", "true");
+    await showButton(page).tap();
+    await expect(showButton(page)).toHaveText("Zobrazujem…");
+    await page.locator('[data-role="console-next"]').tap({ force: true });
+    await expect(preview).toHaveAttribute("data-slide-index", "1");
+    const answered = page.waitForResponse((res) => new URL(res.url()).pathname === "/bible/trigger-slide");
+    release();
+    await (await answered).finished();
+    await expect(preview).toHaveAttribute("data-slide-index", "2");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a translation switch keeps the stepped verse and the next verse after a show", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await page.locator('[data-role="console-next"]').tap();
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
+    await page.locator('[data-role="main-translation"]').selectOption("slk-roh");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:2 (ROH)");
+
+    await showButton(page).tap();
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await page.locator('[data-role="main-translation"]').selectOption("slk-seb");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:3 (SEB)");
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
+    await showButton(page).tap();
+    await expect.poll(() => shows.length).toBe(2);
+    expect(shows[1]).toMatchObject({ mainReference: "Hebrejom 11:3 (SEB)" });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a next verse that did not load: the primary button tries again, one more tap shows it", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await page.route("**/bible/resolve", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+    );
+    await showButton(page).tap();
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "error");
+    await expect(showButton(page)).toHaveText("SKÚSIŤ ZNOVA");
+    await page.unroute("**/bible/resolve");
+    await showButton(page).tap();
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
+    expect(shows).toHaveLength(1);
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await showButton(page).tap();
+    await expect.poll(() => shows.length).toBe(2);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("the end of the book says so and sends the last verse only once", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
+    await showButton(page).tap();
+    await expect(showButton(page)).toHaveText("KONIEC KNIHY");
+    await expect(showButton(page)).toHaveAttribute("aria-disabled", "true");
+    await showButton(page).tap({ force: true });
+    await page.locator('[data-role="console-prev"]').tap();
+    await expect(showButton(page)).toHaveText("ĎALŠÍ: 13:24");
+    expect(shows).toHaveLength(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: ▶ before a show keeps the focus on ZOBRAZIŤ for the next Space", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.pressSequentially("zid 11 1");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    await field.press("Enter");
+    await expect(showButton(page)).toBeFocused();
+    await page.locator('[data-role="console-next"]').click();
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect.poll(() => shows.length).toBe(1);
+    expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:2 (SEB)" });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
