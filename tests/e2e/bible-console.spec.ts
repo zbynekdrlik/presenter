@@ -890,3 +890,57 @@ test("phone: the first verse on the wall moves neither the field nor ZOBRAZIŤ",
     await context.close();
   }
 });
+
+test("a verse sent past the console, by Companion or the AI, is on the strip with Zhasnúť", async ({
+  browser,
+  request,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const trigger = new URL("/bible/trigger", baseURL).toString();
+    const first = { translation: "slk-seb", book: "Hebrejom", chapter: 11, verseStart: 1 };
+    expect((await request.post(trigger, { data: first })).ok()).toBeTruthy();
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    await expect(page.locator('[data-role="console-clear-live"]')).toBeVisible();
+
+    // The next one replaces it, also over a verse the console itself showed.
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    const next = { translation: "slk-seb", book: "Hebrejom", chapter: 11, verseStart: 3 };
+    expect((await request.post(trigger, { data: next })).ok()).toBeTruthy();
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:3");
+
+    await page.reload();
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:3");
+    await page.locator('[data-role="console-clear-live"]').tap();
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: a held Enter stops at ZOBRAZIŤ, a held key never steps a split passage", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.pressSequentially("zid 11 1-20");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    await page.keyboard.down("Enter");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.down("Enter"); // a second down without an up is the auto-repeat
+    await page.keyboard.down("Enter");
+    await page.keyboard.up("Enter");
+    await expect(showButton(page)).toBeFocused();
+    expect(shows).toHaveLength(0);
+
+    await page.keyboard.press("Enter");
+    await expect.poll(() => shows.length).toBe(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});

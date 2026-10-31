@@ -662,6 +662,14 @@ async fn trigger_bible_passage_publishes_event_and_state() {
         }
         other => panic!("unexpected live event: {other:?}"),
     }
+    match rx.recv().await.unwrap() {
+        LiveEvent::BibleSlide { output } => {
+            assert_eq!(output.main_reference, "John 3:16 (TEST)");
+            assert_eq!(output.main_text, "For God so loved");
+            assert_eq!(state.active_bible_slide_output().await, Some(output));
+        }
+        other => panic!("expected the wall output, got {other:?}"),
+    }
 
     state.clear_bible_broadcast().await;
     match rx.recv().await.unwrap() {
@@ -670,6 +678,7 @@ async fn trigger_bible_passage_publishes_event_and_state() {
     }
 
     assert!(state.active_bible_broadcast().await.is_none());
+    assert!(state.active_bible_slide_output().await.is_none());
 }
 
 #[test]
