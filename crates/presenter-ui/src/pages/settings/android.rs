@@ -3,16 +3,15 @@
 //! #819: the list, its inline editor (Edit in the row, "+ Add display" at the top),
 //! the fetch / save / delete flow and the keyed rows are the shared
 //! `list_card::ListCard`, the same as the Resolume card. This file supplies the
-//! Android API and copy, the launch package as the editor's extra field (part of the
-//! draft: loaded on open, validated on save), and the row's own parts (launch status
-//! badge, launch package, attempts, error, Test). Rows are keyed on identity plus the
-//! fields they show or edit ([`row_key`]), never on the live launch status.
+//! Android API and copy and the row's own parts (launch status badge, attempts, error,
+//! Test). What opens on the TV is not asked for (#879): the server launches the Presenter
+//! Stage app. Rows are keyed on identity plus the fields they show or edit ([`row_key`]),
+//! never on the live launch status.
 
 use leptos::prelude::*;
 
 use super::connection_form::{
-    ConnectionForm, ConnectionSpec, DraftValues, ExtraField, Submission, SAVING_TITLE,
-    UNSAVED_TITLE,
+    ConnectionForm, ConnectionSpec, DraftValues, Submission, SAVING_TITLE, UNSAVED_TITLE,
 };
 use super::host_editor::EditorSpec;
 use super::list_card::{CardItem, CardText, ListCard, RowParts};
@@ -20,9 +19,6 @@ use super::row_status::{android_attempts, android_state, updated_created};
 use super::ToastHandle;
 use crate::api::settings::{self, AndroidDisplayDraft, AndroidDisplayDto, AndroidStatusDto};
 use crate::api::ApiError;
-
-/// The launch package a new display starts with.
-const DEFAULT_COMPONENT: &str = "com.tcl.browser";
 
 static TEXT: CardText<ConnectionForm> = CardText {
     editor: EditorSpec {
@@ -42,13 +38,6 @@ static TEXT: CardText<ConnectionForm> = CardText {
         host_placeholder: "sd1l.lan",
         // The adb port.
         default_port: 5555,
-        extra: Some(ExtraField {
-            caption: "Launch Package",
-            role: "android-component",
-            placeholder: DEFAULT_COMPONENT,
-            default: DEFAULT_COMPONENT,
-            empty_message: "Launch component cannot be empty.",
-        }),
     },
     list_role: "android-display-list",
     add_text: "+ Add display",
@@ -69,13 +58,12 @@ static TEXT: CardText<ConnectionForm> = CardText {
 
 /// A row's `<For>` key: its id plus every field the row shows or edits — never the
 /// live launch status, so a poll never rebuilds a row.
-fn row_key(d: &AndroidDisplayDto) -> (String, String, String, u16, String, bool) {
+fn row_key(d: &AndroidDisplayDto) -> (String, String, String, u16, bool) {
     (
         d.id.clone(),
         d.label.clone(),
         d.host.clone(),
         d.port,
-        d.launch_component.clone(),
         d.is_enabled,
     )
 }
@@ -83,7 +71,7 @@ fn row_key(d: &AndroidDisplayDto) -> (String, String, String, u16, String, bool)
 impl CardItem for AndroidDisplayDto {
     type Form = ConnectionForm;
     type Status = AndroidStatusDto;
-    type Key = (String, String, String, u16, String, bool);
+    type Key = (String, String, String, u16, bool);
 
     fn id(&self) -> &str {
         &self.id
@@ -107,7 +95,6 @@ impl CardItem for AndroidDisplayDto {
             host: self.host.clone(),
             port: self.port.to_string(),
             enabled: self.is_enabled,
-            extra: self.launch_component.clone(),
         }
     }
 
@@ -132,7 +119,6 @@ impl CardItem for AndroidDisplayDto {
             label: submission.fields.label,
             host: submission.fields.host,
             port: submission.fields.port,
-            launch_component: submission.extra,
             is_enabled: submission.enabled,
         };
         match id {
@@ -165,7 +151,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
         });
     };
 
-    // The Android parts of a row: launch status badge + launch package, the
+    // The Android parts of a row: launch status badge, the
     // attempts line, the error, and Test before the shared Edit / Delete.
     let row = move |d: &AndroidDisplayDto, status: Memo<Option<AndroidStatusDto>>| {
         let is_enabled = d.is_enabled;
@@ -184,17 +170,12 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                     }
                 })
         };
-        let launch_component = d.launch_component.clone();
         let id_test = d.id.clone();
         RowParts {
             line: view! {
-                <>
-                    <span class=status_class data-role="android-status" data-state=status_state>
-                        {status_label}
-                    </span>
-                    <span class="settings__list-aside" data-role="android-component-value"
-                        title="Launch package">{launch_component}</span>
-                </>
+                <span class=status_class data-role="android-status" data-state=status_state>
+                    {status_label}
+                </span>
             }
             .into_any(),
             meta: Some(
@@ -220,7 +201,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
             <header class="settings__card-header">
                 <div>
                     <h2>"Android Stage Launchers"</h2>
-                    <p>"Keep each Android TV pinned to the stage display: Presenter reconnects and reopens the stage URL in the launch package whenever the device appears."</p>
+                    <p>"Keep each Android TV pinned to the stage display: Presenter reconnects and reopens the stage whenever the device appears."</p>
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="android-count">
@@ -245,7 +226,6 @@ mod tests {
             label: "Stage Left".into(),
             host: "sd1l.lan".into(),
             port: 5555,
-            launch_component: "com.tcl.browser".into(),
             is_enabled: true,
             created_at: "c".into(),
             updated_at: updated_at.into(),
@@ -280,10 +260,6 @@ mod tests {
             },
             AndroidDisplayDto {
                 port: 5556,
-                ..base.clone()
-            },
-            AndroidDisplayDto {
-                launch_component: "com.example/.Main".into(),
                 ..base.clone()
             },
             AndroidDisplayDto {

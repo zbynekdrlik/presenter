@@ -14,8 +14,8 @@ android {
         // versionCode is the stable, monotonic upgrade key the server watchdog
         // compares against the installed app to decide whether to reinstall.
         // Bump it whenever the APK content changes. Keep versionName human-readable.
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     signingConfigs {

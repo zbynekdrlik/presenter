@@ -217,7 +217,6 @@ pub struct AndroidDisplayDto {
     pub label: String,
     pub host: String,
     pub port: u16,
-    pub launch_component: String,
     pub is_enabled: bool,
     #[serde(default)]
     pub created_at: String,
@@ -233,7 +232,6 @@ pub struct AndroidDisplayDraft {
     pub label: String,
     pub host: String,
     pub port: u16,
-    pub launch_component: String,
     pub is_enabled: bool,
 }
 
