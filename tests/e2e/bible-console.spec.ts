@@ -79,6 +79,8 @@ async function lookUp(page: Page, text: string, reference: string): Promise<void
   await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", reference);
 }
 
+const showButton = (page: Page) => page.locator('[data-role="console-show"]');
+
 function collectPosts(page: Page, path: string): unknown[] {
   const bodies: unknown[] = [];
   page.on("request", (req: Request) => {
@@ -89,7 +91,7 @@ function collectPosts(page: Page, path: string): unknown[] {
   return bodies;
 }
 
-test("phone: 'zid 11 1' resolves to Hebrejom 11:1, loads while typing, and its card goes to the wall", async ({
+test("phone: 'zid 11 1' → one tap on ZOBRAZIŤ puts Hebrejom 11:1 on the wall and the stage (S6)", async ({
   browser,
   request,
 }) => {
@@ -106,16 +108,40 @@ test("phone: 'zid 11 1' resolves to Hebrejom 11:1, loads while typing, and its c
     await expect(row).toHaveAttribute("data-verse-end", "1");
     await expect(row).toContainText("Hebrejom 11:1");
     await expect(row).toContainText("SEB");
-    // The old inputs are gone on a phone; the console is the Live tab.
+    const preview = page.locator('[data-role="console-preview"]');
+    await expect(preview).toHaveAttribute("data-ready", "true");
+    await expect(preview).toHaveAttribute("data-reference", "Hebrejom 11:1 (SEB)");
+    await expect(page.locator('[data-role="console-preview-main"]')).toContainText("Viera");
+    // On a phone the console IS the Live tab: no old inputs, no slide grid.
     await expect(page.locator('[data-role="book-filter"]')).toBeHidden();
+    await expect(page.locator('[data-role="slide-card"]').first()).toBeHidden();
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveAttribute("data-live", "false");
 
-    const card = page.locator('[data-role="slide-card"]').first();
-    await expect(card).toContainText("Hebrejom 11:1 (SEB)");
-    await card.locator('[data-role="slide-trigger-zone"]').tap();
+    await page.locator('[data-role="console-show"]').tap(); // the one tap (1 field + 1 tap)
     await expect.poll(() => shows.length).toBe(1);
-    expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)" });
+    expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)", bookCode: "HEB" });
+    const onAir = page.locator('[data-role="console-on-air"]');
+    await expect(onAir).toHaveAttribute("data-live", "true");
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    await expect(page.locator('[data-role="console-on-air-codes"]')).toContainText("SEB");
     const active = await (await request.get(new URL("/bible/active-slide", baseURL).toString())).json();
     expect(active.mainReference).toBe("Hebrejom 11:1 (SEB)");
+
+    // Every output reads the same slide: the stage on its Bible layout shows it.
+    await request.post(new URL("/stage/layout", baseURL).toString(), { data: { code: "bible" } });
+    const stage = await context.newPage();
+    try {
+      await stage.goto("/stage");
+      await stage.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+      await expect(stage.locator(".stage__bible-reference")).toHaveText("Hebrejom 11:1 (SEB)");
+      await expect(stage.locator(".stage__bible-text")).toContainText("Viera");
+    } finally {
+      await request.post(new URL("/stage/layout", baseURL).toString(), {
+        data: { code: "worship-snv" },
+      });
+      await stage.close();
+    }
+    expect(shows).toHaveLength(1);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -282,6 +308,229 @@ test("desktop: the console sits above the old inputs and feeds the slide grid", 
     await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
       "Hebrejom 11:1 (SEB)",
     );
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a long passage shows part by part: ZOBRAZIŤ 1/n, then 2/n", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    await page.locator('[data-role="console-field"]').fill("jan 3 16-21");
+    const preview = page.locator('[data-role="console-preview"]');
+    await expect(preview).toHaveAttribute("data-ready", "true");
+    const count = Number(await preview.getAttribute("data-slide-count"));
+    expect(count).toBeGreaterThan(1);
+    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 1/${count}`);
+    await showButton(page).tap();
+    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 2/${count}`);
+    await expect(preview).toHaveAttribute("data-slide-index", "2");
+    await showButton(page).tap();
+    await expect.poll(() => shows.length).toBe(2);
+    const [first, second] = shows as Array<{ mainReference: string }>;
+    expect(first.mainReference).not.toBe(second.mainReference);
+    expect(first.mainReference).toMatch(/^Ján 3:16/);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("Zhasnúť appears only while a verse is on the wall and clears it", async ({ browser, request }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const clears = collectPosts(page, "/bible/clear");
+    const clear = page.locator('[data-role="console-clear-live"]');
+    await expect(clear).toHaveCount(0);
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect(clear).toBeVisible();
+    await assertMinTapTarget(clear, 44);
+    await clear.tap();
+    await expect.poll(() => clears.length).toBe(1);
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    await expect(clear).toHaveCount(0);
+    const active = await (await request.get(new URL("/bible/active-slide", baseURL).toString())).json();
+    expect(active).toBeNull();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a second tap while the show is on its way sends nothing more", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/bible/trigger-slide", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect(showButton(page)).toBeDisabled();
+    await expect(showButton(page)).toHaveText("Zobrazujem…");
+    await showButton(page).tap({ force: true });
+    const answered = page.waitForResponse((res) => new URL(res.url()).pathname === "/bible/trigger-slide");
+    release();
+    await (await answered).finished();
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    expect(shows).toHaveLength(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("alternatives and fixes: 'jan 3 16' offers 1 Ján, 'zid 14' offers Hebrejom 13", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await lookUp(page, "jan 3 16", "Ján 3:16 (SEB)");
+    const chip = page.locator('[data-role="console-alt-chip"][data-kind="alternative"]');
+    await expect(chip).toHaveText("1 Ján");
+    await assertMinTapTarget(chip, 44);
+    await chip.tap();
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute(
+      "data-reference",
+      "1 Ján 3:16 (SEB)",
+    );
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+
+    const field = page.locator('[data-role="console-field"]');
+    await field.fill("zid 14");
+    await expect(page.locator('[data-role="console-hint"]')).toHaveText("Kniha má len 13 kapitol");
+    await page.locator('[data-role="console-alt-chip"][data-kind="fix"]').tap();
+    await expect(field).toHaveValue("Hebrejom 13");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute(
+      "data-reference",
+      /^Hebrejom 13:/,
+    );
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("two devices: a show or a clear from elsewhere reaches this phone's on-air strip", async ({
+  browser,
+  request,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await request.post(new URL("/bible/trigger-slide", baseURL).toString(), {
+      data: { mainText: "Lebo Boh tak miloval svet", mainReference: "Ján 3:16 (SEB)" },
+    });
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Ján 3:16");
+    await request.post(new URL("/bible/clear", baseURL).toString(), { data: {} });
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a locked phone that missed the live event catches up when it is visible again", async ({
+  browser,
+  request,
+}) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  try {
+    let deaf = false;
+    await page.routeWebSocket(/\/live\/ws/, (ws) => {
+      const server = ws.connectToServer();
+      server.onMessage((message) => {
+        if (deaf) return; // the suspended socket hears nothing
+        ws.send(message);
+      });
+    });
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __presenterLiveConnected: () => boolean }).__presenterLiveConnected())).toBe(true);
+
+    deaf = true;
+    await request.post(new URL("/bible/trigger-slide", baseURL).toString(), {
+      data: { mainText: "Viera je podstatou", mainReference: "Hebrejom 11:1 (SEB)" },
+    });
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(page.locator('[data-role="console-on-air-reference"]')).toHaveText("Hebrejom 11:1");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a failed show says so inline and in a toast; nothing changes on the strip", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    await page.route("**/bible/trigger-slide", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "not-json" }),
+    );
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).tap();
+    await expect(page.locator('[data-role="console-show-error"]')).toContainText("Verš sa nezobrazil");
+    await expect(page.locator('[data-role="toast"]')).toHaveAttribute("data-visible", "true");
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveAttribute("data-live", "false");
+    await expect(showButton(page)).toBeEnabled();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("while typing, the preview card carries its own ZOBRAZIŤ (the iPhone keyboard may hide the bar)", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.tap();
+    await field.pressSequentially("zid 11 1");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    const inline = page.locator('[data-role="console-preview-show"]');
+    await expect(inline).toBeVisible();
+    await assertMinTapTarget(inline, 44);
+    await inline.tap();
+    await expect.poll(() => shows.length).toBe(1);
+    expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)" });
+    await expect(field).toBeFocused(); // the keyboard stays for the next reference
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("desktop: type → Enter → Enter shows the verse", async ({ browser }) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const field = page.locator('[data-role="console-field"]');
+    await field.click();
+    await field.pressSequentially("zid 11 1");
+    await field.press("Enter");
+    await expect(showButton(page)).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => shows.length).toBe(1);
+    expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)" });
     expect(errors).toEqual([]);
   } finally {
     await context.close();
