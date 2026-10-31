@@ -871,6 +871,13 @@ test("a show that fails after its verse left says so in a toast, not on the empt
       page.locator('[data-role="console-bar"]').boundingBox(),
     ]);
     expect(toastBox!.y + toastBox!.height).toBeLessThanOrEqual(barBox!.y);
+    // The same with the field focused: the tab bar goes and the bar drops.
+    await page.locator('[data-role="console-field"]').focus();
+    const [focusedToast, focusedBar] = await Promise.all([
+      toast.boundingBox(),
+      page.locator('[data-role="console-bar"]').boundingBox(),
+    ]);
+    expect(focusedToast!.y + focusedToast!.height).toBeLessThanOrEqual(focusedBar!.y);
     await expect(page.locator('[data-role="console-show-error"]')).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {
