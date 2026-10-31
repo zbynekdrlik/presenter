@@ -19,10 +19,12 @@ paths:
   snapshots). Components only wire signals.
 - **Row keys carry label + detail.** A translation switch renames a row with the same passage; a
   keyed `<For>` never re-renders an unchanged key (ui skill #496).
-- **`Picked`** (a tapped row / chip / search hit, a step) is valid only for the input AND the main
-  translation it was made in; otherwise the first row is the target. One effect clears it on every
-  input or main change (a comparison alone brings it back when the same text is typed again), and
-  disarms `focus_show` with it: Enter arms that only with a target, any later edit cancels.
+- **`Picked`** (a tapped row / chip / search hit, a step) is valid only for the input it was made
+  in; otherwise the first row is the target. It outlives a translation switch through
+  `bible_console_step::rebase` (new book name; a translation without that verse falls back to the
+  rows), and a walk compares by code + segment, never the renamed target. One effect clears it on
+  every input change (a comparison alone brings it back when the same text is typed again), and
+  disarms `focus_show`, on a main change too: Enter arms that only with a target, any later edit cancels.
 - **Stale answers are dropped.** `preview_key` = passage + main + secondary + character limit; a
   `/bible/resolve` answer is applied only while it still equals the target's key (slow Wi-Fi).
 - **Settle markers, never timing:** `[data-role=bible-console]` `data-preview-state` /
@@ -61,11 +63,28 @@ paths:
   phone's socket may have missed the event). An answer is dropped when the signal changed while it
   was on its way; the show's own answer never replaces a later `triggered_at`, and over an empty strip (maybe a clear) it is set and the server re-read. Visibility in E2E: `Object.defineProperty(document,
   "visibilityState", …)` + a dispatched `visibilitychange`.
-- **Phone layout:** the Live tab hides the slide grid; the sticky bar works only because every
-  ancestor up to `.operator__panel--bible` has `overflow: visible` — a new `overflow` on the
-  catalog or the tab panel breaks it.
+- **Phone layout:** the Live tab hides the slide grid; the bar is `fixed` above the tab bar (a show
+  empties the field and the rows go, a sticky bar jumped 180 px under the finger). ◀ / ▶ prevent
+  the press default like ZOBRAZIŤ. `overflow: visible` up to `.operator__panel--bible` stays.
 - **Errors:** a failed preview shows inline (Enter retries); a failed show shows inline AND a
   toast; neither changes the strip.
+
+- **Stepping** (`state::bible_console_step`, `pages/bible_console/stepping.rs`): split slides →
+  the typed segments (`walk`, kept while the field is empty after a show) → the neighbouring
+  verse via `Versification::step`, never into another book. ◀ / ▶ only move the preview (a
+  `Picked` for the current input); after a show `advance_after_show` clears the field, pins the
+  next target for the empty input and sets `after_show` → "ĎALŠÍ: …". Typing resets it. The
+  input effect keeps a `Picked` made for the value the input just took, or the pin dies with the
+  clear; a load from the old inputs drops it itself (the input may not change). The primary is
+  `disabled` only with no target; every wait is `aria-disabled`, so the focus stays for the next
+  Enter or Space. No dead tap: over a failed preview it reads "SKÚSIŤ ZNOVA" and asks again, past
+  the book's last verse it reads "KONIEC KNIHY" (`at_end`, cleared by ◀, typing, an old-inputs
+  load, or a translation that goes on past it: `recheck_end`) and refuses. ◀ / ▶ refuse while a show is on its way: the show moves on from the preview
+  when it lands, a step in between skips a part.
+- **iOS keyboard:** `state::keyboard_inset` writes `body`'s `--kb-inset` from the visual
+  viewport (0 when pinch-zoomed); the phone bar uses `bottom: var(--kb-inset)`; the tab bar hides
+  while the console field has focus (`:has()`, iOS 15.4+). Playwright cannot open an iPhone
+  keyboard — the inline ZOBRAZIŤ is the guaranteed path.
 
 ## One owner of `bs.slides` (until B2c)
 

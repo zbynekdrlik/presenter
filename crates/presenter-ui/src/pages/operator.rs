@@ -43,6 +43,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     setup_body_attributes(&ctx);
     // #850 §6.1: phone or desktop shell (`body[data-shell]`).
     crate::state::phone_shell::install_phone_shell(ctx.phone_shell);
+    crate::state::keyboard_inset::install_keyboard_inset();
 
     // Reactive body attribute sync
     {

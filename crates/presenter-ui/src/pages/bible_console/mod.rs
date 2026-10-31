@@ -10,6 +10,7 @@ mod field;
 mod on_air;
 mod preview;
 mod results;
+mod stepping;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,6 +25,7 @@ use crate::state::bible_console::{
     console_view, preview_key, resolve_request, trigger_request, versification, ConsoleView,
     PreviewTarget,
 };
+use crate::state::bible_console_step::rebase;
 use crate::state::AppContext;
 
 use actions::ConsoleActions;
@@ -72,6 +74,10 @@ impl Preview {
         }
     }
 
+    fn failed_for(&self, wanted: &str) -> bool {
+        matches!(self, Self::Failed { key, .. } if key == wanted)
+    }
+
     fn state(&self) -> &'static str {
         match self {
             Self::Empty => "empty",
@@ -82,8 +88,8 @@ impl Preview {
     }
 }
 
-/// A row or chip the operator tapped: valid for the input and the main
-/// translation it was tapped in, never after either changed.
+/// A row, chip or step: valid for the input it was made in, never after that
+/// changed. `main` is the translation of `target`; another one rebases it.
 #[derive(Debug, Clone, PartialEq)]
 struct Picked {
     input: String,
@@ -116,6 +122,14 @@ struct Console {
     focus_show: RwSignal<bool>,
     /// ZOBRAZIŤ is enabled: the preview is ready and no show is in flight.
     can_show: Memo<bool>,
+    /// The main translation's structure (rows and stepping).
+    structure: Memo<Versification>,
+    /// The typed passage's segments; ◀ / ▶ walk them before the verses.
+    walk: RwSignal<Vec<PreviewTarget>>,
+    /// The last show came from here: the primary button reads "ĎALŠÍ: …".
+    after_show: RwSignal<bool>,
+    /// The last verse of the book was shown; there is no next one to offer.
+    at_end: RwSignal<bool>,
 }
 
 impl Console {
@@ -132,11 +146,21 @@ impl Console {
             let translation = main.get().unwrap_or_default();
             input.with(|text| structure.with(|s| console_view(&lookup(text, s), &translation)))
         });
-        let target = Memo::new(move |_| match picked.get() {
-            Some(p) if input.with(|text| *text == p.input) && main.get() == p.main => {
-                Some(p.target)
-            }
-            _ => view.with(|v| v.default_target().cloned()),
+        // A pick outlives a translation switch, in the new translation's words
+        // (spec §7.1 1b: the preview re-resolves); a translation without that
+        // verse falls back to the rows.
+        let target = Memo::new(move |_| {
+            picked
+                .get()
+                .filter(|p| input.with(|text| *text == p.input))
+                .and_then(|p| {
+                    if main.get() == p.main {
+                        Some(p.target)
+                    } else {
+                        structure.with(|s| rebase(&p.target, s))
+                    }
+                })
+                .or_else(|| view.with(|v| v.default_target().cloned()))
         });
         let target_key = Memo::new(move |_| {
             let target = target.get()?;
@@ -154,7 +178,8 @@ impl Console {
             preview.with(|p| matches!(p, Preview::Ready { .. }) && p.key() == key.as_deref())
         });
         let showing = RwSignal::new(false);
-        let can_show = Memo::new(move |_| ready.get() && !showing.get());
+        let at_end = RwSignal::new(false);
+        let can_show = Memo::new(move |_| ready.get() && !showing.get() && !at_end.get());
         Self {
             input,
             field: NodeRef::new(),
@@ -171,6 +196,10 @@ impl Console {
             field_focused: RwSignal::new(false),
             focus_show: RwSignal::new(false),
             can_show,
+            structure,
+            walk: RwSignal::new(Vec::new()),
+            after_show: RwSignal::new(false),
+            at_end,
         }
     }
 }
@@ -180,6 +209,7 @@ pub fn BibleConsole() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let console = Console::new(&bs);
     setup_auto_preview(console, &bs);
+    stepping::setup_walk(console);
     on_air::setup_on_air_sync(use_ctx!(AppContext).active_bible_slide);
     let c = console;
 
@@ -227,18 +257,37 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         let loads = classic_loads.get();
         if previous.is_some_and(|before| before != loads) {
             owns_grid.set(false);
+            c.after_show.set(false);
+            c.at_end.set(false);
+            c.picked.set(None);
             c.input.set(String::new());
         }
         loads
     });
 
     // What was tapped or asked for belongs to the input it was done in, also
-    // when the same text is typed again later.
+    // when the same text is typed again later. A show pins the next part for
+    // the field it just emptied, that one stays. A translation switch keeps
+    // it too, but cancels a waiting Enter.
     Effect::new(move |_| {
-        c.input.track();
+        let input = c.input.get();
         c.main.track();
-        c.picked.set(None);
+        let pinned = c
+            .picked
+            .with_untracked(|p| p.as_ref().is_some_and(|p| p.input == input));
+        if !pinned {
+            c.picked.set(None);
+        }
         c.focus_show.set(false);
+    });
+
+    // The book's end belongs to the translation: another one may go on.
+    Effect::new(move |previous: Option<Option<String>>| {
+        let main = c.main.get();
+        if previous.is_some_and(|before| before != main) {
+            stepping::recheck_end(c);
+        }
+        main
     });
 
     Effect::new(move |_| {
@@ -307,12 +356,20 @@ fn failed(ctx: &AppContext, key: String, message: String) -> Preview {
     Preview::Failed { key, message }
 }
 
-/// ZOBRAZIŤ: send the previewed slide to the wall. A split verse advances to
-/// its next part, so the next tap shows it.
+/// ZOBRAZIŤ: send the previewed slide to the wall, then preview the next part
+/// (`stepping::advance_after_show`), so the next tap shows it. Over a preview
+/// that failed it asks again: no tap is a dead one, the keyboard may be away.
 fn show(c: Console, ctx: AppContext) {
     let Some(key) = c.target_key.get_untracked() else {
         return;
     };
+    if c.at_end.get_untracked() {
+        return;
+    }
+    if c.preview.with_untracked(|p| p.failed_for(&key)) {
+        c.retry.update(|n| *n = n.wrapping_add(1));
+        return;
+    }
     let ready = c.preview.with_untracked(|p| {
         (p.key() == Some(key.as_str()))
             .then(|| p.slide().cloned())
@@ -339,19 +396,9 @@ fn show(c: Console, ctx: AppContext) {
                     refresh_on_air(ctx.active_bible_slide);
                 }
                 c.show_error.set(None);
-                c.preview.update(|p| {
-                    if let Preview::Ready {
-                        key: k,
-                        slides,
-                        index,
-                        ..
-                    } = p
-                    {
-                        if *k == key && *index + 1 < slides.len() {
-                            *index += 1;
-                        }
-                    }
-                });
+                if c.target_key.get_untracked().as_deref() == Some(key.as_str()) {
+                    stepping::advance_after_show(c);
+                }
             }
             Err(e) => {
                 let message = format!("Verš sa nezobrazil: {e}");

@@ -224,7 +224,7 @@
   bottom: 0;
   z-index: 5;
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1.6fr 1fr;
   gap: 6px;
   padding: 8px 0;
   background: var(--operator-panel);
@@ -241,8 +241,21 @@
   letter-spacing: 0.03em;
   cursor: pointer;
 }
+.console-bar__step {
+  min-height: 48px;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
 .console-bar__show:disabled,
 .console-bar__show[aria-disabled="true"],
+.console-bar__step:disabled,
+.console-bar__step[aria-disabled="true"],
 .console-clear-live:disabled {
   opacity: 0.45;
   cursor: default;
@@ -257,7 +270,6 @@ body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"]
   .operator__slides-column {
   display: none;
 }
-/* The bar sticks to the panel, the phone's one scroll container. */
 body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible {
   position: static;
   padding: 12px;
@@ -265,8 +277,33 @@ body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible {
   border-radius: 0;
   background: transparent;
 }
+/* The bar never moves: a show empties the field and the rows go, and the next
+   tap must land where the last one did. */
+body.operator[data-shell="phone"] .console {
+  padding-bottom: 72px;
+}
 body.operator[data-shell="phone"] .console-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(56px + env(safe-area-inset-bottom));
+  padding: 8px 12px;
   background: var(--operator-bg);
+}
+/* While typing, the keyboard owns the bottom of the screen. */
+body.operator[data-shell="phone"]:has(.console-field__input:focus) .phone-tabs {
+  display: none;
+}
+body.operator[data-shell="phone"]:has(.console-field__input:focus) .console-bar {
+  bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
+}
+/* Landscape: the tabs are a rail on the left, see phone_shell.css. */
+@media (orientation: landscape) and (min-width: 560px) {
+  body.operator[data-shell="phone"] .console-bar {
+    left: calc(64px + env(safe-area-inset-left));
+    right: env(safe-area-inset-right);
+    bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
+  }
 }
 body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,
 body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
