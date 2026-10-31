@@ -148,3 +148,11 @@ paths:
   only after `end ≥ start`, no underflow) → not the NLT → translation installed → book code
   canonical → the rows cover exactly `start..=end` (first `verse_start`, last `verse_end`).
   One chapter per item: the client splits a cross-chapter selection.
+- `PATCH …/items/{itemId}`: `refreshSource: true` wins over `translation`; neither → 400. A
+  translation change re-snapshots and CLEARS the item's edits (the editor confirms first); a
+  refresh keeps the edits of verses whose text is unchanged (`retain_unchanged_edits`). Both
+  keep the item id (and so its slide ids).
+- `POST …/items/reorder` needs EXACTLY the stored item set; a different set (missing, extra,
+  duplicate id) is a stale view → `Conflict(SERMON_CONFLICT)` → 409, never a partial reorder.
+- `POST …/regenerate` = the same items, the slides generated again (retries the secondary line
+  after an NLT failure).

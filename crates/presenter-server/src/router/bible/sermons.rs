@@ -6,9 +6,9 @@
 
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, post, put};
+use axum::routing::{get, patch, post, put};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use presenter_core::bible::sermon::{ItemEdits, SourceVerse};
@@ -22,7 +22,7 @@ use super::super::integrations::extract_client_ip;
 use super::super::AppError;
 use crate::state::sermons::{
     local_today, ItemRange, SermonDetail, SermonDraft, SermonItemView, SermonList, SermonOrigin,
-    SermonRefusal, SermonSlideView,
+    SermonPatch, SermonRefusal, SermonSlideView,
 };
 use crate::state::AppState;
 
@@ -33,9 +33,18 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/bible/sermons", get(list_sermons).post(create_sermon))
         .route("/bible/sermons/today", get(todays_sermons))
-        .route("/bible/sermons/{id}", get(get_sermon).delete(delete_sermon))
+        .route(
+            "/bible/sermons/{id}",
+            get(get_sermon).patch(update_sermon).delete(delete_sermon),
+        )
         .route("/bible/sermons/{id}/items", post(add_item))
+        .route("/bible/sermons/{id}/items/reorder", post(reorder_items))
+        .route(
+            "/bible/sermons/{id}/items/{item_id}",
+            patch(patch_item).delete(delete_item),
+        )
         .route("/bible/sermons/{id}/items/{item_id}/edits", put(put_edits))
+        .route("/bible/sermons/{id}/regenerate", post(regenerate))
         .route("/bible/study/identity", get(identity))
 }
 
@@ -144,6 +153,51 @@ struct AddItemRequest {
 struct EditsRequest {
     expected_revision: i64,
     verses: ItemEdits,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateSermonRequest {
+    expected_revision: i64,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    service_date: Option<NaiveDate>,
+    #[serde(default, deserialize_with = "double_option")]
+    secondary_translation: Option<Option<String>>,
+}
+
+/// Either `{expectedRevision, translation}` or `{expectedRevision,
+/// refreshSource: true}`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchItemRequest {
+    expected_revision: i64,
+    #[serde(default)]
+    translation: Option<String>,
+    #[serde(default)]
+    refresh_source: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderRequest {
+    expected_revision: i64,
+    item_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionRequest {
+    expected_revision: i64,
+}
+
+/// `?expectedRevision=` as spec §11 writes it; `expected_revision` (the
+/// snake_case query convention) is accepted too.
+#[derive(Debug, Deserialize)]
+struct RevisionQuery {
+    #[serde(rename = "expectedRevision", alias = "expected_revision")]
+    expected_revision: i64,
 }
 
 /// serde double-`Option`: an ABSENT field is `None`, an explicit `null` is
@@ -372,6 +426,121 @@ async fn put_edits(
             item_id,
             body.expected_revision,
             &body.verses,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
+async fn update_sermon(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<UpdateSermonRequest>,
+) -> SermonResult {
+    let patch = SermonPatch {
+        title: body.title,
+        service_date: body.service_date,
+        secondary_translation: body.secondary_translation,
+    };
+    let detail = state
+        .update_sermon(
+            BiblePresentationId::from_uuid(id),
+            body.expected_revision,
+            patch,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
+async fn patch_item(
+    State(state): State<AppState>,
+    Path((id, item_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<PatchItemRequest>,
+) -> SermonResult {
+    let id = BiblePresentationId::from_uuid(id);
+    let origin = origin(&headers, peer);
+    let revision = body.expected_revision;
+    let result = match (body.refresh_source, body.translation.as_deref()) {
+        (true, _) => {
+            state
+                .refresh_sermon_item_source(id, item_id, revision, &origin)
+                .await
+        }
+        (false, Some(translation)) => {
+            state
+                .change_sermon_item_translation(id, item_id, revision, translation, &origin)
+                .await
+        }
+        (false, None) => {
+            return Err(AppError::bad_request_message(
+                "translation or refreshSource is required",
+            ))
+        }
+    };
+    Ok(Json(detail_dto(result.map_err(sermon_error)?)))
+}
+
+#[instrument(skip_all)]
+async fn delete_item(
+    State(state): State<AppState>,
+    Path((id, item_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<RevisionQuery>,
+    headers: HeaderMap,
+    peer: Peer,
+) -> SermonResult {
+    let detail = state
+        .delete_sermon_item(
+            BiblePresentationId::from_uuid(id),
+            item_id,
+            query.expected_revision,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
+async fn reorder_items(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<ReorderRequest>,
+) -> SermonResult {
+    let detail = state
+        .reorder_sermon_items(
+            BiblePresentationId::from_uuid(id),
+            body.expected_revision,
+            &body.item_ids,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
+async fn regenerate(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<RevisionRequest>,
+) -> SermonResult {
+    let detail = state
+        .regenerate_sermon(
+            BiblePresentationId::from_uuid(id),
+            body.expected_revision,
             &origin(&headers, peer),
         )
         .await

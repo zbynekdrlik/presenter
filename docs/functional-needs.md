@@ -9,6 +9,8 @@
 - Offline cache of approved translations with fast reference lookup.
 - Formatting presets for scripture slides (single verse, passage, responsive reading).
 - Highlight keywords or responsive parts for stage prompts.
+- Sermon preparation (#851): the preacher builds the sermon's verse list on his own phone or tablet; each item is one verse range of one chapter, edited only by striking words and emphasizing them (no rewording); labels such as "Deuteronómium 28:20a (SEB)" are computed; the sermon IS a Bible presentation, so its generated slides play on the walls, the tablet and the console without retyping.
+- Clean verse text: no section headings, footnotes, paragraph marks or translator's notes inside a verse; bracketed words that belong to a translation stay.
 
 ## Timers
 - Global service clock with overruns/underruns visual indicators.

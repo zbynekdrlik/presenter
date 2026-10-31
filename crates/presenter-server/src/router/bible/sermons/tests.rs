@@ -349,3 +349,62 @@ async fn item_refusals_are_422_409_and_404() {
     let (status, _) = call(&app, "PUT", &missing, Some(edits), &[]).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// ---- #851 P4d: item upkeep, reorder, update, regenerate ---------------------------
+
+#[tokio::test]
+async fn upkeep_routes_answer_the_whole_sermon() {
+    let (app, id) = app_with_sermon().await;
+    let (_, sermon) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
+    let item_id = sermon["items"][0]["id"]
+        .as_str()
+        .expect("item id")
+        .to_string();
+    let item_uri = format!("/bible/sermons/{id}/items/{item_id}");
+
+    let refresh = json!({ "expectedRevision": 2, "refreshSource": true });
+    let (status, refreshed) = call(&app, "PATCH", &item_uri, Some(refresh), &[]).await;
+    assert_eq!(
+        (status, refreshed["revision"].clone()),
+        (StatusCode::OK, json!(3))
+    );
+    assert_eq!(
+        refreshed["items"][0]["edits"]["1"]["emphasized"],
+        json!([0])
+    );
+    let neither = json!({ "expectedRevision": 3 });
+    let (status, _) = call(&app, "PATCH", &item_uri, Some(neither), &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let reorder = json!({ "expectedRevision": 3, "itemIds": [item_id] });
+    let uri = format!("/bible/sermons/{id}/items/reorder");
+    let (status, reordered) = call(&app, "POST", &uri, Some(reorder), &[]).await;
+    assert_eq!(
+        (status, reordered["revision"].clone()),
+        (StatusCode::OK, json!(4))
+    );
+    let rename = json!({ "expectedRevision": 4, "title": "Viera", "secondaryTranslation": null });
+    let (status, renamed) = call(
+        &app,
+        "PATCH",
+        &format!("/bible/sermons/{id}"),
+        Some(rename),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["title"], "Viera");
+    let regenerate = json!({ "expectedRevision": 5 });
+    let uri = format!("/bible/sermons/{id}/regenerate");
+    let (status, regenerated) = call(&app, "POST", &uri, Some(regenerate), &[]).await;
+    assert_eq!(
+        (status, regenerated["revision"].clone()),
+        (StatusCode::OK, json!(6))
+    );
+    let delete = format!("{item_uri}?expectedRevision=6");
+    let (status, emptied) = call(&app, "DELETE", &delete, None, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{emptied}");
+    assert_eq!(
+        (emptied["items"].clone(), emptied["slides"].clone()),
+        (json!([]), json!([]))
+    );
+}

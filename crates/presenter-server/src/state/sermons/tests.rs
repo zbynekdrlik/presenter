@@ -154,11 +154,11 @@ async fn sermon_slides_obey_the_828_limits() {
     set_limit(&state, 100).await;
 
     let main_only = state
-        .generate_sermon_slides(&sermon(None), &[whole.clone()])
+        .generate_sermon_slides(&sermon(None), std::slice::from_ref(&whole))
         .await
         .expect("main only");
     let with_kjv = state
-        .generate_sermon_slides(&sermon(Some("eng-kjv")), &[whole.clone()])
+        .generate_sermon_slides(&sermon(Some("eng-kjv")), std::slice::from_ref(&whole))
         .await
         .expect("with KJV");
     set_limit(&state, 60).await;
@@ -698,7 +698,14 @@ async fn item_refusals_name_the_problem_in_slovak() {
             range("slk-xyz", "HEB", 1..=1),
             "Preklad slk-xyz nie je nainštalovaný",
         ),
-        (range("slk-seb", "HEB", 3..=2), "Neplatný rozsah veršov"),
+        (
+            ItemRange {
+                verse_start: 3,
+                verse_end: 2,
+                ..range("slk-seb", "HEB", 1..=1)
+            },
+            "Neplatný rozsah veršov",
+        ),
     ];
 
     for (bad, message) in cases {
@@ -796,4 +803,185 @@ async fn a_stale_revision_is_refused_before_anything_changes() {
         .expect("detail")
         .expect("sermon");
     assert_eq!((detail.sermon.revision, detail.items.len()), (1, 1));
+}
+
+// ---- #851 P4d: item upkeep, reorder, update, regenerate ----------------------
+
+/// A sermon with HEB 11:1 (verse 1 cut to `1a`) and HEB 11:2-3; revision 3.
+async fn sermon_with_two_items(state: &AppState) -> SermonDetail {
+    let id = new_sermon(state).await.sermon.id;
+    let first = state
+        .add_sermon_item(id, 0, None, &range("slk-seb", "HEB", 1..=1), &preacher())
+        .await
+        .expect("add first");
+    let mut edits = ItemEdits::default();
+    edits.0.insert(
+        1,
+        VerseEdits {
+            deleted: vec![7, 8, 9, 10, 11],
+            emphasized: Vec::new(),
+        },
+    );
+    state
+        .set_sermon_item_edits(id, first.items[0].record.id, 1, &edits, &preacher())
+        .await
+        .expect("edit");
+    state
+        .add_sermon_item(id, 2, None, &range("slk-seb", "HEB", 2..=3), &preacher())
+        .await
+        .expect("add second")
+}
+
+#[tokio::test]
+async fn changing_the_translation_resnapshots_and_clears_the_edits() {
+    let state = hebrews().await;
+    let sermon = sermon_with_two_items(&state).await;
+    let item_id = sermon.items[0].record.id;
+
+    let changed = state
+        .change_sermon_item_translation(sermon.sermon.id, item_id, 3, "eng-kjv", &preacher())
+        .await
+        .expect("translation");
+
+    let item = &changed.items[0];
+    assert_eq!(
+        item.record.id, item_id,
+        "the item keeps its id and its slide ids"
+    );
+    assert_eq!(item.record.translation_code, "eng-kjv");
+    assert_eq!(item.record.book_name, "Hebrews");
+    assert_eq!(item.record.edits, ItemEdits::default());
+    assert_eq!(item.label, "Hebrews 11:1 (KJV)");
+    assert_eq!(item.record.source[0].text, KJV[0]);
+}
+
+#[tokio::test]
+async fn refreshing_keeps_the_edits_of_unchanged_verses_only() {
+    let state = hebrews().await;
+    let id = new_sermon(&state).await.sermon.id;
+    let added = state
+        .add_sermon_item(id, 0, None, &range("slk-seb", "HEB", 1..=2), &preacher())
+        .await
+        .expect("add");
+    let item_id = added.items[0].record.id;
+    let mut edits = ItemEdits::default();
+    edits.0.insert(
+        1,
+        VerseEdits {
+            deleted: vec![11],
+            emphasized: Vec::new(),
+        },
+    );
+    edits.0.insert(
+        2,
+        VerseEdits {
+            deleted: vec![0],
+            emphasized: Vec::new(),
+        },
+    );
+    state
+        .set_sermon_item_edits(id, item_id, 1, &edits, &preacher())
+        .await
+        .expect("edit");
+    seed(
+        &state,
+        "slk-seb",
+        "sk",
+        "Hebrejom",
+        &[SEB[0], "Iné znenie druhého verša.", SEB[2]],
+    )
+    .await;
+
+    let refreshed = state
+        .refresh_sermon_item_source(id, item_id, 2, &preacher())
+        .await
+        .expect("refresh");
+
+    let item = &refreshed.items[0];
+    assert!(!item.source_changed);
+    assert_eq!(item.record.source[1].text, "Iné znenie druhého verša.");
+    assert_eq!(item.record.edits.0.keys().copied().collect::<Vec<_>>(), [1]);
+}
+
+#[tokio::test]
+async fn deleting_and_reordering_items() {
+    let state = hebrews().await;
+    let sermon = sermon_with_two_items(&state).await;
+    let id = sermon.sermon.id;
+    let (first, second) = (sermon.items[0].record.id, sermon.items[1].record.id);
+
+    let reordered = state
+        .reorder_sermon_items(id, 3, &[second, first], &preacher())
+        .await
+        .expect("reorder");
+    let order: Vec<_> = reordered.items.iter().map(|item| item.record.id).collect();
+    assert_eq!(order, [second, first]);
+    assert_eq!(
+        reordered.slides[0].item_id, second,
+        "slides follow the items"
+    );
+
+    let stale_set = state
+        .reorder_sermon_items(id, 4, &[second], &preacher())
+        .await
+        .expect_err("a different item set is a stale view");
+    assert!(matches!(
+        stale_set.downcast_ref::<presenter_persistence::RepositoryError>(),
+        Some(presenter_persistence::RepositoryError::Conflict(_))
+    ));
+
+    let deleted = state
+        .delete_sermon_item(id, second, 4, &preacher())
+        .await
+        .expect("delete item");
+    let left: Vec<_> = deleted.items.iter().map(|item| item.record.id).collect();
+    assert_eq!(left, [first]);
+    assert_eq!(deleted.slides.len(), 1);
+}
+
+#[tokio::test]
+async fn update_and_regenerate() {
+    let state = hebrews().await;
+    let sermon = sermon_with_two_items(&state).await;
+    let id = sermon.sermon.id;
+    let patch = SermonPatch {
+        title: Some("  Viera  ".to_string()),
+        service_date: Some(date("2026-10-25")),
+        secondary_translation: Some(Some("eng-kjv".to_string())),
+    };
+
+    let updated = state
+        .update_sermon(id, 3, patch, &preacher())
+        .await
+        .expect("update");
+
+    assert_eq!(updated.sermon.title, "Viera");
+    assert_eq!(updated.sermon.service_date, date("2026-10-25"));
+    let presentation = state
+        .bible_presentation_detail(id)
+        .await
+        .expect("detail")
+        .expect("presentation");
+    assert_eq!(presentation.name, "Viera");
+    assert_eq!(
+        presentation.slides[0].secondary_reference,
+        "Hebrews 11:1 (KJV)"
+    );
+    let empty = SermonPatch {
+        title: Some("  ".to_string()),
+        ..SermonPatch::default()
+    };
+    let err = state
+        .update_sermon(id, 4, empty, &preacher())
+        .await
+        .expect_err("empty title");
+    assert_eq!(
+        refusal(&err).as_deref(),
+        Some("Názov kázne nesmie byť prázdny")
+    );
+    let regenerated = state
+        .regenerate_sermon(id, 4, &preacher())
+        .await
+        .expect("regenerate");
+    assert_eq!(regenerated.sermon.revision, 5);
 }

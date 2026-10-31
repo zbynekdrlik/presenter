@@ -229,6 +229,11 @@ this split.
 | `/stream/{slug}`| Transparent OBS output page  |
 | `/live/ws`      | Live updates (timers, stage) |
 | `/companion/ws` | Bitfocus Companion control   |
+| `/bible/sermons` | Sermons: list (with the server's `today` + default service date), create (#851) |
+| `/bible/sermons/today` | Today's sermons in full (operator console, tablet, part C) |
+| `/bible/sermons/{id}` | One sermon: items, computed labels, generated slides; PATCH / DELETE |
+| `/bible/sermons/{id}/items…` | Add, edit (strike + emphasize), refresh, change translation, reorder, delete items |
+| `/bible/study/identity` | The Cloudflare Access e-mail (an author label, never a permission) |
 
 Full API reference in [README.md](../README.md#http-api-snapshot).
 

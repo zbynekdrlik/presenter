@@ -10,10 +10,12 @@
 mod commit;
 mod generate;
 mod guard;
+mod maintain;
 mod snapshot;
 mod view;
 mod write;
 
+pub(crate) use maintain::SermonPatch;
 pub(crate) use snapshot::ItemRange;
 pub(crate) use view::{SermonDetail, SermonItemView, SermonList, SermonSlideView};
 pub(crate) use write::SermonDraft;
@@ -47,6 +49,11 @@ pub(crate) enum SermonOp {
     Create,
     Add,
     Edit,
+    Translation,
+    Refresh,
+    DeleteItem,
+    Reorder,
+    Update,
     Delete,
     Regenerate,
 }
@@ -57,6 +64,11 @@ impl SermonOp {
             Self::Create => "create",
             Self::Add => "add",
             Self::Edit => "edit",
+            Self::Translation => "translation",
+            Self::Refresh => "refresh",
+            Self::DeleteItem => "delete_item",
+            Self::Reorder => "reorder",
+            Self::Update => "update",
             Self::Delete => "delete",
             Self::Regenerate => "regenerate",
         }
