@@ -61,7 +61,7 @@ use crate::components::nameplates::NameplateStore;
 pub const DEFAULT_OUTPUT_SLUG: &str = "stream";
 
 /// Toast auto-hide delay, matching the settings page's 4200 ms.
-const TOAST_HIDE_MS: u32 = 4_200;
+pub const TOAST_HIDE_MS: u32 = 4_200;
 
 // ---- Client write DTOs (camelCase, mirroring router/stream.rs) -------------
 
@@ -186,7 +186,7 @@ pub struct StreamEditorCtx {
 }
 
 impl StreamEditorCtx {
-    /// Show a transient toast, auto-hiding after `TOAST_HIDE_MS`.
+    /// Show a transient toast, hidden by the page after `TOAST_HIDE_MS`.
     pub fn show_toast(self, msg: &str, variant: &str) {
         show_editor_toast(
             self.toast_msg,
@@ -699,7 +699,6 @@ pub fn show_editor_toast(
     state.set(variant.to_string());
     text.set(msg.to_string());
     visible.set(true);
-    gloo_timers::callback::Timeout::new(TOAST_HIDE_MS, move || visible.set(false)).forget();
 }
 
 /// Scene ids of one kind, in current (def) order.

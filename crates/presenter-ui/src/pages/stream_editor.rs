@@ -24,7 +24,8 @@ use crate::components::stream_editor::editor_tabs::{
 };
 use crate::components::stream_editor::output_manage::OutputManage;
 use crate::components::stream_editor::output_paths::{initial_output_slug, OutputSelect};
-use crate::components::stream_editor::{show_editor_toast, StreamEditorCtx};
+use crate::components::stream_editor::{show_editor_toast, StreamEditorCtx, TOAST_HIDE_MS};
+use crate::components::toast::hide_after_last_message;
 use crate::components::version_label::VersionLabel;
 
 /// The `/ui/stream` operator editor page.
@@ -57,6 +58,7 @@ pub fn StreamEditorPage() -> impl IntoView {
     let output_slug = RwSignal::new(initial_output_slug());
     let toast_msg = RwSignal::new(String::new());
     let toast_visible = RwSignal::new(false);
+    hide_after_last_message(toast_msg, toast_visible, TOAST_HIDE_MS);
     let toast_state = RwSignal::new(String::from("info"));
     // #871: the plate list is the shared store (also the operator's Menovky
     // view); it reports through this page's toast.

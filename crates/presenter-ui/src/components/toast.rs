@@ -5,6 +5,19 @@ use leptos::prelude::*;
 /// How long a toast stays on screen.
 const TOAST_MS: u32 = 3_500;
 
+/// Hides a `visible` + `message` toast `hide_ms` after its LAST message: every
+/// new message restarts the one timer (#875). Call once, in the component that
+/// owns the signals.
+pub fn hide_after_last_message(message: RwSignal<String>, visible: RwSignal<bool>, hide_ms: u32) {
+    Effect::new(move |previous: Option<Option<Timeout>>| {
+        drop(previous);
+        message.track();
+        visible
+            .get()
+            .then(|| Timeout::new(hide_ms, move || visible.set(false)))
+    });
+}
+
 /// Toast notification component. It owns the toast's lifetime, whoever set the
 /// message (#875): every new message restarts the one timer (dropping a
 /// `Timeout` cancels it).
