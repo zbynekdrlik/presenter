@@ -356,7 +356,7 @@ test("desktop: a load from the old inputs takes the grid, the console lets go", 
     await page.locator('[data-role="book-filter"]').fill("Rimanom");
     await page.locator('[data-role="book-item"]').first().click();
     await page.locator('[data-role="load-button"]').click();
-    await expect(cards.first()).toContainText("Rimanom 1:1 (SEB)");
+    await expect(cards.first()).toContainText("Rimanom 1:1-32 (SEB)");
     await expect(page.locator('[data-role="console-field"]')).toHaveValue("");
 
     // A later translation or limit change has no console target to reload.
@@ -424,8 +424,9 @@ test("a long passage shows part by part: ZOBRAZIŤ 1/n, then 2/n", async ({ brow
     await expect(preview).toHaveAttribute("data-slide-index", "2");
     await showButton(page).tap();
     await expect.poll(() => shows.length).toBe(2);
-    const [first, second] = shows as Array<{ mainReference: string }>;
-    expect(first.mainReference).not.toBe(second.mainReference);
+    // Every part carries the passage's reference; the text is what moves on.
+    const [first, second] = shows as Array<{ mainReference: string; mainText: string }>;
+    expect(first.mainText).not.toBe(second.mainText);
     expect(first.mainReference).toMatch(/^Ján 3:16/);
     expect(errors).toEqual([]);
   } finally {
