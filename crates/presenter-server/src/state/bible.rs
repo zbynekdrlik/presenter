@@ -297,6 +297,8 @@ impl AppState {
         id: BiblePresentationId,
         new_slides: Vec<BiblePresentationSlide>,
     ) -> anyhow::Result<BiblePresentation> {
+        // #851 §8.2: a sermon's slides are generated from its items.
+        self.refuse_if_sermon(id).await?;
         // Note: empty slides are permitted — the operator UI's "add empty
         // slide" button intentionally creates placeholder slides that the
         // operator fills in by editing text in place.
@@ -318,6 +320,7 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_id: BibleSlideId,
     ) -> anyhow::Result<BiblePresentation> {
+        self.refuse_if_sermon(presentation_id).await?;
         let mut presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -354,6 +357,7 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_ids: Vec<BibleSlideId>,
     ) -> anyhow::Result<BiblePresentation> {
+        self.refuse_if_sermon(presentation_id).await?;
         let presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -410,6 +414,7 @@ impl AppState {
         secondary_reference: String,
         metadata: Option<BibleSlideMetadata>,
     ) -> anyhow::Result<BiblePresentationSlide> {
+        self.refuse_if_sermon(presentation_id).await?;
         let mut presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)

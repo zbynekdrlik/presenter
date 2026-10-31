@@ -7,20 +7,22 @@
 use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use presenter_core::bible::sermon::{ItemEdits, SourceVerse};
 use presenter_core::BiblePresentationId;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
 
 use super::super::access_identity::access_email;
+use super::super::integrations::extract_client_ip;
 use super::super::AppError;
 use crate::state::sermons::{
-    local_today, SermonDetail, SermonItemView, SermonList, SermonSlideView,
+    local_today, SermonDetail, SermonDraft, SermonItemView, SermonList, SermonOrigin,
+    SermonRefusal, SermonSlideView,
 };
 use crate::state::AppState;
 
@@ -29,9 +31,9 @@ type SermonResult = Result<Json<SermonDetailDto>, AppError>;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/bible/sermons", get(list_sermons))
+        .route("/bible/sermons", get(list_sermons).post(create_sermon))
         .route("/bible/sermons/today", get(todays_sermons))
-        .route("/bible/sermons/{id}", get(get_sermon))
+        .route("/bible/sermons/{id}", get(get_sermon).delete(delete_sermon))
         .route("/bible/study/identity", get(identity))
 }
 
@@ -109,17 +111,51 @@ struct IdentityDto {
     email: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSermonRequest {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    service_date: Option<NaiveDate>,
+    #[serde(default)]
+    default_translation: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    secondary_translation: Option<Option<String>>,
+}
+
+/// serde double-`Option`: an ABSENT field is `None`, an explicit `null` is
+/// `Some(None)` ("no secondary line"), a value is `Some(Some(v))`.
+fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
+}
+
 // ---- Mapping ----------------------------------------------------------------
 
-/// A failed sermon request (spec §12, logged at WARN with its cause), mapped
-/// through the central `From<anyhow::Error> for AppError`.
+/// The author label and client IP of a write (spec §9, §13).
+fn origin(headers: &HeaderMap, peer: Peer) -> SermonOrigin {
+    let peer = peer.map(|Extension(ConnectInfo(addr))| addr);
+    SermonOrigin {
+        author: access_email(headers, peer),
+        client_ip: extract_client_ip(headers, peer),
+    }
+}
+
+/// A refused sermon request (spec §12, logged at WARN): `SermonRefusal` → 422
+/// with its Slovak message, everything else through the central mapping.
 fn sermon_error(err: anyhow::Error) -> AppError {
     tracing::warn!(
         target: "presenter::bible::sermon",
         error = %err,
         "sermon request refused"
     );
-    AppError::from(err)
+    match err.downcast_ref::<SermonRefusal>() {
+        Some(refusal) => AppError::unprocessable(refusal.0.clone()),
+        None => AppError::from(err),
+    }
 }
 
 fn list_dto(list: SermonList) -> SermonListDto {
@@ -218,6 +254,26 @@ async fn list_sermons(State(state): State<AppState>) -> Result<Json<SermonListDt
 }
 
 #[instrument(skip_all)]
+async fn create_sermon(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<CreateSermonRequest>,
+) -> SermonResult {
+    let draft = SermonDraft {
+        title: body.title,
+        service_date: body.service_date,
+        default_translation: body.default_translation,
+        secondary_translation: body.secondary_translation,
+    };
+    let detail = state
+        .create_sermon(draft, local_today(), &origin(&headers, peer))
+        .await
+        .map_err(sermon_error)?;
+    Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
 async fn todays_sermons(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SermonDetailDto>>, AppError> {
@@ -236,6 +292,20 @@ async fn get_sermon(State(state): State<AppState>, Path(id): Path<Uuid>) -> Serm
         .map_err(sermon_error)?
         .ok_or_else(|| AppError::not_found("sermon not found"))?;
     Ok(Json(detail_dto(detail)))
+}
+
+#[instrument(skip_all)]
+async fn delete_sermon(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    peer: Peer,
+) -> Result<StatusCode, AppError> {
+    state
+        .delete_sermon(BiblePresentationId::from_uuid(id), &origin(&headers, peer))
+        .await
+        .map_err(sermon_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[instrument(skip_all)]

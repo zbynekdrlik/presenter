@@ -200,3 +200,83 @@ async fn identity_trusts_the_access_email_only_from_the_tunnel() {
     let body: Value = serde_json::from_slice(&bytes).expect("json");
     assert_eq!(body, json!({ "email": null }));
 }
+
+// ---- #851 P4b: create, delete, the slide guard, `sermonDate` -------------------
+
+#[tokio::test]
+async fn create_records_the_author_and_delete_is_204_then_404() {
+    let app = app().await;
+    let headers = [
+        ("cf-access-authenticated-user-email", "Preacher@Example.org"),
+        ("x-forwarded-for", "203.0.113.9"),
+    ];
+    let body = json!({ "serviceDate": local_today(), "defaultTranslation": "slk-seb",
+        "secondaryTranslation": null });
+
+    let (status, created) = call(&app, "POST", "/bible/sermons", Some(body), &headers).await;
+
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["authorEmail"], "preacher@example.org");
+    assert_eq!(created["revision"], 0);
+    assert_eq!(created["items"], json!([]));
+    let uri = format!("/bible/sermons/{}", created["id"].as_str().expect("id"));
+    let (status, _) = call(&app, "DELETE", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&app, "GET", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let nlt = json!({ "defaultTranslation": "eng-nlt" });
+    let (status, refused) = call(&app, "POST", "/bible/sermons", Some(nlt), &[]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        refused["message"],
+        "NLT sa do kázne neukladá — vyber iný preklad"
+    );
+}
+
+#[tokio::test]
+async fn a_sermons_slides_refuse_the_presentation_slide_routes() {
+    let (app, id) = app_with_sermon().await;
+    let (_, sermon) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
+    let slide_id = sermon["slides"][0]["id"]
+        .as_str()
+        .expect("slide id")
+        .to_string();
+    let slide_uri = format!("/bible/presentations/{id}/slides/{slide_id}");
+    let refused = [
+        (
+            "POST",
+            format!("/bible/presentations/{id}/append"),
+            Some(json!({ "slides": [{ "bibleMain": "x", "bibleTranslation": "" }] })),
+        ),
+        (
+            "PATCH",
+            slide_uri.clone(),
+            Some(json!({ "bibleMain": "x", "bibleTranslation": "",
+                "bibleMainReference": "", "bibleTranslationReference": "" })),
+        ),
+        ("DELETE", slide_uri, None),
+        (
+            "POST",
+            format!("/bible/presentations/{id}/slides/reorder"),
+            Some(json!({ "slideIds": [slide_id] })),
+        ),
+    ];
+
+    for (method, uri, body) in refused {
+        let (status, answer) = call(&app, method, &uri, body, &[]).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {answer}");
+        assert_eq!(
+            answer["message"],
+            "Slajdy kázne sa generujú z jej položiek — upravuje sa v /ui/study"
+        );
+    }
+    let rename = json!({ "name": "Premenovaná" });
+    let uri = format!("/bible/presentations/{id}");
+    let (status, _) = call(&app, "PATCH", &uri, Some(rename), &[]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "rename stays allowed");
+    let (_, list) = call(&app, "GET", "/bible/presentations", None, &[]).await;
+    assert_eq!(list[0]["name"], "Premenovaná");
+    assert_eq!(list[0]["sermonDate"], json!(local_today()));
+    let (_, detail) = call(&app, "GET", &uri, None, &[]).await;
+    assert_eq!(detail["sermonDate"], json!(local_today()));
+}

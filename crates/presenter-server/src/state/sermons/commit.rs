@@ -37,19 +37,42 @@ pub(crate) struct SermonChange<'a> {
 }
 
 /// The fields of one `presenter::bible::sermon` line (spec §13).
-struct SermonLine<'a> {
-    op: SermonOp,
-    sermon_id: BiblePresentationId,
-    item_id: Option<Uuid>,
-    revision: i64,
-    items: usize,
-    slides: usize,
-    origin: &'a SermonOrigin,
-    elapsed: Duration,
-    warning: Option<&'a str>,
+pub(super) struct SermonLine<'a> {
+    pub(super) op: SermonOp,
+    pub(super) sermon_id: BiblePresentationId,
+    pub(super) item_id: Option<Uuid>,
+    pub(super) revision: i64,
+    pub(super) items: usize,
+    pub(super) slides: usize,
+    pub(super) origin: &'a SermonOrigin,
+    pub(super) elapsed: Duration,
+    pub(super) warning: Option<&'a str>,
 }
 
-fn log_sermon_write(line: &SermonLine<'_>) {
+impl<'a> SermonLine<'a> {
+    /// A line for a write outside `commit_sermon` (create, delete): no item,
+    /// revision 0, no items or slides until the caller fills them in.
+    pub(super) fn new(
+        op: SermonOp,
+        sermon_id: BiblePresentationId,
+        origin: &'a SermonOrigin,
+        started: Instant,
+    ) -> Self {
+        Self {
+            op,
+            sermon_id,
+            item_id: None,
+            revision: 0,
+            items: 0,
+            slides: 0,
+            origin,
+            elapsed: started.elapsed(),
+            warning: None,
+        }
+    }
+}
+
+pub(super) fn log_sermon_write(line: &SermonLine<'_>) {
     let item_id = line
         .item_id
         .map_or_else(|| "-".to_string(), |id| id.to_string());

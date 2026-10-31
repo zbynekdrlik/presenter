@@ -9,9 +9,12 @@
 
 mod commit;
 mod generate;
+mod guard;
 mod view;
+mod write;
 
 pub(crate) use view::{SermonDetail, SermonItemView, SermonList, SermonSlideView};
+pub(crate) use write::SermonDraft;
 
 use chrono::NaiveDate;
 
@@ -39,14 +42,32 @@ impl SermonOrigin {
 /// under `-D warnings` otherwise).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SermonOp {
+    Create,
+    Delete,
     Regenerate,
 }
 
 impl SermonOp {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::Create => "create",
+            Self::Delete => "delete",
             Self::Regenerate => "regenerate",
         }
+    }
+}
+
+/// A sermon request the server refuses with 422 and this Slovak message (an
+/// invalid range, the NLT as an item translation, a bad token index …). Decided
+/// in the state layer, so it is its own type (repository-error-pattern rule:
+/// never forced through `RepositoryError`); `router/bible/sermons.rs` maps it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct SermonRefusal(pub(crate) String);
+
+impl SermonRefusal {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
     }
 }
 

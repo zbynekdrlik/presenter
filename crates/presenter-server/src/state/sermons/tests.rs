@@ -467,3 +467,170 @@ async fn the_list_carries_the_server_dates_and_today_lists_todays_sermons() {
     assert_eq!(list.sermons.len(), 2);
     assert_eq!(on, [todays]);
 }
+
+// ---- #851 P4b: create, delete, the slide guard -------------------------------
+
+fn preacher() -> SermonOrigin {
+    SermonOrigin {
+        author: Some("preacher@example.org".to_string()),
+        client_ip: "203.0.113.9".to_string(),
+    }
+}
+
+fn refusal(err: &anyhow::Error) -> Option<String> {
+    err.downcast_ref::<SermonRefusal>()
+        .map(|refusal| refusal.0.clone())
+}
+
+/// A new SEB sermon for today with no secondary line.
+async fn new_sermon(state: &AppState) -> SermonDetail {
+    let draft = SermonDraft {
+        service_date: Some(local_today()),
+        default_translation: Some("slk-seb".to_string()),
+        secondary_translation: Some(None),
+        ..SermonDraft::default()
+    };
+    state
+        .create_sermon(draft, local_today(), &preacher())
+        .await
+        .expect("create")
+}
+
+#[tokio::test]
+async fn create_takes_the_server_dates_and_the_bible_preferences() {
+    let state = hebrews().await;
+    state
+        .set_bible_preferences(
+            BiblePreferences::default()
+                .with_main_translation(Some("slk-seb".to_string()))
+                .with_secondary_translation(Some("eng-kjv".to_string())),
+        )
+        .await
+        .expect("preferences");
+
+    let created = state
+        .create_sermon(SermonDraft::default(), date("2026-10-14"), &preacher())
+        .await
+        .expect("create");
+
+    let sermon = &created.sermon;
+    assert_eq!(sermon.service_date, date("2026-10-18"));
+    assert_eq!(sermon.title, "Kázeň 18. 10. 2026");
+    assert_eq!(sermon.default_translation_code, "slk-seb");
+    assert_eq!(
+        sermon.secondary_translation_code.as_deref(),
+        Some("eng-kjv")
+    );
+    assert_eq!(sermon.author_email.as_deref(), Some("preacher@example.org"));
+    assert_eq!(sermon.revision, 0);
+    let nlt = SermonDraft {
+        default_translation: Some(NLT_CODE.to_string()),
+        ..SermonDraft::default()
+    };
+    let err = state
+        .create_sermon(nlt, date("2026-10-14"), &preacher())
+        .await
+        .expect_err("the NLT is never an item translation");
+    assert_eq!(
+        refusal(&err).as_deref(),
+        Some("NLT sa do kázne neukladá — vyber iný preklad")
+    );
+}
+
+#[tokio::test]
+async fn deleting_only_deletes_sermons_and_logs_with_the_author() {
+    let state = hebrews().await;
+    let id = new_sermon(&state).await.sermon.id;
+    let plain = state
+        .create_bible_presentation("Ad hoc")
+        .await
+        .expect("plain presentation");
+    let capture = Capture::install();
+
+    let err = state
+        .delete_sermon(plain.id, &preacher())
+        .await
+        .expect_err("a plain presentation is no sermon");
+    state.delete_sermon(id, &preacher()).await.expect("delete");
+
+    assert!(matches!(
+        err.downcast_ref::<presenter_persistence::RepositoryError>(),
+        Some(presenter_persistence::RepositoryError::NotFound(_))
+    ));
+    assert!(state.sermon_detail(id).await.expect("detail").is_none());
+    let writes: Vec<_> = capture
+        .events("presenter::bible::sermon")
+        .into_iter()
+        .filter(|line| line.field("message") == Some("sermon write"))
+        .collect();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].field("op"), Some(quoted("delete").as_str()));
+    assert_eq!(
+        writes[0].field("author"),
+        Some(quoted("preacher@example.org").as_str())
+    );
+    assert_eq!(
+        writes[0].field("client_ip"),
+        Some(quoted("203.0.113.9").as_str())
+    );
+    assert_eq!(writes[0].field("sermon_id"), Some(id.to_string().as_str()));
+}
+
+#[tokio::test]
+async fn sermon_slides_are_read_only_on_the_presentation_paths() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=3, &[])]).await;
+    state.regenerate_future_sermons(local_today()).await;
+    let slides = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon")
+        .slides;
+    let slide_id = slides[0].slide.id;
+
+    let refusals = [
+        state
+            .append_bible_presentation_slides(id, Vec::new())
+            .await
+            .map(|_| ()),
+        state.delete_bible_slide(id, slide_id).await.map(|_| ()),
+        state
+            .reorder_bible_slides(id, vec![slide_id])
+            .await
+            .map(|_| ()),
+        state
+            .update_bible_slide(
+                id,
+                slide_id,
+                "x".into(),
+                "y".into(),
+                String::new(),
+                String::new(),
+                None,
+            )
+            .await
+            .map(|_| ()),
+    ];
+
+    for refused in refusals {
+        let err = refused.expect_err("a sermon's slides are generated");
+        assert!(matches!(
+            err.downcast_ref::<presenter_persistence::RepositoryError>(),
+            Some(presenter_persistence::RepositoryError::Conflict(
+                super::guard::SERMON_SLIDES_REFUSAL
+            ))
+        ));
+    }
+    state
+        .rename_bible_presentation(id, "Nový názov")
+        .await
+        .expect("rename stays allowed");
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert_eq!(detail.sermon.title, "Nový názov");
+    assert_eq!(detail.slides.len(), slides.len());
+}

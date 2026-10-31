@@ -128,3 +128,16 @@ paths:
   `{"email": … | null}` (lives here until D4 creates `router/bible/study.rs`).
 - Router tests drive `build_router(state)` with `oneshot`; a LAN peer is simulated by inserting
   `ConnectInfo(SocketAddr)` into the request extensions.
+- **`SermonRefusal(String)`** (state layer, `thiserror`) = 422 with a Slovak message: an invalid
+  range, more than 60 verses, the NLT as an item or default translation, an unknown translation
+  or book, verses the translation lacks, a bad token index, an empty title. Never forced through
+  `RepositoryError` (repository-error-pattern rule).
+- **Sermon slides are read-only on the presentation routes** (spec §8.2): `refuse_if_sermon`
+  (`guard.rs`) runs FIRST in `append_bible_presentation_slides`, `delete_bible_slide`,
+  `reorder_bible_slides`, `update_bible_slide` → `Conflict(SERMON_SLIDES_REFUSAL)` → 409 "Slajdy
+  kázne sa generujú z jej položiek — upravuje sa v /ui/study"; the AI tools call the same state
+  methods and get the same refusal. Rename (= the sermon title) and delete stay allowed. A new
+  slide-write state method calls the guard first.
+- `DELETE /bible/sermons/{id}` deletes only a sermon (a plain presentation is 404 there).
+- The presentation DTOs carry `sermonDate` (skipped when `None`), so the operator UI (H1) can
+  render sermons read-only.
