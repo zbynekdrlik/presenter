@@ -49,27 +49,29 @@ pub(super) fn apply_move(c: Console, step: Step) {
     let Some(next) = untrack(|| neighbour(c, step)) else {
         return;
     };
-    let input = c.input.get_untracked();
-    land(c, input, next);
+    let (input, current) = (c.input.get_untracked(), c.target.get_untracked());
+    land(c, input, current, next);
 }
 
 /// After a successful show: clear the field and preview the next part.
 pub(super) fn advance_after_show(c: Console) {
     let next = untrack(|| neighbour(c, Step::Next));
+    // The empty field resolves to nothing: read the target before it clears.
+    let current = c.target.get_untracked();
     c.after_show.set(true);
     c.input.set(String::new());
     match next {
-        Some(next) => land(c, String::new(), next),
+        Some(next) => land(c, String::new(), current, next),
         // The end of the book: keep showing what is on the wall.
-        None => pin(c, String::new(), c.target.get_untracked()),
+        None => pin(c, String::new(), current),
     }
 }
 
-fn land(c: Console, input: String, next: Move) {
+fn land(c: Console, input: String, current: Option<PreviewTarget>, next: Move) {
     match next {
         Move::Target(target) => pin(c, input, Some(target)),
         Move::Slide(index) => {
-            pin(c, input, c.target.get_untracked());
+            pin(c, input, current);
             c.preview.update(|p| {
                 if let Preview::Ready { index: current, .. } = p {
                     *current = index;

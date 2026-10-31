@@ -61,9 +61,9 @@ paths:
   phone's socket may have missed the event). An answer is dropped when the signal changed while it
   was on its way; the show's own answer never replaces a later `triggered_at`, and over an empty strip (maybe a clear) it is set and the server re-read. Visibility in E2E: `Object.defineProperty(document,
   "visibilityState", …)` + a dispatched `visibilitychange`.
-- **Phone layout:** the Live tab hides the slide grid; the sticky bar works only because every
-  ancestor up to `.operator__panel--bible` has `overflow: visible` — a new `overflow` on the
-  catalog or the tab panel breaks it.
+- **Phone layout:** the Live tab hides the slide grid; the bar is `fixed` above the tab bar (a show
+  empties the field and the rows go, a sticky bar jumped 180 px under the finger). ◀ / ▶ prevent
+  the press default like ZOBRAZIŤ. `overflow: visible` up to `.operator__panel--bible` stays.
 - **Errors:** a failed preview shows inline (Enter retries); a failed show shows inline AND a
   toast; neither changes the strip.
 

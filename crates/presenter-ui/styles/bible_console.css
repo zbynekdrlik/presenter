@@ -269,7 +269,6 @@ body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"]
   .operator__slides-column {
   display: none;
 }
-/* The bar sticks to the panel, the phone's one scroll container. */
 body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible {
   position: static;
   padding: 12px;
@@ -277,13 +276,32 @@ body.operator.operator--bible[data-shell="phone"] .operator__catalog--bible {
   border-radius: 0;
   background: transparent;
 }
+/* The bar never moves: a show empties the field and the rows go, and the next
+   tap must land where the last one did. */
+body.operator[data-shell="phone"] .console {
+  padding-bottom: 72px;
+}
 body.operator[data-shell="phone"] .console-bar {
-  bottom: var(--kb-inset, 0px);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(56px + env(safe-area-inset-bottom));
+  padding: 8px 12px;
   background: var(--operator-bg);
 }
 /* While typing, the keyboard owns the bottom of the screen. */
 body.operator[data-shell="phone"]:has(.console-field__input:focus) .phone-tabs {
   display: none;
+}
+body.operator[data-shell="phone"]:has(.console-field__input:focus) .console-bar {
+  bottom: var(--kb-inset, 0px);
+}
+/* Landscape: the tabs are a rail on the left, see phone_shell.css. */
+@media (orientation: landscape) and (min-width: 560px) {
+  body.operator[data-shell="phone"] .console-bar {
+    left: calc(64px + env(safe-area-inset-left));
+    bottom: var(--kb-inset, 0px);
+  }
 }
 body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,
 body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {

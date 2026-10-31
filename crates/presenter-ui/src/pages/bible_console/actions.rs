@@ -87,6 +87,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 data-role="console-prev"
                 aria-label="Predošlý"
                 disabled=move || prev.with(Option::is_none)
+                on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
+                on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click=move |_| apply_move(c, Step::Prev)
             >
                 {move || format!("\u{25C0} {}", step_text(prev.get()))}
@@ -118,6 +120,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 data-role="console-next"
                 aria-label="Ďalší"
                 disabled=move || next.with(Option::is_none)
+                on:pointerdown=|ev: web_sys::PointerEvent| ev.prevent_default()
+                on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click=move |_| apply_move(c, Step::Next)
             >
                 {move || format!("{} \u{25B6}", step_text(next.get()))}
