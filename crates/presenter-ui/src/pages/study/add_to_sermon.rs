@@ -23,6 +23,10 @@ pub(super) fn set_active(s: Study, id: Option<String>) {
 
 /// Add `passage`, asking where when no sermon is active.
 pub(super) fn add(s: Study, passage: SermonPassage) {
+    if snapshot_translation(&passage.translation).is_none() {
+        s.tell("Z prekladu NLT sa do kázne pridať nedá — prepni preklad".to_string());
+        return;
+    }
     match s.active_sermon.get_untracked() {
         Some(id) => add_to(s, id, passage),
         None => ask_where(s, passage),
@@ -39,46 +43,69 @@ fn ask_where(s: Study, passage: SermonPassage) {
     }
 }
 
-async fn add_with_retry(
+/// The sermon's answer and the new item's id. `position` is kept inside the
+/// list: another device may have shortened it.
+pub(super) async fn add_with_retry(
     id: &str,
+    position: Option<usize>,
     passage: &SermonPassage,
 ) -> Result<(SermonDetail, String), ApiError> {
+    let at = |held: &SermonDetail| position.map(|wanted| wanted.min(held.items.len()));
     let before = sermons::get_sermon(id).await?;
-    let answer = match sermons::add_item(id, before.revision, None, passage).await {
+    let (before, answer) = match sermons::add_item(id, before.revision, at(&before), passage).await
+    {
         Err(err) if is_conflict(&err) => {
             let fresh = sermons::get_sermon(id).await?;
-            sermons::add_item(id, fresh.revision, None, passage).await?
+            let answer = sermons::add_item(id, fresh.revision, at(&fresh), passage).await?;
+            (fresh, answer)
         }
-        other => other?,
+        other => (before, other?),
     };
     let added = answer
         .items
-        .last()
+        .iter()
+        .find(|item| !before.items.iter().any(|held| held.id == item.id))
         .map(|item| item.id.clone())
         .unwrap_or_default();
     Ok((answer, added))
 }
 
-fn add_to(s: Study, id: String, passage: SermonPassage) {
-    leptos::task::spawn_local(async move {
-        match add_with_retry(&id, &passage).await {
-            Ok((sermon, item)) => {
-                s.tell_undo(
-                    format!("Pridané do kázne „{}“", sermon.title),
-                    Undo::Added { sermon: id, item },
-                );
-                if s.route.with_untracked(|route| route.sheet.is_some()) {
-                    nav::close_sheet(s);
-                }
+/// False while this passage is on its way: a double tap adds it once.
+fn begin_add(s: Study, passage: &SermonPassage) -> bool {
+    if s.adding.with_value(|held| held.as_ref() == Some(passage)) {
+        return false;
+    }
+    s.adding.set_value(Some(passage.clone()));
+    true
+}
+
+async fn add_now(s: Study, id: String, passage: SermonPassage) {
+    match add_with_retry(&id, None, &passage).await {
+        Ok((sermon, item)) => {
+            s.tell_undo(
+                format!("Pridané do kázne „{}“", sermon.title),
+                Undo::Added { sermon: id, item },
+            );
+            if s.route.with_untracked(|route| route.sheet.is_some()) {
+                nav::close_sheet(s);
             }
-            // The sermon was deleted elsewhere: this device must choose again.
-            Err(err) if is_not_found(&err) => {
-                set_active(s, None);
-                ask_where(s, passage);
-            }
-            Err(err) => s.tell(sermon_error(&err)),
         }
-    });
+        // The sermon was deleted elsewhere: this device must choose again.
+        Err(err) if is_not_found(&err) => {
+            set_active(s, None);
+            ask_where(s, passage);
+        }
+        Err(err) => s.tell(sermon_error(&err)),
+    }
+}
+
+fn add_to(s: Study, id: String, passage: SermonPassage) {
+    if begin_add(s, &passage) {
+        leptos::task::spawn_local(async move {
+            add_now(s, id, passage).await;
+            s.adding.set_value(None);
+        });
+    }
 }
 
 /// Späť on the toast: the added item goes again.
@@ -112,16 +139,20 @@ pub(super) fn AddToSermonSheet(s: Study) -> impl IntoView {
         let Some(passage) = s.pending_passage.get_untracked() else {
             return;
         };
+        if !begin_add(s, &passage) {
+            return;
+        }
         leptos::task::spawn_local(async move {
             match sermons::create_sermon(None, None, snapshot_translation(&passage.translation))
                 .await
             {
                 Ok(sermon) => {
                     set_active(s, Some(sermon.id.clone()));
-                    add_to(s, sermon.id, passage);
+                    add_now(s, sermon.id, passage).await;
                 }
                 Err(err) => s.tell(sermon_error(&err)),
             }
+            s.adding.set_value(None);
         });
     };
     view! {

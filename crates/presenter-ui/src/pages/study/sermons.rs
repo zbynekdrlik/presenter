@@ -110,7 +110,12 @@ fn NewSermon(s: Study, answer: SermonList) -> impl IntoView {
     let default_title =
         presenter_core::bible::sermon::default_sermon_title(answer.default_service_date);
     let hint = default_title.clone();
+    let sending = RwSignal::new(false);
     let create = move || {
+        if sending.get_untracked() {
+            return;
+        }
+        sending.set(true);
         let date = date_text.get_untracked().parse::<NaiveDate>().ok();
         let typed = title.get_untracked();
         leptos::task::spawn_local(async move {
@@ -125,7 +130,10 @@ fn NewSermon(s: Study, answer: SermonList) -> impl IntoView {
                     set_active(s, Some(sermon.id.clone()));
                     open_sermon(s, &sermon.id);
                 }
-                Err(err) => s.tell(sermon_error(&err)),
+                Err(err) => {
+                    sending.set(false);
+                    s.tell(sermon_error(&err));
+                }
             }
         });
     };

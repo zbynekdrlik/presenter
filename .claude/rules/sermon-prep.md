@@ -185,6 +185,16 @@ paths:
 - **All writes share the sermon's revision, so they run one at a time** (`Editor::busy`): an edit 300 ms
   after the last tap, a structural write through `write()`, which first waits for the edits
   (`settle_saves`). `Editor::apply` keeps a dirty item's local taps when the server's answer arrives.
+- **The page owns the editors** (`editor_for`: one per opened sermon, created under `Study::owner`). A view's
+  cleanup must not reach the queue: it cancelled the 300 ms timer (a tap lost) and disposed the values an
+  answer on its way reads (`get_value` / `with_untracked` on a disposed value PANICS in release; `set` /
+  `update` do not). `online`, `pagehide`, `visibilitychange` and `beforeunload` are page-wide (`install`).
+- Every write goes through `take_turn` / `end_turn`, Späť included; `end_turn` flushes, or a tap made
+  during a write waits for the next tap. `apply` ignores a LOWER revision (a slow GET would take back a
+  saved edit). A 404 on a save leaves the queue and reloads; only a sermon 404 is `Missing`.
+- Späť after a delete re-adds through the server, which snapshots TODAY's text: `retain_unchanged` keeps
+  only the edits of verses still reading the same, restored as a normal edit (it retries like one). A
+  failed Späť keeps Späť on screen; `tell` never removes it.
 - 409 on an edit: same item, same text → re-sent once; anything else is not replayed (spec §7.6).
 - The words of a card share one listener (`token_at`), never one per token: a chapter has thousands.
 - A new sermon takes the translation being read as its default; the NLT never (`snapshot_translation`).

@@ -131,20 +131,28 @@ impl ItemDraft {
     /// token opening one, in the same verse, else the token itself.
     fn tap_end(&self, verse: u16, index: u16) -> u16 {
         let tokens = self.tokens(verse);
-        let closer = tokens
+        let opening = tokens
             .get(usize::from(index))
-            .and_then(|token| token.chars().next())
-            .and_then(bracket_closer);
-        let Some(closer) = closer else {
+            .and_then(|token| token.chars().next());
+        let Some((opening, closer)) =
+            opening.and_then(|first| Some((first, bracket_closer(first)?)))
+        else {
             return index;
         };
-        tokens
-            .iter()
-            .enumerate()
-            .skip(usize::from(index))
-            .find(|(_, token)| token.contains(closer))
-            .and_then(|(at, _)| u16::try_from(at).ok())
-            .unwrap_or(index)
+        let mut depth = 0_u32;
+        for (at, token) in tokens.iter().enumerate().skip(usize::from(index)) {
+            for letter in token.chars() {
+                if letter == opening {
+                    depth += 1;
+                } else if letter == closer {
+                    depth -= 1;
+                    if depth == 0 {
+                        return u16::try_from(at).unwrap_or(index);
+                    }
+                }
+            }
+        }
+        index
     }
 
     fn commit(&mut self, next: ItemEdits) -> bool {
@@ -224,6 +232,12 @@ impl ItemDraft {
         }
     }
 
+    /// The edits of a deleted item, back on the same item again.
+    pub fn restore(&mut self, edits: ItemEdits) -> bool {
+        self.edits = edits;
+        true
+    }
+
     /// The server's answer for this item, the undo stack kept.
     pub fn accept(&mut self, source: Vec<SourceVerse>, edits: ItemEdits) {
         if source != self.source {
@@ -233,6 +247,28 @@ impl ItemDraft {
         self.source = source;
         self.edits = edits;
     }
+}
+
+/// The edits of the verses whose text is the same in both snapshots: token
+/// indices name words of one text only.
+pub fn retain_unchanged(old: &[SourceVerse], new: &[SourceVerse], edits: &ItemEdits) -> ItemEdits {
+    let text = |source: &'_ [SourceVerse], verse: u16| {
+        source
+            .iter()
+            .find(|held| held.verse == verse)
+            .map(|held| held.text.clone())
+    };
+    ItemEdits(
+        edits
+            .0
+            .iter()
+            .filter(|(verse, _)| {
+                let before = text(old, **verse);
+                before.is_some() && before == text(new, **verse)
+            })
+            .map(|(verse, kept)| (*verse, kept.clone()))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -306,6 +342,41 @@ mod tests {
         item.tap(TapMode::Strike, 2, 8);
         assert_eq!(item.token_state(2, 8), TokenState::Struck);
         assert_eq!(item.token_state(2, 7), TokenState::Kept);
+    }
+
+    #[test]
+    fn a_tap_on_an_outer_parenthesis_passes_the_inner_pair() {
+        let mut item = ItemDraft::new(
+            vec![SourceVerse {
+                verse: 1,
+                text: "(a (b) c) d".to_string(),
+            }],
+            ItemEdits::default(),
+        );
+        item.tap(TapMode::Strike, 1, 0);
+        assert_eq!(item.edits.verse(1).expect("edits").deleted, [0, 1, 2]);
+        assert_eq!(item.token_state(1, 3), TokenState::Kept);
+    }
+
+    #[test]
+    fn only_the_edits_of_an_unchanged_verse_survive_a_new_snapshot() {
+        let verse = |verse: u16, text: &str| SourceVerse {
+            verse,
+            text: text.to_string(),
+        };
+        let mut item = ItemDraft::new(
+            vec![verse(1, "jeden dva"), verse(2, "tri styri")],
+            ItemEdits::default(),
+        );
+        item.tap(TapMode::Strike, 1, 0);
+        item.tap(TapMode::Strike, 2, 1);
+        let kept = retain_unchanged(
+            &item.source,
+            &[verse(1, "jeden dva"), verse(2, "tri pat")],
+            &item.edits,
+        );
+        assert_eq!(kept.verse(1).expect("same text").deleted, [0]);
+        assert!(kept.verse(2).is_none(), "the indices named another text");
     }
 
     #[test]

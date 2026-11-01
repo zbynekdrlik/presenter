@@ -1,8 +1,10 @@
 //! One sermon's editor (spec §7.6): the cards, the save queue and every write.
 //! All writes share the sermon's revision, so they run one at a time: an edit
 //! waits 300 ms after the last tap, a structural write waits for the edits
-//! before it. A failed save keeps the local state and tries again on the next
-//! tap, on the button or when the network returns.
+//! before it. The page owns each editor (`editor_for`), so a save on its way
+//! finishes after the preacher left the sermon, and a failed one is still there
+//! when he returns. A failed save keeps the local state and tries again on the
+//! next tap, on the button or when the network returns.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -11,6 +13,7 @@ use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use presenter_core::bible::sermon::ItemEdits;
 
+use super::add_to_sermon::add_with_retry;
 use super::scroll::ScrollPlan;
 use super::sermon_item::SermonItemCard;
 use super::{ensure_structure, nav, sermon_error, Study, Undo};
@@ -18,7 +21,7 @@ use crate::api::sermons::{
     self, is_conflict, is_not_found, SermonDetail, SermonItem, SermonPassage,
 };
 use crate::api::ApiError;
-use crate::state::sermon_edit::{ItemDraft, SaveState, TapMode};
+use crate::state::sermon_edit::{retain_unchanged, ItemDraft, SaveState, TapMode};
 use crate::state::sermon_list::{count_text, short_date};
 use crate::state::study::{suggest, StudyRoute};
 
@@ -33,7 +36,7 @@ enum Loaded {
     Failed(String),
 }
 
-/// The open sermon. `Copy` (signals only), passed to every card.
+/// A sermon's state. `Copy` (signals only), passed to every card.
 #[derive(Clone, Copy)]
 pub(super) struct Editor {
     pub(super) s: Study,
@@ -46,7 +49,71 @@ pub(super) struct Editor {
     dirty: StoredValue<BTreeSet<String>>,
     /// A write is on its way: the next one waits.
     busy: StoredValue<bool>,
+    /// Items whose delete is on its way: a double tap deletes once.
+    removing: StoredValue<BTreeSet<String>>,
     timer: StoredValue<Option<Timeout>, LocalStorage>,
+}
+
+/// This sermon's editor, created under the page's owner: no view's cleanup
+/// cancels its timer or disposes what an answer on its way reads.
+fn editor_for(s: Study, id: &str) -> Editor {
+    if let Some(held) = s.editors.with_value(|editors| editors.get(id).copied()) {
+        return held;
+    }
+    let e = s.owner.with_value(|owner| {
+        owner.with(|| Editor {
+            s,
+            id: StoredValue::new(id.to_string()),
+            loaded: RwSignal::new(Loaded::Waiting),
+            detail: RwSignal::new(None),
+            drafts: RwSignal::new(HashMap::new()),
+            mode: RwSignal::new(TapMode::Strike),
+            save: RwSignal::new(SaveState::Saved),
+            dirty: StoredValue::new(BTreeSet::new()),
+            busy: StoredValue::new(false),
+            removing: StoredValue::new(BTreeSet::new()),
+            timer: StoredValue::new_local(None),
+        })
+    });
+    s.editors.update_value(|editors| {
+        editors.insert(id.to_string(), e);
+    });
+    e
+}
+
+fn every_editor(s: Study) -> Vec<Editor> {
+    s.editors
+        .with_value(|editors| editors.values().copied().collect())
+}
+
+/// Out now, whatever the timer planned.
+fn save_now(e: Editor) {
+    if !e.dirty.with_value(BTreeSet::is_empty) {
+        e.timer.set_value(None);
+        flush(e);
+    }
+}
+
+/// The page-wide moments an unsaved edit must not wait for: the network came
+/// back, the phone left the app, the tab goes away.
+pub(super) fn install(s: Study) {
+    let save_all = move || every_editor(s).into_iter().for_each(save_now);
+    let _ = window_event_listener(leptos::ev::online, move |_| save_all());
+    let _ = window_event_listener(leptos::ev::pagehide, move |_| save_all());
+    let _ = window_event_listener_untyped("visibilitychange", move |_| {
+        let hidden = crate::utils::window::document().hidden();
+        if hidden {
+            save_all();
+        }
+    });
+    let _ = window_event_listener(leptos::ev::beforeunload, move |event| {
+        let unsaved = every_editor(s)
+            .into_iter()
+            .any(|e| !e.dirty.with_value(BTreeSet::is_empty));
+        if unsaved {
+            event.prevent_default();
+        }
+    });
 }
 
 impl Editor {
@@ -59,15 +126,24 @@ impl Editor {
             .with_untracked(|detail| detail.as_ref().map_or(0, |held| held.revision))
     }
 
-    /// The server's sermon. An item with unsaved taps keeps them.
+    /// The server's sermon. An item with unsaved taps keeps them, unless its
+    /// text changed: the taps named another text's words. An answer older than
+    /// what is held is ignored: it would take back a saved edit.
     fn apply(self, detail: SermonDetail) {
+        if detail.revision < self.revision() {
+            return;
+        }
         let dirty = self.dirty.get_value();
+        let mut lost = Vec::new();
         self.drafts.update(|drafts| {
             let mut next = HashMap::with_capacity(detail.items.len());
             for item in &detail.items {
                 let draft = match drafts.remove(&item.id) {
                     Some(held) if dirty.contains(&item.id) && held.source == item.source => held,
                     Some(mut held) => {
+                        if dirty.contains(&item.id) {
+                            lost.push(item.id.clone());
+                        }
                         held.accept(item.source.clone(), item.edits.clone());
                         held
                     }
@@ -78,8 +154,11 @@ impl Editor {
             *drafts = next;
         });
         self.dirty.update_value(|dirty| {
-            dirty.retain(|id| detail.items.iter().any(|item| item.id == *id));
+            dirty.retain(|id| detail.items.iter().any(|item| item.id == *id) && !lost.contains(id));
         });
+        if !lost.is_empty() {
+            self.s.tell(CHANGED_ELSEWHERE.to_string());
+        }
         self.detail.set(Some(detail));
     }
 
@@ -114,6 +193,9 @@ impl Editor {
         }
     }
 }
+
+const CHANGED_ELSEWHERE: &str =
+    "Položka sa medzitým zmenila na inom zariadení — tvoja úprava sa neuložila";
 
 fn drafted_edits(e: Editor, id: &str) -> Option<ItemEdits> {
     e.drafts
@@ -158,6 +240,15 @@ fn flush(e: Editor) {
                 }
                 flush(e);
             }
+            // The item or the sermon is gone: no retry can store this.
+            Err(err) if is_not_found(&err) => {
+                e.dirty.update_value(|dirty| {
+                    dirty.remove(&item);
+                });
+                e.s.tell(CHANGED_ELSEWHERE.to_string());
+                reload(e);
+                flush(e);
+            }
             Err(err) => {
                 e.save.set(SaveState::Error);
                 e.s.tell(sermon_error(&err));
@@ -191,9 +282,7 @@ async fn resend_after_conflict(
             dirty.remove(item);
         });
         e.apply(fresh);
-        e.s.tell(
-            "Položka sa medzitým zmenila na inom zariadení — tvoja úprava sa neuložila".to_string(),
-        );
+        e.s.tell(CHANGED_ELSEWHERE.to_string());
         Ok(None)
     }
 }
@@ -201,8 +290,6 @@ async fn resend_after_conflict(
 /// Every edit out, nothing on its way: a structural write may start. `false`
 /// when a save failed; the write waits for the preacher.
 async fn settle_saves(e: Editor) -> bool {
-    e.timer.set_value(None);
-    flush(e);
     loop {
         if e.save.get_untracked() == SaveState::Error {
             return false;
@@ -210,32 +297,66 @@ async fn settle_saves(e: Editor) -> bool {
         if !e.busy.get_value() && e.dirty.with_value(BTreeSet::is_empty) {
             return true;
         }
+        save_now(e);
         TimeoutFuture::new(WAIT_STEP_MS).await;
     }
 }
 
-/// A write that is not an edit: never replayed after a 409 (spec §7.6).
+/// This write's turn in the queue. Pair with [`end_turn`].
+async fn take_turn(e: Editor) -> bool {
+    if !settle_saves(e).await {
+        return false;
+    }
+    e.busy.set_value(true);
+    true
+}
+
+/// The queue moves on: a tap made during the write has only this to wake it.
+fn end_turn(e: Editor) {
+    e.busy.set_value(false);
+    flush(e);
+}
+
+const SAVE_FIRST: &str = "Najprv sa musí uložiť úprava";
+
+/// A write that is not an edit: never replayed after a 409 (spec §7.6). True
+/// when it landed.
+async fn run_write<F, Fut>(e: Editor, refused: &'static str, op: F) -> bool
+where
+    F: FnOnce(String, i64) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<SermonDetail, ApiError>> + 'static,
+{
+    if !take_turn(e).await {
+        e.s.tell(SAVE_FIRST.to_string());
+        return false;
+    }
+    let answer = op(e.id(), e.revision()).await;
+    let landed = match answer {
+        Ok(detail) => {
+            e.apply(detail);
+            true
+        }
+        Err(err) if is_conflict(&err) || is_not_found(&err) => {
+            e.s.tell(refused.to_string());
+            reload(e);
+            false
+        }
+        Err(err) => {
+            e.s.tell(sermon_error(&err));
+            false
+        }
+    };
+    end_turn(e);
+    landed
+}
+
 pub(super) fn write<F, Fut>(e: Editor, refused: &'static str, op: F)
 where
     F: FnOnce(String, i64) -> Fut + 'static,
     Fut: std::future::Future<Output = Result<SermonDetail, ApiError>> + 'static,
 {
     leptos::task::spawn_local(async move {
-        if !settle_saves(e).await {
-            e.s.tell("Najprv sa musí uložiť úprava".to_string());
-            return;
-        }
-        e.busy.set_value(true);
-        let answer = op(e.id(), e.revision()).await;
-        e.busy.set_value(false);
-        match answer {
-            Ok(detail) => e.apply(detail),
-            Err(err) if is_conflict(&err) => {
-                e.s.tell(refused.to_string());
-                reload(e);
-            }
-            Err(err) => e.s.tell(sermon_error(&err)),
-        }
+        run_write(e, refused, op).await;
     });
 }
 
@@ -246,7 +367,14 @@ fn reload(e: Editor) {
                 e.apply(detail);
                 e.loaded.set(Loaded::Ready);
             }
-            Err(err) if is_not_found(&err) => e.loaded.set(Loaded::Missing),
+            Err(err) if is_not_found(&err) => {
+                e.timer.set_value(None);
+                e.dirty.update_value(BTreeSet::clear);
+                e.detail.set(None);
+                e.drafts.update(HashMap::clear);
+                e.save.set(SaveState::Saved);
+                e.loaded.set(Loaded::Missing);
+            }
             Err(err) => e.loaded.set(Loaded::Failed(sermon_error(&err))),
         }
     });
@@ -262,31 +390,60 @@ pub(super) fn delete_item(e: Editor, item: SermonItem) {
     }) else {
         return;
     };
+    // Read now: a tap still waiting for its save is part of what Späť restores.
     let edits = drafted_edits(e, &item.id).unwrap_or_default();
     let id = item.id.clone();
-    let sermon = e.id();
-    write(
-        e,
-        "Položka sa medzitým zmenila — skús znova",
-        move |sermon_id, revision| async move {
-            let answer = sermons::delete_item(&sermon_id, &id, revision).await;
-            if answer.is_ok() {
-                e.s.tell_undo(
-                    "Odstránené".to_string(),
-                    Undo::Removed {
-                        sermon,
-                        item: Box::new(item),
-                        position,
-                        edits,
-                    },
-                );
-            }
-            answer
-        },
-    );
+    let first = e
+        .removing
+        .try_update_value(|removing| removing.insert(id.clone()))
+        .unwrap_or(false);
+    if !first {
+        return;
+    }
+    leptos::task::spawn_local(async move {
+        let target = id.clone();
+        let landed = run_write(
+            e,
+            "Položka sa medzitým zmenila — skús znova",
+            move |sermon, revision| async move {
+                sermons::delete_item(&sermon, &target, revision).await
+            },
+        )
+        .await;
+        if landed {
+            e.s.tell_undo(
+                "Odstránené".to_string(),
+                Undo::Removed {
+                    sermon: e.id(),
+                    edits,
+                    item: Box::new(item),
+                    position,
+                },
+            );
+        }
+        e.removing.update_value(|removing| {
+            removing.remove(&id);
+        });
+    });
 }
 
-/// Späť on "Odstránené": the same item data at the same position.
+/// The deleted item's edits on the item that came back. The server snapshots
+/// today's text, so only the verses still reading the same take theirs.
+fn restore_edits(e: Editor, removed: &SermonItem, new_id: &str, edits: &ItemEdits) {
+    let Some(back) = e.item(new_id) else {
+        return;
+    };
+    let kept = retain_unchanged(&removed.source, &back.source, edits);
+    if kept != *edits {
+        e.s.tell("Text sa medzitým zmenil — úpravy zmenených veršov sa nevrátili".to_string());
+    }
+    if kept != ItemEdits::default() {
+        e.edit(new_id, |draft| draft.restore(kept));
+    }
+}
+
+/// Späť on "Odstránené", in the sermon's queue: the item at the same position
+/// with its edits. A refusal keeps Späť on screen: the item exists only there.
 pub(super) fn undo_removed(
     s: Study,
     sermon: String,
@@ -294,7 +451,23 @@ pub(super) fn undo_removed(
     position: usize,
     edits: ItemEdits,
 ) {
+    let e = editor_for(s, &sermon);
     leptos::task::spawn_local(async move {
+        let offer_again = |message: String, item: SermonItem, edits: ItemEdits| {
+            s.tell_undo(
+                message,
+                Undo::Removed {
+                    sermon: e.id(),
+                    item: Box::new(item),
+                    position,
+                    edits,
+                },
+            );
+        };
+        if !take_turn(e).await {
+            offer_again(SAVE_FIRST.to_string(), item, edits);
+            return;
+        }
         let passage = SermonPassage {
             translation: item.translation.clone(),
             book_code: item.book_code.clone(),
@@ -302,51 +475,51 @@ pub(super) fn undo_removed(
             verse_start: item.verse_start,
             verse_end: item.verse_end,
         };
-        let done = async {
-            let held = sermons::get_sermon(&sermon).await?;
-            let added = sermons::add_item(&sermon, held.revision, Some(position), &passage).await?;
-            let new_id = added
-                .items
-                .iter()
-                .find(|row| !held.items.iter().any(|old| old.id == row.id))
-                .map(|row| row.id.clone());
-            match new_id.filter(|_| edits != ItemEdits::default()) {
-                Some(new_id) => sermons::put_edits(&sermon, &new_id, added.revision, &edits).await,
-                None => Ok(added),
+        match add_with_retry(&e.id(), Some(position), &passage).await {
+            Ok((detail, new_id)) => {
+                e.apply(detail);
+                // A normal edit from here: it retries like any other.
+                restore_edits(e, &item, &new_id, &edits);
+                end_turn(e);
             }
-        };
-        match done.await {
-            // The open editor shows it through its reload.
-            Ok(_) => s.retry.update(|n| *n = n.wrapping_add(1)),
-            Err(err) => s.tell(sermon_error(&err)),
+            Err(err) => {
+                end_turn(e);
+                offer_again(sermon_error(&err), item, edits);
+            }
         }
     });
 }
 
 /// `+ Pridať verš`: a reference is added here, words go to the text search,
-/// whose hits add to this (active) sermon.
-fn add_from_field(e: Editor, input: &str) -> bool {
+/// whose hits add to this (active) sermon. The field keeps what was typed until
+/// the verse is in.
+fn add_from_field(e: Editor, text: RwSignal<String>) {
+    let input = text.get_untracked();
     let Some(translation) = e
         .detail
         .with_untracked(|detail| detail.as_ref().map(|held| held.default_translation.clone()))
     else {
-        return false;
+        return;
     };
     let suggestion = e.s.structures.with_untracked(|map| {
         map.get(&translation)
-            .map(|structure| (suggest(input, structure, &translation), structure.clone()))
+            .map(|structure| (suggest(&input, structure, &translation), structure.clone()))
     });
     let Some((suggestion, structure)) = suggestion else {
         e.s.tell("Zoznam kníh sa ešte načítava".to_string());
-        return false;
+        return;
     };
-    if let Some(target) = suggestion.enter_target() {
+    // A word naming a book is a search here, never a whole chapter added.
+    let target = suggestion
+        .enter_target()
+        .filter(|target| target.verses.is_some() || suggestion.text_search.is_none());
+    if let Some(target) = target {
         let verses = target.verses.or_else(|| {
             let last = structure.book(&target.book)?.verse_count(target.chapter)?;
             Some((1, last))
         });
         let Some((verse_start, verse_end)) = verses else {
-            return false;
+            return;
         };
         let passage = SermonPassage {
             translation,
@@ -355,21 +528,34 @@ fn add_from_field(e: Editor, input: &str) -> bool {
             verse_start,
             verse_end,
         };
-        write(
-            e,
-            "Kázeň sa medzitým zmenila — skús znova",
-            move |id, revision| async move { sermons::add_item(&id, revision, None, &passage).await },
-        );
-        return true;
+        leptos::task::spawn_local(async move {
+            let landed = run_write(
+                e,
+                "Kázeň sa medzitým zmenila — skús znova",
+                move |id, revision| async move {
+                    sermons::add_item(&id, revision, None, &passage).await
+                },
+            )
+            .await;
+            if landed {
+                text.update(|shown| {
+                    if *shown == input {
+                        shown.clear();
+                    }
+                });
+            }
+        });
+        return;
     }
     if let Some(query) = suggestion.text_search {
+        text.set(String::new());
         super::add_to_sermon::set_active(e.s, Some(e.id()));
         nav::go(
             e.s,
             StudyRoute::search(&translation, &query),
             ScrollPlan::Top,
         );
-        return true;
+        return;
     }
     e.s.tell(
         suggestion
@@ -377,7 +563,6 @@ fn add_from_field(e: Editor, input: &str) -> bool {
             .hint
             .unwrap_or_else(|| "Odkaz sa nepodarilo prečítať".to_string()),
     );
-    false
 }
 
 #[component]
@@ -388,9 +573,7 @@ fn AddVerse(e: Editor) -> impl IntoView {
             class="sermon-add"
             on:submit=move |ev| {
                 ev.prevent_default();
-                if add_from_field(e, &text.get_untracked()) {
-                    text.set(String::new());
-                }
+                add_from_field(e, text);
             }
         >
             <input
@@ -409,18 +592,10 @@ fn AddVerse(e: Editor) -> impl IntoView {
 
 #[component]
 pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
-    let e = Editor {
-        s,
-        id: StoredValue::new(id),
-        loaded: RwSignal::new(Loaded::Waiting),
-        detail: RwSignal::new(None),
-        drafts: RwSignal::new(HashMap::new()),
-        mode: RwSignal::new(TapMode::Strike),
-        save: RwSignal::new(SaveState::Saved),
-        dirty: StoredValue::new(BTreeSet::new()),
-        busy: StoredValue::new(false),
-        timer: StoredValue::new_local(None),
-    };
+    let e = editor_for(s, &id);
+    if e.detail.with_untracked(Option::is_none) {
+        e.loaded.set(Loaded::Waiting);
+    }
     Effect::new(move |_| {
         s.retry.track();
         reload(e);
@@ -434,8 +609,6 @@ pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
             ensure_structure(s, code);
         }
     });
-    let online = window_event_listener(leptos::ev::online, move |_| flush(e));
-    on_cleanup(move || online.remove());
 
     let header = move || {
         e.detail.with(|detail| {
@@ -488,7 +661,6 @@ pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
                 class="sermon-editor"
                 data-role="sermon-editor"
                 data-state=state
-                data-revision=move || e.revision().to_string()
             >
                 <div class="sermon-editor__head">
                     <div>

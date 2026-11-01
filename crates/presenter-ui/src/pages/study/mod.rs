@@ -52,7 +52,7 @@ use history::HistorySheet;
 use reader::{ChapterBar, Reader};
 use results::SearchResults;
 use scroll::ScrollPlan;
-use sermon_editor::SermonEditor;
+use sermon_editor::{Editor, SermonEditor};
 use sermons::SermonListView;
 use text_size::TextSizeSheet;
 use verse_actions::VerseActionsSheet;
@@ -144,6 +144,12 @@ struct Study {
     active_sermon: RwSignal<Option<String>>,
     /// The passage the add sheet is asking about.
     pending_passage: RwSignal<Option<SermonPassage>>,
+    /// The passage being added: a double tap adds it once.
+    adding: StoredValue<Option<SermonPassage>>,
+    /// One editor per opened sermon, owned by the page: its save queue outlives
+    /// the view, so leaving a sermon never drops an edit.
+    editors: StoredValue<HashMap<String, Editor>, LocalStorage>,
+    owner: StoredValue<Owner, LocalStorage>,
     /// Bumped by a retry button: asks again for the same chapter or search.
     retry: RwSignal<u32>,
     cache: StoredValue<ChapterCache>,
@@ -198,8 +204,8 @@ impl Study {
         })
     }
 
+    /// A Späť on screen stays: a save's message must not take it away.
     fn tell(self, message: String) {
-        self.undo.set(None);
         self.notice.set(Some(message));
     }
 
@@ -478,6 +484,9 @@ pub fn StudyPage() -> impl IntoView {
         undo: RwSignal::new(None),
         active_sermon: RwSignal::new(session::get_persistent(KEY_ACTIVE_SERMON)),
         pending_passage: RwSignal::new(None),
+        adding: StoredValue::new(None),
+        editors: StoredValue::new_local(HashMap::new()),
+        owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
         scroll_plan: StoredValue::new(saved_verse.map_or(ScrollPlan::Keep, ScrollPlan::Verse)),
@@ -488,6 +497,7 @@ pub fn StudyPage() -> impl IntoView {
         scroll::plan_for_route(s);
     }
     nav::install(s);
+    sermon_editor::install(s);
     fetch_translations(s);
 
     let place = Memo::new(move |_| s.place());

@@ -184,7 +184,8 @@ fn Tools(e: Editor, id: String) -> impl IntoView {
     }
 }
 
-fn change_translation(e: Editor, id: String, code: String) {
+fn change_translation(e: Editor, id: String, select: web_sys::HtmlSelectElement) {
+    let code = select.value();
     let Some(item) = e.item(&id) else {
         return;
     };
@@ -208,6 +209,8 @@ fn change_translation(e: Editor, id: String, code: String) {
                 sermons::change_translation(&sermon, &id, revision, &code).await
             },
         );
+    } else {
+        select.set_value(&item.translation);
     }
 }
 
@@ -226,7 +229,15 @@ fn ItemMenu(e: Editor, id: String) -> impl IntoView {
     };
     let translation = {
         let id = id.clone();
-        move || e.item(&id).map(|item| item.translation).unwrap_or_default()
+        move || {
+            e.detail.with(|detail| {
+                detail
+                    .as_ref()
+                    .and_then(|held| held.items.iter().find(|item| item.id == id))
+                    .map(|item| item.translation.clone())
+                    .unwrap_or_default()
+            })
+        }
     };
     let for_select = id.clone();
     let for_refresh = id.clone();
@@ -267,7 +278,7 @@ fn ItemMenu(e: Editor, id: String) -> impl IntoView {
                                         change_translation(
                                             e,
                                             for_select.clone(),
-                                            event_target_value(&ev),
+                                            event_target::<web_sys::HtmlSelectElement>(&ev),
                                         )
                                     }
                                 >
