@@ -10,11 +10,9 @@ use super::scroll::ScrollPlan;
 use super::{nav, Study};
 use crate::state::bible_console::{ConsoleRow, RowTarget};
 use crate::state::study::{
-    chapter_grid, preview_target, suggest, ChapterGrid, StudyRoute, StudySuggest, StudyTarget,
-    StudyView,
+    chapter_grid, preview_target, suggest, suggest_unresolved, ChapterGrid, StudyRoute,
+    StudySuggest, StudyTarget, StudyView,
 };
-
-const MIN_TEXT_CHARS: usize = 2;
 
 #[derive(Clone, Copy)]
 struct Field {
@@ -85,12 +83,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         });
         match found.flatten() {
             Some(suggestions) => suggestions,
-            // No structure yet: words can still be searched.
-            None => StudySuggest {
-                text_search: (input.trim().chars().count() >= MIN_TEXT_CHARS)
-                    .then(|| input.trim().to_string()),
-                ..StudySuggest::default()
-            },
+            None => suggest_unresolved(&input),
         }
     });
     // The search view's words stay in the field; leaving them empties it.

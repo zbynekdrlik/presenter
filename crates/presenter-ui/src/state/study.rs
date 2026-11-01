@@ -5,7 +5,7 @@
 //! is in `state::study_history`.
 
 use presenter_core::bible::canonical_book_by_code;
-use presenter_core::bible::resolver::{lookup, Resolution, Step, Versification};
+use presenter_core::bible::resolver::{lookup, parse, Resolution, Step, Versification};
 use presenter_core::bible::sermon::translation_short_code;
 use serde::{Deserialize, Serialize};
 
@@ -557,6 +557,30 @@ pub fn suggest(input: &str, structure: &Versification, translation: &str) -> Stu
     }
 }
 
+/// The field without the translation's structure: nothing can be resolved. Words
+/// that name no book can still be searched, but a reference must not fall into
+/// the text search and come back as a false "Nič sa nenašlo".
+pub fn suggest_unresolved(input: &str) -> StudySuggest {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return StudySuggest::default();
+    }
+    let parsed = parse(input);
+    if !parsed.candidates.is_empty() || parsed.spec.is_some() || parsed.bare_ordinal.is_some() {
+        return StudySuggest {
+            view: ConsoleView {
+                hint: Some("Zoznam kníh nie je načítaný, odkaz sa nedá otvoriť".to_string()),
+                ..ConsoleView::default()
+            },
+            ..StudySuggest::default()
+        };
+    }
+    StudySuggest {
+        text_search: (trimmed.chars().count() >= MIN_SEARCH_CHARS).then(|| trimmed.to_string()),
+        ..StudySuggest::default()
+    }
+}
+
 /// The chapters of a book in this translation.
 pub fn chapter_grid(structure: &Versification, code: &str) -> Option<ChapterGrid> {
     let book = structure.book(code)?;
@@ -1002,6 +1026,18 @@ mod tests {
         );
         assert_eq!(suggest.text_search, None);
         assert_eq!(suggest.enter_target(), None);
+    }
+
+    #[test]
+    fn without_the_structure_a_reference_gets_a_hint_and_words_still_search() {
+        for reference in ["zid 11 1", "jan", "11:1", "1"] {
+            let found = suggest_unresolved(reference);
+            assert_eq!(found.text_search, None, "{reference}");
+            assert!(found.view.hint.is_some(), "{reference}");
+        }
+        let words = suggest_unresolved("viera zarukou");
+        assert_eq!(words.text_search.as_deref(), Some("viera zarukou"));
+        assert_eq!(suggest_unresolved(" "), StudySuggest::default());
     }
 
     #[test]

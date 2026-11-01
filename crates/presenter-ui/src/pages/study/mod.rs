@@ -101,6 +101,8 @@ struct Study {
     /// `/bible/books` per translation: the reference resolver and the chapter
     /// steps of the reader's translation.
     structures: RwSignal<HashMap<String, Versification>>,
+    /// The translation whose `/bible/books` failed; the page says so and retries.
+    structures_failed: RwSignal<Option<String>>,
     chapter: RwSignal<Chapter>,
     pending: RwSignal<Option<String>>,
     search: RwSignal<Search>,
@@ -229,12 +231,16 @@ fn ensure_structure(s: Study, code: String) {
     if s.structures.with_untracked(|map| map.contains_key(&code)) {
         return;
     }
+    s.structures_failed.set(None);
     leptos::task::spawn_local(async move {
-        if let Ok(books) = bible_api::list_books(&code).await {
-            let structure = versification(&books);
-            s.structures.update(|map| {
-                map.insert(code, structure);
-            });
+        match bible_api::list_books(&code).await {
+            Ok(books) => {
+                let structure = versification(&books);
+                s.structures.update(|map| {
+                    map.insert(code, structure);
+                });
+            }
+            Err(_) => s.structures_failed.set(Some(code)),
         }
     });
 }
@@ -364,6 +370,7 @@ pub fn StudyPage() -> impl IntoView {
         translations: RwSignal::new(Vec::new()),
         translations_failed: RwSignal::new(None),
         structures: RwSignal::new(HashMap::new()),
+        structures_failed: RwSignal::new(None),
         chapter: RwSignal::new(Chapter::None),
         pending: RwSignal::new(None),
         search: RwSignal::new(Search::Idle),
@@ -458,6 +465,29 @@ pub fn StudyPage() -> impl IntoView {
                                     class="study-button"
                                     data-role="study-retry"
                                     on:click=move |_| fetch_translations(s)
+                                >
+                                    "Skúsiť znova"
+                                </button>
+                            </div>
+                        }
+                    })
+            }}
+            {move || {
+                s.structures_failed
+                    .get()
+                    .map(|code| {
+                        view! {
+                            <div
+                                class="study-error study-error--strip"
+                                data-role="study-structure-error"
+                                role="alert"
+                            >
+                                <p>"Zoznam kníh sa nepodarilo načítať. Odkazy a listovanie nefungujú."</p>
+                                <button
+                                    type="button"
+                                    class="study-button"
+                                    data-role="study-retry"
+                                    on:click=move |_| ensure_structure(s, code.clone())
                                 >
                                     "Skúsiť znova"
                                 </button>

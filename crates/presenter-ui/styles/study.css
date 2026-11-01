@@ -407,6 +407,21 @@
   font-size: 12px;
 }
 
+.study-error--strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  font-size: 15px;
+}
+
+.study-error--strip p {
+  margin: 0;
+}
+
 /* Buttons + bottom bar ------------------------------------------------------ */
 
 .study-button {
@@ -673,7 +688,7 @@
   body[data-shell="phone"] .study {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     column-gap: 8px;
   }
 
@@ -705,9 +720,22 @@
     width: 58px;
   }
 
+  body[data-shell="phone"] .study-error--strip,
   body[data-shell="phone"] .study-scroll,
   body[data-shell="phone"] .study-bar {
     grid-column: 1 / -1;
+  }
+
+  body[data-shell="phone"] .study-error--strip {
+    grid-row: 2;
+  }
+
+  body[data-shell="phone"] .study-scroll {
+    grid-row: 3;
+  }
+
+  body[data-shell="phone"] .study-bar {
+    grid-row: 4;
   }
 
   body[data-shell="phone"] .study-bar {

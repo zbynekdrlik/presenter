@@ -266,7 +266,12 @@ pub(super) fn ChapterBar(s: Study) -> impl IntoView {
     let target = move |dir| Memo::new(move |_| step_target(s, dir));
     let previous = target(Step::Prev);
     let next = target(Step::Next);
+    let known = Memo::new(move |_| s.with_structure(|found| found.is_some()) == Some(true));
     let label = move |wanted: Memo<Option<(String, u16)>>, end: &'static str| {
+        // Without the structure neither end of the Bible is known.
+        if !known.get() {
+            return "\u{2026}".to_string();
+        }
         let Some((code, chapter)) = wanted.get() else {
             return end.to_string();
         };
