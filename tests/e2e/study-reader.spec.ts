@@ -17,7 +17,18 @@ import {
   stopServer,
   type ServerHandle,
 } from "./support";
-import { chapter, expectChapter, favourite, field, finish, openStudy, verse } from "./study-support";
+import {
+  chapter,
+  expectChapter,
+  favourite,
+  field,
+  finish,
+  gateRoute,
+  landed,
+  openStudy,
+  verse,
+  verseNumber,
+} from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -139,6 +150,29 @@ test("a chapter on its way leaves the text in place and only the newest lands", 
   release();
   await page.waitForLoadState("networkidle");
   await expectChapter(page, "slk-seb:HEB.13");
+  await finish(opened);
+});
+
+test("a verse number does nothing while another chapter is on its way", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  const answer = page.waitForResponse("**/bible/resolve");
+  const release = await gateRoute(page, "**/bible/resolve");
+  await page.locator(nextChapter).tap();
+  await expect(chapter(page)).toHaveAttribute("data-state", "loading");
+  await expect(page).toHaveURL(/p=HEB\.12/);
+
+  // Verse 1 on screen is Hebrews 11; a selection now would name Hebrews 12.
+  await expect(verseNumber(page, 1)).toBeDisabled();
+  await verseNumber(page, 1).dispatchEvent("click");
+  await expect(page.locator('[data-role="verse-actions"]')).toHaveCount(0);
+  await expect(page).not.toHaveURL(/v=1/);
+
+  release();
+  await landed(answer);
+  await expectChapter(page, "slk-seb:HEB.12");
+  await expect(verseNumber(page, 1)).toBeEnabled();
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "false");
   await finish(opened);
 });
 
