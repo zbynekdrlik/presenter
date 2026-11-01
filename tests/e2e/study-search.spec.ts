@@ -18,7 +18,17 @@ import {
   stopServer,
   type ServerHandle,
 } from "./support";
-import { expectChapter, favourite, field, finish, openStudy, verse } from "./study-support";
+import {
+  expectChapter,
+  favourite,
+  field,
+  finish,
+  gateRoute,
+  landed,
+  openStudy,
+  settled,
+  verse,
+} from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -214,6 +224,83 @@ test("nothing found and the NLT each say so", async ({ browser }) => {
   await finish(opened);
 });
 
+test("Back from a hit finds the list as it was, unasked", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?view=search&t=eng-kjv&q=faith", null);
+  const { page } = opened;
+  await expect(hits(page).first()).toBeVisible();
+  const scroll = page.locator(".study-scroll");
+  await scroll.evaluate((el) => (el.scrollTop = 1500));
+  const searches: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/bible/search")) searches.push(request.url());
+  });
+  const near = await page.evaluate(() => {
+    const box = document.querySelector(".study-scroll") as HTMLElement;
+    const rows = Array.from(document.querySelectorAll('[data-role="search-hit"]'));
+    return rows.findIndex((row) => row.getBoundingClientRect().top > box.getBoundingClientRect().top);
+  });
+  await hits(page).nth(near).tap();
+  await expect(page.locator('[data-role="study-chapter"]')).toHaveAttribute("data-state", "ready");
+
+  await page.goBack();
+  await expect(hits(page).first()).toBeAttached();
+  await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBe(1500);
+  expect(searches).toEqual([]);
+  await finish(opened);
+});
+
+test("a newer search wins over a slow older one", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  const late = page.waitForResponse(/\/bible\/search\?query=viera/);
+  const release = await gateRoute(page, /\/bible\/search\?query=viera/);
+  await field(page).tap();
+  await field(page).fill("viera");
+  await field(page).press("Enter");
+  await expect(results(page)).toHaveAttribute("data-state", "loading");
+  await field(page).tap();
+  await field(page).fill("nadej");
+  await field(page).press("Enter");
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:nadej");
+  release();
+  await landed(late);
+  await settled(page);
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:nadej");
+  await finish(opened);
+});
+
+test("a book's name can still be searched as a word, under its chapters", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("Izaiáš");
+  await expect(page.locator('[data-role="study-chapter-cell"]').first()).toBeVisible();
+  const search = page.locator('[data-role="study-text-search"]');
+  await expect(search).toContainText("Izaiáš");
+  const grid = await page.locator('[data-role="study-chapter-grid"]').boundingBox();
+  const row = await search.boundingBox();
+  expect(row?.y ?? 0).toBeGreaterThan(grid?.y ?? 0);
+  await search.tap();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:Izaiáš");
+  await finish(opened);
+});
+
+test("the same reference again scrolls back to the verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("zid 11 35");
+  await field(page).press("Enter");
+  await expect(verse(page, 35)).toBeInViewport();
+  await page.locator('[data-role="study-scroll"]').evaluate((el) => (el.scrollTop = 0));
+  await expect(verse(page, 35)).not.toBeInViewport();
+  await field(page).tap();
+  await field(page).fill("zid 11 35");
+  await field(page).press("Enter");
+  await expect(verse(page, 35)).toBeInViewport();
+  await finish(opened);
+});
+
 test("a failed search retries inline", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
@@ -231,14 +318,6 @@ test("a failed search retries inline", async ({ browser }) => {
   await card.locator('[data-role="study-retry"]').tap();
   await expect(hits(page).first()).toBeVisible();
   await expect(card).toHaveCount(0);
-  await finish(opened);
-});
-
-test("no scope chips: the server cannot filter yet", async ({ browser }) => {
-  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?view=search&t=eng-kjv&q=grace", null);
-  const { page } = opened;
-  await expect(results(page)).toHaveAttribute("data-loaded-for", "eng-kjv:grace");
-  await expect(page.locator('[data-role="search-scope"]')).toHaveCount(0);
   await finish(opened);
 });
 

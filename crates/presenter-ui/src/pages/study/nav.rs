@@ -11,7 +11,7 @@ use crate::state::session;
 use crate::state::study::{
     reader_label, search_label, StudyRoute, StudySheet, StudyView, KEY_HISTORY, KEY_LAST,
 };
-use crate::state::study_history::HistoryEntry;
+use crate::state::study_history::{parse_state, HistoryEntry, StudyHistory};
 
 fn browser_history() -> Option<web_sys::History> {
     crate::utils::window::window().history().ok()
@@ -56,13 +56,18 @@ fn remember(s: Study, route: &StudyRoute) {
     session::set(KEY_HISTORY, &s.history.with_untracked(|h| h.to_stored()));
 }
 
+fn state_value(s: Study) -> JsValue {
+    JsValue::from_str(&s.history.with_untracked(StudyHistory::state_text))
+}
+
 fn push_entry(s: Study, route: StudyRoute) {
     let entry = entry(s, &route);
     let url = entry.url.clone();
-    let mut index = 0;
-    s.history.update(|history| index = history.push(entry));
+    s.history.update(|history| {
+        history.push(entry);
+    });
     if let Some(history) = browser_history() {
-        let _ = history.push_state_with_url(&JsValue::from_f64(index as f64), "", Some(&url));
+        let _ = history.push_state_with_url(&state_value(s), "", Some(&url));
     }
     remember(s, &route);
     s.route.set(route);
@@ -72,11 +77,14 @@ fn push_entry(s: Study, route: StudyRoute) {
 /// URL without one.
 pub(super) fn replace(s: Study, route: StudyRoute) {
     let entry = entry(s, &route);
+    replace_entry(s, route, entry);
+}
+
+fn replace_entry(s: Study, route: StudyRoute, entry: HistoryEntry) {
     let url = entry.url.clone();
     s.history.update(|history| history.replace(entry));
-    let index = s.history.with_untracked(|history| history.position());
     if let Some(history) = browser_history() {
-        let _ = history.replace_state_with_url(&JsValue::from_f64(index as f64), "", Some(&url));
+        let _ = history.replace_state_with_url(&state_value(s), "", Some(&url));
     }
     remember(s, &route);
     s.route.set(route);
@@ -87,11 +95,18 @@ pub(super) fn replace(s: Study, route: StudyRoute) {
 pub(super) fn go(s: Study, route: StudyRoute, plan: ScrollPlan) {
     let current = s.route.get_untracked();
     if current == route {
+        // The same place asked for again: the reader may have scrolled away.
+        s.scroll_plan.set_value(plan);
+        scroll::settle(s);
         return;
     }
     scroll::remember_offset(s);
     if current.sheet.is_some() {
-        replace(s, current.without_sheet());
+        // It stays a step for Back, but it is no second row of the same place.
+        let closed = current.without_sheet();
+        let mut step = entry(s, &closed);
+        step.listed = false;
+        replace_entry(s, closed, step);
     }
     s.scroll_plan.set_value(plan);
     push_entry(s, route);
@@ -104,14 +119,23 @@ pub(super) fn open_sheet(s: Study, route: StudyRoute) {
 }
 
 /// Close the open sheet. A sheet that came with the URL has nothing behind it
-/// to go back to, so it goes in place.
+/// to go back to, so it goes in place, and the verse sheet's selection with it.
 pub(super) fn close_sheet(s: Study) {
     if s.history.with_untracked(|history| history.can_go_back()) {
         back();
-    } else {
-        let route = s.route.get_untracked().without_sheet();
-        replace(s, route);
+        return;
     }
+    let route = s.route.get_untracked();
+    let selected = route.sheet == Some(StudySheet::Actions);
+    let closed = route.without_sheet();
+    replace(
+        s,
+        if selected {
+            closed.with_verses(None)
+        } else {
+            closed
+        },
+    );
 }
 
 pub(super) fn back() {
@@ -139,33 +163,56 @@ pub(super) fn label_current(s: Study, book: &str) {
         return;
     };
     let label = reader_label(book, *chapter, translation);
-    let mut updated = entry(s, &route);
-    updated.label = label;
-    s.history.update(|history| history.replace(updated));
+    s.history.update(|history| history.relabel(label));
     remember(s, &route);
+}
+
+/// This list's index in a `history.state`; `None` for an entry of no list or of
+/// another one.
+fn index_in_list(s: Study, state: &JsValue) -> Option<usize> {
+    let state = state.as_string()?;
+    let (generation, index) = parse_state(&state)?;
+    let ours = s
+        .history
+        .with_untracked(|history| history.generation() == generation);
+    ours.then_some(index)
+}
+
+/// A new list at this entry: the tab came in from elsewhere (or from an older
+/// list), and what lies behind in the browser is not the study page's. ◀ and a
+/// sheet's ✕ only ever walk this list, so they can never leave the page.
+fn start_list(s: Study, route: &StudyRoute) {
+    let generation = format!(
+        "{:x}{:x}",
+        js_sys::Date::now() as u64,
+        (js_sys::Math::random() * 1e9) as u64
+    );
+    let first = entry(s, route);
+    let url = first.url.clone();
+    s.history.set(StudyHistory::starting(generation, first));
+    s.offsets.update_value(std::collections::HashMap::clear);
+    if let Some(history) = browser_history() {
+        let _ = history.replace_state_with_url(&state_value(s), "", Some(&url));
+    }
+}
+
+/// Is this page a reload of (or a return to) an entry the browser kept?
+pub(super) fn has_entry_state() -> bool {
+    browser_history()
+        .and_then(|history| history.state().ok())
+        .is_some_and(|state| state.is_string())
 }
 
 /// Take the place of the current history entry and follow the browser's moves.
 pub(super) fn install(s: Study) {
     let route = s.route.get_untracked();
-    let index = browser_history()
+    let state = browser_history()
         .and_then(|history| history.state().ok())
-        .and_then(|state| state.as_f64());
-    match index {
+        .unwrap_or(JsValue::NULL);
+    match index_in_list(s, &state) {
         // A reload: the same entry.
-        Some(index) => s.history.update(|history| history.moved_to(index as usize)),
-        None => {
-            let entry = entry(s, &route);
-            let mut index = 0;
-            s.history.update(|history| index = history.push(entry));
-            if let Some(history) = browser_history() {
-                let _ = history.replace_state_with_url(
-                    &JsValue::from_f64(index as f64),
-                    "",
-                    Some(&route.to_url()),
-                );
-            }
-        }
+        Some(index) => s.history.update(|history| history.moved_to(index)),
+        None => start_list(s, &route),
     }
     remember(s, &route);
 
@@ -178,9 +225,10 @@ pub(super) fn install(s: Study) {
             return;
         };
         scroll::remember_offset(s);
-        let index = event.state().as_f64().map(|index| index as usize);
-        if let Some(index) = index {
-            s.history.update(|history| history.moved_to(index));
+        let index = index_in_list(s, &event.state());
+        match index {
+            Some(index) => s.history.update(|history| history.moved_to(index)),
+            None => start_list(s, &route),
         }
         let sheet_only = s.route.with_untracked(|current| {
             current.without_sheet().with_verses(None) == route.without_sheet().with_verses(None)
@@ -188,8 +236,11 @@ pub(super) fn install(s: Study) {
         if !sheet_only {
             let offset = index
                 .and_then(|index| s.offsets.with_value(|offsets| offsets.get(&index).copied()));
+            let opening = route
+                .verses
+                .map_or(ScrollPlan::Top, |(verse, _)| ScrollPlan::Verse(verse));
             s.scroll_plan
-                .set_value(offset.map_or(ScrollPlan::Keep, ScrollPlan::Offset));
+                .set_value(offset.map_or(opening, ScrollPlan::Offset));
         }
         remember(s, &route);
         s.route.set(route);

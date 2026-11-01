@@ -63,7 +63,7 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
     };
 
     view! {
-        <main class="study-scroll study-scroll--results">
+        <main class="study-scroll study-scroll--results" node_ref=s.scroller>
             <section
                 class="study-results"
                 data-role="search-results"

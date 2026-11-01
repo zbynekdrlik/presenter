@@ -73,7 +73,8 @@ mod tests {
 
     #[test]
     fn the_service_worker_caches_nothing_and_handles_no_request() {
-        assert!(!SERVICE_WORKER.contains("addEventListener(\"fetch\""));
+        assert!(!SERVICE_WORKER.contains("\"fetch\""));
+        assert!(!SERVICE_WORKER.contains("'fetch'"));
         assert!(!SERVICE_WORKER.contains("caches."));
     }
 }

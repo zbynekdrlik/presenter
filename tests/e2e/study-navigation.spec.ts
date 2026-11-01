@@ -24,6 +24,8 @@ import {
   field,
   finish,
   openStudy,
+  scrollToVerse,
+  settled,
   verse,
   verseNumber,
 } from "./study-support";
@@ -131,7 +133,6 @@ test("the sheet offers only what works today", async ({ browser }) => {
   await expect(actions(page).locator("button:not([data-role=study-sheet-close])")).toHaveText([
     "Kopírovať",
   ]);
-  await expect(page.locator('[data-role="add-to-sermon"]')).toHaveCount(0);
   await finish(opened);
 });
 
@@ -207,8 +208,129 @@ test("a closed sheet lights no ▶ and a chapter step leaves no sheet behind", a
   await drag(page, -120, 0);
   await expectChapter(page, "slk-seb:HEB.12");
   await expect(actions(page)).toHaveCount(0);
+  const listed = await page.evaluate(() => {
+    const stored = sessionStorage.getItem("presenter:study.history") ?? '""';
+    const history = JSON.parse(JSON.parse(stored)) as { entries: { label: string; listed: boolean }[] };
+    return history.entries.filter((entry) => entry.listed).map((entry) => entry.label);
+  });
+  expect(listed).toEqual(["Hebrejom 11 · SEB", "Hebrejom 12 · SEB"]);
   // The system gesture: Chrome swallows the click of a tap right after a swipe.
   await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await expect(actions(page)).toHaveCount(0);
+  await finish(opened);
+});
+
+test("Back with no stored offset goes to the place's verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("zid 12 20");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:HEB.12");
+  await field(page).tap();
+  await field(page).fill("zid 13");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:HEB.13");
+  // A reload forgets the offsets in memory.
+  await page.reload();
+  await expectChapter(page, "slk-seb:HEB.13");
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.12");
+  await expect(verse(page, 20)).toBeInViewport();
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await expect.poll(() =>
+    page.locator('[data-role="study-scroll"]').evaluate((el) => el.scrollTop),
+  ).toBe(0);
+  await finish(opened);
+});
+
+test("a reload keeps the place in the chapter", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await scrollToVerse(page, 25);
+  await page.waitForFunction(() =>
+    (localStorage.getItem("presenter:study.lastVerse") ?? "").includes("|25"),
+  );
+  await page.reload();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await expect(verse(page, 25)).toBeInViewport();
+  await finish(opened);
+});
+
+test("a reopen keeps the place even when the last URL had a verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=HEB.11&v=1");
+  const { page } = opened;
+  await scrollToVerse(page, 25);
+  await page.waitForFunction(() =>
+    (localStorage.getItem("presenter:study.lastVerse") ?? "").includes("|25"),
+  );
+  await page.goto("/ui/study");
+  await expectChapter(page, "slk-seb:HEB.11");
+  await expect(verse(page, 25)).toBeInViewport();
+  await finish(opened);
+});
+
+test("a link's verse wins over the verse saved for its chapter", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await scrollToVerse(page, 25);
+  await page.waitForFunction(() =>
+    (localStorage.getItem("presenter:study.lastVerse") ?? "").includes("|25"),
+  );
+  await page.goto("/ui/study?t=slk-seb&p=HEB.11&v=3");
+  await expectChapter(page, "slk-seb:HEB.11");
+  await expect(verse(page, 3)).toBeInViewport();
+  await finish(opened);
+});
+
+test("coming back through a link starts a new list: ◀ and ✕ never leave the page", async ({
+  browser,
+}) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await page.locator('[data-role="study-next-chapter"]').tap();
+  await expectChapter(page, "slk-seb:HEB.12");
+
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  await page.goto("/ui/study");
+  await expectChapter(page, "slk-seb:HEB.12");
+
+  await expect(back(page)).toHaveAttribute("aria-disabled", "true");
+  await back(page).dispatchEvent("click");
+  await settled(page);
+  await expect(page).toHaveURL(/\/ui\/study/);
+  await page.locator('[data-role="study-text-size"]').tap();
+  await page.locator('[data-role="study-text-sheet"] [data-role="study-sheet-close"]').tap();
+  await expect(page.locator('[data-role="study-text-sheet"]')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/ui\/study/);
+
+  // The browser's own Back to the old list leaves ◀ on the new one.
+  await page.goBack();
+  await page.waitForSelector('[data-role="surface-nav"]', { state: "attached" });
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.12");
+  await expect(back(page)).toHaveAttribute("aria-disabled", "true");
+  // The operator polls the stage and warns when left mid-save: its noise, not this page's.
+  opened.wallRequests.length = 0;
+  const left = opened.errors.filter((text) => !/auto-save preferences failed/.test(text));
+  opened.errors.splice(0, opened.errors.length, ...left);
+  await finish(opened);
+});
+
+test("a sheet that came with the URL closes in place, without its verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=HEB.11&v=2&s=akcie");
+  const { page } = opened;
+  await expect(actions(page)).toBeVisible();
+  await actions(page).locator('[data-role="study-sheet-close"]').tap();
+  await expect(actions(page)).toHaveCount(0);
+  await expect(page).toHaveURL(/\/ui\/study\?t=slk-seb&p=HEB\.11$/);
+  await expect(verse(page, 2)).toHaveAttribute("data-selected", "false");
+  await expect(page.locator('[data-selected="true"]')).toHaveCount(0);
+
+  await page.goto("/ui/study?t=slk-seb&p=HEB.11&s=akcie");
   await expectChapter(page, "slk-seb:HEB.11");
   await expect(actions(page)).toHaveCount(0);
   await finish(opened);

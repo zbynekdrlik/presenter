@@ -24,6 +24,16 @@ pub struct StudyHistory {
     base: usize,
     /// The browser history index shown now.
     position: usize,
+    /// Written into `history.state` with the index: an entry of another list
+    /// (the tab left the page and came back) is never taken for one of this.
+    #[serde(default)]
+    generation: String,
+}
+
+/// `history.state` of an entry: `(generation, browser index)`.
+pub fn parse_state(state: &str) -> Option<(&str, usize)> {
+    let (generation, index) = state.rsplit_once(':')?;
+    Some((generation, index.parse().ok()?))
 }
 
 impl StudyHistory {
@@ -38,6 +48,25 @@ impl StudyHistory {
         serde_json::to_string(self).unwrap_or_default()
     }
 
+    /// A new list that starts at `entry`: nothing lies behind it.
+    pub fn starting(generation: String, entry: HistoryEntry) -> Self {
+        Self {
+            entries: vec![entry],
+            base: 0,
+            position: 0,
+            generation,
+        }
+    }
+
+    pub fn generation(&self) -> &str {
+        &self.generation
+    }
+
+    /// What goes into `history.state` for the current entry.
+    pub fn state_text(&self) -> String {
+        format!("{}:{}", self.generation, self.position)
+    }
+
     pub fn position(&self) -> usize {
         self.position
     }
@@ -49,7 +78,12 @@ impl StudyHistory {
     /// A new place after the current one; whatever was ahead of it is gone,
     /// as in the browser. Returns the new entry's browser history index.
     pub fn push(&mut self, entry: HistoryEntry) -> usize {
-        if !self.entries.is_empty() {
+        if self.position < self.base {
+            // Back went past the kept list: nothing kept is behind or ahead now.
+            self.entries.clear();
+            self.base = self.position + 1;
+            self.position = self.base;
+        } else if !self.entries.is_empty() {
             self.entries.truncate(self.offset() + 1);
             self.position += 1;
         }
@@ -67,6 +101,14 @@ impl StudyHistory {
         match self.entries.get_mut(offset) {
             Some(held) => *held = entry,
             None => self.entries.push(entry),
+        }
+    }
+
+    /// The current entry's row, once the chapter's real book name is known.
+    pub fn relabel(&mut self, label: String) {
+        let offset = self.offset();
+        if let Some(entry) = self.entries.get_mut(offset) {
+            entry.label = label;
         }
     }
 
@@ -226,6 +268,42 @@ mod tests {
         history.push(place("b"));
         history.moved_to(0);
         assert_eq!(history.forward_steps(), Some(2));
+    }
+
+    #[test]
+    fn a_push_after_going_below_the_kept_list_starts_over_there() {
+        let mut history = StudyHistory::default();
+        for index in 0..60 {
+            history.push(place(&index.to_string()));
+        }
+        history.moved_to(3);
+        assert_eq!(history.push(place("new")), 4);
+        assert!(!history.can_go_back());
+        assert!(!history.can_go_forward());
+        assert_eq!(history.push(place("next")), 5);
+        assert_eq!(history.back_list()[0].0, -1);
+        assert_eq!(history.back_list()[0].1.label, "new");
+    }
+
+    #[test]
+    fn a_new_list_has_nothing_behind_it_and_names_its_generation() {
+        let mut history = StudyHistory::starting("g1".to_string(), place("a"));
+        assert!(!history.can_go_back());
+        assert_eq!(history.state_text(), "g1:0");
+        history.push(place("b"));
+        assert_eq!(history.state_text(), "g1:1");
+        assert_eq!(parse_state("g1:1"), Some(("g1", 1)));
+        assert_eq!(parse_state("nothing"), None);
+        assert_eq!(parse_state("g1:x"), None);
+    }
+
+    #[test]
+    fn relabel_keeps_a_closed_sheet_unlisted() {
+        let mut history = walked(&["a"]);
+        history.push(sheet("b"));
+        history.relabel("Hebrejom 11 · SEB".to_string());
+        history.push(place("c"));
+        assert_eq!(history.back_list().len(), 1);
     }
 
     #[test]

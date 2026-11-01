@@ -150,6 +150,12 @@ impl Study {
         })
     }
 
+    /// `slk-seb:viera`, the settle marker of the search on the route.
+    fn search_state_key(self) -> Option<String> {
+        let (translation, query) = self.search_key()?;
+        Some(format!("{translation}:{query}"))
+    }
+
     fn search_key(self) -> Option<(String, String)> {
         let translation = self.translation()?;
         self.route.with(|route| match &route.view {
@@ -224,6 +230,7 @@ fn fetch_search(s: Study, translation: String, query: String) {
                 message: study_error(&err),
             },
         });
+        scroll::settle(s);
     });
 }
 
@@ -288,7 +295,10 @@ fn opening_route() -> (StudyRoute, Option<u16>) {
         .search()
         .unwrap_or_default();
     if let Some(route) = StudyRoute::parse(&search) {
-        return (route, None);
+        // A link names its verse; a reload stays where the reader was.
+        let keeps_place = route.verses.is_none() || nav::has_entry_state();
+        let verse = keeps_place.then(|| scroll::saved_verse(&route)).flatten();
+        return (route, verse);
     }
     let last = session::get_persistent(crate::state::study::KEY_LAST)
         .and_then(|url| StudyRoute::parse(url.split_once('?')?.1));
@@ -388,7 +398,7 @@ pub fn StudyPage() -> impl IntoView {
         offsets: StoredValue::new(HashMap::new()),
         scroller: NodeRef::new(),
     };
-    if s.route.with_untracked(|route| route.verses).is_some() {
+    if saved_verse.is_none() && s.route.with_untracked(|route| route.verses).is_some() {
         scroll::plan_for_route(s);
     }
     nav::install(s);
@@ -420,8 +430,16 @@ pub fn StudyPage() -> impl IntoView {
     Effect::new(move |_| {
         s.retry.track();
         if let Some((translation, query)) = search_key.get() {
-            s.search.set(Search::Idle);
-            fetch_search(s, translation, query);
+            // Back from a hit: the list is still here, scroll and all.
+            let key = format!("{translation}:{query}");
+            let held = s.search.with_untracked(|search| match search {
+                Search::Ready { key: shown, .. } => *shown == key,
+                _ => false,
+            });
+            if !held {
+                s.search.set(Search::Idle);
+                fetch_search(s, translation, query);
+            }
         }
     });
     Effect::new(move |previous: Option<Option<Timeout>>| {

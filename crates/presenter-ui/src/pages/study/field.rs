@@ -56,7 +56,7 @@ impl Field {
             return;
         };
         self.leave();
-        nav::go(self.s, StudyRoute::search(&code, text), ScrollPlan::Keep);
+        nav::go(self.s, StudyRoute::search(&code, text), ScrollPlan::Top);
     }
 
     fn complete(self, text: &str) {
@@ -218,23 +218,6 @@ fn Suggestions(f: Field, suggestions: Memo<StudySuggest>) -> impl IntoView {
                 children=move |row| view! { <Row f=f row=row /> }
             />
             {move || {
-                text()
-                    .map(|words| {
-                        let search = words.clone();
-                        view! {
-                            <button
-                                type="button"
-                                class="study-row"
-                                data-role="study-text-search"
-                                on:click=move |_| f.search(&search)
-                            >
-                                <span class="study-row__label">"Hľadať v texte"</span>
-                                <small class="study-row__detail">{format!("„{words}“")}</small>
-                            </button>
-                        }
-                    })
-            }}
-            {move || {
                 hint()
                     .map(|hint| {
                         view! {
@@ -254,6 +237,23 @@ fn Suggestions(f: Field, suggestions: Memo<StudySuggest>) -> impl IntoView {
                 </div>
             </Show>
             {move || grid().map(|grid| view! { <Chapters f=f grid=grid /> })}
+            {move || {
+                text()
+                    .map(|words| {
+                        let search = words.clone();
+                        view! {
+                            <button
+                                type="button"
+                                class="study-row"
+                                data-role="study-text-search"
+                                on:click=move |_| f.search(&search)
+                            >
+                                <span class="study-row__label">"Hľadať v texte"</span>
+                                <small class="study-row__detail">{format!("„{words}“")}</small>
+                            </button>
+                        }
+                    })
+            }}
             <Show when=move || books.with(|list| !list.is_empty())>
                 <p class="study-suggest__label">"Knihy"</p>
                 <div class="study-chips" data-role="study-books">

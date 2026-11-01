@@ -302,7 +302,7 @@
   overflow-y: auto;
   overscroll-behavior-y: contain;
   border-top: 1px solid #1e293b;
-  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
   -webkit-overflow-scrolling: touch;
 }
 

@@ -6,7 +6,7 @@ use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{Chapter, Study};
+use super::{Chapter, Search, Study};
 use crate::state::session;
 use crate::state::study::{chapter_key, StudyRoute, StudyView, KEY_LAST_VERSE};
 
@@ -34,14 +34,17 @@ pub(super) fn plan_for_route(s: Study) {
 /// Carry out the plan once the route's chapter is the one on screen. The
 /// `requestAnimationFrame` lands after the render effects that show it.
 pub(super) fn settle(s: Study) {
-    let Some(place) = s.place() else {
-        return;
+    let on_screen = match s.place() {
+        Some(place) => s.chapter.with_untracked(|shown| match shown {
+            Chapter::Ready(held, _) => *held == place,
+            Chapter::Missing(held) | Chapter::Failed(held, _) => *held == place,
+            Chapter::None => false,
+        }),
+        None => s.search.with_untracked(|search| match search {
+            Search::Ready { key, .. } => s.search_state_key().as_ref() == Some(key),
+            _ => false,
+        }),
     };
-    let on_screen = s.chapter.with_untracked(|shown| match shown {
-        Chapter::Ready(held, _) => *held == place,
-        Chapter::Missing(held) | Chapter::Failed(held, _) => *held == place,
-        Chapter::None => false,
-    });
     if !on_screen {
         return;
     }
@@ -106,8 +109,13 @@ pub(super) fn save_after_scroll(s: Study, ticket: StoredValue<u32>) {
         if ticket.try_get_value() != Some(mine) {
             return;
         }
-        if let (Some(place), Some(verse)) = (s.place(), verse_in_view(s)) {
-            session::set_persistent(KEY_LAST_VERSE, &format!("{}|{verse}", place.key()));
+        // The chapter on screen, not the route's: one may be on its way.
+        let shown = s.chapter.with_untracked(|shown| match shown {
+            Chapter::Ready(place, _) => Some(place.key()),
+            _ => None,
+        });
+        if let (Some(key), Some(verse)) = (shown, verse_in_view(s)) {
+            session::set_persistent(KEY_LAST_VERSE, &format!("{key}|{verse}"));
         }
     })
     .forget();

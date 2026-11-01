@@ -159,11 +159,13 @@ impl StudyRoute {
             Some(_) => return None,
         };
         let reading = matches!(view, StudyView::Reader { .. });
+        let verses = verses.filter(|_| reading);
         Some(Self {
             translation,
             view,
-            verses: verses.filter(|_| reading),
-            sheet,
+            verses,
+            // The verse sheet is about its verses: none, no sheet.
+            sheet: sheet.filter(|sheet| *sheet != StudySheet::Actions || verses.is_some()),
         })
     }
 
@@ -535,8 +537,9 @@ pub fn preview_target(target: &crate::state::bible_console::PreviewTarget) -> St
 
 /// The resolver's reading of `input` against the reader's translation (spec
 /// §6.4), through the verse console's row builder. Words that are no reference
-/// offer the text search; so does anything else the resolver has no passage
-/// for, except a hint about numbers ("Napíš aj knihu").
+/// offer the text search, and so does a word that happens to name a book
+/// ("Mojžiš", "kráľ"), under its chapters; Enter still opens the book. A hint
+/// about numbers ("Napíš aj knihu") or a chapter past the end searches nothing.
 pub fn suggest(input: &str, structure: &Versification, translation: &str) -> StudySuggest {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -549,7 +552,10 @@ pub fn suggest(input: &str, structure: &Versification, translation: &str) -> Stu
         _ => None,
     };
     let wordy = trimmed.chars().count() >= MIN_SEARCH_CHARS
-        && matches!(resolution, Resolution::NoBook { hint: None, .. });
+        && matches!(
+            resolution,
+            Resolution::NoBook { hint: None, .. } | Resolution::BookOnly { .. }
+        );
     StudySuggest {
         view,
         grid,
@@ -782,6 +788,14 @@ mod tests {
     }
 
     #[test]
+    fn the_verse_sheet_needs_verses() {
+        let route = StudyRoute::parse("p=HEB.11&s=akcie").expect("a route");
+        assert_eq!(route.sheet, None);
+        let other = StudyRoute::parse("p=HEB.11&s=pismo").expect("a route");
+        assert_eq!(other.sheet, Some(StudySheet::TextSize));
+    }
+
+    #[test]
     fn stepping_crosses_books_and_stops_at_both_ends_of_the_bible() {
         let kjv = structure("kjv");
         let step = |book, chapter, dir| step_chapter(&kjv, book, chapter, dir);
@@ -1008,6 +1022,19 @@ mod tests {
         assert_eq!(grid.code, "HEB");
         assert_eq!(grid.chapters.len(), 13);
         assert_eq!(suggest.enter_target().expect("a target").chapter, 1);
+    }
+
+    #[test]
+    fn a_word_that_names_a_book_can_still_search_the_text() {
+        let seb = structure("seb");
+        for word in ["Mojžiš", "kráľ", "Izaiáš prorok"] {
+            let found = suggest(word, &seb, "slk-seb");
+            assert_eq!(found.text_search.as_deref(), Some(word), "{word}");
+        }
+        // Enter stays the book's first chapter.
+        let book = suggest("Izaiáš", &seb, "slk-seb");
+        assert_eq!(book.text_search.as_deref(), Some("Izaiáš"));
+        assert_eq!(book.enter_target().expect("a target").book, "ISA");
     }
 
     #[test]

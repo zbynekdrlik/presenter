@@ -47,7 +47,7 @@ export async function expectChapter(page: Page, key: string): Promise<void> {
 }
 
 /** Holds every matching request until the returned `release` is called. */
-export async function gateRoute(page: Page, url: string): Promise<() => void> {
+export async function gateRoute(page: Page, url: string | RegExp): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
   await page.route(url, async (route) => {
@@ -60,6 +60,29 @@ export async function gateRoute(page: Page, url: string): Promise<() => void> {
 /** Waits until a response's body has fully arrived (headers alone resolve `waitForResponse`). */
 export async function landed(response: Promise<Response>): Promise<void> {
   await (await response).finished();
+}
+
+/** Two frames: a late answer that was going to land has landed. */
+export async function settled(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
+}
+
+/** The reader's or the results' scroll box, once `verse` is its top line. */
+export async function scrollToVerse(page: Page, number: number): Promise<void> {
+  await page.locator('[data-role="study-scroll"]').evaluate((el, wanted) => {
+    const target = el.querySelector(`[data-verse="${wanted}"]`) as HTMLElement;
+    el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top;
+  }, number);
+}
+
+/** How far below the top of the reader this verse sits. */
+export async function verseOffset(page: Page, number: number): Promise<number> {
+  return page.locator('[data-role="study-scroll"]').evaluate((el, wanted) => {
+    const target = el.querySelector(`[data-verse="${wanted}"]`) as HTMLElement;
+    return target.getBoundingClientRect().top - el.getBoundingClientRect().top;
+  }, number);
 }
 
 export async function openStudy(

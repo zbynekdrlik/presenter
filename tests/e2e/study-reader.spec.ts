@@ -26,8 +26,11 @@ import {
   gateRoute,
   landed,
   openStudy,
+  scrollToVerse,
+  settled,
   verse,
   verseNumber,
+  verseOffset,
 } from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
@@ -82,15 +85,11 @@ test("one tap switches the translation at the same place, and Back returns", asy
 test("a switch keeps the verse being read at the top", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
-  await page
-    .locator('[data-role="study-scroll"]')
-    .evaluate((el) => {
-      const target = el.querySelector('[data-verse="20"]') as HTMLElement;
-      el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top;
-    });
+  await scrollToVerse(page, 20);
   await favourite(page, "eng-kjv").tap();
   await expectChapter(page, "eng-kjv:HEB.11");
-  await expect(verse(page, 20)).toBeInViewport();
+  await expect.poll(() => verseOffset(page, 20)).toBeGreaterThanOrEqual(0);
+  await expect.poll(() => verseOffset(page, 20)).toBeLessThanOrEqual(16);
   await finish(opened);
 });
 
@@ -137,10 +136,17 @@ test("a chapter on its way leaves the text in place and only the newest lands", 
   const { page } = opened;
   let release: () => void = () => undefined;
   const held = new Promise<void>((resolve) => (release = resolve));
+  const asksFor = (body: unknown, chapterNumber: number) =>
+    (body as { chapter: number }).chapter === chapterNumber;
   await page.route("**/bible/resolve", async (route) => {
-    if ((route.request().postDataJSON() as { chapter: number }).chapter === 12) await held;
+    if (asksFor(route.request().postDataJSON(), 12)) await held;
     await route.fallback();
   });
+  const late = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/bible/resolve") &&
+      asksFor(response.request().postDataJSON(), 12),
+  );
   await page.locator(nextChapter).tap();
   await expect(chapter(page)).toHaveAttribute("data-state", "loading");
   await expect(verse(page, 1)).toContainText("Viera");
@@ -148,8 +154,35 @@ test("a chapter on its way leaves the text in place and only the newest lands", 
   await page.locator(nextChapter).tap();
   await expectChapter(page, "slk-seb:HEB.13");
   release();
-  await page.waitForLoadState("networkidle");
+  await landed(late);
+  await settled(page);
   await expectChapter(page, "slk-seb:HEB.13");
+  await finish(opened);
+});
+
+test("a quick second translation wins over a slow first one", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const isKjv = (body: unknown) => (body as { mainTranslation: string }).mainTranslation === "eng-kjv";
+  await page.route("**/bible/resolve", async (route) => {
+    if (isKjv(route.request().postDataJSON())) await held;
+    await route.fallback();
+  });
+  const late = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/bible/resolve") && isKjv(response.request().postDataJSON()),
+  );
+  await favourite(page, "eng-kjv").tap();
+  await expect(chapter(page)).toHaveAttribute("data-state", "loading");
+  await favourite(page, "slk-roh").tap();
+  await expectChapter(page, "slk-roh:HEB.11");
+  release();
+  await landed(late);
+  await settled(page);
+  await expectChapter(page, "slk-roh:HEB.11");
+  await expect(favourite(page, "slk-roh")).toHaveAttribute("aria-pressed", "true");
   await finish(opened);
 });
 
@@ -323,8 +356,14 @@ test("a wide screen keeps the text column at 720 px and docks a sheet beside it"
   await finish(opened);
 });
 
-test("the page installs as its own app and its worker caches nothing", async ({ request }) => {
-  const manifest = await request.get(new URL("/ui/study/manifest.json", baseURL).toString());
+test("the page installs as its own app and its worker caches nothing", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    "href",
+    "/ui/study/manifest.json",
+  );
+  const manifest = await page.request.get("/ui/study/manifest.json");
   expect(manifest.ok()).toBeTruthy();
   expect(manifest.headers()["content-type"]).toContain("application/manifest+json");
   const body = await manifest.json();
@@ -336,16 +375,24 @@ test("the page installs as its own app and its worker caches nothing", async ({ 
     short_name: "Štúdium",
     orientation: "any",
   });
-  const worker = await request.get(new URL("/ui/study/sw.js", baseURL).toString());
+  const worker = await page.request.get("/ui/study/sw.js");
   expect(worker.ok()).toBeTruthy();
-  expect(await worker.text()).not.toContain('"fetch"');
+  const code = await worker.text();
+  expect(code).not.toMatch(/["'`]fetch["'`]/);
+  expect(code).not.toContain("caches.");
+  await finish(opened);
 });
 
-test("the operator's surface nav links the page", async ({ browser }) => {
-  const context = await browser.newContext({ baseURL });
-  const page = await context.newPage();
-  await page.goto("/ui/operator");
+test("the operator's surface nav opens the page", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, { viewport: { width: 1280, height: 800 } }, "/ui/operator", null);
+  const { page } = opened;
   const link = page.locator('[data-role="surface-nav-link"][data-target="Štúdium"]');
   await expect(link).toHaveAttribute("href", "/ui/study");
-  await context.close();
+  await link.evaluate((el) => el.removeAttribute("target"));
+  await link.click();
+  await expect(chapter(page)).toHaveAttribute("data-loaded-for", /:JHN\.1$/);
+  // The operator polls the stage; T11 is about the study page.
+  opened.wallRequests.length = 0;
+  await settled(page);
+  await finish(opened);
 });
