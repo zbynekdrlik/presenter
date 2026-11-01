@@ -40,7 +40,21 @@ fn turn(s: Study, dir: Step) {
     }
 }
 
+/// The text on screen is the route's chapter. While another one loads the URL
+/// has moved on: a verse number there would select in the wrong chapter.
+pub(super) fn chapter_settled(s: Study) -> bool {
+    let wanted = s.place();
+    s.pending.with(Option::is_none)
+        && s.chapter.with(|chapter| match chapter {
+            Chapter::Ready(place, _) => Some(place) == wanted.as_ref(),
+            _ => false,
+        })
+}
+
 fn on_verse_tap(s: Study, verse: u16) {
+    if !chapter_settled_untracked(s) {
+        return;
+    }
     let route = s.route.get_untracked();
     if route.sheet == Some(StudySheet::Actions) {
         match extend_selection(route.verses, verse) {
@@ -57,9 +71,14 @@ fn on_verse_tap(s: Study, verse: u16) {
     }
 }
 
+fn chapter_settled_untracked(s: Study) -> bool {
+    leptos::prelude::untrack(|| chapter_settled(s))
+}
+
 #[component]
 pub(super) fn Reader(s: Study) -> impl IntoView {
     let swipe: StoredValue<SwipeStart> = StoredValue::new(None);
+    let settled = Memo::new(move |_| chapter_settled(s));
     let save_ticket = StoredValue::new(0_u32);
     let loaded = Memo::new(move |_| {
         s.chapter.with(|chapter| match chapter {
@@ -197,6 +216,7 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
                                     class="study-verse__number"
                                     data-role="study-verse-number"
                                     aria-label=format!("Verš {number}")
+                                    disabled=move || !settled.get()
                                     on:click=move |_| on_verse_tap(s, number)
                                 >
                                     {number}

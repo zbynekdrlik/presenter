@@ -34,10 +34,14 @@ const VERSE_ACTIONS: [VerseAction; 1] = [VerseAction::Copy];
 /// The selection's reference, and its text for the clipboard.
 fn selection(s: Study) -> Option<(String, String)> {
     let verses = s.route.with(|route| route.verses)?;
+    let wanted = s.place()?;
     s.chapter.with(|chapter| {
         let Chapter::Ready(place, text) = chapter else {
             return None;
         };
+        if *place != wanted {
+            return None;
+        }
         let reference = verse_reference(&text.book, place.chapter, verses, &place.translation);
         let chosen = text
             .verses
