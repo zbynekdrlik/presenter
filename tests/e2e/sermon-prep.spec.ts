@@ -262,11 +262,13 @@ test("an old answer never takes back a saved tap", async ({ browser }) => {
   let release = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   let stalled = 0;
+  let landed = false;
   await page.route(new RegExp(`/bible/sermons/${id}$`), async (route) => {
     const answer = await route.fetch();
     stalled += 1;
     await held;
     await route.fulfill({ response: answer });
+    landed = true;
   });
   await role(page, "study-sermons").tap();
   await role(page, "sermon-open").first().tap();
@@ -274,6 +276,7 @@ test("an old answer never takes back a saved tap", async ({ browser }) => {
   await token(page, 1, 0).tap();
   await saved(page);
   release();
+  await expect.poll(() => landed).toBe(true);
   await token(page, 1, 1).tap();
   await saved(page);
   await expect(token(page, 1, 0)).toHaveAttribute("data-state", "struck");
@@ -307,6 +310,15 @@ test("Späť after a delete shares the queue with a tap on another card", async 
 test("a double tap creates one sermon and adds one verse", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?view=sermons", null);
   const { page } = opened;
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") writes.push(new URL(request.url()).pathname);
+  });
+  // A second write would land after the first: only the wait can show it.
+  const written = async (ending: RegExp, count: number) => {
+    await page.waitForTimeout(1_000);
+    expect(writes.filter((path) => ending.test(path))).toHaveLength(count);
+  };
   await expect(role(page, "sermon-list")).toHaveAttribute("data-state", "ready");
   await role(page, "sermon-new-open").tap();
   await role(page, "sermon-new-date").fill("2032-05-02");
@@ -314,15 +326,25 @@ test("a double tap creates one sermon and adds one verse", async ({ browser }) =
   await role(page, "sermon-new-create").dblclick();
   await expect(role(page, "sermon-title")).toHaveText("Dvojité");
   const id = new URL(page.url()).searchParams.get("id") as string;
-  const list = (await (await fetch(`${baseURL}/bible/sermons`)).json()) as { sermons: { title: string }[] };
-  expect(list.sermons.filter((sermon) => sermon.title === "Dvojité")).toHaveLength(1);
+  await written(/\/bible\/sermons$/, 1);
 
-  await addVerse(id, 1, 1);
+  // Enter twice in the field: it keeps its text until the verse is in.
+  await role(page, "sermon-add-field").fill("heb 11 2");
+  await page.evaluate(() => {
+    const form = document.querySelector(".sermon-add") as HTMLFormElement;
+    form.requestSubmit();
+    form.requestSubmit();
+  });
+  await expect(role(page, "sermon-item")).toHaveCount(1);
+  await written(/\/items$/, 1);
+  await expect(role(page, "sermon-add-field")).toHaveValue("");
+
   await page.goto(`${baseURL}/ui/study?view=search&q=viera&t=slk-seb`);
   await expect(role(page, "search-results")).toHaveAttribute("data-state", "ready");
   await role(page, "search-hit-add").first().dblclick();
   await expect(role(page, "study-notice")).toContainText("Pridané do kázne „Dvojité“");
-  await expect.poll(async () => (await sermonOf(id)).items.length).toBe(2);
+  await written(/\/items$/, 2);
+  expect((await sermonOf(id)).items).toHaveLength(2);
   await finish(opened);
 });
 
@@ -351,6 +373,28 @@ test("an edit survives another device's write; a deleted item comes back with Sp
   expect(back.items[0].edits["1"].deleted, "same place, same edits").toEqual([0]);
   // The deliberate conflict's own console line.
   opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("409")));
+  await finish(opened);
+});
+
+test("Späť on an added verse reaches the open editor", async ({ browser }) => {
+  const id = await newSermon("Späť v editore");
+  const opened = await openStudy(browser, baseURL, PHONE_390, undefined, undefined, async (page) => {
+    await page.addInitScript((sermon) => {
+      localStorage.setItem("presenter:study.activeSermon", JSON.stringify(sermon));
+    }, id);
+  });
+  const { page } = opened;
+  await verseNumber(page, 2).tap();
+  await role(page, "verse-add-to-sermon").tap();
+  await expect(role(page, "study-notice-undo")).toBeVisible();
+  await role(page, "study-sermons").tap();
+  await role(page, "sermon-open").first().tap();
+  await expect(role(page, "sermon-item")).toHaveCount(1);
+
+  await role(page, "study-notice-undo").tap();
+  await expect(role(page, "sermon-item")).toHaveCount(0);
+  await expect(role(page, "sermon-empty")).toBeVisible();
+  expect((await sermonOf(id)).items).toHaveLength(0);
   await finish(opened);
 });
 
