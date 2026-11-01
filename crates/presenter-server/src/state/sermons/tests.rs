@@ -985,3 +985,204 @@ async fn update_and_regenerate() {
         .expect("regenerate");
     assert_eq!(regenerated.sermon.revision, 5);
 }
+
+// ---- #851: an outage never takes a prepared secondary line ------------------
+
+/// A sermon dated today with an NLT secondary and `item`, stored with `slides`.
+async fn nlt_sermon(
+    state: &AppState,
+    item: SermonItemRecord,
+    slides: Vec<presenter_core::BiblePresentationSlide>,
+) -> BiblePresentationId {
+    let new = NewSermon {
+        title: "Kázeň".to_string(),
+        service_date: local_today(),
+        default_translation_code: "slk-seb".to_string(),
+        secondary_translation_code: Some(NLT_CODE.to_string()),
+        author_email: None,
+    };
+    let created = state
+        .repository()
+        .create_sermon(&new)
+        .await
+        .expect("create");
+    let write = SermonWrite {
+        expected_revision: 0,
+        title: "Kázeň".to_string(),
+        service_date: local_today(),
+        secondary_translation_code: Some(NLT_CODE.to_string()),
+        items: vec![item],
+        slides,
+    };
+    state
+        .repository()
+        .save_sermon_change(created.id, &write)
+        .await
+        .expect("seed write");
+    created.id
+}
+
+async fn nlt_down(state: &mut AppState) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(path("/api/passages"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    state.set_test_nlt_client(NltClient::for_test(&server.uri(), Duration::from_secs(5)));
+    server
+}
+
+#[tokio::test]
+async fn an_outage_keeps_the_secondary_line_stored_earlier() {
+    let mut state = hebrews().await;
+    let heb = item(1..=2, &[]);
+    let mut slides = state
+        .generate_sermon_slides(&sermon(Some("eng-kjv")), std::slice::from_ref(&heb))
+        .await
+        .expect("generate")
+        .slides;
+    for slide in &mut slides {
+        if let Some(meta) = slide.metadata.as_mut() {
+            meta.secondary_translation_code = Some(NLT_CODE.to_string());
+        }
+    }
+    let id = nlt_sermon(&state, heb.clone(), slides).await;
+    let _server = nlt_down(&mut state).await;
+    let mut record = sermon(Some(NLT_CODE));
+    record.id = id;
+
+    let generated = state
+        .generate_sermon_slides(&record, &[heb])
+        .await
+        .expect("generate");
+
+    assert_eq!(generated.warnings, Vec::<String>::new());
+    assert_eq!(
+        generated.slides[0].secondary.value(),
+        format!("1. {}\n2. {}", KJV[0], KJV[1])
+    );
+    assert_eq!(
+        generated.slides[0].secondary_reference,
+        "Hebrews 11:1-2 (NLT)"
+    );
+}
+
+#[tokio::test]
+async fn the_limit_pass_leaves_a_sermon_it_cannot_complete() {
+    let mut state = hebrews().await;
+    let id = nlt_sermon(&state, item(1..=3, &[]), Vec::new()).await;
+    let _server = nlt_down(&mut state).await;
+
+    state.regenerate_future_sermons(local_today()).await;
+
+    let snapshot = state
+        .repository()
+        .fetch_sermon(id)
+        .await
+        .expect("fetch")
+        .expect("sermon");
+    assert_eq!(snapshot.sermon.revision, 1);
+    assert_eq!(snapshot.items[0].slide_count, 0);
+}
+
+#[tokio::test]
+async fn a_missing_line_shows_on_a_read() {
+    let mut state = hebrews().await;
+    let heb = item(1..=1, &[]);
+    let id = nlt_sermon(&state, heb.clone(), Vec::new()).await;
+    let _server = nlt_down(&mut state).await;
+    let snapshot = state
+        .repository()
+        .fetch_sermon(id)
+        .await
+        .expect("fetch")
+        .expect("sermon");
+    state
+        .commit_sermon(commit::SermonChange {
+            op: SermonOp::Regenerate,
+            origin: &SermonOrigin {
+                author: None,
+                client_ip: "192.0.2.7".to_string(),
+            },
+            expected_revision: snapshot.sermon.revision,
+            sermon: snapshot.sermon,
+            items: snapshot.items,
+            item_id: None,
+        })
+        .await
+        .expect("a person's write stores what it has");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+
+    assert!(detail.secondary_missing);
+    assert_eq!(detail.slides.len(), 1);
+}
+
+#[tokio::test]
+async fn a_secondary_equal_to_the_item_translation_adds_no_line() {
+    let state = hebrews().await;
+    let cut = item(1..=1, &[(1, &[7, 8, 9, 10, 11])]);
+
+    let generated = state
+        .generate_sermon_slides(&sermon(Some("slk-seb")), &[cut])
+        .await
+        .expect("generate");
+
+    assert_eq!(generated.slides[0].secondary.value(), "");
+    assert_eq!(generated.slides[0].secondary_reference, "");
+}
+
+#[tokio::test]
+async fn deleting_a_sermon_as_a_presentation_logs_the_sermon_line() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=1, &[])]).await;
+    let capture = Capture::install();
+
+    state.delete_bible_presentation(id).await.expect("delete");
+
+    let lines = capture.events("presenter::bible::sermon");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].field("op"), Some(quoted("delete").as_str()));
+    assert!(state
+        .repository()
+        .fetch_sermon(id)
+        .await
+        .expect("fetch")
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_range_with_a_hole_in_the_translation_is_refused() {
+    let state = hebrews().await;
+    let translation = BibleTranslation::new("slk-gap", "slk-gap", "sk");
+    let passages = [1, 3]
+        .iter()
+        .map(|verse| {
+            let reference =
+                BibleReference::new_with_code("Hebrejom", "HEB", 58, 11, *verse, *verse)
+                    .expect("reference");
+            BiblePassage::new(reference, translation.clone(), "Text.".to_string())
+        })
+        .collect();
+    let batch = BibleIngestionBatch::new(translation.clone(), passages).expect("batch");
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .expect("seed");
+    let id = new_sermon(&state).await.sermon.id;
+
+    let err = state
+        .add_sermon_item(id, 0, None, &range("slk-gap", "HEB", 1..=3), &preacher())
+        .await
+        .expect_err("verse 2 is missing");
+
+    assert_eq!(
+        refusal(&err).as_deref(),
+        Some("HEB 11:1-3 nie je celé v preklade GAP")
+    );
+}

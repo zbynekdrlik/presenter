@@ -109,6 +109,13 @@ impl AppState {
         let generated = self
             .generate_sermon_slides(&change.sermon, &change.items)
             .await?;
+        // The server's own pass never stores slides with a line missing: the
+        // operator did not ask for this write and nobody would see the warning.
+        if change.origin.is_system() {
+            if let Some(warning) = generated.warnings.first() {
+                anyhow::bail!("{warning}");
+            }
+        }
         let mut items = change.items;
         for (item, count) in items.iter_mut().zip(&generated.slide_counts) {
             item.slide_count = *count;

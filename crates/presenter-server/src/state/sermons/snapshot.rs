@@ -67,7 +67,10 @@ impl AppState {
             .is_some_and(|first| first.reference.verse_start == range.verse_start)
             && rows
                 .last()
-                .is_some_and(|last| last.reference.verse_end == range.verse_end);
+                .is_some_and(|last| last.reference.verse_end == range.verse_end)
+            && rows
+                .windows(2)
+                .all(|pair| pair[1].reference.verse_start == pair[0].reference.verse_end + 1);
         let (Some(first), true) = (rows.first(), complete) else {
             let short = translation_short_code(&translation.code);
             let (chapter, start, end) = (range.chapter, range.verse_start, range.verse_end);

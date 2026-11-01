@@ -31,13 +31,19 @@ pub(crate) struct SermonOrigin {
     pub(crate) client_ip: String,
 }
 
+const SYSTEM_CLIENT: &str = "system";
+
 impl SermonOrigin {
     /// A write the server makes on its own (the character-limit pass).
     pub(crate) fn system() -> Self {
         Self {
             author: None,
-            client_ip: "system".to_string(),
+            client_ip: SYSTEM_CLIENT.to_string(),
         }
+    }
+
+    pub(crate) fn is_system(&self) -> bool {
+        self.client_ip == SYSTEM_CLIENT
     }
 }
 

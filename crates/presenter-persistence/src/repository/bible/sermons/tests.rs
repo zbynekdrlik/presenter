@@ -420,3 +420,32 @@ async fn a_reimport_leaves_slides_sermons_and_items_byte_identical() {
     assert_eq!(slides_before.len(), 2);
     assert_eq!(items_before.len(), 1);
 }
+
+#[tokio::test]
+async fn a_rename_makes_a_write_loaded_before_it_stale() {
+    let repo = repo().await;
+    let sermon = repo
+        .create_sermon(&new_sermon("Kázeň", "2026-10-18"))
+        .await
+        .expect("create");
+
+    repo.rename_bible_presentation(sermon.id, "Viera")
+        .await
+        .expect("rename");
+
+    let err = repo
+        .save_sermon_change(sermon.id, &write(0, "Kázeň", Vec::new(), Vec::new()))
+        .await
+        .expect_err("loaded before the rename");
+    assert!(matches!(
+        refusal(&err),
+        Some(RepositoryError::Conflict(SERMON_CONFLICT))
+    ));
+    let snapshot = repo
+        .fetch_sermon(sermon.id)
+        .await
+        .expect("fetch")
+        .expect("exists");
+    assert_eq!(snapshot.sermon.title, "Viera");
+    assert_eq!(snapshot.sermon.revision, 1);
+}

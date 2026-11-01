@@ -156,3 +156,18 @@ paths:
   duplicate id) is a stale view → `Conflict(SERMON_CONFLICT)` → 409, never a partial reorder.
 - `POST …/regenerate` = the same items, the slides generated again (retries the secondary line
   after an NLT failure).
+
+## Secondary line and outages (review of the server stack, 2026-11-01)
+
+- Prod's Bible preference has the NLT as secondary, so its paths are the normal case. Lookups run
+  concurrently over the item's FULL range (stable remote cache key), kept verses are filtered after.
+- An outage never takes a stored line: `stored_secondary` reads the sermon's slides back
+  (`"{verse}. {text}"` lines, book from the stored label) and fills what the lookup lost; the
+  warning stays only when a kept verse is still missing. The server's own pass
+  (`origin.is_system()`) then refuses to store: a person's write stores what it has, and
+  `SermonDetail.secondaryMissing` carries the state across a reload and to other devices.
+- A secondary equal to the item's translation adds no line (the full verse would bring struck words back).
+- `rename_bible_presentation` bumps a sermon's revision in the same transaction: a write loaded
+  before a rename gets its 409 and never restores the old title.
+- `delete_bible_presentation` on a sermon goes through `delete_sermon` (the `delete` log line).
+- Sermons do not sync between SNV and PP: they live on the site where they were written.

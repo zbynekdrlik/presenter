@@ -1,6 +1,7 @@
 //! Bible search, broadcast, and ingestion methods for [`AppState`].
 
 use super::bible_show_log::{log_bible_show, BibleShowOrigin};
+use super::sermons::SermonOrigin;
 use super::AppState;
 use crate::bible_remote::RemoteBibleError;
 use crate::live::LiveEvent;
@@ -285,6 +286,9 @@ impl AppState {
     }
 
     pub async fn delete_bible_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {
+        if self.repository.is_sermon(id).await? {
+            return self.delete_sermon(id, &SermonOrigin::system()).await;
+        }
         self.repository.delete_bible_presentation(id).await?;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: id.to_string(),

@@ -24,6 +24,9 @@ pub(crate) struct SermonDetail {
     /// Warnings of the write that produced this answer (an unavailable NLT);
     /// empty on a read.
     pub(crate) warnings: Vec<String>,
+    /// A slide lacks the sermon's secondary line: the outage's warning is gone
+    /// after the write answer, this survives a reload and a second device.
+    pub(crate) secondary_missing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,12 +97,14 @@ impl AppState {
                 let item_id = *owners.get(&slide.id)?;
                 Some(SermonSlideView { item_id, slide })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let secondary_missing = secondary_missing(&snapshot.sermon, &slides);
         Ok(Some(SermonDetail {
             sermon: snapshot.sermon,
             items,
             slides,
             warnings: Vec::new(),
+            secondary_missing,
         }))
     }
 
@@ -142,4 +147,20 @@ impl AppState {
         }
         Ok(details)
     }
+}
+
+/// Whether a slide of another translation than the secondary has no line (a
+/// slide in the secondary's own translation never carries one).
+fn secondary_missing(sermon: &SermonRecord, slides: &[SermonSlideView]) -> bool {
+    let Some(code) = sermon.secondary_translation_code.as_deref() else {
+        return false;
+    };
+    slides.iter().any(|view| {
+        let own = view
+            .slide
+            .metadata
+            .as_ref()
+            .is_some_and(|meta| meta.translation_code.eq_ignore_ascii_case(code));
+        !own && view.slide.secondary.value().is_empty()
+    })
 }

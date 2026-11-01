@@ -84,6 +84,7 @@ struct SermonDetailDto {
     items: Vec<SermonItemDto>,
     slides: Vec<SermonSlideDto>,
     warnings: Vec<String>,
+    secondary_missing: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -299,6 +300,7 @@ fn detail_dto(detail: SermonDetail) -> SermonDetailDto {
         items,
         slides,
         warnings,
+        secondary_missing,
     } = detail;
     SermonDetailDto {
         id: sermon.id.to_string(),
@@ -315,6 +317,7 @@ fn detail_dto(detail: SermonDetail) -> SermonDetailDto {
             .collect(),
         slides: slides.into_iter().map(slide_dto).collect(),
         warnings,
+        secondary_missing,
     }
 }
 

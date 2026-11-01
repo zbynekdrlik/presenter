@@ -8,7 +8,7 @@ use sea_orm::{
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::entities::{bible_presentation, bible_slide};
+use crate::entities::{bible_presentation, bible_sermon, bible_slide};
 use presenter_core::{
     search::fold_query, slide::BibleSlideMetadata, BiblePresentation, BiblePresentationId,
     BiblePresentationSlide, BiblePresentationSummary, BibleSlideId, SlideText,
@@ -135,14 +135,26 @@ impl Repository {
         if trimmed.is_empty() {
             return Err(anyhow!("bible presentation name cannot be empty"));
         }
+        let txn = self.db.begin().await?;
         let result = bible_presentation::Entity::update_many()
             .col_expr(bible_presentation::Column::Name, SeaExpr::value(trimmed))
             .filter(bible_presentation::Column::Id.eq(id.to_string()))
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(RepositoryError::NotFound("bible presentation not found").into());
         }
+        // A sermon's title is its presentation's name: a write loaded before
+        // this rename must get its 409, not restore the old title.
+        bible_sermon::Entity::update_many()
+            .col_expr(
+                bible_sermon::Column::Revision,
+                SeaExpr::col(bible_sermon::Column::Revision).add(1),
+            )
+            .filter(bible_sermon::Column::PresentationId.eq(id.to_string()))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
         Ok(())
     }
 
