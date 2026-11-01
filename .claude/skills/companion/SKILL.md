@@ -247,3 +247,12 @@ launch Companion with `--extra-module-path /opt/companion-module-dev`.
   unwraps them before calling the module's upgrade scripts (`Fu()` in main.js) and re-wraps the
   result, so scripts see plain values. After a deploy, verify `lastUpgradeIndex` on the
   presenter connection and `upgradeIndex` on its actions in the `v5.0` DB.
+
+## Module base version = Companion's supported range (#885)
+
+Companion refuses a dev module whose installed `@companion-module/base` is outside its range and
+stays `active` (log: `Module Api version is too new/old`, no connection on 18175). 5.1.1 accepts
+`1 - 1.14.x` and `2 - 2.2.x`. The deploy runs `npm install` with no lockfile, so the module pins
+`~1.14.x`; check the range (`oP` in `/opt/companion/main.js`) before a Companion upgrade or a base
+bump. The deploy fails when the module does not connect. A swapped `node_modules` is not picked up
+by the file watcher: disable + enable only the presenter connection in the web UI.

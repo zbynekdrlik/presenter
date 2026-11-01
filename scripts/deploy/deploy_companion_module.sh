@@ -66,5 +66,20 @@ if [ "$REPIN_RC" -ne 0 ]; then
   echo "::error::presenter connection re-pin failed on $LABEL (rc=$REPIN_RC)"
   exit 1
 fi
+# Companion refuses a module outside its API range and stays active, so only the module's
+# own connection to the server proves it runs.
+CONNECTED=0
+for _ in $(seq 1 12); do
+  if ssh "$HOST" "ss -tn state established '( sport = :18175 )' | tail -n +2 | grep -q ."; then
+    CONNECTED=1
+    break
+  fi
+  sleep 5
+done
+if [ "$CONNECTED" -ne 1 ]; then
+  echo "::error::presenter module did not connect to the server on $LABEL"
+  ssh "$HOST" "sudo journalctl -u companion --since '-2 min' --no-pager | grep -E 'too new/old|Connection/presenter' | tail -5" || true
+  exit 1
+fi
 VERSION=$(node -e "console.log(require('$ROOT/ops/companion/presenter/package.json').version)")
 echo "Companion module $VERSION deployed to $LABEL (dev module + connection pinned to 'dev')"
