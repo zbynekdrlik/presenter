@@ -176,6 +176,47 @@ test("a verse number does nothing while another chapter is on its way", async ({
   await finish(opened);
 });
 
+test("failed books say so, the bar stays neutral and a reference never becomes a search", async ({
+  browser,
+}) => {
+  let failing = true;
+  const searches: string[] = [];
+  const opened = await openStudy(browser, baseURL, PHONE_390, undefined, undefined, async (page) => {
+    await page.route("**/bible/books**", async (route) => {
+      if (!failing) return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    });
+    page.on("request", (request) => {
+      if (request.url().includes("/bible/search")) searches.push(request.url());
+    });
+  });
+  const { page } = opened;
+  const card = page.locator('[data-role="study-structure-error"]');
+  await expect(card).toBeVisible();
+  await expect(page.locator(nextChapter)).toBeDisabled();
+  await expect(page.locator(nextChapter)).not.toContainText("Koniec");
+  await expect(page.locator(previousChapter)).not.toContainText("Začiatok");
+
+  await field(page).tap();
+  await field(page).fill("zid 11 1");
+  await expect(page.locator('[data-role="study-hint"]')).toBeVisible();
+  await expect(page.locator('[data-role="study-text-search"]')).toHaveCount(0);
+  await field(page).press("Enter");
+  await expect(page).not.toHaveURL(/view=search/);
+  expect(searches).toEqual([]);
+  await field(page).blur();
+
+  failing = false;
+  await card.locator('[data-role="study-retry"]').tap();
+  await expect(card).toHaveCount(0);
+  await expect(page.locator(nextChapter)).toContainText("kap. 12");
+  await field(page).tap();
+  await field(page).fill("zid 11 3");
+  await field(page).press("Enter");
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await finish(opened);
+});
+
 test("a failed chapter shows why and retries inline", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
