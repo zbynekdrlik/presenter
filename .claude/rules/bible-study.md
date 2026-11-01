@@ -12,7 +12,8 @@ paths:
 
 # The study page `/ui/study` (#851 S1–S3)
 
-The preacher's reader, replacing MySword on his phone and tablet. Reading and searching only.
+The preacher's reader, replacing MySword on his phone and tablet: reading, searching and sermon
+preparation (the sermon views are in `sermon-prep.md`).
 
 - **Nothing here reaches a wall (T11).** No trigger, clear or stage call; every test in the study
   specs ends with `finish()` (`study-support.ts`), which asserts that and the clean console. The test
@@ -58,8 +59,8 @@ The preacher's reader, replacing MySword on his phone and tablet. Reading and se
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.
-- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); E1
-  adds "Pridať do kázne" there and "Kázne" in the header, S4 "Porovnať" and "Odkazy", S5 the word sheet.
+- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); S4 adds
+  "Porovnať" and "Odkazy", S5 the word sheet.
   A new view is a `StudyView` variant. Scope chips and the quoted phrase wait for D4's server
   support: never filter on the client.
 - **CSS:** `study.css` carries its own tokens on `.study` (`position: fixed` over the body). No `inset`
@@ -75,5 +76,10 @@ The preacher's reader, replacing MySword on his phone and tablet. Reading and se
   `networkidle`; "only the newest lands" is proven to fail with the `pending` guard removed; `body` has no height under the fixed `.study`, so wait for
   `data-wasm-ready` with `state: "attached"`; a long press = `touchDrag` from a point to itself with the assertion
   in `whileHeld`; the deliberate NLT 503 is filtered by status, the failure paths are malformed 200s.
+- **Local E2E of a UI change:** the server EMBEDS `presenter-ui/dist` (`include_dir!`), so a CI or
+  `/opt/presenter-dev` binary runs the OLD UI. Build it (`cargo build --release -p presenter-server
+  --features mock-integrations,test-helpers`, ~11 min) and stop `presenter-dev` for the run (the mock
+  Resolume binds 8091). That cargo build re-runs trunk unpatched: the `integrity` console warnings
+  in `finish()` are this local dist only.
 - **Local UI builds need nightly** (`.cargo/config.toml` has `build-std`): `RUSTUP_TOOLCHAIN=nightly
   trunk build`; on stable, wasm-bindgen fails with `__wbindgen_externref_table_alloc`.

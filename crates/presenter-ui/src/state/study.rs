@@ -17,6 +17,7 @@ pub const KEY_LAST_VERSE: &str = "study.lastVerse";
 pub const KEY_FAVOURITES: &str = "study.favourites";
 pub const KEY_TEXT_SIZE: &str = "study.textSize";
 pub const KEY_HISTORY: &str = "study.history";
+pub const KEY_ACTIVE_SERMON: &str = "study.activeSermon";
 
 const PATH: &str = "/ui/study";
 /// Where a first visit opens: the Gospel of John, in the first favourite.
@@ -45,6 +46,9 @@ pub enum StudySheet {
     TextSize,
     /// Which translation sits in this favourite slot (long press on a chip).
     Favourite(usize),
+    /// Which sermon the passage goes to. It exists only for the passage in hand,
+    /// so a URL never opens it.
+    AddToSermon,
 }
 
 impl StudySheet {
@@ -54,6 +58,7 @@ impl StudySheet {
             Self::History => "historia".to_string(),
             Self::TextSize => "pismo".to_string(),
             Self::Favourite(slot) => format!("preklad{slot}"),
+            Self::AddToSermon => "pridat".to_string(),
         }
     }
 
@@ -62,6 +67,7 @@ impl StudySheet {
             "akcie" => Some(Self::Actions),
             "historia" => Some(Self::History),
             "pismo" => Some(Self::TextSize),
+            // `pridat` is no sheet of a URL: the passage it adds is gone.
             other => other
                 .strip_prefix("preklad")?
                 .parse()
@@ -72,11 +78,13 @@ impl StudySheet {
     }
 }
 
-/// The reader or the text search. New views (sermons, E1) add a variant.
+/// The reader, the text search, the sermon list and one sermon's editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StudyView {
     Reader { book: String, chapter: u16 },
     Search { query: String },
+    Sermons,
+    Sermon { id: String },
 }
 
 /// Everything a study URL says.
@@ -114,6 +122,24 @@ impl StudyRoute {
         }
     }
 
+    pub fn sermons(translation: Option<String>) -> Self {
+        Self {
+            translation,
+            view: StudyView::Sermons,
+            verses: None,
+            sheet: None,
+        }
+    }
+
+    pub fn sermon(translation: Option<String>, id: &str) -> Self {
+        Self {
+            translation,
+            view: StudyView::Sermon { id: id.to_string() },
+            verses: None,
+            sheet: None,
+        }
+    }
+
     pub fn with_verses(mut self, verses: Option<(u16, u16)>) -> Self {
         self.verses = verses;
         self
@@ -133,6 +159,7 @@ impl StudyRoute {
         let mut query = None;
         let mut verses = None;
         let mut sheet = None;
+        let mut id = None;
         for pair in search.trim_start_matches('?').split('&') {
             let Some((name, value)) = pair.split_once('=') else {
                 continue;
@@ -145,6 +172,7 @@ impl StudyRoute {
                 "q" => query = Some(value),
                 "v" => verses = parse_verses(&value),
                 "s" => sheet = StudySheet::parse(&value),
+                "id" => id = Some(value).filter(|id| !id.is_empty()),
                 _ => {}
             }
         }
@@ -152,6 +180,8 @@ impl StudyRoute {
             Some("search") => StudyView::Search {
                 query: query.filter(|text| !text.trim().is_empty())?,
             },
+            Some("sermons") => StudyView::Sermons,
+            Some("sermon") => StudyView::Sermon { id: id? },
             None => {
                 let (book, chapter) = passage?;
                 StudyView::Reader { book, chapter }
@@ -171,8 +201,11 @@ impl StudyRoute {
 
     pub fn to_url(&self) -> String {
         let mut params = Vec::new();
-        if matches!(self.view, StudyView::Search { .. }) {
-            params.push("view=search".to_string());
+        match &self.view {
+            StudyView::Reader { .. } => {}
+            StudyView::Search { .. } => params.push("view=search".to_string()),
+            StudyView::Sermons => params.push("view=sermons".to_string()),
+            StudyView::Sermon { .. } => params.push("view=sermon".to_string()),
         }
         if let Some(code) = &self.translation {
             params.push(format!("t={}", urlencoding::encode(code)));
@@ -194,6 +227,8 @@ impl StudyRoute {
                     urlencoding::encode(query).replace("%20", "+")
                 ));
             }
+            StudyView::Sermons => {}
+            StudyView::Sermon { id } => params.push(format!("id={}", urlencoding::encode(id))),
         }
         if let Some(sheet) = self.sheet {
             params.push(format!("s={}", sheet.to_param()));
@@ -755,7 +790,7 @@ mod tests {
             "p=HEBREWS.1",
             "view=search",
             "view=search&q=%20",
-            "view=sermons",
+            "view=inde",
             "view=compare&p=HEB.11",
         ] {
             assert_eq!(StudyRoute::parse(broken), None, "{broken}");
@@ -1109,6 +1144,31 @@ mod tests {
             mark_matches("Na počiatku.", "x"),
             [("Na počiatku.".to_string(), false)]
         );
+    }
+
+    #[test]
+    fn the_sermon_views_round_trip() {
+        let list = StudyRoute::sermons(Some("slk-seb".to_string()));
+        assert_eq!(list.to_url(), "/ui/study?view=sermons&t=slk-seb");
+        assert_eq!(StudyRoute::parse("view=sermons&t=slk-seb"), Some(list));
+        let editor = StudyRoute::sermon(None, "abc-1");
+        assert_eq!(editor.to_url(), "/ui/study?view=sermon&id=abc-1");
+        assert_eq!(StudyRoute::parse("view=sermon&id=abc-1"), Some(editor));
+    }
+
+    #[test]
+    fn a_sermon_view_needs_its_id() {
+        assert_eq!(StudyRoute::parse("view=sermon"), None);
+        assert_eq!(StudyRoute::parse("view=sermon&id="), None);
+    }
+
+    #[test]
+    fn the_add_sheet_never_comes_from_a_url() {
+        let route = StudyRoute::reader("slk-seb", "HEB", 11)
+            .with_verses(Some((1, 1)))
+            .with_sheet(Some(StudySheet::AddToSermon));
+        let parsed = StudyRoute::parse(route.to_url().split_once('?').expect("query").1);
+        assert_eq!(parsed.expect("a route").sheet, None);
     }
 
     #[test]

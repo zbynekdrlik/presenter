@@ -21,7 +21,7 @@ type SwipeStart = Option<(i32, f64, f64)>;
 fn step_target(s: Study, dir: Step) -> Option<(String, u16)> {
     let (book, chapter) = s.route.with(|route| match &route.view {
         StudyView::Reader { book, chapter } => Some((book.clone(), *chapter)),
-        StudyView::Search { .. } => None,
+        _ => None,
     })?;
     s.with_structure(|structure| step_chapter(structure?, &book, chapter, dir))?
 }
@@ -277,7 +277,7 @@ pub(super) fn ChapterBar(s: Study) -> impl IntoView {
         };
         let book = s.route.with(|route| match &route.view {
             StudyView::Reader { book, .. } => book.clone(),
-            StudyView::Search { .. } => String::new(),
+            _ => String::new(),
         });
         s.with_structure(|structure| {
             structure.map(|found| step_label(found, &book, (&code, chapter)))

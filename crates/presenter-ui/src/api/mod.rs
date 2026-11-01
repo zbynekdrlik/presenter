@@ -7,6 +7,7 @@ pub mod ndi;
 pub mod network;
 pub mod playlists;
 pub mod presentations;
+pub mod sermons;
 pub mod settings;
 pub mod stage;
 pub mod stream;
@@ -370,6 +371,47 @@ pub async fn patch_json_detail<B: serde::Serialize, T: DeserializeOwned>(
         return Err(status_with_detail(response).await);
     }
     response.json().await.map_err(ApiError::Deserialize)
+}
+
+/// PATCH with the [`post_json_refusal`] error shape.
+pub async fn patch_json_refusal<B: serde::Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
+    let response = Request::patch(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_refusal(response).await);
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
+/// DELETE answering JSON, with the [`post_json_refusal`] error shape.
+pub async fn delete_json_refusal<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
+    let response = Request::delete(&api_url(path))
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_refusal(response).await);
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
+/// DELETE with no answer body, with the [`post_json_refusal`] error shape.
+pub async fn delete_refusal(path: &str) -> Result<(), ApiError> {
+    let response = Request::delete(&api_url(path))
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_refusal(response).await);
+    }
+    Ok(())
 }
 
 /// `delete`, but a non-2xx carries the server error-body message (the guarded

@@ -6,6 +6,8 @@ pub mod interpreter;
 pub mod keyboard_inset;
 pub mod operator;
 pub mod phone_shell;
+pub mod sermon_edit;
+pub mod sermon_list;
 pub mod session;
 pub mod slide_columns;
 pub mod song_load;

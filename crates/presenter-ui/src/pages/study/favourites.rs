@@ -23,7 +23,7 @@ fn switch(s: Study, code: &str) {
         StudyView::Reader { .. } => {
             scroll::verse_in_view(s).map_or(ScrollPlan::Keep, ScrollPlan::Verse)
         }
-        StudyView::Search { .. } => ScrollPlan::Top,
+        _ => ScrollPlan::Top,
     };
     nav::go(s, route, plan);
 }
