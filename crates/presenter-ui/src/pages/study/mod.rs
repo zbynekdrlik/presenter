@@ -9,12 +9,14 @@
 mod favourites;
 mod field;
 mod header;
+mod history;
 mod long_press;
 mod nav;
 mod reader;
 mod scroll;
 mod sheet;
 mod text_size;
+mod verse_actions;
 
 use std::collections::HashMap;
 
@@ -37,9 +39,11 @@ use crate::state::study_history::StudyHistory;
 use favourites::{FavouriteSheet, Favourites};
 use field::StudyField;
 use header::StudyHeader;
+use history::HistorySheet;
 use reader::{ChapterBar, Reader};
 use scroll::ScrollPlan;
 use text_size::TextSizeSheet;
+use verse_actions::VerseActionsSheet;
 
 /// `/bible/search` answers at most this many verses.
 const SEARCH_LIMIT: u32 = 100;
@@ -424,9 +428,11 @@ pub fn StudyPage() -> impl IntoView {
             .with(|route| matches!(route.view, StudyView::Reader { .. }))
     });
     let sheets = move || match open_sheet.get() {
+        Some(StudySheet::Actions) => view! { <VerseActionsSheet s=s /> }.into_any(),
+        Some(StudySheet::History) => view! { <HistorySheet s=s /> }.into_any(),
         Some(StudySheet::TextSize) => view! { <TextSizeSheet s=s /> }.into_any(),
         Some(StudySheet::Favourite(slot)) => view! { <FavouriteSheet s=s index=slot /> }.into_any(),
-        Some(StudySheet::Actions | StudySheet::History) | None => ().into_any(),
+        None => ().into_any(),
     };
 
     view! {
