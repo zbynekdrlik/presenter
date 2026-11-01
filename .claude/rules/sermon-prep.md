@@ -214,3 +214,4 @@ paths:
 - A new sermon takes the translation being read as its default; the NLT never (`snapshot_translation`).
 - `sermon_error`: only `ApiError::Refused` shows the server's text, so sermon calls use the `*_refusal`
   helpers.
+- **A refusal lives until HOTOVO has named it (or the sermon is opened again):** a later landed write never clears `Editor::refused`, or HOTOVO would say "Kázeň je uložená" over a change that was thrown away.
