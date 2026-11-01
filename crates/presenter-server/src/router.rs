@@ -23,6 +23,7 @@ mod stream_fonts;
 mod stream_nameplates;
 mod stream_page;
 mod stream_playback;
+mod study_pwa;
 mod sync;
 mod tablet_pwa;
 mod timers;
@@ -426,6 +427,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/clear", post(ai::clear_conversation))
         .route("/ai/status", get(ai::check_status))
         .route("/api/network-mode", get(network_mode::get_network_mode))
+        // #851: the Bible study page, its manifest and service worker.
+        .merge(study_pwa::routes())
         // #852: šepkár tips for the interpreter (/interpreter/tips*).
         .merge(interpreter_tips::router())
         // #852 C1a: listening microphones + the VBAN receiver status.

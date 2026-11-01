@@ -305,7 +305,7 @@ pub fn TimerPanel() -> impl IntoView {
 ///
 /// `execCommand` is deprecated in web-sys (gated behind an unstable
 /// feature flag), so we call it dynamically through js_sys::Reflect.
-fn copy_to_clipboard(text: &str) -> bool {
+pub(crate) fn copy_to_clipboard(text: &str) -> bool {
     use js_sys::{Function, Reflect};
     use wasm_bindgen::{JsCast, JsValue};
 

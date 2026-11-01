@@ -31,6 +31,7 @@ fn HomeDocument() -> impl IntoView {
                         <ul class="home__links">
                             <li><a href="/ui/operator">"Operator UI"</a></li>
                             <li><a href="/ui/tablet">"Tablet UI"</a></li>
+                            <li><a href="/ui/study">"Štúdium"</a></li>
                             <li><a href="/ui/bible">"Bible Control"</a></li>
                             <li><a href="/ui/settings" target="_blank" rel="noopener">"Settings"</a></li>
                         </ul>

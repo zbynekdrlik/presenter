@@ -60,6 +60,8 @@ fn App() -> impl IntoView {
             view! { <pages::stream_editor::StreamEditorPage /> }.into_any()
         } else if p == "/ui/interpreter" {
             view! { <pages::interpreter::InterpreterPage /> }.into_any()
+        } else if p == "/ui/study" {
+            view! { <pages::study::StudyPage /> }.into_any()
         } else if p == "/ui/sepkar" {
             view! { <pages::sepkar::SepkarPage /> }.into_any()
         } else {

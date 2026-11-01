@@ -1,0 +1,781 @@
+/* /ui/study (#851 spec §6.1): a quiet reading page on the app's dark palette.
+   Phone: one column. Tablet portrait: the same with a wider text column.
+   >= 1024 px: the sheets dock as a side panel next to the text.
+   The phone test is body[data-shell] (phone-shell rule), never a width of its
+   own; every control is at least 44 x 44 px, every field 16 px or more. */
+
+.study {
+  --study-bg: #0f172a;
+  --study-panel: #1e293b;
+  --study-panel-2: #273449;
+  --study-line: #334155;
+  --study-ink: #e2e8f0;
+  --study-muted: #94a3b8;
+  --study-blue: #3b82f6;
+  --study-chip: #1d3a5f;
+  --study-chip-ink: #cfe2ff;
+  --study-mark: #facc15;
+  --study-text: 19px;
+  --study-gutter: 44px;
+
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) var(--kb-inset, 0px)
+    env(safe-area-inset-left);
+  background: var(--study-bg);
+  color: var(--study-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.study[data-text-size="small"] {
+  --study-text: 17px;
+}
+
+.study[data-text-size="large"] {
+  --study-text: 23px;
+}
+
+.study *,
+.study *::before,
+.study *::after {
+  box-sizing: border-box;
+}
+
+.study :where(button) {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.study-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding-inline: 16px 4px;
+}
+
+.study-head__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.study-head__actions {
+  display: flex;
+}
+
+.study-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--study-ink);
+  font-size: 16px;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.study-icon:active {
+  background: var(--study-panel);
+}
+
+.study-icon[aria-disabled="true"],
+.study-icon:disabled {
+  color: #475569;
+  cursor: default;
+}
+
+.study-icon--text {
+  font-family: Georgia, "Noto Serif", serif;
+  font-size: 19px;
+}
+
+/* Field + suggestions ------------------------------------------------------ */
+
+.study-field {
+  position: relative;
+  flex: none;
+  margin: 2px 12px 8px;
+}
+
+.study-field__input {
+  display: block;
+  width: 100%;
+  height: 46px;
+  padding: 0 46px 0 14px;
+  border: 1.5px solid var(--study-line);
+  border-radius: 12px;
+  background: var(--study-panel);
+  color: var(--study-ink);
+  font: inherit;
+  font-size: 17px;
+  outline: none;
+}
+
+.study-field__input::placeholder {
+  color: var(--study-muted);
+}
+
+.study-field__input:focus {
+  border-color: var(--study-blue);
+}
+
+.study-field__clear {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--study-muted);
+  cursor: pointer;
+}
+
+.study-suggest {
+  position: fixed;
+  z-index: 5;
+  top: calc(env(safe-area-inset-top) + 100px);
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px calc(16px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--study-bg);
+}
+
+.study-suggest__label {
+  margin: 8px 0 0;
+  color: var(--study-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.study-row {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--study-panel);
+  text-align: left;
+  cursor: pointer;
+}
+
+.study-row:first-child[data-role="study-row"] {
+  background: #1e3a8a;
+  outline: 1.5px solid var(--study-blue);
+}
+
+.study-row[aria-pressed="true"] {
+  outline: 1.5px solid var(--study-blue);
+}
+
+.study-row__label {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.study-row__detail {
+  min-width: 0;
+  color: var(--study-muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.study-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #3a2a10;
+  color: #fcd9a0;
+  font-size: 15px;
+}
+
+.study-chips {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.study-chip {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--study-chip);
+  color: var(--study-chip-ink);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.study-grid {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 8px;
+}
+
+.study-grid__cell {
+  min-height: 48px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--study-panel);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Favourites --------------------------------------------------------------- */
+
+.study-favs {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+.study-fav {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 1px solid var(--study-line);
+  border-radius: 11px;
+  background: var(--study-panel);
+  color: var(--study-ink);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.study-fav[aria-pressed="true"] {
+  border-color: var(--study-blue);
+  background: var(--study-blue);
+  color: #fff;
+}
+
+/* Reader ------------------------------------------------------------------- */
+
+.study-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  border-top: 1px solid #1e293b;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.study-chapter {
+  max-width: 720px;
+  margin-inline: auto;
+  padding: 18px 0 32px;
+  transition: opacity 0.12s linear;
+}
+
+.study-chapter[data-state="loading"] {
+  opacity: 0.55;
+}
+
+.study-chapter__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 16px 14px var(--study-gutter);
+  font-family: Georgia, "Noto Serif", "Droid Serif", serif;
+  font-size: calc(var(--study-text) + 7px);
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.study-chapter__code {
+  color: var(--study-muted);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.study-verse {
+  display: grid;
+  grid-template-columns: var(--study-gutter) minmax(0, 1fr);
+  transition: background-color 0.12s linear;
+}
+
+.study-verse[data-selected="true"] {
+  background: rgba(59, 130, 246, 0.18);
+  box-shadow: inset 3px 0 0 var(--study-blue);
+}
+
+.study-verse__number {
+  align-self: start;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  width: var(--study-gutter);
+  min-height: 44px;
+  padding: calc((var(--study-text) * 1.6 - 18px) / 2 + 3px) 8px 0 0;
+  border: 0;
+  background: transparent;
+  color: #7dabf0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: right;
+  vertical-align: top;
+  cursor: pointer;
+}
+
+.study-verse[data-selected="true"] .study-verse__number {
+  color: #fff;
+}
+
+.study-verse__text {
+  margin: 0;
+  padding: 3px 16px 7px 0;
+  font-family: Georgia, "Noto Serif", "Droid Serif", "Times New Roman", serif;
+  font-size: var(--study-text);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.study-empty {
+  margin: 32px 16px 32px var(--study-gutter);
+  color: var(--study-muted);
+  font-size: 17px;
+}
+
+.study-error {
+  margin: 16px;
+  padding: 14px;
+  border: 1px solid #7f1d1d;
+  border-radius: 12px;
+  background: #3b1418;
+  color: #fecaca;
+}
+
+.study-error p {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.study-version {
+  margin: 28px 0 0 var(--study-gutter);
+  color: #64748b;
+  font-size: 12px;
+}
+
+/* Buttons + bottom bar ------------------------------------------------------ */
+
+.study-button {
+  min-width: 44px;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid var(--study-line);
+  border-radius: 12px;
+  background: var(--study-panel);
+  color: var(--study-ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.study-button:active {
+  background: var(--study-panel-2);
+}
+
+.study-button:disabled {
+  color: #64748b;
+  cursor: default;
+}
+
+.study-button--primary {
+  width: 100%;
+  border-color: var(--study-blue);
+  background: var(--study-blue);
+  color: #fff;
+}
+
+.study-bar {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--study-line);
+  background: #0b1222;
+}
+
+.study-bar__step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  padding-inline: 10px;
+}
+
+.study-bar__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The keyboard has the bottom of the screen; the bar would ride on it. */
+.study:has(.study-field__input:focus) .study-bar {
+  display: none;
+}
+
+/* Search results ------------------------------------------------------------ */
+
+.study-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+  margin-inline: auto;
+  padding: 12px;
+}
+
+.study-results .study-empty {
+  margin: 24px 4px;
+}
+
+.study-results .study-error {
+  margin: 8px 0;
+}
+
+.study-results__count {
+  margin: 0 4px;
+  color: var(--study-muted);
+  font-size: 14px;
+}
+
+.study-hit {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--study-panel);
+  text-align: left;
+  cursor: pointer;
+}
+
+.study-hit__label {
+  color: #9cc3ff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.study-hit__text {
+  font-family: Georgia, "Noto Serif", "Droid Serif", serif;
+  font-size: 17px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.study-hit mark {
+  border-radius: 3px;
+  background: transparent;
+  color: var(--study-mark);
+  font-weight: 600;
+}
+
+/* Sheets -------------------------------------------------------------------- */
+
+.study-backdrop {
+  position: fixed;
+  z-index: 8;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.study-sheet {
+  position: fixed;
+  z-index: 9;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(70%, 560px);
+  padding: 6px 0 calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--study-line);
+  border-radius: 18px 18px 0 0;
+  background: var(--study-panel-2);
+  box-shadow: 0 -12px 32px rgba(2, 6, 23, 0.5);
+}
+
+.study-sheet__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px 0 16px;
+}
+
+.study-sheet__title {
+  margin: 0;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.study-sheet__body {
+  min-height: 0;
+  padding: 2px 12px 0;
+  overflow-y: auto;
+}
+
+.study-sheet__hint {
+  margin: 0 4px 12px;
+  color: var(--study-muted);
+  font-size: 14px;
+}
+
+.study-sheet__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.study-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.study-sheet .study-row {
+  background: var(--study-panel);
+}
+
+.study-sizes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.study-size {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 84px;
+  padding: 8px 4px;
+  border: 1px solid var(--study-line);
+  border-radius: 12px;
+  background: var(--study-panel);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.study-size__sample {
+  font-family: Georgia, "Noto Serif", serif;
+  line-height: 1;
+}
+
+.study-size[data-size="small"] .study-size__sample {
+  font-size: 20px;
+}
+
+.study-size[data-size="medium"] .study-size__sample {
+  font-size: 26px;
+}
+
+.study-size[data-size="large"] .study-size__sample {
+  font-size: 32px;
+}
+
+.study-size[aria-pressed="true"] {
+  border-color: var(--study-blue);
+  background: var(--study-blue);
+  color: #fff;
+}
+
+.study-notice {
+  position: fixed;
+  z-index: 10;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity 0.15s linear;
+}
+
+.study-notice[data-visible="true"] {
+  opacity: 1;
+}
+
+/* A phone on its side: one row up top, or the text gets 30 % of the screen. */
+@media (orientation: landscape) and (min-width: 560px) {
+  body[data-shell="phone"] .study {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    column-gap: 8px;
+  }
+
+  body[data-shell="phone"] .study-head {
+    grid-column: 1;
+    grid-row: 1;
+    padding-inline: 8px 0;
+  }
+
+  body[data-shell="phone"] .study-head__title {
+    display: none;
+  }
+
+  body[data-shell="phone"] .study-field {
+    grid-column: 2;
+    grid-row: 1;
+    margin: 4px 0;
+  }
+
+  body[data-shell="phone"] .study-favs {
+    grid-column: 3;
+    grid-row: 1;
+    align-items: center;
+    padding: 0 12px 0 0;
+  }
+
+  body[data-shell="phone"] .study-fav {
+    flex: none;
+    width: 58px;
+  }
+
+  body[data-shell="phone"] .study-scroll,
+  body[data-shell="phone"] .study-bar {
+    grid-column: 1 / -1;
+  }
+
+  body[data-shell="phone"] .study-bar {
+    padding-block: 4px calc(4px + env(safe-area-inset-bottom));
+  }
+
+  body[data-shell="phone"] .study-suggest {
+    top: calc(env(safe-area-inset-top) + 54px);
+  }
+
+  body[data-shell="phone"] .study-sheet {
+    max-height: 86%;
+  }
+}
+
+/* The reader's width on anything wider than a phone. */
+@media (min-width: 769px) {
+  .study-head,
+  .study-field,
+  .study-favs {
+    width: 100%;
+    max-width: 744px;
+    margin-inline: auto;
+  }
+
+  .study-field {
+    padding-inline: 12px;
+  }
+
+  .study-field__clear {
+    right: 13px;
+  }
+
+  .study-bar {
+    grid-template-columns: minmax(0, 240px) minmax(0, 240px);
+    justify-content: center;
+  }
+
+  .study-sheet {
+    left: 50%;
+    width: min(100%, 560px);
+    transform: translateX(-50%);
+  }
+
+  .study-suggest {
+    left: 50%;
+    width: min(100%, 744px);
+    transform: translateX(-50%);
+  }
+}
+
+/* Two panes: the sheets stand next to the text instead of over it. */
+@media (min-width: 1024px) {
+  .study-sheet {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    width: clamp(380px, 32vw, 480px);
+    max-height: none;
+    padding-top: 12px;
+    border-top: 0;
+    border-left: 1px solid var(--study-line);
+    border-radius: 0;
+    transform: none;
+  }
+
+  .study:has(.study-sheet) {
+    padding-right: clamp(380px, 32vw, 480px);
+  }
+}

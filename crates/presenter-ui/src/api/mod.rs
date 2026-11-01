@@ -10,6 +10,7 @@ pub mod presentations;
 pub mod settings;
 pub mod stage;
 pub mod stream;
+pub mod study;
 pub mod sync;
 pub mod timers;
 
