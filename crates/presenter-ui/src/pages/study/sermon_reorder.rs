@@ -9,7 +9,7 @@ use web_sys::PointerEvent;
 
 use super::sermon_editor::{refuse, run_write, Editor, OrderDraft, WriteEnd};
 use super::sheet::Sheet;
-use crate::api::sermons;
+use crate::api::{sermons, ApiError};
 use crate::components::nameplates::order::{
     drop_marker, drop_slot, reorder_one_step, reorder_to_slot,
 };
@@ -23,10 +23,11 @@ pub(super) fn order_moved(e: Editor) -> bool {
         .with_untracked(|draft| draft.as_ref().is_some_and(|draft| draft.ids != draft.base))
 }
 
-/// The order goes out once, as Poradie leaves. The rows started from `base`: a
-/// sermon reordered since was seen by the socket, so its revision would pass,
-/// and this list would silently undo that order. A failure keeps the order for
-/// the retry button; a sheet still open keeps collecting moves.
+/// The order goes out as Poradie leaves, or as the page hides with the sheet
+/// open, which keeps collecting moves on what was sent. The rows started from
+/// `base`: a sermon reordered since was seen by the socket, so its revision
+/// would pass and this list would silently undo that order. A failure keeps the
+/// order for the retry button.
 pub(super) fn send_order(e: Editor) {
     let Some(draft) = e.order.get_untracked() else {
         return;
@@ -34,12 +35,13 @@ pub(super) fn send_order(e: Editor) {
     if e.order_sending.get_value() {
         return;
     }
-    if draft.ids == draft.base {
-        e.order.set(None);
-        e.order_failed.set(false);
+    let held = e.held_order();
+    // Its answer got lost, but the order is stored.
+    if draft.ids == draft.base || draft.ids == held {
+        settle_order(e, &draft.ids);
         return;
     }
-    if e.held_order() != draft.base {
+    if held != draft.base {
         e.order.set(None);
         e.order_failed.set(false);
         refuse(e, ORDER_REFUSED);
@@ -47,17 +49,43 @@ pub(super) fn send_order(e: Editor) {
     }
     e.order_sending.set_value(true);
     leptos::task::spawn_local(async move {
+        let sent = draft.ids.clone();
+        let base = draft.base;
         let ids = draft.ids;
         let end = run_write(e, ORDER_REFUSED, move |id, revision| async move {
+            // The turn may have waited for edits, and for a newer sermon.
+            if e.held_order() != base {
+                return Err(ApiError::Refused(409, ORDER_REFUSED.to_string()));
+            }
             sermons::reorder_items(&id, revision, &ids).await
         })
         .await;
         e.order_sending.set_value(false);
         e.order_failed.set(end == WriteEnd::Failed);
-        if end != WriteEnd::Failed {
-            e.order.set(None);
+        match end {
+            WriteEnd::Landed => settle_order(e, &sent),
+            WriteEnd::Refused => e.order.set(None),
+            WriteEnd::Failed => {}
         }
     });
+}
+
+/// `stored` is in: moves made since stay and go next. A sheet still open keeps
+/// its rows; a closed one leaves nothing behind.
+fn settle_order(e: Editor, stored: &[String]) {
+    let open = e.order_open.get_value();
+    e.order_failed.set(false);
+    e.order.update(|draft| {
+        let unsent = draft.as_ref().is_some_and(|held| held.ids != stored);
+        if let Some(held) = draft.as_mut().filter(|_| open || unsent) {
+            held.base = stored.to_vec();
+        } else {
+            *draft = None;
+        }
+    });
+    if !open {
+        send_order(e);
+    }
 }
 
 fn handle_of(ev: &PointerEvent) -> Option<web_sys::Element> {
@@ -231,8 +259,11 @@ pub(super) fn ReorderSheet(e: Editor) -> impl IntoView {
     let drag = RwSignal::new(None);
     // A sheet opened from its URL is here before the sermon; a failed order
     // waits here to be moved on.
+    e.order_open.set_value(true);
     Effect::new(move |_| {
-        if e.order.with_untracked(Option::is_none) && e.detail.with(Option::is_some) {
+        let missing = e.order.with(Option::is_none);
+        let loaded = e.detail.with(Option::is_some);
+        if missing && loaded {
             let base = e.held_order();
             e.order.set(Some(OrderDraft {
                 ids: base.clone(),
@@ -240,7 +271,10 @@ pub(super) fn ReorderSheet(e: Editor) -> impl IntoView {
             }));
         }
     });
-    Owner::on_cleanup(move || send_order(e));
+    Owner::on_cleanup(move || {
+        e.order_open.set_value(false);
+        send_order(e);
+    });
     let shown = move || {
         e.order
             .with(|draft| draft.as_ref().map(|held| held.ids.clone()))

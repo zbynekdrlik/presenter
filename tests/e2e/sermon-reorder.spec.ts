@@ -248,6 +248,39 @@ test("an order that failed to go out waits for its retry, and HOTOVO says so", a
   await finish(opened);
 });
 
+test("the phone locked with Poradie open keeps the rows, and every move goes out", async () => {
+  const id = await seeded("Zamknutý telefón");
+  const opened = await openReorder(id);
+  const { page } = opened;
+  const hide = () =>
+    page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+      delete (document as unknown as { hidden?: boolean }).hidden;
+    });
+  // Nothing moved yet: the sheet must not go blank.
+  await hide();
+  await expect(role(page, "sermon-order-row")).toHaveCount(4);
+
+  // Moved, hidden, and moved again while that order is on its way.
+  await role(page, "sermon-order-row").nth(1).locator('[data-role="sermon-order-up"]').click();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const reorder = /\/items\/reorder$/;
+  await page.route(reorder, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await hide();
+  await role(page, "sermon-order-row").nth(3).locator('[data-role="sermon-order-up"]').click();
+  release();
+  await expect.poll(() => versesOf(id)).toEqual([2, 1, 3, 4]);
+  await expect(role(page, "sermon-order-row")).toHaveCount(4);
+  await closeSheet(page);
+  await expect.poll(() => versesOf(id)).toEqual([2, 1, 4, 3]);
+  await finish(opened);
+});
+
 test("Poradie opened from its URL lists the sermon", async ({ browser }) => {
   const id = await seeded("Z odkazu");
   const opened = await openStudy(browser, baseURL, PHONE_390, `/ui/study?view=sermon&id=${id}&s=poradie`, null);

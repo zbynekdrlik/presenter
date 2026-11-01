@@ -60,6 +60,8 @@ pub(super) struct Editor {
     /// That order failed to go out: it waits for the retry button.
     pub(super) order_failed: RwSignal<bool>,
     pub(super) order_sending: StoredValue<bool>,
+    /// Poradie is on screen.
+    pub(super) order_open: StoredValue<bool>,
     /// The newest change this page could not store, for HOTOVO to name.
     refused: StoredValue<Option<String>>,
     /// An event came during a write of ours: the sermon reads again after it.
@@ -105,6 +107,7 @@ pub(super) fn editor_for(s: Study, id: &str) -> Editor {
             order: RwSignal::new(None),
             order_failed: RwSignal::new(false),
             order_sending: StoredValue::new(false),
+            order_open: StoredValue::new(false),
             refused: StoredValue::new(None),
             behind: StoredValue::new(false),
         })
@@ -282,6 +285,14 @@ fn drafted_edits(e: Editor, id: &str) -> Option<ItemEdits> {
         .with_untracked(|drafts| drafts.get(id).map(|draft| draft.edits.clone()))
 }
 
+/// What another device wrote during our write.
+fn catch_up(e: Editor) {
+    if e.behind.get_value() {
+        e.behind.set_value(false);
+        reload(e);
+    }
+}
+
 /// Save the next changed item, then the one after.
 fn flush(e: Editor) {
     if e.busy.get_value() {
@@ -289,10 +300,7 @@ fn flush(e: Editor) {
     }
     let Some(item) = e.dirty.with_value(|dirty| dirty.first().cloned()) else {
         e.save.set(SaveState::Saved);
-        if e.behind.get_value() {
-            e.behind.set_value(false);
-            reload(e);
-        }
+        catch_up(e);
         return;
     };
     let Some(edits) = drafted_edits(e, &item) else {
@@ -347,6 +355,7 @@ fn flush(e: Editor) {
             Err(err) => {
                 e.save.set(SaveState::Error);
                 e.s.tell(sermon_error(&err));
+                catch_up(e);
             }
         }
     });
@@ -435,6 +444,7 @@ where
     let end = match answer {
         Ok(detail) => {
             e.apply(detail);
+            e.refused.set_value(None);
             WriteEnd::Landed
         }
         Err(err) if is_conflict(&err) || is_not_found(&err) => {
@@ -570,6 +580,7 @@ fn finish(e: Editor) {
 pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
     let e = editor_for(s, &id);
     listen_live(s);
+    e.refused.set_value(None);
     if e.detail.with_untracked(Option::is_none) {
         e.loaded.set(Loaded::Waiting);
     }
