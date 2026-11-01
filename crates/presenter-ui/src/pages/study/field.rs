@@ -90,7 +90,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     let shown_query = Memo::new(move |_| {
         s.route.with(|route| match &route.view {
             StudyView::Search { query } => Some(query.clone()),
-            StudyView::Reader { .. } => None,
+            _ => None,
         })
     });
     Effect::new(move |previous: Option<bool>| {

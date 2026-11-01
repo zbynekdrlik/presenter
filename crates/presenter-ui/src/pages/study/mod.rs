@@ -1,11 +1,12 @@
-//! `/ui/study` (#851 spec §6): the Bible on the preacher's phone and tablet,
-//! reading and searching only. Nothing on this page can reach a wall (T11): it
-//! never calls a trigger, clear or stage endpoint.
+//! `/ui/study` (#851 spec §6, §7.6): the Bible on the preacher's phone and
+//! tablet, reading, searching and preparing sermons. Nothing on this page can
+//! reach a wall (T11): it never calls a trigger, clear or stage endpoint.
 //!
 //! The URL is the state (`state::study::StudyRoute`): every view and sheet has
 //! its own, so the system Back gesture works. `nav` owns the moves, the
 //! components only read `Study`.
 
+mod add_to_sermon;
 mod favourites;
 mod field;
 mod header;
@@ -15,6 +16,9 @@ mod nav;
 mod reader;
 mod results;
 mod scroll;
+mod sermon_editor;
+mod sermon_item;
+mod sermons;
 mod sheet;
 mod text_size;
 mod verse_actions;
@@ -25,18 +29,22 @@ use gloo_timers::callback::Timeout;
 use leptos::html::Main;
 use leptos::prelude::*;
 use presenter_core::bible::resolver::Versification;
+use presenter_core::bible::sermon::ItemEdits;
 use presenter_core::BibleTranslation;
 
 use crate::api::bible::{self as bible_api, BibleSearchHit};
+use crate::api::sermons::{SermonItem, SermonPassage};
 use crate::api::study::{load_chapter, ChapterCache, ChapterText};
 use crate::state::bible_console::versification;
 use crate::state::session;
 use crate::state::study::{
     chapter_key, failure_text, parse_favourites, visible_favourites, StudyRoute, StudySheet,
-    StudyView, TextSize, KEY_FAVOURITES, KEY_HISTORY, KEY_TEXT_SIZE, START_BOOK, START_CHAPTER,
+    StudyView, TextSize, KEY_ACTIVE_SERMON, KEY_FAVOURITES, KEY_HISTORY, KEY_TEXT_SIZE, START_BOOK,
+    START_CHAPTER,
 };
 use crate::state::study_history::StudyHistory;
 
+use add_to_sermon::AddToSermonSheet;
 use favourites::{FavouriteSheet, Favourites};
 use field::StudyField;
 use header::StudyHeader;
@@ -44,6 +52,8 @@ use history::HistorySheet;
 use reader::{ChapterBar, Reader};
 use results::SearchResults;
 use scroll::ScrollPlan;
+use sermon_editor::SermonEditor;
+use sermons::SermonListView;
 use text_size::TextSizeSheet;
 use verse_actions::VerseActionsSheet;
 
@@ -51,6 +61,10 @@ use verse_actions::VerseActionsSheet;
 const SEARCH_LIMIT: u32 = 100;
 /// How long "Skopírované" stays.
 const NOTICE_MS: u32 = 2_500;
+/// How long a toast with Späť stays.
+const UNDO_MS: u32 = 5_000;
+/// The NLT is fetched on demand: it has no text to snapshot into a sermon.
+pub(crate) const REMOTE_TRANSLATION: &str = "eng-nlt";
 
 /// A chapter of a translation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +105,21 @@ enum Search {
     },
 }
 
+/// What Späť on a toast takes back.
+#[derive(Clone)]
+enum Undo {
+    Added {
+        sermon: String,
+        item: String,
+    },
+    Removed {
+        sermon: String,
+        item: Box<SermonItem>,
+        position: usize,
+        edits: ItemEdits,
+    },
+}
+
 /// The page's state. `Copy` (signals only), passed to every component.
 #[derive(Clone, Copy)]
 struct Study {
@@ -110,6 +139,11 @@ struct Study {
     text_size: RwSignal<TextSize>,
     history: RwSignal<StudyHistory>,
     notice: RwSignal<Option<String>>,
+    undo: RwSignal<Option<Undo>>,
+    /// The sermon "Pridať do kázne" goes to (`study.activeSermon`).
+    active_sermon: RwSignal<Option<String>>,
+    /// The passage the add sheet is asking about.
+    pending_passage: RwSignal<Option<SermonPassage>>,
     /// Bumped by a retry button: asks again for the same chapter or search.
     retry: RwSignal<u32>,
     cache: StoredValue<ChapterCache>,
@@ -146,7 +180,7 @@ impl Study {
                 book: book.clone(),
                 chapter: *chapter,
             }),
-            StudyView::Search { .. } => None,
+            _ => None,
         })
     }
 
@@ -160,8 +194,49 @@ impl Study {
         let translation = self.translation()?;
         self.route.with(|route| match &route.view {
             StudyView::Search { query } => Some((translation, query.clone())),
-            StudyView::Reader { .. } => None,
+            _ => None,
         })
+    }
+
+    fn tell(self, message: String) {
+        self.undo.set(None);
+        self.notice.set(Some(message));
+    }
+
+    /// A toast with Späť.
+    fn tell_undo(self, message: String, undo: Undo) {
+        self.undo.set(Some(undo));
+        self.notice.set(Some(message));
+    }
+}
+
+/// A refused sermon request reads as the server's own Slovak sentence.
+fn sermon_error(err: &crate::api::ApiError) -> String {
+    match err {
+        crate::api::ApiError::Refused(_, message) => message.clone(),
+        _ => failure_text(""),
+    }
+}
+
+/// A translation a sermon can snapshot: every one but the on-demand NLT.
+fn snapshot_translation(code: &str) -> Option<&str> {
+    (code != REMOTE_TRANSLATION).then_some(code)
+}
+
+fn run_undo(s: Study) {
+    let Some(undo) = s.undo.get_untracked() else {
+        return;
+    };
+    s.undo.set(None);
+    s.notice.set(None);
+    match undo {
+        Undo::Added { sermon, item } => add_to_sermon::undo_added(s, sermon, item),
+        Undo::Removed {
+            sermon,
+            item,
+            position,
+            edits,
+        } => sermon_editor::undo_removed(s, sermon, *item, position, edits),
     }
 }
 
@@ -368,6 +443,14 @@ fn install_pwa() {
     );
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ViewKind {
+    Reader,
+    Search,
+    Sermons,
+    Sermon(String),
+}
+
 #[component]
 pub fn StudyPage() -> impl IntoView {
     crate::state::phone_shell::install_phone_shell(RwSignal::new(false));
@@ -392,6 +475,9 @@ pub fn StudyPage() -> impl IntoView {
         )),
         history: RwSignal::new(StudyHistory::parse(session::get(KEY_HISTORY).as_deref())),
         notice: RwSignal::new(None),
+        undo: RwSignal::new(None),
+        active_sermon: RwSignal::new(session::get_persistent(KEY_ACTIVE_SERMON)),
+        pending_passage: RwSignal::new(None),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
         scroll_plan: StoredValue::new(saved_verse.map_or(ScrollPlan::Keep, ScrollPlan::Verse)),
@@ -444,21 +530,45 @@ pub fn StudyPage() -> impl IntoView {
     });
     Effect::new(move |previous: Option<Option<Timeout>>| {
         drop(previous);
-        s.notice
-            .with(Option::is_some)
-            .then(|| Timeout::new(NOTICE_MS, move || s.notice.set(None)))
+        let stay = if s.undo.with(Option::is_some) {
+            UNDO_MS
+        } else {
+            NOTICE_MS
+        };
+        s.notice.with(Option::is_some).then(|| {
+            Timeout::new(stay, move || {
+                s.notice.set(None);
+                s.undo.set(None);
+            })
+        })
     });
 
     let open_sheet = Memo::new(move |_| s.route.with(|route| route.sheet));
-    let reading = Memo::new(move |_| {
-        s.route
-            .with(|route| matches!(route.view, StudyView::Reader { .. }))
+    let view_kind = Memo::new(move |_| {
+        s.route.with(|route| match &route.view {
+            StudyView::Reader { .. } => ViewKind::Reader,
+            StudyView::Search { .. } => ViewKind::Search,
+            StudyView::Sermons => ViewKind::Sermons,
+            StudyView::Sermon { id } => ViewKind::Sermon(id.clone()),
+        })
     });
+    let bible_view = move || matches!(view_kind.get(), ViewKind::Reader | ViewKind::Search);
+    let body = move || match view_kind.get() {
+        ViewKind::Reader => view! {
+            <Reader s=s />
+            <ChapterBar s=s />
+        }
+        .into_any(),
+        ViewKind::Search => view! { <SearchResults s=s /> }.into_any(),
+        ViewKind::Sermons => view! { <SermonListView s=s /> }.into_any(),
+        ViewKind::Sermon(id) => view! { <SermonEditor s=s id=id /> }.into_any(),
+    };
     let sheets = move || match open_sheet.get() {
         Some(StudySheet::Actions) => view! { <VerseActionsSheet s=s /> }.into_any(),
         Some(StudySheet::History) => view! { <HistorySheet s=s /> }.into_any(),
         Some(StudySheet::TextSize) => view! { <TextSizeSheet s=s /> }.into_any(),
         Some(StudySheet::Favourite(slot)) => view! { <FavouriteSheet s=s index=slot /> }.into_any(),
+        Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
         None => ().into_any(),
     };
 
@@ -469,8 +579,10 @@ pub fn StudyPage() -> impl IntoView {
             data-text-size=move || s.text_size.get().key()
         >
             <StudyHeader s=s />
-            <StudyField s=s />
-            <Favourites s=s />
+            <Show when=bible_view>
+                <StudyField s=s />
+                <Favourites s=s />
+            </Show>
             {move || {
                 s.translations_failed
                     .get()
@@ -513,10 +625,7 @@ pub fn StudyPage() -> impl IntoView {
                         }
                     })
             }}
-            <Show when=move || reading.get() fallback=move || view! { <SearchResults s=s /> }>
-                <Reader s=s />
-                <ChapterBar s=s />
-            </Show>
+            {body}
             {sheets}
             <div
                 class="study-notice"
@@ -525,6 +634,22 @@ pub fn StudyPage() -> impl IntoView {
                 role="status"
             >
                 {move || s.notice.get().unwrap_or_default()}
+                {move || {
+                    s.undo
+                        .with(Option::is_some)
+                        .then(|| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class="study-notice__undo"
+                                    data-role="study-notice-undo"
+                                    on:click=move |_| run_undo(s)
+                                >
+                                    "Späť"
+                                </button>
+                            }
+                        })
+                }}
             </div>
         </div>
     }

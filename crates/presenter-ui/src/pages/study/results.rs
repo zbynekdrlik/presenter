@@ -6,12 +6,10 @@ use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
 
 use super::scroll::ScrollPlan;
-use super::{nav, Search, Study, SEARCH_LIMIT};
+use super::{add_to_sermon, nav, Search, Study, REMOTE_TRANSLATION, SEARCH_LIMIT};
 use crate::api::bible::BibleSearchHit;
+use crate::api::sermons::SermonPassage;
 use crate::state::study::{mark_matches, StudyRoute, StudyView};
-
-/// The NLT is fetched on demand and has no local text (bible-remote rule).
-const REMOTE_TRANSLATION: &str = "eng-nlt";
 
 fn count_text(count: usize) -> String {
     if count >= SEARCH_LIMIT as usize {
@@ -26,7 +24,7 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
     let query = move || {
         s.route.with(|route| match &route.view {
             StudyView::Search { query } => query.clone(),
-            StudyView::Reader { .. } => String::new(),
+            _ => String::new(),
         })
     };
     let remote = move || s.translation().as_deref() == Some(REMOTE_TRANSLATION);
@@ -136,6 +134,26 @@ fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
         reference.to_human_readable(),
         translation_short_code(&translation)
     );
+    let on_add = {
+        let reference = reference.clone();
+        let translation = translation.clone();
+        move |_| {
+            let Some(book) = reference.book_code.clone() else {
+                return;
+            };
+            let verse_start = reference.verse_start;
+            add_to_sermon::add(
+                s,
+                SermonPassage {
+                    translation: translation.clone(),
+                    book_code: book,
+                    chapter: reference.chapter,
+                    verse_start,
+                    verse_end: reference.verse_end.max(verse_start),
+                },
+            );
+        }
+    };
     let on_open = {
         let reference = reference.clone();
         move |_| {
@@ -160,17 +178,28 @@ fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
         .collect_view();
 
     view! {
-        <button
-            type="button"
-            class="study-hit"
-            data-role="search-hit"
-            data-book-code=reference.book_code.clone().unwrap_or_default()
-            data-chapter=reference.chapter
-            data-verse=reference.verse_start
-            on:click=on_open
-        >
-            <span class="study-hit__label">{label}</span>
-            <span class="study-hit__text">{snippet}</span>
-        </button>
+        <div class="study-hit-row">
+            <button
+                type="button"
+                class="study-hit"
+                data-role="search-hit"
+                data-book-code=reference.book_code.clone().unwrap_or_default()
+                data-chapter=reference.chapter
+                data-verse=reference.verse_start
+                on:click=on_open
+            >
+                <span class="study-hit__label">{label}</span>
+                <span class="study-hit__text">{snippet}</span>
+            </button>
+            <button
+                type="button"
+                class="study-icon"
+                data-role="search-hit-add"
+                aria-label="Pridať do kázne"
+                on:click=on_add
+            >
+                "+"
+            </button>
+        </div>
     }
 }

@@ -1,11 +1,12 @@
 //! The 48 px header: ◀ ▶ step through the history, a long press on ◀ opens the
-//! list, Aa the text size. E1 adds "Kázne" here.
+//! list, Aa the text size, Kázne the sermon list.
 
 use leptos::prelude::*;
 
 use super::long_press::LongPress;
+use super::scroll::ScrollPlan;
 use super::{nav, Study};
-use crate::state::study::StudySheet;
+use crate::state::study::{StudyRoute, StudySheet};
 
 #[component]
 pub(super) fn StudyHeader(s: Study) -> impl IntoView {
@@ -25,6 +26,10 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
             nav::step_history(steps);
         }
     };
+    let on_sermons = move |_| {
+        let translation = s.route.with_untracked(|route| route.translation.clone());
+        nav::go(s, StudyRoute::sermons(translation), ScrollPlan::Top);
+    };
     let on_press = move |ev: web_sys::PointerEvent| {
         if can_back.get_untracked() {
             press.begin(&ev, open_list);
@@ -35,6 +40,14 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
         <header class="study-head">
             <h1 class="study-head__title">"Štúdium"</h1>
             <div class="study-head__actions">
+                <button
+                    type="button"
+                    class="study-icon study-icon--text study-icon--wide"
+                    data-role="study-sermons"
+                    on:click=on_sermons
+                >
+                    "Kázne"
+                </button>
                 <button
                     type="button"
                     class="study-icon"

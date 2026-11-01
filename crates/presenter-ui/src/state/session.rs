@@ -66,6 +66,13 @@ pub fn set_persistent(key: &str, value: &str) {
     write(local_storage(), key, value);
 }
 
+/// Remove a value from local storage.
+pub fn remove_persistent(key: &str) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.remove_item(&format!("{PREFIX}{key}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,35 +1,39 @@
 //! The verse sheet (spec §6.3): what can be done with the selected verses.
 //! It leaves the text tappable: another verse number extends the selection. A
-//! new action is one [`VerseAction`] and its arm in [`run`] (E1 adds "Pridať do
-//! kázne", S4 "Porovnať" and "Odkazy").
+//! new action is one [`VerseAction`] and its arm in [`run`] (S4 adds "Porovnať"
+//! and "Odkazy").
 
 use leptos::prelude::*;
 
 use super::sheet::Sheet;
-use super::{nav, Chapter, Study};
+use super::{add_to_sermon, nav, Chapter, Study};
+use crate::api::sermons::SermonPassage;
 use crate::components::timer_panel::copy_to_clipboard;
 use crate::state::study::{copy_text, verse_reference};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerseAction {
+    AddToSermon,
     Copy,
 }
 
 impl VerseAction {
     fn label(self) -> &'static str {
         match self {
+            Self::AddToSermon => "Pridať do kázne",
             Self::Copy => "Kopírovať",
         }
     }
 
     fn role(self) -> &'static str {
         match self {
+            Self::AddToSermon => "verse-add-to-sermon",
             Self::Copy => "verse-copy",
         }
     }
 }
 
-const VERSE_ACTIONS: [VerseAction; 1] = [VerseAction::Copy];
+const VERSE_ACTIONS: [VerseAction; 2] = [VerseAction::AddToSermon, VerseAction::Copy];
 
 /// The selection's reference, and its text for the clipboard.
 fn selection(s: Study) -> Option<(String, String)> {
@@ -53,8 +57,26 @@ fn selection(s: Study) -> Option<(String, String)> {
     })
 }
 
+/// The selection as a sermon passage. The route's chapter is the one on screen.
+fn passage(s: Study) -> Option<SermonPassage> {
+    let (verse_start, verse_end) = s.route.with_untracked(|route| route.verses)?;
+    let place = s.place()?;
+    Some(SermonPassage {
+        translation: place.translation,
+        book_code: place.book,
+        chapter: place.chapter,
+        verse_start,
+        verse_end,
+    })
+}
+
 fn run(s: Study, action: VerseAction) {
     match action {
+        VerseAction::AddToSermon => {
+            if let Some(passage) = passage(s) {
+                add_to_sermon::add(s, passage);
+            }
+        }
         VerseAction::Copy => {
             let Some((_, text)) = selection(s) else {
                 return;

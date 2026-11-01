@@ -9,6 +9,11 @@ paths:
   - "crates/presenter-server/src/router/bible/sermons.rs"
   - "crates/presenter-server/src/router/bible/sermons/**"
   - "crates/presenter-server/src/router/access_identity.rs"
+  - "crates/presenter-ui/src/pages/study/sermon*.rs"
+  - "crates/presenter-ui/src/pages/study/add_to_sermon.rs"
+  - "crates/presenter-ui/src/state/sermon_*.rs"
+  - "crates/presenter-ui/src/api/sermons.rs"
+  - "tests/e2e/sermon-*.spec.ts"
 ---
 
 # Sermon preparation (#851 P and E units)
@@ -171,3 +176,17 @@ paths:
   before a rename gets its 409 and never restores the old title.
 - `delete_bible_presentation` on a sermon goes through `delete_sermon` (the `delete` log line).
 - Sermons do not sync between SNV and PP: they live on the site where they were written.
+
+## The study page's sermon views (E1, E2, `pages/study/{sermons,add_to_sermon,sermon_editor,sermon_item}.rs`)
+
+- Views: `StudyView::{Sermons, Sermon { id }}`. The add sheet `s=pridat` never comes from a URL: the
+  passage it asks about lives only in `Study::pending_passage`.
+- `study.activeSermon` (localStorage) = where "Pridať do kázne" goes. A 404 forgets it and asks.
+- **All writes share the sermon's revision, so they run one at a time** (`Editor::busy`): an edit 300 ms
+  after the last tap, a structural write through `write()`, which first waits for the edits
+  (`settle_saves`). `Editor::apply` keeps a dirty item's local taps when the server's answer arrives.
+- 409 on an edit: same item, same text → re-sent once; anything else is not replayed (spec §7.6).
+- The words of a card share one listener (`token_at`), never one per token: a chapter has thousands.
+- A new sermon takes the translation being read as its default; the NLT never (`snapshot_translation`).
+- `sermon_error`: only `ApiError::Refused` shows the server's text, so sermon calls use the `*_refusal`
+  helpers.

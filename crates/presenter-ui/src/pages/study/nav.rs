@@ -40,6 +40,8 @@ fn entry(s: Study, route: &StudyRoute) -> HistoryEntry {
             reader_label(&book_name(s, route, book, *chapter), *chapter, translation)
         }
         StudyView::Search { query } => search_label(query, translation),
+        StudyView::Sermons => "Kázne".to_string(),
+        StudyView::Sermon { .. } => "Kázeň".to_string(),
     };
     HistoryEntry {
         url: route.to_url(),
