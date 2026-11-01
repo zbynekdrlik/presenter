@@ -342,6 +342,32 @@ test("a reorder that lost to another device says so and keeps the server's order
   await finish(opened);
 });
 
+test("a later write does not hide a refused order from HOTOVO", async () => {
+  const id = await seeded("Odmietnuté");
+  const opened = await openReorder(id);
+  const { page } = opened;
+  await role(page, "sermon-order-row").nth(1).locator('[data-role="sermon-order-up"]').click();
+  await page.route(/\/items\/reorder$/, async (route) => {
+    await addVerse(id, 5);
+    await route.continue();
+  });
+  await closeSheet(page);
+  await expect(role(page, "study-notice")).toContainText("Poradie sa medzitým zmenilo");
+  await expect(role(page, "sermon-item")).toHaveCount(5);
+
+  page.on("dialog", (dialog) => void dialog.accept());
+  await role(page, "sermon-item-menu").first().click();
+  await role(page, "sermon-item-delete").click();
+  await expect(role(page, "sermon-item")).toHaveCount(4);
+
+  await role(page, "sermon-done").click();
+  await expect(role(page, "study-notice")).toContainText("Poradie sa medzitým zmenilo");
+  await expect(role(page, "sermon-editor")).toBeVisible();
+  await expect(role(page, "sermon-list")).toHaveCount(0);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("409")));
+  await finish(opened);
+});
+
 test("Náhľad shows the stored slide with its count; a missing secondary line can be asked for again", async ({ browser }) => {
   const id = await newSermon("Náhľad");
   await addVerse(id, 1);
