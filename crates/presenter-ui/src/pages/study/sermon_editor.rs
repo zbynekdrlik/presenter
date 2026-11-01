@@ -17,6 +17,7 @@ use super::scroll::ScrollPlan;
 use super::sermon_add::AddVerse;
 use super::sermon_item::SermonItemCard;
 use super::sermon_live::listen_live;
+use super::sermon_reorder::{order_moved, send_order};
 use super::{ensure_structure, nav, sermon_error, Study, Undo};
 use crate::api::sermons::{
     self, is_conflict, is_not_found, is_refused_edit, SermonDetail, SermonItem,
@@ -58,7 +59,7 @@ pub(super) struct Editor {
     pub(super) order: RwSignal<Option<OrderDraft>>,
     /// That order failed to go out: it waits for the retry button.
     pub(super) order_failed: RwSignal<bool>,
-    order_sending: StoredValue<bool>,
+    pub(super) order_sending: StoredValue<bool>,
     /// The newest change this page could not store, for HOTOVO to name.
     refused: StoredValue<Option<String>>,
     /// An event came during a write of ours: the sermon reads again after it.
@@ -195,7 +196,7 @@ impl Editor {
     /// The server's sermon. An item with unsaved taps keeps them, unless its
     /// text changed: the taps named another text's words. An answer older than
     /// what is held is ignored: it would take back a saved edit.
-    fn apply(self, detail: SermonDetail) {
+    pub(super) fn apply(self, detail: SermonDetail) {
         if detail.revision < self.revision() {
             return;
         }
@@ -267,7 +268,7 @@ impl Editor {
 }
 
 /// Say what did not get stored, and keep it for HOTOVO.
-fn refuse(e: Editor, message: &str) {
+pub(super) fn refuse(e: Editor, message: &str) {
     e.refused.set_value(Some(message.to_string()));
     e.s.tell(message.to_string());
 }
@@ -482,50 +483,6 @@ pub(super) fn reload(e: Editor) {
                     e.loaded.set(Loaded::Failed(sermon_error(&err)));
                 }
             }
-        }
-    });
-}
-
-const ORDER_REFUSED: &str = "Poradie sa medzitým zmenilo — skús znova";
-
-fn order_moved(e: Editor) -> bool {
-    e.order
-        .with_untracked(|draft| draft.as_ref().is_some_and(|draft| draft.ids != draft.base))
-}
-
-/// The order goes out once, as Poradie leaves. The rows started from `base`: a
-/// sermon reordered since was seen by the socket, so its revision would pass,
-/// and this list would silently undo that order. A failure keeps the order for
-/// the retry button; a sheet still open keeps collecting moves.
-pub(super) fn send_order(e: Editor) {
-    let Some(draft) = e.order.get_untracked() else {
-        return;
-    };
-    if e.order_sending.get_value() {
-        return;
-    }
-    if draft.ids == draft.base {
-        e.order.set(None);
-        e.order_failed.set(false);
-        return;
-    }
-    if e.held_order() != draft.base {
-        e.order.set(None);
-        e.order_failed.set(false);
-        refuse(e, ORDER_REFUSED);
-        return;
-    }
-    e.order_sending.set_value(true);
-    leptos::task::spawn_local(async move {
-        let ids = draft.ids;
-        let end = run_write(e, ORDER_REFUSED, move |id, revision| async move {
-            sermons::reorder_items(&id, revision, &ids).await
-        })
-        .await;
-        e.order_sending.set_value(false);
-        e.order_failed.set(end == WriteEnd::Failed);
-        if end != WriteEnd::Failed {
-            e.order.set(None);
         }
     });
 }

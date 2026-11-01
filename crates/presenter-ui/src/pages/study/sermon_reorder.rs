@@ -7,13 +7,58 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
-use super::sermon_editor::{send_order, Editor, OrderDraft};
+use super::sermon_editor::{refuse, run_write, Editor, OrderDraft, WriteEnd};
 use super::sheet::Sheet;
+use crate::api::sermons;
 use crate::components::nameplates::order::{
     drop_marker, drop_slot, reorder_one_step, reorder_to_slot,
 };
 
 const PRIMARY_BUTTON: i16 = 0;
+
+const ORDER_REFUSED: &str = "Poradie sa medzitým zmenilo — skús znova";
+
+pub(super) fn order_moved(e: Editor) -> bool {
+    e.order
+        .with_untracked(|draft| draft.as_ref().is_some_and(|draft| draft.ids != draft.base))
+}
+
+/// The order goes out once, as Poradie leaves. The rows started from `base`: a
+/// sermon reordered since was seen by the socket, so its revision would pass,
+/// and this list would silently undo that order. A failure keeps the order for
+/// the retry button; a sheet still open keeps collecting moves.
+pub(super) fn send_order(e: Editor) {
+    let Some(draft) = e.order.get_untracked() else {
+        return;
+    };
+    if e.order_sending.get_value() {
+        return;
+    }
+    if draft.ids == draft.base {
+        e.order.set(None);
+        e.order_failed.set(false);
+        return;
+    }
+    if e.held_order() != draft.base {
+        e.order.set(None);
+        e.order_failed.set(false);
+        refuse(e, ORDER_REFUSED);
+        return;
+    }
+    e.order_sending.set_value(true);
+    leptos::task::spawn_local(async move {
+        let ids = draft.ids;
+        let end = run_write(e, ORDER_REFUSED, move |id, revision| async move {
+            sermons::reorder_items(&id, revision, &ids).await
+        })
+        .await;
+        e.order_sending.set_value(false);
+        e.order_failed.set(end == WriteEnd::Failed);
+        if end != WriteEnd::Failed {
+            e.order.set(None);
+        }
+    });
+}
 
 fn handle_of(ev: &PointerEvent) -> Option<web_sys::Element> {
     ev.target()
