@@ -70,7 +70,7 @@ The preacher's reader, replacing MySword on his phone and tablet. Reading and se
   sheet lifts over the backdrop, and that click would close the sheet at once.
 - **The verse sheet covers the chapter bar on a phone:** the swipe on the text still turns the chapter.
 - **E2E:** `study-support.ts`; a late answer is `gateRoute` + `landed()` + `settled()`, never
-  `networkidle` (it does not wait for the body, the test passed with the guard removed); `body` has no height under the fixed `.study`, so wait for
+  `networkidle`; "only the newest lands" is proven to fail with the `pending` guard removed; `body` has no height under the fixed `.study`, so wait for
   `data-wasm-ready` with `state: "attached"`; a long press = `touchDrag` from a point to itself with the assertion
   in `whileHeld`; the deliberate NLT 503 is filtered by status, the failure paths are malformed 200s.
 - **Local UI builds need nightly** (`.cargo/config.toml` has `build-std`): `RUSTUP_TOOLCHAIN=nightly
