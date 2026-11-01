@@ -192,3 +192,6 @@ were simultaneously free. It retries with a fresh `base` if `base + 1` is taken
   VERIFIED free at allocation instead of blindly assumed.
 - This is a TEST-FIXTURE robustness concern only; the production probe is
   correct and race-free (it scans, it does not assume).
+- **A test asserting that the probe adopts NOTHING uses its own loopback address** (`ISOLATED_LOOPBACK`,
+  127.0.0.2): the probe walks +-5 ports, and a parallel test's mock Arena on an ephemeral 127.0.0.1 port
+  inside that window is a real Arena to it. `free_port_pair()` proves only that the two ports are free.

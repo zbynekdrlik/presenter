@@ -96,6 +96,9 @@ async fn mount_unrelated_server(server: &MockServer) {
         .await;
 }
 
+/// No other test binds here: every mock server sits on 127.0.0.1.
+const ISOLATED_LOOPBACK: &str = "127.0.0.2";
+
 fn host_config(port: u16) -> ResolumeHost {
     let now = Utc::now();
     ResolumeHost::new(
@@ -262,12 +265,18 @@ async fn probe_never_adopts_a_non_resolume_server_on_a_nearby_port() {
     // Nothing listens on the configured port (guaranteed refused). A
     // DIFFERENT, non-Resolume HTTP server happens to be up on the next port —
     // the probe must NOT mistake it for a drifted Arena.
-    let listener =
-        StdTcpListener::bind(("127.0.0.1", drifted_port)).expect("bind unrelated server port");
+    //
+    // Its own loopback address: the probe walks +-5 ports, and a parallel
+    // test's mock Arena on an ephemeral 127.0.0.1 port inside that window
+    // would be adopted, correctly, and fail this "nothing to adopt" assertion.
+    let listener = StdTcpListener::bind((ISOLATED_LOOPBACK, drifted_port))
+        .expect("bind unrelated server port");
     let unrelated = MockServer::builder().listener(listener).start().await;
     mount_unrelated_server(&unrelated).await;
 
-    let mut driver = HostDriver::new(Client::new(), host_config(configured_port));
+    let mut host = host_config(configured_port);
+    host.host = ISOLATED_LOOPBACK.to_string();
+    let mut driver = HostDriver::new(Client::new(), host);
     let status = fresh_snapshot();
 
     let err = driver
