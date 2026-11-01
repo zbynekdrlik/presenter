@@ -444,7 +444,6 @@ where
     let end = match answer {
         Ok(detail) => {
             e.apply(detail);
-            e.refused.set_value(None);
             WriteEnd::Landed
         }
         Err(err) if is_conflict(&err) || is_not_found(&err) => {
