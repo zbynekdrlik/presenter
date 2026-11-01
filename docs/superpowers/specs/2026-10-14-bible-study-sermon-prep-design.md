@@ -446,7 +446,7 @@ Every view has its own URL, so the system Back gesture works. `state/study.rs` h
   `<h3 data-role="study-heading">`; italics as `<i>`; notes as a superscript "†" that opens a small popover
   (`study-note`). A partial translation without the chapter shows "Tento preklad obsahuje len evanjeliá".
 - **Chapter change:** horizontal swipe (pointer events; ≥ 60 px horizontally and less than 30° off the
-  horizontal; the text column has `touch-action: pan-y`) or the bottom-bar buttons. It crosses book
+  horizontal; the text column has `touch-action: pan-y pinch-zoom`, the reader stays zoomable) or the bottom-bar buttons. It crosses book
   boundaries and stops at Genesis 1 / Revelation 22. A loaded chapter carries the settle marker
   `data-loaded-for="slk-seb:HEB.11"` (bible-page rule: settle signal, never a timing poll). The last 30
   chapters stay in memory.
@@ -1000,7 +1000,7 @@ outcome.
 | Database growth (~45 MB) and backup growth | `WITHOUT ROWID`; measured on the dev deploy in D2b/D3a/D3b **[unverified]**; votes ≥ 2 filter |
 | Import time after the `PARSER_VERSION` bumps | measured on the dev deploy; the server is stopped during ingest anyway (existing flow) |
 | iOS long press opens the text callout instead of emphasis | `user-select: none`, `-webkit-touch-callout: none`, mode toggle as the always-working path; **[unverified on a real iPhone]** |
-| Swipe fights vertical scrolling | `touch-action: pan-y`, 60 px / 30° threshold, chapter buttons always available |
+| Swipe fights vertical scrolling | `touch-action: pan-y pinch-zoom`, 60 px / 30° threshold, chapter buttons always available |
 | NLT quota (500 requests/day anonymous) under heavy study | LRU cache; the client logs every request; WARN on quota answers; a registered key raises it to 5,000 (env `PRESENTER_NLT_API_KEY`) |
 | Versification differences (KJV-numbered cross-references, Mal 4 vs 3) | same code/chapter/verse + "číslovanie sa môže líšiť" + KJV fallback, the C rule |
 | The Hebrew sheet is shorter than MySword's Strong + BDB | Strong's full entry shown; a clean BDB (Open Scriptures, CC BY, unfinished) can be added later as another `bible_study_sources` row |

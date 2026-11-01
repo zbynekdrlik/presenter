@@ -14,4 +14,5 @@ pub mod stage;
 pub mod stage_events;
 pub mod stream_editor;
 pub mod stream_output;
+pub mod study;
 pub mod tablet;
