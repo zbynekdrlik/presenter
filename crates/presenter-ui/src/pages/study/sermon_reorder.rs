@@ -7,9 +7,8 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
-use super::sermon_editor::{write, Editor};
+use super::sermon_editor::{send_order, Editor, OrderDraft};
 use super::sheet::Sheet;
-use crate::api::sermons;
 use crate::components::nameplates::order::{
     drop_marker, drop_slot, reorder_one_step, reorder_to_slot,
 };
@@ -44,34 +43,23 @@ fn slot_under(ev: &PointerEvent) -> Option<usize> {
     Some(drop_slot(&middles, f64::from(ev.client_y())))
 }
 
-fn held_order(e: Editor) -> Vec<String> {
-    e.detail.with_untracked(|detail| {
-        detail
-            .as_ref()
-            .map(|held| held.items.iter().map(|item| item.id.clone()).collect())
-            .unwrap_or_default()
-    })
+fn ids_now(e: Editor) -> Vec<String> {
+    e.order
+        .with_untracked(|draft| draft.as_ref().map(|held| held.ids.clone()))
+        .unwrap_or_default()
 }
 
-/// The order goes out as the sheet leaves: one write, and none when nothing moved.
-fn send_order(e: Editor, order: Vec<String>) {
-    if order == held_order(e) {
-        return;
-    }
-    write(
-        e,
-        "Poradie sa medzitým zmenilo — skús znova",
-        move |id, revision| async move { sermons::reorder_items(&id, revision, &order).await },
-    );
+/// The rows move: the draft takes the new order.
+fn set_ids(e: Editor, ids: Vec<String>) {
+    e.order.update(|draft| {
+        if let Some(draft) = draft {
+            draft.ids = ids;
+        }
+    });
 }
 
 #[component]
-fn OrderRow(
-    e: Editor,
-    id: String,
-    order: RwSignal<Vec<String>>,
-    drag: RwSignal<Option<(String, usize)>>,
-) -> impl IntoView {
+fn OrderRow(e: Editor, id: String, drag: RwSignal<Option<(String, usize)>>) -> impl IntoView {
     let label = e
         .item(&id)
         .map(|item| {
@@ -85,20 +73,25 @@ fn OrderRow(
         .unwrap_or_default();
     let position = {
         let id = id.clone();
-        Memo::new(move |_| order.with(|ids| ids.iter().position(|held| *held == id)))
+        Memo::new(move |_| {
+            e.order
+                .with(|draft| draft.as_ref()?.ids.iter().position(|held| *held == id))
+        })
     };
-    let count = Memo::new(move |_| order.with(Vec::len));
+    let count = Memo::new(move |_| {
+        e.order
+            .with(|draft| draft.as_ref().map_or(0, |held| held.ids.len()))
+    });
     let marker = move || {
         let (dragged, slot) = drag.get()?;
-        let from = order.with(|ids| ids.iter().position(|held| *held == dragged))?;
+        let from = ids_now(e).iter().position(|held| *held == dragged)?;
         drop_marker(from, slot, position.get()?, count.get())
     };
     let step = {
         let id = id.clone();
         move |up: bool| {
-            let moved = order.with_untracked(|ids| reorder_one_step(ids, &id, up));
-            if let Some(moved) = moved {
-                order.set(moved);
+            if let Some(moved) = reorder_one_step(&ids_now(e), &id, up) {
+                set_ids(e, moved);
             }
         }
     };
@@ -135,9 +128,8 @@ fn OrderRow(
             return;
         };
         drag.set(None);
-        let moved = order.with_untracked(|ids| reorder_to_slot(ids, &id, slot));
-        if let Some(moved) = moved {
-            order.set(moved);
+        if let Some(moved) = reorder_to_slot(&ids_now(e), &id, slot) {
+            set_ids(e, moved);
         }
     };
     view! {
@@ -160,6 +152,7 @@ fn OrderRow(
                 on:pointermove=on_move
                 on:pointerup=on_up
                 on:pointercancel=move |_| drag.set(None)
+                on:lostpointercapture=move |_| drag.set(None)
             >
                 "\u{2261}"
             </button>
@@ -190,14 +183,32 @@ fn OrderRow(
 
 #[component]
 pub(super) fn ReorderSheet(e: Editor) -> impl IntoView {
-    let order = RwSignal::new(held_order(e));
     let drag = RwSignal::new(None);
-    Owner::on_cleanup(move || send_order(e, order.get_untracked()));
+    // A sheet opened from its URL is here before the sermon; a failed order
+    // waits here to be moved on.
+    Effect::new(move |_| {
+        if e.order.with_untracked(Option::is_none) && e.detail.with(Option::is_some) {
+            let base = e.held_order();
+            e.order.set(Some(OrderDraft {
+                ids: base.clone(),
+                base,
+            }));
+        }
+    });
+    Owner::on_cleanup(move || send_order(e));
+    let shown = move || {
+        e.order
+            .with(|draft| draft.as_ref().map(|held| held.ids.clone()))
+            .unwrap_or_default()
+    };
+    let empty = move || {
+        e.order
+            .with(|draft| draft.as_ref().is_some_and(|held| held.ids.is_empty()))
+    };
     view! {
         <Sheet s=e.s role="sermon-reorder" modal=true title=Signal::derive(|| "Poradie".to_string())>
             {move || {
-                order
-                    .with(Vec::is_empty)
+                empty()
                     .then(|| {
                         view! {
                             <p class="study-empty" data-role="sermon-order-empty">
@@ -208,9 +219,9 @@ pub(super) fn ReorderSheet(e: Editor) -> impl IntoView {
             }}
             <div class="sermon-order" data-role="sermon-order">
                 <For
-                    each=move || order.get()
+                    each=shown
                     key=|id: &String| id.clone()
-                    children=move |id| view! { <OrderRow e=e id=id order=order drag=drag /> }
+                    children=move |id| view! { <OrderRow e=e id=id drag=drag /> }
                 />
             </div>
         </Sheet>

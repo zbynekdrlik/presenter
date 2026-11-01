@@ -22,6 +22,7 @@ mod sermon_item;
 mod sermon_live;
 mod sermon_preview;
 mod sermon_reorder;
+mod sermon_undo;
 mod sermons;
 mod sheet;
 mod text_size;
@@ -158,9 +159,9 @@ struct Study {
     /// the view, so leaving a sermon never drops an edit.
     editors: StoredValue<HashMap<String, Editor>, LocalStorage>,
     owner: StoredValue<Owner, LocalStorage>,
-    /// The live socket is up: it opens with the first sermon, so plain reading
-    /// keeps no socket awake on the phone.
-    live: StoredValue<bool>,
+    /// The live socket's connects so far; `None` until the first sermon opens
+    /// it, so reading alone keeps no socket awake on the phone.
+    live: RwSignal<Option<u32>>,
     /// Bumped by a retry button: asks again for the same chapter or search.
     retry: RwSignal<u32>,
     cache: StoredValue<ChapterCache>,
@@ -257,14 +258,14 @@ fn run_undo(s: Study) {
     end_undo_toast(s);
     match undo {
         Undo::Added { sermon, item } => {
-            sermon_editor::undo_added(s, sermon, item);
+            sermon_undo::undo_added(s, sermon, item);
         }
         Undo::Removed {
             sermon,
             item,
             position,
             edits,
-        } => sermon_editor::undo_removed(s, sermon, *item, position, edits),
+        } => sermon_undo::undo_removed(s, sermon, *item, position, edits),
     }
 }
 
@@ -510,7 +511,7 @@ pub fn StudyPage() -> impl IntoView {
         adding: StoredValue::new(None),
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
-        live: StoredValue::new(false),
+        live: RwSignal::new(None),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
         scroll_plan: StoredValue::new(saved_verse.map_or(ScrollPlan::Keep, ScrollPlan::Verse)),

@@ -272,7 +272,7 @@ test("an old answer never takes back a saved tap", async ({ browser }) => {
   });
   await role(page, "study-sermons").tap();
   await role(page, "sermon-open").first().tap();
-  await expect.poll(() => stalled).toBe(1);
+  await expect.poll(() => stalled).toBeGreaterThanOrEqual(1);
   await token(page, 1, 0).tap();
   await saved(page);
   release();

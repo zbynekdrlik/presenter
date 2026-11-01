@@ -6,7 +6,7 @@ use leptos::prelude::*;
 use super::add_to_sermon::{begin_add, set_active};
 use super::nav;
 use super::scroll::ScrollPlan;
-use super::sermon_editor::{run_write, Editor};
+use super::sermon_editor::{run_write, Editor, WriteEnd};
 use crate::api::sermons::{self, SermonPassage};
 use crate::state::study::{suggest, StudyRoute};
 
@@ -53,7 +53,7 @@ fn add_from_field(e: Editor, text: RwSignal<String>) {
             return;
         }
         leptos::task::spawn_local(async move {
-            let landed = run_write(
+            let end = run_write(
                 e,
                 "Kázeň sa medzitým zmenila — skús znova",
                 move |id, revision| async move {
@@ -62,7 +62,7 @@ fn add_from_field(e: Editor, text: RwSignal<String>) {
             )
             .await;
             e.s.adding.set_value(None);
-            if landed {
+            if end == WriteEnd::Landed {
                 text.update(|shown| {
                     if *shown == input {
                         shown.clear();

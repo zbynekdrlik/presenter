@@ -9,6 +9,7 @@ use super::sheet::Sheet;
 use crate::api::bible as bible_api;
 use crate::api::sermons::{self, SermonSlide};
 use crate::state::bible::slide_char_count;
+use crate::state::sermon_edit::SaveState;
 
 const SECONDARY_MISSING: &str = "Druhý preklad sa nepodarilo načítať — slajdy ho zatiaľ nemajú";
 
@@ -68,16 +69,14 @@ pub(super) fn PreviewSheet(e: Editor) -> impl IntoView {
                 .unwrap_or_default()
         })
     };
-    let warning = move || {
-        e.detail.with(|detail| {
-            let held = detail.as_ref().filter(|held| held.secondary_missing)?;
-            Some(
-                held.warnings
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| SECONDARY_MISSING.to_string()),
-            )
-        })
+    let missing = move || {
+        e.detail
+            .with(|detail| detail.as_ref().is_some_and(|held| held.secondary_missing))
+    };
+    let unsaved = move || match e.save.get() {
+        SaveState::Saved => None,
+        SaveState::Saving => Some("Posledná úprava sa ešte ukladá — slajdy ju zatiaľ nemajú"),
+        SaveState::Error => Some("Posledná úprava sa neuložila — slajdy ju nemajú"),
     };
     let regenerate = move |_| {
         write(
@@ -89,11 +88,21 @@ pub(super) fn PreviewSheet(e: Editor) -> impl IntoView {
     view! {
         <Sheet s=e.s role="sermon-preview" title=Signal::derive(|| "Náhľad".to_string())>
             {move || {
-                warning()
+                unsaved()
                     .map(|message| {
                         view! {
-                            <div class="sermon-preview__warning" data-role="sermon-preview-warning">
+                            <div class="sermon-preview__warning" data-role="sermon-preview-unsaved">
                                 <p>{message}</p>
+                            </div>
+                        }
+                    })
+            }}
+            {move || {
+                missing()
+                    .then(|| {
+                        view! {
+                            <div class="sermon-preview__warning" data-role="sermon-preview-warning">
+                                <p>{SECONDARY_MISSING}</p>
                                 <button
                                     type="button"
                                     class="study-button"

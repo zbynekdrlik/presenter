@@ -102,6 +102,28 @@ async function drag(page: Page, from: number, y: (rows: { top: number; bottom: n
   await page.mouse.up();
 }
 
+/// The POSTs from here on: a reorder is the only one these tests can cause.
+const postsOf = (page: Page) => {
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts.push(new URL(request.url()).pathname);
+  });
+  return posts;
+};
+
+/// A write that must NOT happen has no settle marker: only the wait can show it.
+const nothingFollows = (page: Page) => page.waitForTimeout(800);
+
+async function reorderElsewhere(id: string, itemIds: string[]) {
+  const { revision } = await sermonOf(id);
+  const response = await fetch(`${baseURL}/bible/sermons/${id}/items/reorder`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: revision, itemIds }),
+  });
+  expect(response.status).toBe(200);
+}
+
 const closeSheet = (page: Page) =>
   role(page, "sermon-reorder").locator('[data-role="study-sheet-close"]').click();
 
@@ -117,10 +139,11 @@ test("an empty sermon has no handles and leaving sends nothing", async () => {
   const { page } = opened;
   await expect(role(page, "sermon-order-empty")).toHaveText("Zatiaľ žiadne položky");
   await expect(role(page, "sermon-drag-handle")).toHaveCount(0);
-  const before = (await sermonOf(id)).revision;
+  const posts = postsOf(page);
   await closeSheet(page);
   await expect(role(page, "sermon-reorder")).toHaveCount(0);
-  expect((await sermonOf(id)).revision).toBe(before);
+  await nothingFollows(page);
+  expect(posts).toEqual([]);
   await finish(opened);
 });
 
@@ -160,24 +183,111 @@ test("a drag into the middle lands there, and a finger does the same", async () 
   await finish(opened);
 });
 
-test("a drop on its own place sends nothing; ▲ ▼ move a step and Back sends the order", async () => {
+test("a drop on its own place sends nothing", async () => {
+  const id = await seeded("Na mieste");
+  const opened = await openReorder(id);
+  const { page } = opened;
+  const posts = postsOf(page);
+  await drag(page, 1, (rows) => rows[1].top + 4);
+  await closeSheet(page);
+  await nothingFollows(page);
+  expect(posts).toEqual([]);
+  await finish(opened);
+});
+
+test("an order changed elsewhere is not undone by an open sheet", async () => {
+  const id = await seeded("Dve poradia");
+  const opened = await openReorder(id);
+  const { page } = opened;
+  await expect(role(page, "sermon-editor")).toHaveAttribute("data-live", "true");
+  const posts = postsOf(page);
+  const items = (await sermonOf(id)).items.map((item) => item.id);
+  const moved = [items[1], items[0], items[2], items[3]];
+  await reorderElsewhere(id, moved);
+  await expect(role(page, "sermon-item").first()).toHaveAttribute("data-label", "Hebrejom 11:2 (SEB)");
+
+  // Nothing touched here: the sheet just closes.
+  await closeSheet(page);
+  await nothingFollows(page);
+  expect(posts).toEqual([]);
+  await expect.poll(() => versesOf(id)).toEqual([2, 1, 3, 4]);
+
+  // Moved here on the old order: named, never sent.
+  await role(page, "sermon-reorder-open").click();
+  const third = role(page, "sermon-order-row").nth(2);
+  await third.locator('[data-role="sermon-order-up"]').click();
+  await reorderElsewhere(id, items);
+  await expect(role(page, "sermon-item").first()).toHaveAttribute("data-label", "Hebrejom 11:1 (SEB)");
+  await closeSheet(page);
+  await expect(role(page, "study-notice")).toContainText("Poradie sa medzitým zmenilo");
+  await nothingFollows(page);
+  expect(posts).toEqual([]);
+  expect(await versesOf(id)).toEqual([1, 2, 3, 4]);
+  await finish(opened);
+});
+
+test("an order that failed to go out waits for its retry, and HOTOVO says so", async () => {
+  const id = await seeded("Výpadok poradia");
+  const opened = await openReorder(id);
+  const { page } = opened;
+  await role(page, "sermon-order-row").nth(1).locator('[data-role="sermon-order-up"]').click();
+  const reorder = /\/items\/reorder$/;
+  await page.route(reorder, (route) => route.abort());
+  await closeSheet(page);
+  await expect(role(page, "sermon-order-retry")).toBeVisible();
+
+  await role(page, "sermon-done").click();
+  await expect(role(page, "study-notice")).toContainText("Poradie sa neuložilo");
+  await expect(role(page, "sermon-editor")).toBeVisible();
+
+  await page.unroute(reorder);
+  await role(page, "sermon-order-retry").click();
+  await expect.poll(() => versesOf(id)).toEqual([2, 1, 3, 4]);
+  await expect(role(page, "sermon-order-retry")).toHaveCount(0);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("ERR_FAILED")));
+  await finish(opened);
+});
+
+test("Poradie opened from its URL lists the sermon", async ({ browser }) => {
+  const id = await seeded("Z odkazu");
+  const opened = await openStudy(browser, baseURL, PHONE_390, `/ui/study?view=sermon&id=${id}&s=poradie`, null);
+  const { page } = opened;
+  await expect(role(page, "sermon-order-row")).toHaveCount(4);
+  const posts = postsOf(page);
+  await closeSheet(page);
+  await nothingFollows(page);
+  expect(posts).toEqual([]);
+  await finish(opened);
+});
+
+test("a sermon deleted elsewhere offers no HOTOVO", async ({ browser }) => {
+  const id = await newSermon("Zmazaná");
+  await addVerse(id, 1);
+  const opened = await openStudy(browser, baseURL, PHONE_390, `/ui/study?view=sermon&id=${id}`, null);
+  const { page } = opened;
+  await expect(role(page, "sermon-done")).toBeVisible();
+  await expect(role(page, "sermon-editor")).toHaveAttribute("data-live", "true");
+  expect((await fetch(`${baseURL}/bible/sermons/${id}`, { method: "DELETE" })).status).toBe(204);
+  await expect(role(page, "sermon-missing")).toBeVisible();
+  await expect(role(page, "sermon-done")).toHaveCount(0);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("404")));
+  await finish(opened);
+});
+
+test("▲ ▼ move a step and Back sends the order", async () => {
   const id = await seeded("Šípky");
   const opened = await openReorder(id);
   const { page } = opened;
-  await drag(page, 1, (rows) => rows[1].top + 4);
   await expect(role(page, "sermon-order-row").first().locator('[data-role="sermon-order-up"]')).toBeDisabled();
   await expect(role(page, "sermon-order-row").last().locator('[data-role="sermon-order-down"]')).toBeDisabled();
 
-  const posts: string[] = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST") posts.push(request.url());
-  });
+  const posts = postsOf(page);
   await role(page, "sermon-order-row").nth(1).locator('[data-role="sermon-order-up"]').click();
   await role(page, "sermon-order-row").nth(1).locator('[data-role="sermon-order-down"]').click();
   await page.goBack();
   await expect(role(page, "sermon-reorder")).toHaveCount(0);
   await expect.poll(() => versesOf(id)).toEqual([2, 3, 1, 4]);
-  expect(posts.filter((url) => url.endsWith("/items/reorder"))).toHaveLength(1);
+  expect(posts).toHaveLength(1);
   await finish(opened);
 });
 
@@ -213,6 +323,7 @@ test("Náhľad shows the stored slide with its count; a missing secondary line c
   await page.locator('[data-role="sermon-token"][data-verse="1"][data-index="0"]').tap();
   await expect(role(page, "sermon-save")).toHaveAttribute("data-save-state", "saved");
   await role(page, "sermon-preview-open").tap();
+  await expect(role(page, "sermon-preview-unsaved")).toHaveCount(0);
 
   const stored = await sermonOf(id);
   const slide = role(page, "sermon-slide");
@@ -232,6 +343,16 @@ test("Náhľad shows the stored slide with its count; a missing secondary line c
 
   await page.goBack();
   await expect(role(page, "sermon-preview")).toHaveCount(0);
+
+  // A tap whose save fails: the sheet says these slides lack it.
+  const edits = /\/edits$/;
+  await page.route(edits, (route) => route.abort());
+  await page.locator('[data-role="sermon-token"][data-verse="1"][data-index="1"]').tap();
+  await expect(role(page, "sermon-save")).toHaveAttribute("data-save-state", "error");
+  await role(page, "sermon-preview-open").tap();
+  await expect(role(page, "sermon-preview-unsaved")).toContainText("neuložila");
+  await page.unroute(edits);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("ERR_FAILED")));
   await finish(opened);
 });
 
@@ -255,8 +376,8 @@ test("another device's write appears in an open editor by itself", async ({ brow
   const { page } = opened;
   await expect(role(page, "sermon-item")).toHaveCount(1);
   await expect(role(page, "sermon-counts")).toContainText("1 položka");
-  // The socket opens with the sermon: wait for it, the hub never replays.
-  await page.waitForTimeout(2_000);
+  // The hub never replays: the write comes once the socket has delivered a frame.
+  await expect(role(page, "sermon-editor")).toHaveAttribute("data-live", "true");
   await addVerse(id, 2);
   await expect(role(page, "sermon-item")).toHaveCount(2);
   await finish(opened);
@@ -268,11 +389,24 @@ test("the last tap goes out with a closing tab", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, `/ui/study?view=sermon&id=${id}`, null);
   const { page } = opened;
   await expect(role(page, "sermon-item")).toBeVisible();
+  // A plain fetch dies with the tab: this one must ask to outlive it.
+  await page.evaluate(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if ((input as Request).method === "PUT") {
+        (window as unknown as { keepalive?: boolean }).keepalive = (input as Request).keepalive;
+      }
+      return original(input, init);
+    };
+  });
+  await page.locator('[data-role="sermon-token"][data-index="1"]').first().tap();
+  await expect(role(page, "sermon-save")).toHaveAttribute("data-save-state", "saved");
+  expect(await page.evaluate(() => (window as unknown as { keepalive?: boolean }).keepalive)).toBe(true);
   await page.evaluate(() => {
     (document.querySelector('[data-role="sermon-token"]') as HTMLElement).click();
   });
   await page.close();
-  await expect.poll(async () => (await sermonOf(id)).items[0].edits["1"]?.deleted).toEqual([0]);
+  await expect.poll(async () => (await sermonOf(id)).items[0].edits["1"]?.deleted).toEqual([0, 1]);
   expect(opened.errors).toEqual([]);
   await opened.context.close();
 });

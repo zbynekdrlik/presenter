@@ -60,7 +60,6 @@ pub struct SermonDetail {
     pub revision: i64,
     pub items: Vec<SermonItem>,
     pub slides: Vec<SermonSlide>,
-    pub warnings: Vec<String>,
     pub secondary_missing: bool,
 }
 
@@ -194,14 +193,16 @@ pub async fn reorder_items(
     revision: i64,
     item_ids: &[String],
 ) -> Result<SermonDetail, ApiError> {
-    post_json_refusal(
+    let started = start_keepalive(
+        "POST",
         &format!("/bible/sermons/{id}/items/reorder"),
         &ItemOrder {
             expected_revision: revision,
             item_ids,
         },
-    )
-    .await
+        SAVE_TIMEOUT_MS,
+    );
+    finish_json(started).await
 }
 
 pub async fn regenerate(id: &str, revision: i64) -> Result<SermonDetail, ApiError> {
@@ -214,8 +215,9 @@ pub async fn regenerate(id: &str, revision: i64) -> Result<SermonDetail, ApiErro
     .await
 }
 
-/// A `keepalive` fetch started before this returns: the browser cancels a plain
-/// one when the tab closes, and the last taps go out exactly then.
+/// A `keepalive` fetch: the browser cancels a plain one when the tab closes, and
+/// the last taps go out exactly then. The caller's task must run in the same
+/// turn as the page's last event, which `spawn_local` does.
 pub async fn put_edits(
     id: &str,
     item_id: &str,
@@ -289,6 +291,11 @@ pub async fn identity() -> Result<Option<String>, ApiError> {
 /// Did the write lose to another device?
 pub fn is_conflict(err: &ApiError) -> bool {
     matches!(err, ApiError::Refused(409, _) | ApiError::Status(409, _))
+}
+
+/// The server read this edit and will never take it: no retry can store it.
+pub fn is_refused_edit(err: &ApiError) -> bool {
+    matches!(err, ApiError::Refused(422, _) | ApiError::Status(422, _))
 }
 
 pub fn is_not_found(err: &ApiError) -> bool {
