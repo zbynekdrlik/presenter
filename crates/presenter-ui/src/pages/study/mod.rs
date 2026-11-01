@@ -13,6 +13,7 @@ mod history;
 mod long_press;
 mod nav;
 mod reader;
+mod results;
 mod scroll;
 mod sheet;
 mod text_size;
@@ -41,6 +42,7 @@ use field::StudyField;
 use header::StudyHeader;
 use history::HistorySheet;
 use reader::{ChapterBar, Reader};
+use results::SearchResults;
 use scroll::ScrollPlan;
 use text_size::TextSizeSheet;
 use verse_actions::VerseActionsSheet;
@@ -463,7 +465,7 @@ pub fn StudyPage() -> impl IntoView {
                         }
                     })
             }}
-            <Show when=move || reading.get()>
+            <Show when=move || reading.get() fallback=move || view! { <SearchResults s=s /> }>
                 <Reader s=s />
                 <ChapterBar s=s />
             </Show>
