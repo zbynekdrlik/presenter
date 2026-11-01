@@ -478,6 +478,9 @@ pub mod bible_slide {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+mod sermon;
+pub use sermon::{bible_sermon, bible_sermon_item};
+
 pub use app_settings::Entity as AppSettingsEntity;
 pub use bible_passage::Entity as BiblePassageEntity;
 pub use bible_presentation::Entity as BiblePresentationEntity;

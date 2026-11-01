@@ -1,6 +1,7 @@
 //! Bible search, broadcast, and ingestion methods for [`AppState`].
 
 use super::bible_show_log::{log_bible_show, BibleShowOrigin};
+use super::sermons::SermonOrigin;
 use super::AppState;
 use crate::bible_remote::RemoteBibleError;
 use crate::live::LiveEvent;
@@ -208,7 +209,7 @@ impl AppState {
     /// answering unusably, #826) gives no verses plus a warning for the
     /// operator, so the main text still loads during a service; any other
     /// error still fails the load.
-    async fn secondary_verse_lookup(
+    pub(super) async fn secondary_verse_lookup(
         &self,
         translation: &BibleTranslation,
         book: &str,
@@ -285,6 +286,9 @@ impl AppState {
     }
 
     pub async fn delete_bible_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {
+        if self.repository.is_sermon(id).await? {
+            return self.delete_sermon(id, &SermonOrigin::system()).await;
+        }
         self.repository.delete_bible_presentation(id).await?;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: id.to_string(),
@@ -297,6 +301,8 @@ impl AppState {
         id: BiblePresentationId,
         new_slides: Vec<BiblePresentationSlide>,
     ) -> anyhow::Result<BiblePresentation> {
+        // #851 §8.2: a sermon's slides are generated from its items.
+        self.refuse_if_sermon(id).await?;
         // Note: empty slides are permitted — the operator UI's "add empty
         // slide" button intentionally creates placeholder slides that the
         // operator fills in by editing text in place.
@@ -318,6 +324,7 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_id: BibleSlideId,
     ) -> anyhow::Result<BiblePresentation> {
+        self.refuse_if_sermon(presentation_id).await?;
         let mut presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -354,6 +361,7 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_ids: Vec<BibleSlideId>,
     ) -> anyhow::Result<BiblePresentation> {
+        self.refuse_if_sermon(presentation_id).await?;
         let presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -410,6 +418,7 @@ impl AppState {
         secondary_reference: String,
         metadata: Option<BibleSlideMetadata>,
     ) -> anyhow::Result<BiblePresentationSlide> {
+        self.refuse_if_sermon(presentation_id).await?;
         let mut presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -463,11 +472,22 @@ impl AppState {
 
     pub async fn set_bible_preferences(&self, prefs: BiblePreferences) -> anyhow::Result<()> {
         let key = "bible-preferences";
+        // #851 P3: a new character limit regenerates the sermons from today on;
+        // an unreadable stored row counts as a change.
+        let previous_limit = self
+            .get_bible_preferences()
+            .await
+            .ok()
+            .map(|preferences| preferences.character_limit);
         let json = serde_json::to_string(&prefs)?;
         self.repository.set_app_setting(key, &json).await?;
         self.live_hub.publish(LiveEvent::BiblePreferencesChanged {
             character_limit: prefs.character_limit,
         });
+        if previous_limit != Some(prefs.character_limit) {
+            self.regenerate_future_sermons(super::sermons::local_today())
+                .await;
+        }
         Ok(())
     }
 

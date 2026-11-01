@@ -409,3 +409,21 @@ fn a_sentence_end_before_a_closing_quote_or_bracket_gets_no_ellipsis() {
     );
     assert_eq!(more.suffix, "1-4");
 }
+
+#[test]
+fn a_verse_with_only_one_kind_of_edit_is_kept() {
+    let heb = source(&[(1, HEB_11_1), (2, "Pre ňu dostali starší svedectvo.")]);
+
+    let normalized = normalize_edits(&heb, &edits(&[(1, &[0], &[]), (2, &[], &[1])]));
+
+    assert_eq!(normalized, Ok(edits(&[(1, &[0], &[]), (2, &[], &[1])])));
+}
+
+#[test]
+fn an_item_with_a_kept_token_is_not_empty() {
+    let heb = source(&[(1, HEB_11_1)]);
+
+    let item = render_item(&heb, &ItemEdits::default());
+
+    assert!(!item.is_empty());
+}

@@ -9,4 +9,5 @@ pub(super) mod broadcast;
 pub(super) mod browse;
 pub(super) mod presentations;
 pub(super) mod resolve;
+pub(super) mod sermons;
 pub(super) mod translations;

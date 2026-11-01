@@ -1,3 +1,4 @@
+mod access_identity;
 mod ai;
 mod ai_env;
 mod ai_health;
@@ -448,7 +449,10 @@ pub fn build_router(state: AppState) -> Router {
         // files. Static `/stream/api/playback*` + `/stream/playback/*`
         // prefixes; "playback" is a reserved slug, so `/stream/{slug}` never
         // collides.
-        .merge(stream_playback::routes());
+        .merge(stream_playback::routes())
+        // #851: sermons + the Access identity (`/bible/sermons*`,
+        // `/bible/study/identity`); static `/today` wins over `/{id}`.
+        .merge(bible::sermons::routes());
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
     request_log::with_request_log(router).with_state(state)
 }

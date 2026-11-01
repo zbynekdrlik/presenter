@@ -6,6 +6,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use chrono::NaiveDate;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{
     BiblePresentation, BiblePresentationId, BiblePresentationSlide, BibleSlideId, SlideText,
@@ -24,6 +25,9 @@ pub(crate) struct BiblePresentationSummaryDto {
     id: String,
     name: String,
     slide_count: usize,
+    /// The service date when the presentation is a sermon (#851 §7.1, §8.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sermon_date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +36,9 @@ pub(crate) struct BiblePresentationDetailDto {
     id: String,
     name: String,
     slides: Vec<BibleSlideDto>,
+    /// The service date when the presentation is a sermon (#851 §7.1, §8.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sermon_date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +101,7 @@ fn bible_presentation_to_detail(presentation: &BiblePresentation) -> BiblePresen
         id: presentation.id.to_string(),
         name: presentation.name.clone(),
         slides: presentation.slides.iter().map(bible_slide_to_dto).collect(),
+        sermon_date: presentation.sermon_date,
     }
 }
 
@@ -108,6 +116,7 @@ pub(crate) async fn list_bible_presentations(
             id: s.id.to_string(),
             name: s.name,
             slide_count: s.slide_count,
+            sermon_date: s.sermon_date,
         })
         .collect();
     Ok(Json(result))

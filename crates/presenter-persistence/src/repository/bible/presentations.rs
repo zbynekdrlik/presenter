@@ -8,7 +8,7 @@ use sea_orm::{
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::entities::{bible_presentation, bible_slide};
+use crate::entities::{bible_presentation, bible_sermon, bible_slide};
 use presenter_core::{
     search::fold_query, slide::BibleSlideMetadata, BiblePresentation, BiblePresentationId,
     BiblePresentationSlide, BiblePresentationSummary, BibleSlideId, SlideText,
@@ -48,6 +48,7 @@ impl Repository {
             .into_iter()
             .map(|r| (r.presentation_id, r.slide_count as usize))
             .collect();
+        let sermon_dates = self.sermon_dates().await?;
 
         let mut summaries = Vec::with_capacity(presentations.len());
         for model in presentations {
@@ -58,6 +59,7 @@ impl Repository {
                 id: BiblePresentationId::from_uuid(uuid),
                 name: model.name,
                 slide_count,
+                sermon_date: sermon_dates.get(&model.id).copied(),
             });
         }
         Ok(summaries)
@@ -75,6 +77,7 @@ impl Repository {
         else {
             return Ok(None);
         };
+        let sermon_date = self.sermon_date_of(&id_str).await?;
 
         let slide_models = bible_slide::Entity::find()
             .filter(bible_slide::Column::PresentationId.eq(id_str))
@@ -92,6 +95,7 @@ impl Repository {
             name: model.name,
             slides,
             created_at: model.created_at.into(),
+            sermon_date,
         }))
     }
 
@@ -117,6 +121,7 @@ impl Repository {
             name: trimmed.to_string(),
             slides: Vec::new(),
             created_at: now,
+            sermon_date: None,
         })
     }
 
@@ -130,14 +135,26 @@ impl Repository {
         if trimmed.is_empty() {
             return Err(anyhow!("bible presentation name cannot be empty"));
         }
+        let txn = self.db.begin().await?;
         let result = bible_presentation::Entity::update_many()
             .col_expr(bible_presentation::Column::Name, SeaExpr::value(trimmed))
             .filter(bible_presentation::Column::Id.eq(id.to_string()))
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(RepositoryError::NotFound("bible presentation not found").into());
         }
+        // A sermon's title is its presentation's name: a write loaded before
+        // this rename must get its 409, not restore the old title.
+        bible_sermon::Entity::update_many()
+            .col_expr(
+                bible_sermon::Column::Revision,
+                SeaExpr::col(bible_sermon::Column::Revision).add(1),
+            )
+            .filter(bible_sermon::Column::PresentationId.eq(id.to_string()))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -255,7 +272,7 @@ fn model_to_bible_slide(model: bible_slide::Model) -> anyhow::Result<BiblePresen
     })
 }
 
-fn bible_slide_to_active_model(
+pub(super) fn bible_slide_to_active_model(
     slide: &BiblePresentationSlide,
     presentation_id: &str,
 ) -> anyhow::Result<bible_slide::ActiveModel> {

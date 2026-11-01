@@ -1,0 +1,106 @@
+//! Sermon preparation on the server (#851 spec §7). A write loads the sermon,
+//! computes the new item list in memory, generates the slides from the items
+//! (`generate.rs`) and commits items + slides in ONE repository transaction
+//! guarded by the expected revision (`commit.rs`): a stale write is
+//! `RepositoryError::Conflict` → 409 and is never half-applied. Then
+//! `LiveEvent::BibleSlidesChanged` is published and one INFO
+//! `presenter::bible::sermon` line is logged. Item text is a snapshot, so a
+//! Bible re-import never changes a sermon (spec §5.7).
+
+mod commit;
+mod generate;
+mod guard;
+mod maintain;
+mod snapshot;
+mod view;
+mod write;
+
+pub(crate) use maintain::SermonPatch;
+pub(crate) use snapshot::ItemRange;
+pub(crate) use view::{SermonDetail, SermonItemView, SermonList, SermonSlideView};
+pub(crate) use write::SermonDraft;
+
+use chrono::NaiveDate;
+
+/// Who wrote (spec §13): the Cloudflare Access e-mail when the request carried
+/// one, and the client IP by the #793 rule. Both are labels, never
+/// permissions (spec §9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SermonOrigin {
+    pub(crate) author: Option<String>,
+    pub(crate) client_ip: String,
+}
+
+const SYSTEM_CLIENT: &str = "system";
+
+impl SermonOrigin {
+    /// A write the server makes on its own (the character-limit pass).
+    pub(crate) fn system() -> Self {
+        Self {
+            author: None,
+            client_ip: SYSTEM_CLIENT.to_string(),
+        }
+    }
+
+    pub(crate) fn is_system(&self) -> bool {
+        self.client_ip == SYSTEM_CLIENT
+    }
+}
+
+/// The `op` field of the `presenter::bible::sermon` line (spec §13). A unit
+/// adds its variant together with the write that constructs it (`dead_code`
+/// under `-D warnings` otherwise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SermonOp {
+    Create,
+    Add,
+    Edit,
+    Translation,
+    Refresh,
+    DeleteItem,
+    Reorder,
+    Update,
+    Delete,
+    Regenerate,
+}
+
+impl SermonOp {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Add => "add",
+            Self::Edit => "edit",
+            Self::Translation => "translation",
+            Self::Refresh => "refresh",
+            Self::DeleteItem => "delete_item",
+            Self::Reorder => "reorder",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::Regenerate => "regenerate",
+        }
+    }
+}
+
+/// A sermon request the server refuses with 422 and this Slovak message (an
+/// invalid range, the NLT as an item translation, a bad token index …). Decided
+/// in the state layer, so it is its own type (repository-error-pattern rule:
+/// never forced through `RepositoryError`); `router/bible/sermons.rs` maps it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct SermonRefusal(pub(crate) String);
+
+impl SermonRefusal {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+/// The server-local date: "today" for `/bible/sermons/today`, the default
+/// service date and the character-limit pass. The only clock read of the
+/// sermon code; everything below it takes the date as a parameter.
+pub(crate) fn local_today() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+#[cfg(test)]
+mod tests;
