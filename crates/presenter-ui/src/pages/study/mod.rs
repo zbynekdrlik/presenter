@@ -140,6 +140,8 @@ struct Study {
     history: RwSignal<StudyHistory>,
     notice: RwSignal<Option<String>>,
     undo: RwSignal<Option<Undo>>,
+    /// A message waiting for the toast with Späť to end.
+    later: StoredValue<Option<String>>,
     /// The sermon "Pridať do kázne" goes to (`study.activeSermon`).
     active_sermon: RwSignal<Option<String>>,
     /// The passage the add sheet is asking about.
@@ -204,9 +206,13 @@ impl Study {
         })
     }
 
-    /// A Späť on screen stays: a save's message must not take it away.
+    /// A Späť on screen stays with its own sentence; this message follows it.
     fn tell(self, message: String) {
-        self.notice.set(Some(message));
+        if self.undo.with_untracked(Option::is_some) {
+            self.later.set_value(Some(message));
+        } else {
+            self.notice.set(Some(message));
+        }
     }
 
     /// A toast with Späť.
@@ -229,14 +235,21 @@ fn snapshot_translation(code: &str) -> Option<&str> {
     (code != REMOTE_TRANSLATION).then_some(code)
 }
 
+fn end_undo_toast(s: Study) {
+    s.undo.set(None);
+    s.notice
+        .set(s.later.try_update_value(Option::take).flatten());
+}
+
 fn run_undo(s: Study) {
     let Some(undo) = s.undo.get_untracked() else {
         return;
     };
-    s.undo.set(None);
-    s.notice.set(None);
+    end_undo_toast(s);
     match undo {
-        Undo::Added { sermon, item } => add_to_sermon::undo_added(s, sermon, item),
+        Undo::Added { sermon, item } => {
+            sermon_editor::undo_added(s, sermon, item);
+        }
         Undo::Removed {
             sermon,
             item,
@@ -482,6 +495,7 @@ pub fn StudyPage() -> impl IntoView {
         history: RwSignal::new(StudyHistory::parse(session::get(KEY_HISTORY).as_deref())),
         notice: RwSignal::new(None),
         undo: RwSignal::new(None),
+        later: StoredValue::new(None),
         active_sermon: RwSignal::new(session::get_persistent(KEY_ACTIVE_SERMON)),
         pending_passage: RwSignal::new(None),
         adding: StoredValue::new(None),
@@ -545,12 +559,9 @@ pub fn StudyPage() -> impl IntoView {
         } else {
             NOTICE_MS
         };
-        s.notice.with(Option::is_some).then(|| {
-            Timeout::new(stay, move || {
-                s.notice.set(None);
-                s.undo.set(None);
-            })
-        })
+        s.notice
+            .with(Option::is_some)
+            .then(|| Timeout::new(stay, move || end_undo_toast(s)))
     });
 
     let open_sheet = Memo::new(move |_| s.route.with(|route| route.sheet));

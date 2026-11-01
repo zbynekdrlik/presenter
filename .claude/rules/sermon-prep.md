@@ -194,7 +194,7 @@ paths:
   saved edit). A 404 on a save leaves the queue and reloads; only a sermon 404 is `Missing`.
 - Späť after a delete re-adds through the server, which snapshots TODAY's text: `retain_unchanged` keeps
   only the edits of verses still reading the same, restored as a normal edit (it retries like one). A
-  failed Späť keeps Späť on screen; `tell` never removes it.
+  failed Späť keeps Späť on screen; a `tell` during its 5 s waits in `Study::later` for the toast to end.
 - 409 on an edit: same item, same text → re-sent once; anything else is not replayed (spec §7.6).
 - The words of a card share one listener (`token_at`), never one per token: a chapter has thousands.
 - A new sermon takes the translation being read as its default; the NLT never (`snapshot_translation`).

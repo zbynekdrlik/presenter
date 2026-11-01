@@ -71,7 +71,7 @@ pub(super) async fn add_with_retry(
 }
 
 /// False while this passage is on its way: a double tap adds it once.
-fn begin_add(s: Study, passage: &SermonPassage) -> bool {
+pub(super) fn begin_add(s: Study, passage: &SermonPassage) -> bool {
     if s.adding.with_value(|held| held.as_ref() == Some(passage)) {
         return false;
     }
@@ -106,20 +106,6 @@ fn add_to(s: Study, id: String, passage: SermonPassage) {
             s.adding.set_value(None);
         });
     }
-}
-
-/// Späť on the toast: the added item goes again.
-pub(super) fn undo_added(s: Study, sermon: String, item: String) {
-    leptos::task::spawn_local(async move {
-        let done = async {
-            let held = sermons::get_sermon(&sermon).await?;
-            sermons::delete_item(&sermon, &item, held.revision).await
-        };
-        match done.await {
-            Ok(_) => s.tell("Odstránené z kázne".to_string()),
-            Err(err) => s.tell(sermon_error(&err)),
-        }
-    });
 }
 
 #[component]

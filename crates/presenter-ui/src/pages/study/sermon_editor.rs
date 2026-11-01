@@ -11,9 +11,9 @@ use std::collections::{BTreeSet, HashMap};
 use gloo_timers::callback::Timeout;
 use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
-use presenter_core::bible::sermon::ItemEdits;
+use presenter_core::bible::sermon::{ItemEdits, SourceVerse};
 
-use super::add_to_sermon::add_with_retry;
+use super::add_to_sermon::{add_with_retry, begin_add};
 use super::scroll::ScrollPlan;
 use super::sermon_item::SermonItemCard;
 use super::{ensure_structure, nav, sermon_error, Study, Undo};
@@ -159,6 +159,12 @@ impl Editor {
         if !lost.is_empty() {
             self.s.tell(CHANGED_ELSEWHERE.to_string());
         }
+        // What failed to save is gone: nothing is unsaved any more.
+        if self.dirty.with_value(BTreeSet::is_empty)
+            && self.save.get_untracked() == SaveState::Error
+        {
+            self.save.set(SaveState::Saved);
+        }
         self.detail.set(Some(detail));
     }
 
@@ -218,12 +224,14 @@ fn flush(e: Editor) {
         flush(e);
         return;
     };
+    // The text these edits were made on: a reload may replace it during the PUT.
+    let sent_on = e.item(&item).map(|held| (held.translation, held.source));
     e.busy.set_value(true);
     e.save.set(SaveState::Saving);
     leptos::task::spawn_local(async move {
         let answer = sermons::put_edits(&e.id(), &item, e.revision(), &edits).await;
         let answer = match answer {
-            Err(err) if is_conflict(&err) => resend_after_conflict(e, &item, &edits).await,
+            Err(err) if is_conflict(&err) => resend_after_conflict(e, &item, &edits, sent_on).await,
             other => other.map(Some),
         };
         e.busy.set_value(false);
@@ -263,15 +271,15 @@ async fn resend_after_conflict(
     e: Editor,
     item: &str,
     edits: &ItemEdits,
+    sent_on: Option<(String, Vec<SourceVerse>)>,
 ) -> Result<Option<SermonDetail>, ApiError> {
-    let sent_source = e.item(item).map(|held| (held.translation, held.source));
     let fresh = sermons::get_sermon(&e.id()).await?;
     let same = fresh
         .items
         .iter()
         .find(|held| held.id == item)
         .is_some_and(|held| {
-            sent_source.as_ref() == Some(&(held.translation.clone(), held.source.clone()))
+            sent_on.as_ref() == Some(&(held.translation.clone(), held.source.clone()))
         });
     if same {
         let answer = sermons::put_edits(&e.id(), item, fresh.revision, edits).await?;
@@ -319,6 +327,12 @@ fn end_turn(e: Editor) {
 
 const SAVE_FIRST: &str = "Najprv sa musí uložiť úprava";
 
+/// A refused write changes nothing, but a control the preacher moved (the
+/// translation select) must read what is held again.
+fn show_held(e: Editor) {
+    e.detail.update(|_| {});
+}
+
 /// A write that is not an edit: never replayed after a 409 (spec §7.6). True
 /// when it landed.
 async fn run_write<F, Fut>(e: Editor, refused: &'static str, op: F) -> bool
@@ -328,6 +342,7 @@ where
 {
     if !take_turn(e).await {
         e.s.tell(SAVE_FIRST.to_string());
+        show_held(e);
         return false;
     }
     let answer = op(e.id(), e.revision()).await;
@@ -343,6 +358,7 @@ where
         }
         Err(err) => {
             e.s.tell(sermon_error(&err));
+            show_held(e);
             false
         }
     };
@@ -424,6 +440,46 @@ pub(super) fn delete_item(e: Editor, item: SermonItem) {
         e.removing.update_value(|removing| {
             removing.remove(&id);
         });
+    });
+}
+
+async fn delete_with_retry(sermon: &str, item: &str) -> Result<SermonDetail, ApiError> {
+    let held = sermons::get_sermon(sermon).await?;
+    match sermons::delete_item(sermon, item, held.revision).await {
+        Err(err) if is_conflict(&err) => {
+            let fresh = sermons::get_sermon(sermon).await?;
+            sermons::delete_item(sermon, item, fresh.revision).await
+        }
+        other => other,
+    }
+}
+
+/// Späť on "Pridané": the added item goes again, in the sermon's queue, so an
+/// editor open on it follows. A refusal keeps Späť on screen.
+pub(super) fn undo_added(s: Study, sermon: String, item: String) {
+    let e = editor_for(s, &sermon);
+    leptos::task::spawn_local(async move {
+        let offer_again = |message: String, item: String| {
+            s.tell_undo(
+                message,
+                Undo::Added {
+                    sermon: e.id(),
+                    item,
+                },
+            );
+        };
+        if !take_turn(e).await {
+            offer_again(SAVE_FIRST.to_string(), item);
+            return;
+        }
+        match delete_with_retry(&e.id(), &item).await {
+            Ok(detail) => {
+                e.apply(detail);
+                s.tell("Odstránené z kázne".to_string());
+            }
+            Err(err) => offer_again(sermon_error(&err), item),
+        }
+        end_turn(e);
     });
 }
 
@@ -528,6 +584,10 @@ fn add_from_field(e: Editor, text: RwSignal<String>) {
             verse_start,
             verse_end,
         };
+        // The field keeps its text meanwhile: a second Enter must not add again.
+        if !begin_add(e.s, &passage) {
+            return;
+        }
         leptos::task::spawn_local(async move {
             let landed = run_write(
                 e,
@@ -537,6 +597,7 @@ fn add_from_field(e: Editor, text: RwSignal<String>) {
                 },
             )
             .await;
+            e.s.adding.set_value(None);
             if landed {
                 text.update(|shown| {
                     if *shown == input {
