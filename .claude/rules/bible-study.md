@@ -15,9 +15,11 @@ paths:
 The preacher's reader, replacing MySword on his phone and tablet. Reading and searching only.
 
 - **Nothing here reaches a wall (T11).** No trigger, clear or stage call; every test in the study
-  specs ends with `finish()` (`study-support.ts`), which asserts that and the clean console. The two
-  tests that pass through the operator empty `wallRequests` once they are back: the operator polls
-  the stage.
+  specs ends with `finish()` (`study-support.ts`), which asserts that and the clean console. The test
+  that passes through the operator empties `wallRequests` once it is back: the operator polls the
+  stage.
+- **No pill in the operator's surface nav.** That row is absolutely positioned at the header's limit:
+  a seventh pill slid the AI chip under the stage preview at 1280 px. The page is entered from `/`.
 - **A chapter comes from `POST /bible/resolve` with `characterLimit: 1`, in ONE function**
   (`api/study.rs::load_chapter`), until D4's `/bible/study/chapter` replaces it. `/bible/passage`
   cannot: it matches a row whose verse span EQUALS the request and rows are single verses, so a

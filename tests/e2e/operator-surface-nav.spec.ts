@@ -73,7 +73,6 @@ const EXPECTED_TARGETS: ReadonlyArray<{ name: string; href: string }> = [
   { name: "Stage", href: "/stage" },
   { name: "Camera", href: "/ui/camera" },
   { name: "Tablet", href: "/ui/tablet" },
-  { name: "Štúdium", href: "/ui/study" },
   { name: "Timer", href: "/stream/timer" },
 ];
 

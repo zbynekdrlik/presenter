@@ -383,16 +383,12 @@ test("the page installs as its own app and its worker caches nothing", async ({ 
   await finish(opened);
 });
 
-test("the operator's surface nav opens the page", async ({ browser }) => {
-  const opened = await openStudy(browser, baseURL, { viewport: { width: 1280, height: 800 } }, "/ui/operator", null);
+test("the home page opens the study page", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, { viewport: { width: 1280, height: 800 } }, "/ui/study", null);
   const { page } = opened;
-  const link = page.locator('[data-role="surface-nav-link"][data-target="Štúdium"]');
-  await expect(link).toHaveAttribute("href", "/ui/study");
-  await link.evaluate((el) => el.removeAttribute("target"));
-  await link.click();
+  await page.goto("/");
+  await page.locator('a[href="/ui/study"]').click();
   await expect(chapter(page)).toHaveAttribute("data-loaded-for", /:JHN\.1$/);
-  // The operator polls the stage; T11 is about the study page.
-  opened.wallRequests.length = 0;
   await settled(page);
   await finish(opened);
 });
