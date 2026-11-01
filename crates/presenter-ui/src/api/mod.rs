@@ -102,6 +102,16 @@ pub fn start_patch_keepalive<B: serde::Serialize>(
     body: &B,
     timeout_ms: u32,
 ) -> Result<js_sys::Promise, ApiError> {
+    start_keepalive("PATCH", path, body, timeout_ms)
+}
+
+/// [`start_patch_keepalive`] for another method: the sermon edits' PUT.
+pub fn start_keepalive<B: serde::Serialize>(
+    method: &str,
+    path: &str,
+    body: &B,
+    timeout_ms: u32,
+) -> Result<js_sys::Promise, ApiError> {
     let json = serde_json::to_string(body).map_err(|e| ApiError::Serialize(e.into()))?;
     let headers = web_sys::Headers::new().map_err(js_error)?;
     headers
@@ -109,7 +119,7 @@ pub fn start_patch_keepalive<B: serde::Serialize>(
         .map_err(js_error)?;
     let abort = web_sys::AbortController::new().map_err(js_error)?;
     let init = web_sys::RequestInit::new();
-    init.set_method("PATCH");
+    init.set_method(method);
     init.set_headers(&headers);
     init.set_body(&JsValue::from_str(&json));
     init.set_signal(Some(&abort.signal()));

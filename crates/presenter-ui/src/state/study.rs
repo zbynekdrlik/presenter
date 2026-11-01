@@ -49,6 +49,10 @@ pub enum StudySheet {
     /// Which sermon the passage goes to. It exists only for the passage in hand,
     /// so a URL never opens it.
     AddToSermon,
+    /// The open sermon's stored slides.
+    Preview,
+    /// The open sermon's items in their order.
+    Reorder,
 }
 
 impl StudySheet {
@@ -59,6 +63,8 @@ impl StudySheet {
             Self::TextSize => "pismo".to_string(),
             Self::Favourite(slot) => format!("preklad{slot}"),
             Self::AddToSermon => "pridat".to_string(),
+            Self::Preview => "nahlad".to_string(),
+            Self::Reorder => "poradie".to_string(),
         }
     }
 
@@ -67,6 +73,8 @@ impl StudySheet {
             "akcie" => Some(Self::Actions),
             "historia" => Some(Self::History),
             "pismo" => Some(Self::TextSize),
+            "nahlad" => Some(Self::Preview),
+            "poradie" => Some(Self::Reorder),
             // `pridat` is no sheet of a URL: the passage it adds is gone.
             other => other
                 .strip_prefix("preklad")?

@@ -16,8 +16,12 @@ mod nav;
 mod reader;
 mod results;
 mod scroll;
+mod sermon_add;
 mod sermon_editor;
 mod sermon_item;
+mod sermon_live;
+mod sermon_preview;
+mod sermon_reorder;
 mod sermons;
 mod sheet;
 mod text_size;
@@ -52,7 +56,9 @@ use history::HistorySheet;
 use reader::{ChapterBar, Reader};
 use results::SearchResults;
 use scroll::ScrollPlan;
-use sermon_editor::{Editor, SermonEditor};
+use sermon_editor::{open_editor, Editor, SermonEditor};
+use sermon_preview::PreviewSheet;
+use sermon_reorder::ReorderSheet;
 use sermons::SermonListView;
 use text_size::TextSizeSheet;
 use verse_actions::VerseActionsSheet;
@@ -152,6 +158,9 @@ struct Study {
     /// the view, so leaving a sermon never drops an edit.
     editors: StoredValue<HashMap<String, Editor>, LocalStorage>,
     owner: StoredValue<Owner, LocalStorage>,
+    /// The live socket is up: it opens with the first sermon, so plain reading
+    /// keeps no socket awake on the phone.
+    live: StoredValue<bool>,
     /// Bumped by a retry button: asks again for the same chapter or search.
     retry: RwSignal<u32>,
     cache: StoredValue<ChapterCache>,
@@ -501,6 +510,7 @@ pub fn StudyPage() -> impl IntoView {
         adding: StoredValue::new(None),
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
+        live: StoredValue::new(false),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
         scroll_plan: StoredValue::new(saved_verse.map_or(ScrollPlan::Keep, ScrollPlan::Verse)),
@@ -590,6 +600,12 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::TextSize) => view! { <TextSizeSheet s=s /> }.into_any(),
         Some(StudySheet::Favourite(slot)) => view! { <FavouriteSheet s=s index=slot /> }.into_any(),
         Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
+        Some(StudySheet::Preview) => open_editor(s)
+            .map(|e| view! { <PreviewSheet e=e /> })
+            .into_any(),
+        Some(StudySheet::Reorder) => open_editor(s)
+            .map(|e| view! { <ReorderSheet e=e /> })
+            .into_any(),
         None => ().into_any(),
     };
 

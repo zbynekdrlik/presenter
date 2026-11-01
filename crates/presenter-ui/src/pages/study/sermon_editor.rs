@@ -13,9 +13,11 @@ use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use presenter_core::bible::sermon::{ItemEdits, SourceVerse};
 
-use super::add_to_sermon::{add_with_retry, begin_add};
+use super::add_to_sermon::add_with_retry;
 use super::scroll::ScrollPlan;
+use super::sermon_add::AddVerse;
 use super::sermon_item::SermonItemCard;
+use super::sermon_live::listen_live;
 use super::{ensure_structure, nav, sermon_error, Study, Undo};
 use crate::api::sermons::{
     self, is_conflict, is_not_found, SermonDetail, SermonItem, SermonPassage,
@@ -23,7 +25,7 @@ use crate::api::sermons::{
 use crate::api::ApiError;
 use crate::state::sermon_edit::{retain_unchanged, ItemDraft, SaveState, TapMode};
 use crate::state::sermon_list::{count_text, short_date};
-use crate::state::study::{suggest, StudyRoute};
+use crate::state::study::{StudyRoute, StudySheet, StudyView};
 
 const SAVE_AFTER_MS: u32 = 300;
 const WAIT_STEP_MS: u32 = 50;
@@ -81,6 +83,15 @@ fn editor_for(s: Study, id: &str) -> Editor {
     e
 }
 
+/// The editor of the sermon on the route.
+pub(super) fn open_editor(s: Study) -> Option<Editor> {
+    let id = s.route.with_untracked(|route| match &route.view {
+        StudyView::Sermon { id } => Some(id.clone()),
+        _ => None,
+    })?;
+    Some(editor_for(s, &id))
+}
+
 fn every_editor(s: Study) -> Vec<Editor> {
     s.editors
         .with_value(|editors| editors.values().copied().collect())
@@ -117,8 +128,13 @@ pub(super) fn install(s: Study) {
 }
 
 impl Editor {
-    fn id(self) -> String {
+    pub(super) fn id(self) -> String {
         self.id.get_value()
+    }
+
+    /// A write of this page is on its way.
+    pub(super) fn writing(self) -> bool {
+        self.busy.get_value()
     }
 
     fn revision(self) -> i64 {
@@ -335,7 +351,7 @@ fn show_held(e: Editor) {
 
 /// A write that is not an edit: never replayed after a 409 (spec §7.6). True
 /// when it landed.
-async fn run_write<F, Fut>(e: Editor, refused: &'static str, op: F) -> bool
+pub(super) async fn run_write<F, Fut>(e: Editor, refused: &'static str, op: F) -> bool
 where
     F: FnOnce(String, i64) -> Fut + 'static,
     Fut: std::future::Future<Output = Result<SermonDetail, ApiError>> + 'static,
@@ -376,7 +392,7 @@ where
     });
 }
 
-fn reload(e: Editor) {
+pub(super) fn reload(e: Editor) {
     leptos::task::spawn_local(async move {
         match sermons::get_sermon(&e.id()).await {
             Ok(detail) => {
@@ -546,114 +562,26 @@ pub(super) fn undo_removed(
     });
 }
 
-/// `+ Pridať verš`: a reference is added here, words go to the text search,
-/// whose hits add to this (active) sermon. The field keeps what was typed until
-/// the verse is in.
-fn add_from_field(e: Editor, text: RwSignal<String>) {
-    let input = text.get_untracked();
-    let Some(translation) = e
-        .detail
-        .with_untracked(|detail| detail.as_ref().map(|held| held.default_translation.clone()))
-    else {
-        return;
-    };
-    let suggestion = e.s.structures.with_untracked(|map| {
-        map.get(&translation)
-            .map(|structure| (suggest(&input, structure, &translation), structure.clone()))
-    });
-    let Some((suggestion, structure)) = suggestion else {
-        e.s.tell("Zoznam kníh sa ešte načítava".to_string());
-        return;
-    };
-    // A word naming a book is a search here, never a whole chapter added.
-    let target = suggestion
-        .enter_target()
-        .filter(|target| target.verses.is_some() || suggestion.text_search.is_none());
-    if let Some(target) = target {
-        let verses = target.verses.or_else(|| {
-            let last = structure.book(&target.book)?.verse_count(target.chapter)?;
-            Some((1, last))
-        });
-        let Some((verse_start, verse_end)) = verses else {
-            return;
-        };
-        let passage = SermonPassage {
-            translation,
-            book_code: target.book,
-            chapter: target.chapter,
-            verse_start,
-            verse_end,
-        };
-        // The field keeps its text meanwhile: a second Enter must not add again.
-        if !begin_add(e.s, &passage) {
+/// HOTOVO: everything is saved, or this says what is not. Back to the list.
+fn finish(e: Editor) {
+    leptos::task::spawn_local(async move {
+        if !settle_saves(e).await {
+            e.s.tell(SAVE_FIRST.to_string());
             return;
         }
-        leptos::task::spawn_local(async move {
-            let landed = run_write(
-                e,
-                "Kázeň sa medzitým zmenila — skús znova",
-                move |id, revision| async move {
-                    sermons::add_item(&id, revision, None, &passage).await
-                },
-            )
-            .await;
-            e.s.adding.set_value(None);
-            if landed {
-                text.update(|shown| {
-                    if *shown == input {
-                        shown.clear();
-                    }
-                });
-            }
-        });
-        return;
-    }
-    if let Some(query) = suggestion.text_search {
-        text.set(String::new());
-        super::add_to_sermon::set_active(e.s, Some(e.id()));
-        nav::go(
-            e.s,
-            StudyRoute::search(&translation, &query),
-            ScrollPlan::Top,
+        let translation = e.s.route.with_untracked(|route| route.translation.clone());
+        nav::go(e.s, StudyRoute::sermons(translation), ScrollPlan::Top);
+        e.s.tell(
+            "Kázeň je uložená · u operátora v „Pripravené kazateľom“ v deň bohoslužby a na tablete"
+                .to_string(),
         );
-        return;
-    }
-    e.s.tell(
-        suggestion
-            .view
-            .hint
-            .unwrap_or_else(|| "Odkaz sa nepodarilo prečítať".to_string()),
-    );
-}
-
-#[component]
-fn AddVerse(e: Editor) -> impl IntoView {
-    let text = RwSignal::new(String::new());
-    view! {
-        <form
-            class="sermon-add"
-            on:submit=move |ev| {
-                ev.prevent_default();
-                add_from_field(e, text);
-            }
-        >
-            <input
-                class="study-input"
-                data-role="sermon-add-field"
-                type="text"
-                placeholder="+ Pridať verš: gal 3 13-14"
-                autocomplete="off"
-                autocapitalize="off"
-                prop:value=move || text.get()
-                on:input=move |ev| text.set(event_target_value(&ev))
-            />
-        </form>
-    }
+    });
 }
 
 #[component]
 pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
     let e = editor_for(s, &id);
+    listen_live(s);
     if e.detail.with_untracked(Option::is_none) {
         e.loaded.set(Loaded::Waiting);
     }
@@ -728,6 +656,16 @@ pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
                         <h2 class="sermon-section__title" data-role="sermon-date">{header}</h2>
                         <p class="sermon-editor__title" data-role="sermon-title">{title}</p>
                     </div>
+                    <button
+                        type="button"
+                        class="study-button"
+                        data-role="sermon-preview-open"
+                        on:click=move |_| {
+                            nav::open_sheet(s, nav::sheet_route(s, StudySheet::Preview));
+                        }
+                    >
+                        "Náhľad"
+                    </button>
                     <span
                         class="sermon-save"
                         data-role="sermon-save"
@@ -803,6 +741,26 @@ pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
                 }}
                 <AddVerse e=e />
                 <p class="sermon-editor__footer" data-role="sermon-counts">{footer}</p>
+                <div class="sermon-bar">
+                    <button
+                        type="button"
+                        class="study-button"
+                        data-role="sermon-reorder-open"
+                        on:click=move |_| {
+                            nav::open_sheet(s, nav::sheet_route(s, StudySheet::Reorder));
+                        }
+                    >
+                        "Poradie"
+                    </button>
+                    <button
+                        type="button"
+                        class="study-button study-button--primary"
+                        data-role="sermon-done"
+                        on:click=move |_| finish(e)
+                    >
+                        "HOTOVO"
+                    </button>
+                </div>
             </section>
         </main>
     }
