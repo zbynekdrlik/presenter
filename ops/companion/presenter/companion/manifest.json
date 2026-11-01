@@ -3,7 +3,7 @@
   "name": "Presenter Companion WS",
   "shortname": "presenter",
   "description": "Control Presenter via the /companion/ws API",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "MIT",
   "repository": "https://git.newleveltech/presenter",
   "bugs": "https://git.newleveltech/presenter/issues",
@@ -16,7 +16,7 @@
   "runtime": {
     "type": "node18",
     "api": "nodejs-ipc",
-    "apiVersion": "1.13.2",
+    "apiVersion": "1.14.1",
     "entrypoint": "../index.js"
   },
   "manufacturer": "New Level Church",
