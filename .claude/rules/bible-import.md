@@ -151,8 +151,13 @@ with you all. Amen.". The deploy log shows five `Imported … (digest …)` line
   in the tests and the spec follow the committed file. A new file = update `sources.json` and the counts on purpose.
 - `STUDY_PARSER_VERSION` is separate from `PARSER_VERSION`, so a study parse change never re-imports the Bibles.
 - Strong's text is NFC. A Hebrew `x-typo` note sits INSIDE an exegesis note: skip it, keep the text after it.
-- Greek: `<greek>` and `<pronunciation>` before any field are the head, inside a field they are text. The markers are
-  `:--` or just `--`. Text after the fields joins the renderings. G302 and G1473 have no `strongs_def`: their meaning
-  is in the derivation.
+- Hebrew `<w>` has three shapes: `ID` = the head, `src` = a reference, neither = another form of the word, written as
+  its `xlit` (one has only `POS`).
+- Greek: the first `<greek>` is the headword, the rest of the head (other forms, loose text) leads the derivation, where
+  the Hebrew file has them. `<greek>` inside a field is text. The markers are `:--` or just `--`; a definition may sit
+  before a SECOND `:--`. Text after the fields joins the renderings. 20 entries have no `strongs_def`: their meaning is in
+  the derivation. G3179 carries the source's `LEXEME NOT FOUND`, which stays out.
+- Readers must allow: `related` ids with no entry (G5689, G5869, G6590, G7343) and five cross-references naming 3 John 15,
+  which the KJV does not have.
 - 16 cross-references cross a book, hence `to_book_number_end`. A reader of a target range must use it.
 - An unknown OSIS id fails even on a row the votes filter would drop.

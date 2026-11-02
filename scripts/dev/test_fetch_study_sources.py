@@ -65,6 +65,17 @@ class CheckCommitted(unittest.TestCase):
             archive.writestr("other.xml", b"xml")
         self.assertEqual(fss.check_committed(self.dir), ["a.zip: a.xml missing"])
 
+    def test_an_entry_without_a_hash_is_named(self) -> None:
+        (self.dir / "sources.json").write_text(
+            json.dumps({"files": [{"file": "a.zip"}, {"file": "b.zip", "sha256": "0"}]}),
+            encoding="utf-8",
+        )
+        self.assertIn("a.zip: no hash in sources.json", fss.check_committed(self.dir))
+
+    def test_a_file_outside_the_list_is_named(self) -> None:
+        (self.dir / "c.zip").write_bytes(b"new")
+        self.assertEqual(fss.check_committed(self.dir), ["c.zip: not listed in sources.json"])
+
     def test_the_repository_files_pass(self) -> None:
         self.assertEqual(fss.check_committed(fss.STUDY_DIR), [])
 
@@ -74,6 +85,24 @@ class Fetch(unittest.TestCase):
         with mock.patch.object(fss, "download", return_value=b"changed"):
             with self.assertRaises(SystemExit):
                 fss.verified("http://x", fss.sha256(b"pinned"), "x")
+
+    def test_a_failed_download_leaves_the_files_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            study = Path(name)
+            (study / "a.zip").write_bytes(b"committed")
+            sources = {
+                "files": [
+                    {
+                        "file": "a.zip",
+                        "members": [{"name": "a.xml", "url": "http://x", "sha256": "0" * 64}],
+                    }
+                ]
+            }
+            (study / "sources.json").write_text(json.dumps(sources), encoding="utf-8")
+            with mock.patch.object(fss, "download", return_value=b"changed"):
+                with self.assertRaises(SystemExit):
+                    fss.fetch(study)
+            self.assertEqual((study / "a.zip").read_bytes(), b"committed")
 
     def test_a_fetch_rebuilds_what_the_check_accepts(self) -> None:
         with tempfile.TemporaryDirectory() as name:

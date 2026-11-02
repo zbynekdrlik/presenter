@@ -58,9 +58,10 @@ fn strongs_id(language: char, number: &str) -> Result<String> {
         .with_context(|| format!("bad Strong's number {language}{number}"))
 }
 
-fn add_related(related: &mut Vec<String>, id: &str) {
-    if !related.iter().any(|held| held == id) {
-        related.push(id.to_string());
+/// Four Hebrew entries name themselves; that is no relation.
+fn add_related(entry: &mut LexiconEntry, id: &str) {
+    if id != entry.strongs && !entry.related.iter().any(|held| held == id) {
+        entry.related.push(id.to_string());
     }
 }
 
@@ -79,8 +80,13 @@ fn event_text(event: &Event<'_>) -> Result<Option<String>> {
     })
 }
 
+/// The source's own conversion failure, in G3179's other form.
+const NOT_A_WORD: &str = "LEXEME NOT FOUND";
+
 #[derive(Clone, Copy)]
 enum Field {
+    /// A Greek entry's other forms: text between the first form and the fields.
+    Forms,
     Definition,
     Derivation,
     Renderings,
@@ -90,6 +96,7 @@ enum Field {
 #[derive(Default)]
 struct Draft {
     entry: LexiconEntry,
+    forms: String,
     definition: String,
     derivation: String,
     renderings: String,
@@ -98,6 +105,7 @@ struct Draft {
 impl Draft {
     fn push(&mut self, field: Field, text: &str) {
         match field {
+            Field::Forms => self.forms.push_str(text),
             Field::Definition => self.definition.push_str(text),
             Field::Derivation => self.derivation.push_str(text),
             Field::Renderings => self.renderings.push_str(text),
@@ -111,11 +119,24 @@ impl Draft {
         self.entry.lemma = clean(&self.entry.lemma);
         self.entry.transliteration = clean(&self.entry.transliteration);
         self.entry.pronunciation = clean(&self.entry.pronunciation);
-        self.entry.definition = clean(&self.definition);
-        self.entry.derivation = clean(&self.derivation);
+        // The Hebrew file opens its exegesis with the other forms: the same place.
+        let forms = clean(&self.forms);
+        let forms = if forms.contains(NOT_A_WORD) {
+            ""
+        } else {
+            &forms
+        };
+        let forms = forms.trim_start_matches([',', ';', ' ']);
+        self.entry.derivation = clean(&format!("{forms} {}", self.derivation));
         let renderings = clean(&self.renderings);
         let renderings = renderings.strip_prefix(':').unwrap_or(&renderings);
         let renderings = renderings.strip_prefix("--").unwrap_or(renderings);
+        // Three entries carry their definition before a second marker.
+        let (definition, renderings) = match renderings.split_once(":--") {
+            Some((definition, renderings)) => (definition, renderings),
+            None => ("", renderings),
+        };
+        self.entry.definition = clean(&format!("{} {definition}", self.definition));
         self.entry.kjv_renderings = renderings.trim().to_string();
         Ok(self.entry)
     }
@@ -142,6 +163,7 @@ impl Hebrew {
         if name == b"div" {
             if attrs.get("type").is_some_and(|kind| kind == "entry") {
                 self.draft = Some(Draft::default());
+                self.field = None;
             }
             return Ok(());
         }
@@ -164,15 +186,20 @@ impl Hebrew {
                         None => id.clone(),
                     };
                     draft.push(field, &text);
-                    add_related(&mut draft.entry.related, &id);
+                    add_related(&mut draft.entry, &id);
+                } else if let Some(field) = field {
+                    // Another form of the word, with no entry of its own.
+                    let form = attrs.get("xlit").or_else(|| attrs.get("POS"));
+                    draft.push(field, form.map_or("", String::as_str));
                 }
             }
             b"foreign" | b"list" => self.skip = u32::from(!empty),
+            b"note" if empty => {}
             b"note" => match attrs.get("type").map(String::as_str) {
                 Some("exegesis") => self.field = Some(Field::Derivation),
                 Some("explanation") => self.field = Some(Field::Definition),
                 Some("translation") => self.field = Some(Field::Renderings),
-                _ => self.skip = u32::from(!empty),
+                _ => self.skip = 1,
             },
             _ => {}
         }
@@ -214,11 +241,13 @@ struct Greek {
 
 impl Greek {
     fn target(&self) -> Option<Field> {
+        let draft = self.draft.as_ref()?;
         self.field
             .or(self.after_fields.then_some(Field::Renderings))
+            .or((!draft.entry.lemma.is_empty()).then_some(Field::Forms))
     }
 
-    fn open(&mut self, element: &BytesStart<'_>) -> Result<()> {
+    fn open(&mut self, element: &BytesStart<'_>, empty: bool) -> Result<()> {
         let attrs = attributes(element)?;
         let name = local_name(element);
         if name == b"entry" {
@@ -226,6 +255,8 @@ impl Greek {
             let mut draft = Draft::default();
             draft.entry.strongs = strongs_id('G', number)?;
             self.draft = Some(draft);
+            self.field = None;
+            self.in_number = false;
             self.after_fields = false;
             return Ok(());
         }
@@ -233,24 +264,28 @@ impl Greek {
         let Some(draft) = self.draft.as_mut() else {
             return Ok(());
         };
+        let value = |key: &str| attrs.get(key).cloned().unwrap_or_default();
         match name.as_slice() {
+            b"strongs" | b"strongs_def" | b"strongs_derivation" | b"kjv_def" if empty => {}
             b"strongs" => self.in_number = true,
             b"strongs_def" => self.field = Some(Field::Definition),
             b"strongs_derivation" => self.field = Some(Field::Derivation),
             b"kjv_def" => self.field = Some(Field::Renderings),
-            b"greek" | b"pronunciation" => {
-                let value = |key: &str| attrs.get(key).cloned().unwrap_or_default();
-                match (name.as_slice(), target) {
-                    (b"greek", None) => {
-                        draft.entry.lemma = value("unicode");
-                        draft.entry.transliteration = value("translit");
-                    }
-                    (b"pronunciation", None) => draft.entry.pronunciation = value("strongs"),
-                    (b"greek", Some(field)) => draft.push(field, &value("unicode")),
-                    (_, Some(field)) => draft.push(field, &value("strongs")),
-                    _ => {}
+            // The first form is the headword.
+            b"greek" => match target {
+                None => {
+                    draft.entry.lemma = value("unicode");
+                    draft.entry.transliteration = value("translit");
                 }
-            }
+                Some(field) => draft.push(field, &value("unicode")),
+            },
+            b"pronunciation" => match target {
+                None | Some(Field::Forms) if draft.entry.pronunciation.is_empty() => {
+                    draft.entry.pronunciation = value("strongs");
+                }
+                Some(Field::Forms) | None => {}
+                Some(field) => draft.push(field, &value("strongs")),
+            },
             b"strongsref" | b"see" => {
                 let language = match attrs.get("language").map(String::as_str) {
                     Some("HEBREW") => 'H',
@@ -261,7 +296,7 @@ impl Greek {
                 if let (b"strongsref", Some(field)) = (name.as_slice(), target) {
                     draft.push(field, &id);
                 }
-                add_related(&mut draft.entry.related, &id);
+                add_related(&mut draft.entry, &id);
             }
             _ => {}
         }
@@ -327,7 +362,8 @@ pub fn parse_greek_lexicon(xml: &[u8]) -> Result<Vec<LexiconEntry>> {
             .read_event_into(&mut buffer)
             .context("bad Greek XML")?;
         match &event {
-            Event::Start(element) | Event::Empty(element) => state.open(element)?,
+            Event::Start(element) => state.open(element, false)?,
+            Event::Empty(element) => state.open(element, true)?,
             Event::End(element) => state.close(element.local_name().as_ref())?,
             Event::Eof => return Ok(state.entries),
             other => {
@@ -429,6 +465,89 @@ mod tests {
             "{}",
             typo.derivation
         );
+    }
+
+    #[test]
+    fn a_hebrew_form_without_an_entry_stays_in_the_text() {
+        let entries = hebrew();
+        let entry = find(&entries, "H26");
+        assert!(
+            entry
+                .derivation
+                .starts_with("or shorter ʼĂbîygal; from H1 (ʼâb)"),
+            "{}",
+            entry.derivation
+        );
+        // This one has only its pronunciation.
+        assert!(!find(&entries, "H595").derivation.contains("sometimes, ;"));
+    }
+
+    #[test]
+    fn nobody_is_related_to_himself() {
+        let entries = hebrew();
+        for id in ["H585", "H2421", "H2470", "H2687"] {
+            let entry = find(&entries, id);
+            assert!(!entry.related.iter().any(|held| held == id), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_first_greek_form_is_the_headword_and_the_others_lead_the_derivation() {
+        let entries = greek();
+        for (id, lemma) in [
+            ("G683", "ἀπωθέομαι"),
+            ("G2192", "ἔχω"),
+            ("G2309", "θέλω"),
+            ("G3588", "ὁ"),
+        ] {
+            assert_eq!(find(&entries, id).lemma, lemma, "{id}");
+        }
+        let entry = find(&entries, "G683");
+        assert!(
+            entry.derivation.starts_with("or ἀπώθομαι"),
+            "{}",
+            entry.derivation
+        );
+        assert_eq!(find(&entries, "G683").pronunciation, "ap-o-theh'-om-ahee");
+        let the = find(&entries, "G3588");
+        assert!(
+            the.derivation.starts_with("including the feminine"),
+            "{}",
+            the.derivation
+        );
+        assert!(!format!("{:?}", find(&entries, "G3179")).contains(NOT_A_WORD));
+    }
+
+    #[test]
+    fn a_definition_in_front_of_a_second_marker_is_a_definition() {
+        let entries = greek();
+        let entry = find(&entries, "G2022");
+        assert!(
+            entry.definition.ends_with("to pour upon"),
+            "{}",
+            entry.definition
+        );
+        assert_eq!(entry.kjv_renderings, "pour in.");
+        let mete = find(&entries, "G3354");
+        assert_eq!(mete.kjv_renderings, "measure, mete.");
+        assert!(
+            mete.definition.ends_with("figuratively, to estimate"),
+            "{}",
+            mete.definition
+        );
+    }
+
+    #[test]
+    fn an_empty_element_opens_nothing() {
+        let hebrew = br#"<osis><div type="entry"><w ID="H1"/><note type="exegesis"/></div>
+            <div type="entry"><w ID="H2"/>loose</div></osis>"#;
+        let entries = parse_hebrew_lexicon(hebrew).unwrap();
+        assert_eq!(entries[1].derivation, "");
+        let greek = br#"<d><entry strongs="1"><strongs_def/></entry>
+            <entry strongs="2">loose</entry></d>"#;
+        let entries = parse_greek_lexicon(greek).unwrap();
+        assert_eq!(entries[1].definition, "");
+        assert_eq!(entries[1].kjv_renderings, "");
     }
 
     #[test]

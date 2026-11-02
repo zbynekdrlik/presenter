@@ -10,7 +10,8 @@ pub struct StudySource {
     pub source_digest: String,
 }
 
-/// One Strong's entry. `related` lists the Strong's ids the entry names.
+/// One Strong's entry. `related` lists the Strong's ids the entry names; four
+/// of them have no entry (G5689, G5869, G6590, G7343), a reader must allow that.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LexiconEntry {
     pub strongs: String,
@@ -23,8 +24,10 @@ pub struct LexiconEntry {
     pub related: Vec<String>,
 }
 
-/// A verse pointing at a verse or a range, in the KJV's numbering. A range may
-/// cross chapters and, 16 times in the source, books (2 John into 3 John).
+/// A verse pointing at a verse or a range, in the KJV's numbering, nearly: five
+/// rows name 3 John 15, which the KJV counts into verse 14, so a reader must
+/// keep a place inside the chapter. A range may cross chapters and, 16 times in
+/// the source, books (2 John into 3 John).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrossReference {
     pub from_book: i32,

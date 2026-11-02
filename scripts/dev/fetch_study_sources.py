@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import sys
 import urllib.request
@@ -36,8 +37,16 @@ def load_sources(study_dir: Path) -> dict:
 def check_committed(study_dir: Path) -> list[str]:
     """Every mismatch between sources.json and the files, as messages."""
     problems: list[str] = []
-    for entry in load_sources(study_dir)["files"]:
+    entries = load_sources(study_dir)["files"]
+    listed = {entry["file"] for entry in entries} | {"sources.json"}
+    for path in sorted(study_dir.iterdir()):
+        if path.is_file() and path.name not in listed:
+            problems.append(f"{path.name}: not listed in sources.json")
+    for entry in entries:
         path = study_dir / entry["file"]
+        if "sha256" not in entry and not entry.get("members"):
+            problems.append(f"{entry['file']}: no hash in sources.json")
+            continue
         if not path.is_file():
             problems.append(f"{entry['file']}: missing")
             continue
@@ -69,17 +78,23 @@ def verified(url: str, expected: str, label: str) -> bytes:
 
 
 def fetch(study_dir: Path) -> None:
+    """Everything is downloaded and verified before the first file is touched."""
+    built: list[tuple[Path, bytes]] = []
     for entry in load_sources(study_dir)["files"]:
-        path = study_dir / entry["file"]
         if "members" in entry:
-            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
                 for member in entry["members"]:
                     data = verified(member["url"], member["sha256"], member["name"])
                     info = zipfile.ZipInfo(member["name"], ZIP_EPOCH)
                     info.compress_type = zipfile.ZIP_DEFLATED
                     archive.writestr(info, data)
+            built.append((study_dir / entry["file"], buffer.getvalue()))
         else:
-            path.write_bytes(verified(entry["url"], entry["sha256"], entry["file"]))
+            data = verified(entry["url"], entry["sha256"], entry["file"])
+            built.append((study_dir / entry["file"], data))
+    for path, data in built:
+        path.write_bytes(data)
         print(f"wrote {path}")
 
 

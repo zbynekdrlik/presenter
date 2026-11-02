@@ -23,6 +23,7 @@ binary_is_stale() {
     "${REPO_ROOT}/crates/presenter-persistence" \
     "${REPO_ROOT}/crates/presenter-migration" \
     "${REPO_ROOT}/crates/presenter-core" \
+    "${REPO_ROOT}/crates/presenter-bible" \
     "${REPO_ROOT}/data/study" \
     \( -name '*.rs' -o -name '*.zip' \) -newer "$binary" -print -quit 2>/dev/null | grep -q .
 }

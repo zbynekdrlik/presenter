@@ -21,24 +21,21 @@ mod tests {
     use super::*;
     use presenter_core::bible::canonical_book_by_number;
 
+    /// The id's letters appear in the book's name, in order: "Phlm" fits
+    /// Philemon and not Philippians, so a swap anywhere in the table fails.
     #[test]
-    fn the_table_follows_the_canonical_numbers() {
-        let cases = [
-            ("Gen", "Genesis"),
-            ("Ps", "Psalm"),
-            ("Mal", "Malachi"),
-            ("Matt", "Matthew"),
-            ("Phlm", "Philemon"),
-            ("Rev", "Revelation"),
-        ];
-        for (osis, name) in cases {
+    fn every_book_sits_at_its_canonical_number() {
+        for (index, osis) in BOOKS.iter().enumerate() {
             let number = book_number(osis).expect(osis);
+            assert_eq!(number as usize, index + 1);
             let book = canonical_book_by_number(number as u16).expect("canonical book");
-            assert!(
-                book.english_name.starts_with(name),
-                "{osis}: {}",
-                book.english_name
-            );
+            let name = book.english_name.to_lowercase();
+            let mut letters = name.chars();
+            let fits = osis
+                .to_lowercase()
+                .chars()
+                .all(|wanted| letters.any(|letter| letter == wanted));
+            assert!(fits, "{osis} at {number}: {}", book.english_name);
         }
     }
 

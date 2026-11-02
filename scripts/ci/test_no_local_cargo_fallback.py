@@ -55,7 +55,7 @@ SHELL_C_ARG = re.compile(r"(?:^|\s)-l?c\s+(\"(?:[^\"\\]|\\.)*\"|'[^']*')")
 SHELL_GUARDS = ("require_local_cargo", "local_cargo_allowed")
 NEGATED_GUARD = re.compile(r"!\s*(?:require_local_cargo|local_cargo_allowed)")
 GUARD_LOOKBACK = 8
-NON_CODE_SUFFIXES = {".md", ".json", ".yaml", ".yml", ".txt"}
+NON_CODE_SUFFIXES = {".md", ".json", ".yaml", ".yml", ".txt", ".pyc"}
 IMPORTER_BINS = ("import_propresenter", "ingest_bibles")
 SOURCE_CRATES = (
     "presenter-importer",

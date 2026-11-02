@@ -298,7 +298,8 @@ another `bible_study_sources` row later).
   `<w src="433" xlit="…"/>` or `<strongsref strongs="3982"/>` becomes the text "H433 (ʼĕlôwahh)" / "G3982",
   which the UI links. Text is NFC (the Greek file uses oxia code points). 212 Greek entries have loose text after
   their fields ("Compare G5"); it joins `kjv_renderings`, where the Hebrew file keeps the same remark. `<see>` adds
-  to `related` like `strongsref`. The 101 Greek numbers Strong left "Not Used" stay as empty rows; no KJV tag uses them.
+  to `related` like `strongsref`. A Hebrew `<w>` with no `src` is another form: its `xlit`. A Greek entry's first form
+  is the headword, its other forms lead `derivation`, as in the Hebrew file. The 101 Greek numbers Strong left "Not Used" stay as empty rows; no KJV tag uses them.
 - Parser: `presenter-bible/src/lexicon.rs` with `quick-xml = "0.39"` (already locked). Rejected: a hand-written
   scanner (entities, nested `<w>` inside notes).
 
