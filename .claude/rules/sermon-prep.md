@@ -195,8 +195,23 @@ paths:
 - Späť after a delete re-adds through the server, which snapshots TODAY's text: `retain_unchanged` keeps
   only the edits of verses still reading the same, restored as a normal edit (it retries like one). A
   failed Späť keeps Späť on screen; a `tell` during its 5 s waits in `Study::later` for the toast to end.
+- **E3:** Náhľad and Poradie are sheets with URLs (`s=nahlad`, `s=poradie`) over the sermon view (`open_editor`).
+  The order is `Editor::order` (`OrderDraft { base, ids }`), not the sheet's: sent once as the sheet LEAVES
+  (`Owner::on_cleanup` + `send_order`), whichever way it closes, kept after a failure for
+  `sermon-order-retry`. **The socket keeps the revision fresh, so a revision check cannot catch a stale
+  order: `send_order` compares the stored order with `base` and refuses by itself.** HOTOVO goes only when
+  everything is stored and names what was refused (`Editor::refused`). A drag = pointer events on a `touch-action: none` handle, the pure order
+  logic is the plate list's (`nameplates::order`, generic). The socket (`ws::passive`, surface `study`) opens
+  with the first sermon, never for plain reading; a sermon's id IS its presentation's. A test that needs a
+  409 must race the write itself (`page.route` on the PUT): a REST write beforehand reaches the open editor
+  through the socket first. An event during a write of ours waits for it (`Editor::behind`); a failed
+  background reload keeps the sermon on screen. Accepted: a closing tab sends one PUT (the next item's
+  needs the first's new revision), the socket stays once opened.
+- **Edits go as a `keepalive` fetch with a 15 s abort** (`start_keepalive`): the browser cancels a plain fetch
+  as a tab closes. It answers `ApiError::Status`, so a refused edit shows no server text.
 - 409 on an edit: same item, same text → re-sent once; anything else is not replayed (spec §7.6).
 - The words of a card share one listener (`token_at`), never one per token: a chapter has thousands.
 - A new sermon takes the translation being read as its default; the NLT never (`snapshot_translation`).
 - `sermon_error`: only `ApiError::Refused` shows the server's text, so sermon calls use the `*_refusal`
   helpers.
+- **A refusal lives until HOTOVO has named it (or the sermon is opened again):** a later landed write never clears `Editor::refused`, or HOTOVO would say "Kázeň je uložená" over a change that was thrown away.

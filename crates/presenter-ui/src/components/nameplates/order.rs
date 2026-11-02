@@ -1,4 +1,4 @@
-//! Plate ORDER logic (#871), pure and host-tested: the ↑ / ↓ step, the drag
+//! List ORDER logic (#871; the sermon items' too), pure and host-tested: the ↑ / ↓ step, the drag
 //! drop slot and its marker, and applying a new order to the local list.
 //!
 //! The server's reorder (`PUT …/nameplates/order`) wants the FULL id set, so
@@ -9,8 +9,8 @@ use presenter_core::Nameplate;
 
 /// The id list after moving `id` one step up or down, or `None` when it cannot
 /// move (already first / last, or not in the list).
-pub fn reorder_one_step(ids: &[i64], id: i64, up: bool) -> Option<Vec<i64>> {
-    let pos = ids.iter().position(|x| *x == id)?;
+pub fn reorder_one_step<T: PartialEq + Clone>(ids: &[T], id: &T, up: bool) -> Option<Vec<T>> {
+    let pos = ids.iter().position(|x| x == id)?;
     let target = if up {
         pos.checked_sub(1)?
     } else if pos + 1 < ids.len() {
@@ -33,12 +33,12 @@ pub fn drop_slot(middles: &[f64], y: f64) -> usize {
 /// The id list after dropping `id` into `slot` (a [`drop_slot`] value), or
 /// `None` when that leaves the order unchanged (a drop on the row's own place)
 /// or `id` is not in the list.
-pub fn reorder_to_slot(ids: &[i64], id: i64, slot: usize) -> Option<Vec<i64>> {
-    let from = ids.iter().position(|x| *x == id)?;
-    let mut moved: Vec<i64> = ids.iter().copied().filter(|x| *x != id).collect();
+pub fn reorder_to_slot<T: PartialEq + Clone>(ids: &[T], id: &T, slot: usize) -> Option<Vec<T>> {
+    let from = ids.iter().position(|x| x == id)?;
+    let mut moved: Vec<T> = ids.iter().filter(|x| *x != id).cloned().collect();
     // Removing the row first shifts every slot below it up by one.
     let insert = if slot > from { slot - 1 } else { slot }.min(moved.len());
-    moved.insert(insert, id);
+    moved.insert(insert, id.clone());
     (moved != ids).then_some(moved)
 }
 
@@ -76,17 +76,17 @@ mod tests {
 
     #[test]
     fn a_plate_moves_one_step_and_keeps_the_full_id_set() {
-        assert_eq!(reorder_one_step(&[1, 2, 3], 2, true), Some(vec![2, 1, 3]));
-        assert_eq!(reorder_one_step(&[1, 2, 3], 2, false), Some(vec![1, 3, 2]));
-        assert_eq!(reorder_one_step(&[1, 2, 3], 3, true), Some(vec![1, 3, 2]));
+        assert_eq!(reorder_one_step(&[1, 2, 3], &2, true), Some(vec![2, 1, 3]));
+        assert_eq!(reorder_one_step(&[1, 2, 3], &2, false), Some(vec![1, 3, 2]));
+        assert_eq!(reorder_one_step(&[1, 2, 3], &3, true), Some(vec![1, 3, 2]));
     }
 
     #[test]
     fn the_first_cannot_go_up_the_last_cannot_go_down_an_unknown_id_not_at_all() {
-        assert_eq!(reorder_one_step(&[1, 2, 3], 1, true), None);
-        assert_eq!(reorder_one_step(&[1, 2, 3], 3, false), None);
-        assert_eq!(reorder_one_step(&[1, 2, 3], 9, true), None);
-        assert_eq!(reorder_one_step(&[], 1, false), None);
+        assert_eq!(reorder_one_step(&[1, 2, 3], &1, true), None);
+        assert_eq!(reorder_one_step(&[1, 2, 3], &3, false), None);
+        assert_eq!(reorder_one_step(&[1, 2, 3], &9, true), None);
+        assert_eq!(reorder_one_step(&[], &1, false), None);
     }
 
     #[test]
@@ -102,21 +102,21 @@ mod tests {
     #[test]
     fn a_drop_above_the_first_below_the_last_or_in_the_middle_moves_the_plate() {
         let ids = [1, 2, 3, 4];
-        assert_eq!(reorder_to_slot(&ids, 3, 0), Some(vec![3, 1, 2, 4]));
-        assert_eq!(reorder_to_slot(&ids, 1, 4), Some(vec![2, 3, 4, 1]));
-        assert_eq!(reorder_to_slot(&ids, 4, 2), Some(vec![1, 2, 4, 3]));
-        assert_eq!(reorder_to_slot(&ids, 1, 3), Some(vec![2, 3, 1, 4]));
+        assert_eq!(reorder_to_slot(&ids, &3, 0), Some(vec![3, 1, 2, 4]));
+        assert_eq!(reorder_to_slot(&ids, &1, 4), Some(vec![2, 3, 4, 1]));
+        assert_eq!(reorder_to_slot(&ids, &4, 2), Some(vec![1, 2, 4, 3]));
+        assert_eq!(reorder_to_slot(&ids, &1, 3), Some(vec![2, 3, 1, 4]));
     }
 
     #[test]
     fn a_drop_on_the_rows_own_place_or_of_an_unknown_id_changes_nothing() {
         let ids = [1, 2, 3];
-        assert_eq!(reorder_to_slot(&ids, 2, 1), None);
-        assert_eq!(reorder_to_slot(&ids, 2, 2), None);
-        assert_eq!(reorder_to_slot(&ids, 9, 0), None);
-        assert_eq!(reorder_to_slot(&[1], 1, 0), None);
-        assert_eq!(reorder_to_slot(&[1], 1, 1), None);
-        assert_eq!(reorder_to_slot(&[], 1, 0), None);
+        assert_eq!(reorder_to_slot(&ids, &2, 1), None);
+        assert_eq!(reorder_to_slot(&ids, &2, 2), None);
+        assert_eq!(reorder_to_slot(&ids, &9, 0), None);
+        assert_eq!(reorder_to_slot(&[1], &1, 0), None);
+        assert_eq!(reorder_to_slot(&[1], &1, 1), None);
+        assert_eq!(reorder_to_slot(&[], &1, 0), None);
     }
 
     #[test]

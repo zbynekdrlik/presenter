@@ -7,9 +7,12 @@ use presenter_core::bible::sermon::{ItemEdits, SourceVerse};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    delete_json_refusal, delete_refusal, get_json, patch_json_refusal, post_json_refusal,
-    put_json_refusal, ApiError,
+    delete_json_refusal, delete_refusal, finish_json, get_json, patch_json_refusal,
+    post_json_refusal, start_keepalive, ApiError,
 };
+
+/// A save that never answers turns into a failure instead of holding the queue.
+const SAVE_TIMEOUT_MS: u32 = 15_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,7 +59,19 @@ pub struct SermonDetail {
     pub default_translation: String,
     pub revision: i64,
     pub items: Vec<SermonItem>,
-    pub warnings: Vec<String>,
+    pub slides: Vec<SermonSlide>,
+    pub secondary_missing: bool,
+}
+
+/// A stored slide, as the wall would get it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SermonSlide {
+    pub id: String,
+    pub main_text: String,
+    pub main_reference: String,
+    pub secondary_text: String,
+    pub secondary_reference: String,
 }
 
 /// A passage of one chapter, as an item is added.
@@ -91,6 +106,19 @@ struct NewItem<'a> {
     chapter: u16,
     verse_start: u16,
     verse_end: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemOrder<'a> {
+    expected_revision: i64,
+    item_ids: &'a [String],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Revision {
+    expected_revision: i64,
 }
 
 #[derive(Serialize)]
@@ -160,20 +188,52 @@ pub async fn add_item(
     .await
 }
 
+pub async fn reorder_items(
+    id: &str,
+    revision: i64,
+    item_ids: &[String],
+) -> Result<SermonDetail, ApiError> {
+    let started = start_keepalive(
+        "POST",
+        &format!("/bible/sermons/{id}/items/reorder"),
+        &ItemOrder {
+            expected_revision: revision,
+            item_ids,
+        },
+        SAVE_TIMEOUT_MS,
+    );
+    finish_json(started).await
+}
+
+pub async fn regenerate(id: &str, revision: i64) -> Result<SermonDetail, ApiError> {
+    post_json_refusal(
+        &format!("/bible/sermons/{id}/regenerate"),
+        &Revision {
+            expected_revision: revision,
+        },
+    )
+    .await
+}
+
+/// A `keepalive` fetch: the browser cancels a plain one when the tab closes, and
+/// the last taps go out exactly then. The caller's task must run in the same
+/// turn as the page's last event, which `spawn_local` does.
 pub async fn put_edits(
     id: &str,
     item_id: &str,
     revision: i64,
     edits: &ItemEdits,
 ) -> Result<SermonDetail, ApiError> {
-    put_json_refusal(
+    let started = start_keepalive(
+        "PUT",
         &format!("/bible/sermons/{id}/items/{item_id}/edits"),
         &NewEdits {
             expected_revision: revision,
             verses: edits,
         },
-    )
-    .await
+        SAVE_TIMEOUT_MS,
+    );
+    finish_json(started).await
 }
 
 pub async fn change_translation(
@@ -231,6 +291,11 @@ pub async fn identity() -> Result<Option<String>, ApiError> {
 /// Did the write lose to another device?
 pub fn is_conflict(err: &ApiError) -> bool {
     matches!(err, ApiError::Refused(409, _) | ApiError::Status(409, _))
+}
+
+/// The server read this edit and will never take it: no retry can store it.
+pub fn is_refused_edit(err: &ApiError) -> bool {
+    matches!(err, ApiError::Refused(422, _) | ApiError::Status(422, _))
 }
 
 pub fn is_not_found(err: &ApiError) -> bool {

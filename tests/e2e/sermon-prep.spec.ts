@@ -272,7 +272,7 @@ test("an old answer never takes back a saved tap", async ({ browser }) => {
   });
   await role(page, "study-sermons").tap();
   await role(page, "sermon-open").first().tap();
-  await expect.poll(() => stalled).toBe(1);
+  await expect.poll(() => stalled).toBeGreaterThanOrEqual(1);
   await token(page, 1, 0).tap();
   await saved(page);
   release();
@@ -356,7 +356,16 @@ test("an edit survives another device's write; a deleted item comes back with Sp
   const { page } = opened;
   await expect(role(page, "sermon-item")).toHaveCount(2);
 
-  await addVerse(id, 3, 3); // another device
+  // Another device, in the moment before this save: an earlier write would
+  // reach the open editor through the socket and no conflict would happen.
+  let raced = false;
+  await page.route(/\/items\/[^/]+\/edits$/, async (route) => {
+    if (!raced) {
+      raced = true;
+      await addVerse(id, 3, 3);
+    }
+    await route.continue();
+  });
   await token(page, 1, 0).tap();
   await saved(page);
   await expect(role(page, "study-notice")).toContainText("tvoja úprava je uložená");
