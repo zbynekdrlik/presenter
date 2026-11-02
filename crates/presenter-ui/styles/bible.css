@@ -672,3 +672,24 @@ body.operator.operator--bible .operator__panel--bible {
     grid-template-columns: 1fr;
   }
 }
+
+/* A sermon in the Prepared tab (#851 H1): read-only cards. */
+.bible__sermon-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bible__sermon-badge {
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.bible__sermon-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: #93c5fd;
+}

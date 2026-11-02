@@ -3,11 +3,13 @@ use presenter_core::{LiveEvent, TimerState, TimersOverview};
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto, BibleSlideMetaBible};
+use crate::api::sermons;
 use crate::components::info_popover::InfoPopover;
 use crate::components::version_label::VersionLabel;
 use crate::state::tablet::TabletContext;
 use crate::ws::{self, WsState};
 
+mod sermon_select;
 mod slide_list;
 use slide_list::SlideList;
 
@@ -96,10 +98,15 @@ pub fn TabletPage() -> impl IntoView {
 
             // Fetch presentations
             if let Ok(presentations) = bible::list_presentations().await {
-                let first = presentations.first().cloned();
+                // A failed read only loses the preselection.
+                let today: Vec<String> = sermons::todays_sermons()
+                    .await
+                    .map(|details| details.into_iter().map(|sermon| sermon.id).collect())
+                    .unwrap_or_default();
+                let first = sermon_select::initial_presentation(&presentations, &today).cloned();
                 ctx.presentations.set(presentations);
 
-                // Auto-select first presentation
+                // Auto-select today's sermon, else the first presentation
                 if let Some(pres) = first {
                     ctx.current_presentation_id.set(Some(pres.id.clone()));
                     ctx.current_presentation_name.set(pres.name.clone());
@@ -372,6 +379,7 @@ fn PresentationList() -> impl IntoView {
                     let pres_id = pres.id.clone();
                     let pres_name = pres.name.clone();
                     let slide_count = pres.slide_count;
+                    let sermon_label = crate::pages::bible_prepared_sermon::sermon_badge(&pres);
                     let is_active = {
                         let pid = pres_id.clone();
                         move || ctx.current_presentation_id.get().as_deref() == Some(&pid)
@@ -407,6 +415,11 @@ fn PresentationList() -> impl IntoView {
                                 on:click=on_click
                             >
                                 <span class="tablet-button__label">{pres_name}</span>
+                                {sermon_label.map(|label| view! {
+                                    <span class="tablet-button__sermon" data-role="presentation-sermon">
+                                        {label}
+                                    </span>
+                                })}
                                 <span class="tablet-button__meta">{slide_count}</span>
                             </button>
                         </div>
@@ -557,7 +570,7 @@ pub(super) async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
         return;
     };
     match bible::trigger_presentation_slide(&pres_id, &slide.id).await {
-        Ok(()) => {
+        Ok(_) => {
             ctx.active_slide_id.set(Some(slide.id.clone()));
             ctx.show_toast("Slide triggered", "success");
         }
@@ -573,6 +586,7 @@ async fn refresh_presentations(ctx: &TabletContext) {
     };
 
     let old = ctx.presentations.get_untracked();
+    sermon_select::refresh_open_sermon(ctx, &fresh).await;
 
     // Check if anything changed
     let changed = if fresh.len() != old.len() {

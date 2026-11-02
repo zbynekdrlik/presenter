@@ -202,19 +202,12 @@ pub async fn trigger_slide(req: &TriggerSlideRequest) -> Result<TriggerSlideResp
 pub async fn trigger_presentation_slide(
     presentation_id: &str,
     slide_id: &str,
-) -> Result<(), ApiError> {
+) -> Result<TriggerSlideResponse, ApiError> {
     let url = format!(
         "/bible/presentations/{}/slides/{}/trigger",
         presentation_id, slide_id
     );
-    let response = gloo_net::http::Request::post(&url)
-        .send()
-        .await
-        .map_err(ApiError::Network)?;
-    if !response.ok() {
-        return Err(ApiError::Status(response.status(), response.status_text()));
-    }
-    Ok(())
+    post_json(&url, &serde_json::json!({})).await
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +317,9 @@ pub struct BiblePresentationSummary {
     pub id: String,
     pub name: String,
     pub slide_count: usize,
+    /// Set on a sermon (#851): its service date.
+    #[serde(default)]
+    pub sermon_date: Option<chrono::NaiveDate>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

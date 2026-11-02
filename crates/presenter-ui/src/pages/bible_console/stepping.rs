@@ -21,7 +21,6 @@ pub(super) enum Move {
 /// The move one `step` away from what the preview shows; `None` = the button
 /// is disabled (nothing loaded, or the end of the book).
 pub(super) fn neighbour(c: Console, step: Step) -> Option<Move> {
-    let target = c.target.get()?;
     let key = c.target_key.get();
     let slide = c.preview.with(|p| match p {
         Preview::Ready {
@@ -37,6 +36,10 @@ pub(super) fn neighbour(c: Console, step: Step) -> Option<Move> {
         (Step::Prev, Some((index, _))) if index > 0 => Some(Move::Slide(index - 1)),
         _ => None,
     };
+    if c.prepared.with(Option::is_some) {
+        return within;
+    }
+    let target = c.target.get()?;
     within.or_else(|| {
         c.walk
             .with(|walk| c.structure.with(|s| step_target(&target, walk, s, step)))

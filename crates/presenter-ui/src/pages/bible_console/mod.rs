@@ -8,6 +8,7 @@
 mod actions;
 mod field;
 mod on_air;
+mod prepared;
 mod preview;
 mod results;
 mod stepping;
@@ -25,6 +26,7 @@ use crate::state::bible_console::{
     console_view, preview_key, resolve_request, trigger_request, versification, ConsoleView,
     PreviewTarget,
 };
+use crate::state::bible_console_prepared::{PreparedPick, PreparedSermon};
 use crate::state::bible_console_step::rebase;
 use crate::state::AppContext;
 
@@ -32,6 +34,7 @@ use actions::ConsoleActions;
 use field::ConsoleField;
 pub use on_air::refresh as refresh_on_air;
 use on_air::OnAirStrip;
+use prepared::PreparedSection;
 use preview::ConsolePreview;
 use results::ConsoleResults;
 
@@ -130,6 +133,10 @@ struct Console {
     after_show: RwSignal<bool>,
     /// The last verse of the book was shown; there is no next one to offer.
     at_end: RwSignal<bool>,
+    /// Today's sermons (#851 H1); the section hides while empty.
+    sermons: RwSignal<Vec<PreparedSermon>>,
+    /// A prepared item is the preview: it replaces `target` until typing.
+    prepared: RwSignal<Option<PreparedPick>>,
 }
 
 impl Console {
@@ -162,7 +169,14 @@ impl Console {
                 })
                 .or_else(|| view.with(|v| v.default_target().cloned()))
         });
+        let prepared = RwSignal::new(None::<PreparedPick>);
+        // The revision, never the slide: a step inside a sermon only moves the
+        // preview's index.
+        let prepared_key = Memo::new(move |_| prepared.with(|p| p.as_ref().map(PreparedPick::key)));
         let target_key = Memo::new(move |_| {
+            if let Some(key) = prepared_key.get() {
+                return Some(key);
+            }
             let target = target.get()?;
             let main = main.get()?;
             Some(preview_key(
@@ -200,6 +214,8 @@ impl Console {
             walk: RwSignal::new(Vec::new()),
             after_show: RwSignal::new(false),
             at_end,
+            sermons: RwSignal::new(Vec::new()),
+            prepared,
         }
     }
 }
@@ -210,6 +226,7 @@ pub fn BibleConsole() -> impl IntoView {
     let console = Console::new(&bs);
     setup_auto_preview(console, &bs);
     stepping::setup_walk(console);
+    prepared::setup_prepared(console);
     on_air::setup_on_air_sync(use_ctx!(AppContext).active_bible_slide);
     let c = console;
 
@@ -226,6 +243,7 @@ pub fn BibleConsole() -> impl IntoView {
             <OnAirStrip />
             <ConsoleField console=console />
             <ConsoleResults console=console />
+            <PreparedSection console=console />
             <ConsolePreview console=console />
             <ConsoleActions console=console />
         </section>
@@ -260,6 +278,7 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             c.after_show.set(false);
             c.at_end.set(false);
             c.picked.set(None);
+            c.prepared.set(None);
             c.input.set(String::new());
         }
         loads
@@ -277,6 +296,9 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             .with_untracked(|p| p.as_ref().is_some_and(|p| p.input == input));
         if !pinned {
             c.picked.set(None);
+        }
+        if !input.is_empty() {
+            c.prepared.set(None);
         }
         c.focus_show.set(false);
     });
@@ -307,6 +329,21 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             !matches!(p, Preview::Failed { .. }) && p.key() == Some(key.as_str())
         });
         if current {
+            return;
+        }
+        if let Some(pick) = c.prepared.get_untracked() {
+            // Stored slides: no request, the preview IS what the wall gets.
+            pending.borrow_mut().take();
+            c.show_error.set(None);
+            owns_grid.set(true);
+            console_takes.update(|n| *n += 1);
+            clear_grid();
+            c.preview.set(Preview::Ready {
+                key,
+                slides: pick.sermon.slides,
+                index: pick.index,
+                warning: None,
+            });
             return;
         }
         let (Some(target), Some(main)) = (c.target.get_untracked(), c.main.get_untracked()) else {
@@ -378,10 +415,17 @@ fn show(c: Console, ctx: AppContext) {
     let (Some(slide), false) = (ready, c.showing.get_untracked()) else {
         return;
     };
+    let sermon = c
+        .prepared
+        .with_untracked(|p| p.as_ref().map(|p| p.sermon.id.clone()));
     let request = trigger_request(&slide, &c.main.get_untracked().unwrap_or_default());
     c.showing.set(true);
     leptos::task::spawn_local(async move {
-        match api::trigger_slide(&request).await {
+        let answer = match sermon {
+            Some(sermon) => api::trigger_presentation_slide(&sermon, &slide.id).await,
+            None => api::trigger_slide(&request).await,
+        };
+        match answer {
             Ok(resp) => {
                 // A verse sent while the answer travelled is the wall's truth;
                 // an empty strip may be a clear, so the server gets the last word.
