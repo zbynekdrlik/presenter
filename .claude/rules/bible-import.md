@@ -94,7 +94,8 @@ paths:
 
 `presenter-importer/src/bible_digest.rs`: digest = SHA-256(file bytes ‖ version). A parser
 change that alters passage text WITHOUT a bump never reaches a deployed database — the stored
-digest still matches and `ingest_bibles` prints "Skipping … (up-to-date)". D1 = 2, D2b = 3.
+digest still matches and `ingest_bibles` prints "Skipping … (up-to-date)". D1 = 2, D2b = 3
+(markup tables + the 8 repaired KJV verses).
 A bump re-imports all five translations on the next deploy (saved presentations and sermons
 survive — no FK to passages or translations, spec §5.7). Dev and PP import with the service
 stopped and the new binaries copied in; SNV's staged deploy imports AFTER the swap and the
@@ -104,6 +105,15 @@ binary, which skips everything as up-to-date (D1 nearly shipped that way; pinned
 3–4 of `scripts/ci/check_deploy_workflows.py`). Pin a bump
 with a digest test (`the_d1_import_fixes_change_every_stored_digest`), never `assert_eq!` on
 the constant.
+
+## Markup and Strong's tables (#851 D2b)
+
+`bible_passage_markup` (a row only for a verse with `has_markup()`) and
+`bible_strongs_occurrences` are written in `replace_bible_translation_passages`, in its
+transaction, by `repository/bible/markup.rs`; the delete of the translation row cascades the old
+ones away. `bible_passage` stays untouched, so search and passage reads load no markup; read it
+with `bible_chapter_markup`. Real numbers (copy of the dev DB): KJV 31,100 rows, ROH 2,785, SEB
+1,025, MIL 0, SEVP 0; 310,076 occurrences; database 187 → 240 MB.
 
 ## Tests
 

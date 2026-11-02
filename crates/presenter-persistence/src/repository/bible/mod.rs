@@ -3,6 +3,7 @@
 //! Split into focused submodules, each contributing `impl Repository` methods:
 //! - [`query`]      — read/search methods (translations, passages, FTS).
 //! - [`import`]     — translation write/import methods (fast-import, digests).
+//! - [`markup`]     — verse markup + Strong's occurrences (written by the import).
 //! - [`presentations`] — bible-presentation CRUD + slide row-mapping helpers.
 //! - [`sermons`]    — sermons: a presentation plus its source items.
 //!
@@ -10,6 +11,7 @@
 //! public paths are unchanged from when this lived in a single `bible.rs`.
 
 mod import;
+mod markup;
 mod presentations;
 mod query;
 mod sermons;
