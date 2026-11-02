@@ -40,12 +40,20 @@ fn build_fts_query(input: &str) -> Option<String> {
     }
 }
 
+/// A phone's keyboard types `„viera“` as readily as `"viera"`.
+fn is_quote(c: char) -> bool {
+    matches!(c, '"' | '„' | '“' | '”')
+}
+
 /// The words of one fully quoted input, punctuation turned into spaces and
 /// combining marks dropped (the tokenizer folds them): inside an FTS5 phrase a
 /// `"` would end it. Two quoted parts are not one phrase.
 fn quoted_phrase(input: &str) -> Option<String> {
-    let inner = input.trim().strip_prefix('"')?.strip_suffix('"')?;
-    if inner.contains('"') {
+    let inner = input
+        .trim()
+        .strip_prefix(is_quote)?
+        .strip_suffix(is_quote)?;
+    if inner.contains(is_quote) {
         return None;
     }
     Some(
@@ -366,6 +374,10 @@ mod fts_query_tests {
         assert_eq!(
             build_fts_query("\"viera, nádej-láska\"").as_deref(),
             Some("content : \"viera nádej láska\"")
+        );
+        assert_eq!(
+            build_fts_query("„viera, nádej“").as_deref(),
+            Some("content : \"viera nádej\"")
         );
         assert_eq!(
             build_fts_query("\"viera\" nádej").as_deref(),

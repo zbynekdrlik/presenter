@@ -55,7 +55,7 @@ use crate::state::study::{
     START_CHAPTER,
 };
 use crate::state::study_history::StudyHistory;
-use crate::state::study_word::KEY_NUMBERS;
+use crate::state::study_word::{KEY_NUMBERS, SCOPE_ALL};
 
 use add_to_sermon::AddToSermonSheet;
 use compare::{CompareCell, CompareView};
@@ -236,14 +236,14 @@ impl Study {
 
     /// `slk-seb:viera`, the settle marker of the search on the route.
     fn search_state_key(self) -> Option<String> {
-        let (translation, query) = self.search_key()?;
-        Some(format!("{translation}:{query}"))
+        let (translation, query, scope) = self.search_key()?;
+        Some(search_marker(&translation, &query, &scope))
     }
 
-    fn search_key(self) -> Option<(String, String)> {
+    fn search_key(self) -> Option<(String, String, String)> {
         let translation = self.translation()?;
         self.route.with(|route| match &route.view {
-            StudyView::Search { query } => Some((translation, query.clone())),
+            StudyView::Search { query, scope } => Some((translation, query.clone(), scope.clone())),
             _ => None,
         })
     }
@@ -354,11 +354,21 @@ fn show_chapter(s: Study, chapter: Chapter) {
     scroll::settle(s);
 }
 
-fn fetch_search(s: Study, translation: String, query: String) {
-    let key = format!("{translation}:{query}");
+/// `slk-seb:viera`, with `|HEB` when the search has a scope.
+fn search_marker(translation: &str, query: &str, scope: &str) -> String {
+    if scope == SCOPE_ALL {
+        format!("{translation}:{query}")
+    } else {
+        format!("{translation}:{query}|{scope}")
+    }
+}
+
+fn fetch_search(s: Study, translation: String, query: String, scope: String) {
+    let key = search_marker(&translation, &query, &scope);
     leptos::task::spawn_local(async move {
-        let answer = bible_api::search(&query, &translation, Some(SEARCH_LIMIT)).await;
-        if s.search_key() != Some((translation, query)) {
+        let scoped = (scope != SCOPE_ALL).then_some(scope.as_str());
+        let answer = bible_api::search(&query, &translation, Some(SEARCH_LIMIT), scoped).await;
+        if s.search_key() != Some((translation, query, scope)) {
             return;
         }
         s.search.set(match answer {
@@ -603,16 +613,16 @@ pub fn StudyPage() -> impl IntoView {
     let search_key = Memo::new(move |_| s.search_key());
     Effect::new(move |_| {
         s.retry.track();
-        if let Some((translation, query)) = search_key.get() {
+        if let Some((translation, query, scope)) = search_key.get() {
             // Back from a hit: the list is still here, scroll and all.
-            let key = format!("{translation}:{query}");
+            let key = search_marker(&translation, &query, &scope);
             let held = s.search.with_untracked(|search| match search {
                 Search::Ready { key: shown, .. } => *shown == key,
                 _ => false,
             });
             if !held {
                 s.search.set(Search::Idle);
-                fetch_search(s, translation, query);
+                fetch_search(s, translation, query, scope);
             }
         }
     });

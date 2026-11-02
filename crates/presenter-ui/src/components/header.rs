@@ -122,7 +122,7 @@ pub fn Header() -> impl IntoView {
 
                 let timer = gloo_timers::callback::Timeout::new(300, move || {
                     leptos::task::spawn_local(async move {
-                        match bible_api::search(&val, &translation, Some(20)).await {
+                        match bible_api::search(&val, &translation, Some(20), None).await {
                             Ok(hits) => {
                                 search_results.set(hits);
                                 has_searched.set(true);

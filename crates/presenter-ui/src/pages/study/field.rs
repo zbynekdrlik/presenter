@@ -101,7 +101,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     // The search view's words stay in the field; leaving them empties it.
     let shown_query = Memo::new(move |_| {
         s.route.with(|route| match &route.view {
-            StudyView::Search { query } => Some(query.clone()),
+            StudyView::Search { query, .. } => Some(query.clone()),
             _ => None,
         })
     });

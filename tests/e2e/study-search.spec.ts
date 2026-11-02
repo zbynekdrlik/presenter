@@ -19,6 +19,7 @@ import {
   type ServerHandle,
 } from "./support";
 import {
+  dropDeliberateNlt503,
   expectChapter,
   favourite,
   field,
@@ -307,6 +308,65 @@ test("the same reference again scrolls back to the verse", async ({ browser }) =
   await field(page).fill("zid 11 35");
   await field(page).press("Enter");
   await expect(verse(page, 35)).toBeInViewport();
+  await finish(opened);
+});
+
+test("scope chips narrow a search and the URL keeps the scope", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=HEB.11", "slk-seb:HEB.11");
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("viera zárukou");
+  await field(page).press("Enter");
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou");
+  const chip = (scope: string) => page.locator(`[data-role="search-scope"][data-scope="${scope}"]`);
+  await expect(page.locator('[data-role="search-scope"]')).toHaveText(["Celá Biblia", "SZ", "NZ", "Hebrejom"]);
+  await expect(chip("all")).toHaveAttribute("aria-pressed", "true");
+
+  await chip("ot").tap();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou|ot");
+  await expect(page).toHaveURL(/scope=ot/);
+  await expect(chip("ot")).toHaveAttribute("aria-pressed", "true");
+  await expect(hits(page).filter({ hasText: "Hebrejom" })).toHaveCount(0);
+
+  await chip("HEB").tap();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou|HEB");
+  await expect(hits(page).first()).toHaveAttribute("data-book-code", "HEB");
+  const books = await hits(page).evaluateAll((all) => all.map((el) => el.getAttribute("data-book-code")));
+  expect(new Set(books)).toEqual(new Set(["HEB"]));
+
+  await page.reload();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou|HEB");
+  await expect(chip("HEB")).toHaveAttribute("aria-pressed", "true");
+  await expect(chip("HEB")).toHaveText("Hebrejom");
+  await assertNoHorizontalOverflow(page);
+  await finish(opened);
+});
+
+test("a quoted query finds the phrase and marks it whole", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=eng-kjv&p=GEN.1", "eng-kjv:GEN.1");
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("„substance of things“");
+  await field(page).press("Enter");
+  await expect(results(page)).toHaveAttribute("data-state", "ready");
+  const hit = hits(page).first();
+  await expect(hit).toContainText("Hebrews 11:1");
+  await expect(hit.locator("mark")).toHaveText(["substance of things"]);
+  await finish(opened);
+});
+
+test("a hit opens the comparison of its verse, and Back returns to the list", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_360, "/ui/study?view=search&t=slk-seb&q=viera+z%C3%A1rukou", null);
+  const { page } = opened;
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou");
+  const row = page.locator(".study-hit-row").filter({ hasText: "Hebrejom 11:1" }).first();
+  await assertMinTapTarget(row.locator('[data-role="search-hit-compare"]'), 44);
+  await assertNoHorizontalOverflow(page);
+  await row.locator('[data-role="search-hit-compare"]').tap();
+  await expect(page.locator('[data-role="study-compare"]')).toHaveAttribute("data-loaded-for", "HEB.11.1");
+  await page.goBack();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou");
+  dropDeliberateNlt503(opened);
   await finish(opened);
 });
 

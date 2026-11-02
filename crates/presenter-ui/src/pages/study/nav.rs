@@ -41,7 +41,7 @@ fn entry(s: Study, route: &StudyRoute) -> HistoryEntry {
         StudyView::Reader { book, chapter } => {
             reader_label(&book_name(s, route, book, *chapter), *chapter, translation)
         }
-        StudyView::Search { query } => search_label(query, translation),
+        StudyView::Search { query, .. } => search_label(query, translation),
         StudyView::Compare {
             book,
             chapter,

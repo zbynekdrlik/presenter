@@ -162,3 +162,4 @@ preparation (the sermon views are in `sermon-prep.md`).
 
 - **A spec opens its own sermon by id,** never `.first()`: the server lives through the whole file and the list runs by service date, so an earlier test's sermon comes first. Only the retry's fresh database hid this.
 - **Repeating a spec locally:** the local-only `integrity` warning fails every test at `finish`, so each repeat restarts the server (~20 s). Filter it in a throwaway edit first. A `[pageerror]` line now carries the stack: read it before calling a failure a scroll or timing problem.
+- **Search scope** lives in the URL (`scope=`, left out for `all`) and in the settle marker (`slk-seb:viera|HEB`); the book chip is the chapter still held behind the search, so a search opened from a bare URL has none. A quoted query matches the server's phrase rule, curly quotes included: `mark_matches` marks the whole run.

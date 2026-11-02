@@ -113,6 +113,8 @@ pub enum StudyView {
     },
     Search {
         query: String,
+        /// `all|ot|nt|<BOOK>`, in the URL unless it is `all`.
+        scope: String,
     },
     /// One verse (a phone) or its chapter (wider) across translations. An empty
     /// `translations` = the favourites.
@@ -169,6 +171,7 @@ impl StudyRoute {
             translation: Some(translation.to_string()),
             view: StudyView::Search {
                 query: query.to_string(),
+                scope: SCOPE_ALL.to_string(),
             },
             verses: None,
             sheet: None,
@@ -303,6 +306,7 @@ impl StudyRoute {
         let view = match view.as_deref() {
             Some("search") => StudyView::Search {
                 query: query.filter(|text| !text.trim().is_empty())?,
+                scope: scope.unwrap_or_else(|| SCOPE_ALL.to_string()),
             },
             Some("compare") => {
                 let (book, chapter, verse) = place?;
@@ -371,11 +375,14 @@ impl StudyRoute {
                     });
                 }
             }
-            StudyView::Search { query } => {
+            StudyView::Search { query, scope } => {
                 params.push(format!(
                     "q={}",
                     urlencoding::encode(query).replace("%20", "+")
                 ));
+                if scope != SCOPE_ALL {
+                    params.push(format!("scope={}", urlencoding::encode(scope)));
+                }
             }
             StudyView::Compare {
                 book,
@@ -787,6 +794,9 @@ pub fn extend_selection(current: Option<(u16, u16)>, tapped: u16) -> Option<(u16
 /// A hit's text cut at the words the query matched. The server searches word
 /// prefixes without diacritics, and so does this; `true` = marked.
 pub fn mark_matches(text: &str, query: &str) -> Vec<(String, bool)> {
+    if let Some(words) = phrase_words(query) {
+        return mark_phrase(text, &words);
+    }
     let needles: Vec<String> = query
         .split_whitespace()
         .map(|word| {
@@ -820,6 +830,58 @@ pub fn mark_matches(text: &str, query: &str) -> Vec<(String, bool)> {
             push(&text[index..index + c.len_utf8()], false);
         }
         start = index + c.len_utf8();
+    }
+    parts
+}
+
+/// The folded words of a fully quoted query, the server's exact phrase.
+fn phrase_words(query: &str) -> Option<Vec<String>> {
+    let quote = |c: char| matches!(c, '"' | '„' | '“' | '”');
+    let inner = query.trim().strip_prefix(quote)?.strip_suffix(quote)?;
+    if inner.contains(quote) {
+        return None;
+    }
+    let words: Vec<String> = inner
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(fold)
+        .collect();
+    (!words.is_empty()).then_some(words)
+}
+
+/// Each run of the phrase's words is one mark, the gaps inside it included.
+fn mark_phrase(text: &str, phrase: &[String]) -> Vec<(String, bool)> {
+    let mut words: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (index, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        match (c.is_alphanumeric(), start) {
+            (true, None) => start = Some(index),
+            (false, Some(from)) => {
+                words.push((from, index));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    let folded: Vec<String> = words.iter().map(|&(a, b)| fold(&text[a..b])).collect();
+    let mut parts = Vec::new();
+    let mut done = 0;
+    let mut at = 0;
+    while at + phrase.len() <= folded.len() {
+        if folded[at..at + phrase.len()] != *phrase {
+            at += 1;
+            continue;
+        }
+        let (from, to) = (words[at].0, words[at + phrase.len() - 1].1);
+        if from > done {
+            parts.push((text[done..from].to_string(), false));
+        }
+        parts.push((text[from..to].to_string(), true));
+        done = to;
+        at += phrase.len();
+    }
+    if done < text.len() {
+        parts.push((text[done..].to_string(), false));
     }
     parts
 }
@@ -1374,6 +1436,39 @@ mod tests {
             suggest("  ", &structure("seb"), "slk-seb"),
             StudySuggest::default()
         );
+    }
+
+    #[test]
+    fn a_quoted_query_marks_the_whole_phrase_and_nothing_else() {
+        let parts = mark_matches(
+            "Viera, nádej. Viera je nádej, nádej viera",
+            "„viera, je nádej“",
+        );
+        assert_eq!(
+            parts,
+            vec![
+                ("Viera, nádej. ".to_string(), false),
+                ("Viera je nádej".to_string(), true),
+                (", nádej viera".to_string(), false),
+            ]
+        );
+        let none = mark_matches("Viera je", "\"nádej\"");
+        assert_eq!(none, vec![("Viera je".to_string(), false)]);
+        let two = mark_matches("a b a b", "\"a b\"");
+        assert_eq!(two.iter().filter(|(_, marked)| *marked).count(), 2);
+    }
+
+    #[test]
+    fn a_search_url_keeps_its_scope_and_all_stays_out_of_it() {
+        let mut route = StudyRoute::search("slk-seb", "viera");
+        assert!(!route.to_url().contains("scope"));
+        if let StudyView::Search { scope, .. } = &mut route.view {
+            *scope = "HEB".to_string();
+        }
+        let url = route.to_url();
+        assert!(url.ends_with("q=viera&scope=HEB"), "{url}");
+        let parsed = StudyRoute::parse(url.split_once('?').expect("a query").1).expect("a route");
+        assert_eq!(parsed, route);
     }
 
     #[test]
