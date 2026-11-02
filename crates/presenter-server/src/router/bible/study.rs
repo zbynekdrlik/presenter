@@ -116,7 +116,7 @@ async fn chapter(
     let chapter = state
         .study_chapter(&query.translation, &query.book_code, query.chapter)
         .await?
-        .ok_or_else(|| AppError::not_found("Preklad, kniha alebo kapitola neexistuje"))?;
+        .ok_or_else(|| AppError::not_found("Preklad alebo kniha neexistuje"))?;
     Ok(Json(StudyChapterDto::new(query.translation, chapter)))
 }
 

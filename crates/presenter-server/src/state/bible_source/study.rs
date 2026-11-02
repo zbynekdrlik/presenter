@@ -3,8 +3,10 @@
 //!
 //! Cross-references never call a remote API: a list of ten would spend ten of
 //! the NLT's 500 daily requests and fail whole with it, so the NLT reads the
-//! KJV's text and says so. A place the translation does not have stays inside
-//! its chapter, and its text comes from the KJV (`fallback_translation`).
+//! KJV's text and says so. A verse a translation does not have comes from the
+//! KJV (`fallback_translation`): clamping it would show another verse (Joel
+//! 2:28 is 3:1 in the SEB, whose chapter 2 ends at 27). Only the KJV's own
+//! gaps (3 John 15) stay inside the chapter.
 
 use std::collections::HashMap;
 
@@ -152,31 +154,49 @@ struct Placed {
     end_book: Option<u16>,
 }
 
+/// Which start verses a structure accepts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartVerse {
+    /// A verse past the chapter's end is another translation's place.
+    Exact,
+    /// The last resort: keep a place inside the chapter.
+    Clamped,
+}
+
 /// Keep a row's range inside the structure's chapters; the end of a range that
 /// leaves the book is the book's last verse. `None`: the structure has no such
-/// chapter.
-fn place_reference(structure: &Structure, row: &CrossReference) -> Option<Placed> {
+/// place.
+fn place_reference(
+    structure: &Structure,
+    row: &CrossReference,
+    start_verse: StartVerse,
+) -> Option<Placed> {
     let number = |value: i32| u16::try_from(value).ok();
     let book = number(row.to_book)?;
     let chapter = number(row.to_chapter)?;
-    let verse = number(row.to_verse)?.min(structure.verse_count(book, chapter)?);
-    let start = (chapter, verse);
+    let count = structure.verse_count(book, chapter)?;
+    let verse = number(row.to_verse)?;
+    if verse > count && start_verse == StartVerse::Exact {
+        return None;
+    }
+    let start = (chapter, verse.min(count));
     let row_end = (number(row.to_chapter_end)?, number(row.to_verse_end)?);
+    let last = structure.last_place(book)?;
     if row.to_book_end != row.to_book {
         return Some(Placed {
             start,
-            end: structure.last_place(book)?,
+            end: last,
             label_end: row_end,
             end_book: number(row.to_book_end),
         });
     }
-    let last = structure.last_place(book)?;
-    let chapter_end = row_end.0.min(last.0);
-    let verse_end = match structure.verse_count(book, chapter_end) {
-        Some(count) => row_end.1.min(count),
-        None => row_end.1,
+    let end = if row_end.0 > last.0 {
+        last
+    } else {
+        let count = structure.verse_count(book, row_end.0).unwrap_or(row_end.1);
+        (row_end.0, row_end.1.min(count))
     };
-    let end = (chapter_end, verse_end).max(start);
+    let end = end.max(start);
     Some(Placed {
         start,
         end,
@@ -191,9 +211,9 @@ impl AppState {
         Ok(translations.iter().any(|known| known.code == translation))
     }
 
-    /// `None`: no such translation, book or chapter. A chapter only the KJV
-    /// has (a partial translation, Malachi 4 in the SEB) is a chapter with no
-    /// verses, so the reader can say why and move on.
+    /// `None`: no such translation or book. A chapter the translation lacks
+    /// (a partial translation, Malachi 4 in the SEB) has no verses, so the
+    /// reader can say why and move on.
     pub(crate) async fn study_chapter(
         &self,
         translation: &str,
@@ -209,34 +229,17 @@ impl AppState {
         let summaries = self.bible_book_chapter_summaries(translation).await?;
         let structure = Structure::new(&summaries);
         let (prev, next) = structure.neighbours(canon.number, chapter);
-        let Some(verse_count) = structure.verse_count(canon.number, chapter) else {
-            let reference = self
-                .bible_book_chapter_summaries(STRUCTURE_TRANSLATION_CODE)
-                .await?;
-            if Structure::new(&reference)
-                .verse_count(canon.number, chapter)
-                .is_none()
-            {
-                return Ok(None);
-            }
-            return Ok(Some(StudyChapter {
-                book_code: canon.code.to_string(),
-                book_number: canon.number,
-                book: canon.english_name.to_string(),
-                chapter,
-                verse_count: 0,
-                prev,
-                next,
-                verses: Vec::new(),
-            }));
-        };
         let book = structure
             .name(canon.number)
             .unwrap_or(canon.english_name)
             .to_string();
-        let verses = self
-            .study_verses(translation, canon, &book, chapter, verse_count)
-            .await?;
+        let verse_count = structure.verse_count(canon.number, chapter).unwrap_or(0);
+        let verses = if verse_count == 0 {
+            Vec::new()
+        } else {
+            self.study_verses(translation, canon, &book, chapter, verse_count)
+                .await?
+        };
         Ok(Some(StudyChapter {
             book_code: canon.code.to_string(),
             book_number: canon.number,
@@ -381,7 +384,7 @@ impl AppState {
         else {
             return Ok(None);
         };
-        let own_place = place_reference(own, row);
+        let own_place = place_reference(own, row, StartVerse::Exact);
         let own_text = match &own_place {
             Some(place) => self.range_text(reader, book.code, place).await?,
             None => String::new(),
@@ -389,7 +392,7 @@ impl AppState {
         let (place, names, text, read_from) = match own_place {
             Some(place) if !own_text.is_empty() => (place, own, own_text, reader),
             _ => {
-                let Some(place) = place_reference(kjv, row) else {
+                let Some(place) = place_reference(kjv, row, StartVerse::Clamped) else {
                     return Ok(None);
                 };
                 let text = self

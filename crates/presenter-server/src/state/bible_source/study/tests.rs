@@ -78,10 +78,11 @@ async fn seed(state: &AppState, code: &str, books: &[Book]) {
         .expect("seed");
 }
 
-fn kjv_books() -> [Book; 8] {
+fn kjv_books() -> [Book; 9] {
     [
         book("Genesis", "GEN", 1, 1, 3),
-        book("Genesis", "GEN", 1, 2, 2),
+        book("Genesis", "GEN", 1, 2, 5),
+        book("Malachi", "MAL", 39, 3, 2),
         book("Malachi", "MAL", 39, 4, 6),
         book("Matthew", "MAT", 40, 1, 3),
         book("2 John", "2JN", 63, 1, 13),
@@ -91,10 +92,11 @@ fn kjv_books() -> [Book; 8] {
     ]
 }
 
-fn seb_books() -> [Book; 4] {
+fn seb_books() -> [Book; 5] {
     [
         book("Genezis", "GEN", 1, 1, 3),
         book("Genezis", "GEN", 1, 2, 2),
+        book("Malachiáš", "MAL", 39, 3, 2),
         book("Hebrejom", "HEB", 58, 11, 4),
         book("Matúš", "MAT", 40, 1, 3),
     ]
@@ -181,12 +183,13 @@ async fn a_translation_without_markup_answers_plain_verses() {
 }
 
 #[tokio::test]
-async fn a_chapter_only_the_kjv_has_is_empty_and_still_moves_on() {
+async fn a_chapter_the_translation_lacks_is_empty_and_still_moves_on() {
     let state = state().await;
     let chapter = state.study_chapter(SEB, "MAL", 4).await.unwrap().unwrap();
     assert!(chapter.verses.is_empty());
     assert_eq!(chapter.verse_count, 0);
-    assert_eq!(chapter.prev, place("GEN", 2));
+    assert_eq!(chapter.book, "Malachiáš");
+    assert_eq!(chapter.prev, place("MAL", 3));
     assert_eq!(chapter.next, place("MAT", 1));
 }
 
@@ -199,7 +202,6 @@ async fn unknown_places_are_none() {
         .unwrap()
         .is_none());
     assert!(state.study_chapter(KJV, "XXX", 1).await.unwrap().is_none());
-    assert!(state.study_chapter(KJV, "GEN", 99).await.unwrap().is_none());
     let references = state.study_crossrefs("xxx", "GEN", 1, 1, 10);
     assert!(references.await.unwrap().is_none());
     let references = state.study_crossrefs(KJV, "XXX", 1, 1, 10);
@@ -314,6 +316,34 @@ async fn a_place_the_translation_lacks_comes_from_the_kjv_and_says_so() {
     assert_eq!(items[0].label, "Malachi 4:5");
     assert_eq!(items[0].text, "eng-kjv MAL 4:5");
     assert_eq!(items[0].fallback_translation.as_deref(), Some(KJV));
+}
+
+#[tokio::test]
+async fn a_verse_past_the_translations_chapter_is_never_another_verse() {
+    let state = state().await;
+    seed_references(&state, &[reference((1, 2, 4), (1, 2, 5), 9)]).await;
+    let (_, items) = state
+        .study_crossrefs(SEB, "GEN", 1, 1, 10)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(items[0].label, "Genesis 2:4-5");
+    assert_eq!(items[0].text, "eng-kjv GEN 2:4 eng-kjv GEN 2:5");
+    assert_eq!(items[0].fallback_translation.as_deref(), Some(KJV));
+}
+
+#[tokio::test]
+async fn a_range_past_the_translations_last_chapter_ends_with_its_last_verse() {
+    let state = state().await;
+    seed_references(&state, &[reference((39, 3, 1), (39, 4, 1), 9)]).await;
+    let (_, items) = state
+        .study_crossrefs(SEB, "GEN", 1, 1, 10)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(items[0].label, "Malachiáš 3:1-2");
+    assert_eq!(items[0].text, "slk-seb MAL 3:1 slk-seb MAL 3:2");
+    assert_eq!(items[0].fallback_translation, None);
 }
 
 #[tokio::test]

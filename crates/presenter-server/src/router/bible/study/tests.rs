@@ -129,7 +129,6 @@ async fn chapter_answers_camel_case_and_404_for_the_unknown() {
     for uri in [
         "/bible/study/chapter?translation=xxx&book_code=MAT&chapter=1",
         "/bible/study/chapter?translation=eng-kjv&book_code=XXX&chapter=1",
-        "/bible/study/chapter?translation=eng-kjv&book_code=MAT&chapter=9",
     ] {
         assert_eq!(get(&app, uri).await.0, StatusCode::NOT_FOUND, "{uri}");
     }
@@ -225,6 +224,16 @@ async fn search_takes_a_scope_and_a_quoted_phrase() {
     )
     .await;
     assert_eq!(phrase.as_array().map(Vec::len), Some(1));
+    let (_, title) = get(
+        &app,
+        "/bible/search?translation=eng-kjv&query=%22matthew%22",
+    )
+    .await;
+    assert_eq!(title.as_array().map(Vec::len), Some(0));
+    let (_, empty) = get(&app, "/bible/search?translation=eng-kjv&query=%22%22").await;
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
+    let (_, marks) = get(&app, "/bible/search?translation=eng-kjv&query=%22-%22").await;
+    assert_eq!(marks.as_array().map(Vec::len), Some(0));
     let (_, broken) = get(
         &app,
         "/bible/search?translation=eng-kjv&query=%22love%20beginning%22",

@@ -21,7 +21,7 @@ use crate::repository::Repository;
 fn build_fts_query(input: &str) -> Option<String> {
     if let Some(phrase) = quoted_phrase(input) {
         let words: Vec<&str> = phrase.split_whitespace().collect();
-        return (!words.is_empty()).then(|| format!("\"{}\"", words.join(" ")));
+        return (!words.is_empty()).then(|| format!("content : \"{}\"", words.join(" ")));
     }
     let tokens: Vec<String> = input
         .split_whitespace()
@@ -40,13 +40,18 @@ fn build_fts_query(input: &str) -> Option<String> {
     }
 }
 
-/// The words of a fully quoted input, punctuation turned into spaces: inside
-/// an FTS5 phrase a `"` would end it, and the tokenizer splits on the rest.
+/// The words of one fully quoted input, punctuation turned into spaces and
+/// combining marks dropped (the tokenizer folds them): inside an FTS5 phrase a
+/// `"` would end it. Two quoted parts are not one phrase.
 fn quoted_phrase(input: &str) -> Option<String> {
     let inner = input.trim().strip_prefix('"')?.strip_suffix('"')?;
+    if inner.contains('"') {
+        return None;
+    }
     Some(
         inner
             .chars()
+            .filter(|c| !matches!(c, '\u{0300}'..='\u{036F}'))
             .map(|c| if c.is_alphanumeric() { c } else { ' ' })
             .collect(),
     )
@@ -149,6 +154,13 @@ impl Repository {
         scope: BookScope,
         limit: u32,
     ) -> anyhow::Result<Vec<bible_passage::Model>> {
+        let phrase = quoted_phrase(query);
+        if phrase
+            .as_deref()
+            .is_some_and(|words| words.trim().is_empty())
+        {
+            return Ok(Vec::new());
+        }
         if let Some(fts_query) = build_fts_query(query) {
             let result = self
                 .fts_search_raw(&fts_query, translation_code, scope, limit)
@@ -164,7 +176,7 @@ impl Repository {
 
         // Fallback: LIKE-based search
         let (first_book, last_book) = scope.book_numbers();
-        let text = quoted_phrase(query).unwrap_or_else(|| query.to_string());
+        let text = phrase.unwrap_or_else(|| query.to_string());
         let pattern = format!("%{}%", sanitize_like_input(text.trim()));
         let mut q = bible_passage::Entity::find()
             .filter(bible_passage::Column::Content.like(pattern))
@@ -353,11 +365,19 @@ mod fts_query_tests {
         );
         assert_eq!(
             build_fts_query("\"viera, nádej-láska\"").as_deref(),
-            Some("\"viera nádej láska\"")
+            Some("content : \"viera nádej láska\"")
         );
         assert_eq!(
             build_fts_query("\"viera\" nádej").as_deref(),
             Some("viera* nádej*")
+        );
+        assert_eq!(
+            build_fts_query("\"\"viera\" \"nádej\"\"").as_deref(),
+            Some("viera* nádej*")
+        );
+        assert_eq!(
+            build_fts_query("\"na\u{0301}dej\"").as_deref(),
+            Some("content : \"nadej\"")
         );
         assert_eq!(build_fts_query("\" - \""), None);
         assert_eq!(build_fts_query("\""), None);
