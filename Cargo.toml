@@ -12,7 +12,7 @@ exclude = ["crates/presenter-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.338"
+version = "0.4.339"
 edition = "2021"
 authors = ["Presenter Team <drlik.zbynek@gmail.com>"]
 license = "MIT"
