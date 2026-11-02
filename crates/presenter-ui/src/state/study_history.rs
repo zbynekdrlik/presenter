@@ -129,6 +129,21 @@ impl StudyHistory {
         !self.entries.is_empty() && self.offset() > 0
     }
 
+    /// How many entries right behind the current one this describes.
+    pub fn run_behind(&self, belongs: impl Fn(&HistoryEntry) -> bool) -> usize {
+        self.entries
+            .iter()
+            .take(self.offset())
+            .rev()
+            .take_while(|entry| belongs(entry))
+            .count()
+    }
+
+    /// The entries behind the current one.
+    pub fn behind(&self) -> usize {
+        self.offset()
+    }
+
     /// ▶ works when a PLACE lies ahead: a closed sheet is no place to return to.
     pub fn can_go_forward(&self) -> bool {
         self.entries
@@ -179,6 +194,17 @@ mod tests {
             label: name.to_string(),
             listed: true,
         }
+    }
+
+    #[test]
+    fn the_run_behind_stops_at_the_first_entry_that_does_not_belong() {
+        let mut history = StudyHistory::starting("g".to_string(), place("a"));
+        history.push(sheet("b"));
+        history.push(sheet("c"));
+        history.push(sheet("d"));
+        assert_eq!(history.behind(), 3);
+        assert_eq!(history.run_behind(|entry| !entry.listed), 2);
+        assert_eq!(history.run_behind(|entry| entry.listed), 0);
     }
 
     fn sheet(name: &str) -> HistoryEntry {

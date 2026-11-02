@@ -112,6 +112,7 @@ web-sys = { version = "0.3", features = [
     "VisibilityState",
     "VisualViewport",
     "WebSocket",
+    "Selection",
     "Window",
 ] }
 js-sys = "0.3"

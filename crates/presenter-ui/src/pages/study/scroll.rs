@@ -6,7 +6,7 @@ use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use super::{Chapter, Search, Study};
+use super::{strongs_view, Chapter, Search, Study};
 use crate::state::session;
 use crate::state::study::{chapter_key, StudyRoute, StudyView, KEY_LAST_VERSE};
 
@@ -40,10 +40,13 @@ pub(super) fn settle(s: Study) {
             Chapter::Missing(held) | Chapter::Failed(held, _) => *held == place,
             Chapter::None => false,
         }),
-        None => s.search.with_untracked(|search| match search {
-            Search::Ready { key, .. } => s.search_state_key().as_ref() == Some(key),
-            _ => false,
-        }),
+        None => {
+            strongs_view::settled(s)
+                || s.search.with_untracked(|search| match search {
+                    Search::Ready { key, .. } => s.search_state_key().as_ref() == Some(key),
+                    _ => false,
+                })
+        }
     };
     if !on_screen {
         return;

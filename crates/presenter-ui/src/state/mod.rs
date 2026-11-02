@@ -15,7 +15,9 @@ pub mod song_load;
 pub mod stage;
 pub mod study;
 pub mod study_compare;
+pub mod study_field;
 pub mod study_history;
+pub mod study_word;
 pub mod tablet;
 pub mod view_nav;
 

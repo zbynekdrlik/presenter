@@ -1108,7 +1108,9 @@
     transform: none;
   }
 
-  .study:has(.study-sheet),
+  /* The word sheet lies over the text behind its backdrop: spec §6.6, the
+     reading position never moves. */
+  .study:has(.study-sheet:not([data-role="word-sheet"])),
   .study[data-pane="true"] {
     padding-right: clamp(380px, 32vw, 480px);
   }
@@ -1136,7 +1138,7 @@
 /* Room for the text beside both; narrower, the sheet lies over it and the text
    keeps its width (264 px at 1024 is no reading column). */
 @media (min-width: 1200px) {
-  .study[data-pane="true"]:has(.study-sheet) {
+  .study[data-pane="true"]:has(.study-sheet:not([data-role="word-sheet"])) {
     padding-right: calc(2 * clamp(380px, 32vw, 480px));
   }
 }
@@ -1272,7 +1274,6 @@
 .study-compare__grid {
   display: grid;
   gap: 12px 16px;
-  align-items: start;
 }
 
 .study-compare[data-columns="1"] .study-compare__grid {
@@ -1352,11 +1353,27 @@
   font-size: 16px;
 }
 
+.study-bar--compare {
+  grid-template-columns: minmax(44px, 1fr) minmax(0, auto) minmax(44px, 1fr);
+}
+
 .study-compare__nav {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   font-weight: 700;
+  white-space: pre;
+}
+
+.study-compare__book {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.study-compare__verse {
+  flex: none;
 }
 
 /* Cross-references (spec §6.7). */
@@ -1393,4 +1410,155 @@
 .study-crossref__code {
   color: var(--study-muted);
   font-size: 14px;
+}
+
+/* Verse text (spec §5.2, §6.3): one renderer for the reader and compare. */
+.study-line {
+  margin: 0;
+}
+
+.study-heading {
+  margin: 8px 0 4px;
+  color: var(--study-chip-ink);
+  font-size: 1em;
+  font-weight: 700;
+}
+
+.study-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -12px -10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #7dabf0;
+  font-size: 0.8em;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.study-note__text {
+  display: block;
+  margin: 4px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--study-panel);
+  color: var(--study-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.study-word {
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.study-word[data-active="true"] {
+  background: rgba(59, 130, 246, 0.35);
+}
+
+.study-word:focus-visible {
+  outline: 2px solid var(--study-blue);
+}
+
+.study-strongs-badge {
+  margin-inline: 1px 2px;
+  color: #7dabf0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 0.6em;
+}
+
+.study-chapter__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.study-chapter__head .study-chip {
+  flex: none;
+}
+
+.study-chip[aria-pressed="true"] {
+  background: var(--study-blue);
+  color: #fff;
+}
+
+/* The word sheet (spec §6.6). */
+.study-word-entry {
+  padding-block: 8px;
+}
+
+.study-word-entry p {
+  margin: 0 4px 8px;
+  overflow-wrap: anywhere;
+}
+
+.study-word-entry__lemma {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.study-word-entry__greek {
+  font-family: Georgia, "Noto Serif", "Droid Serif", serif;
+  font-size: 22px;
+}
+
+.study-word-entry__sound,
+.study-word-entry__kjv {
+  color: var(--study-muted);
+}
+
+.study-word-entry__actions,
+.study-word-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.study-word-steps {
+  justify-content: space-between;
+  padding-bottom: 4px;
+}
+
+.study-word-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: #9cc3ff;
+  text-decoration: underline;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+/* The Strong's view (spec §6.6). */
+.study-results__title {
+  margin: 0 4px;
+  font-size: 1.15rem;
+}
+
+.study-scopes {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 36 books would push the verses off a phone: one row, sideways. */
+body[data-shell="phone"] .study-scopes {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+body[data-shell="phone"] .study-scopes .study-chip {
+  flex: none;
 }

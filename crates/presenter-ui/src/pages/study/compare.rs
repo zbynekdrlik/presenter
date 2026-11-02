@@ -9,16 +9,20 @@ use leptos::prelude::*;
 use presenter_core::bible::resolver::Step;
 use presenter_core::bible::sermon::translation_short_code;
 
+use super::markup_view::{NumbersChip, VerseBody};
 use super::reader::chapter_settled_untracked;
 use super::scroll::{self, ScrollPlan};
 use super::swipe::SwipeTracker;
 use super::{nav, study_error, ChapterPlace, Study};
 use crate::api::sermons::is_not_found;
 use crate::api::study::{load_chapter, ChapterText};
-use crate::state::study::{step_chapter, visible_favourites, StudyRoute, StudyView};
+use crate::state::study::{
+    chapter_key, step_chapter, visible_favourites, StudyRoute, StudyVerse, StudyView,
+};
 use crate::state::study_compare::{
     fitted, listed_translations, switch_column, verse_numbers, CompareLayout, MISSING_VERSE,
 };
+use crate::state::study_word::{has_numbers, STRONGS_TRANSLATION};
 
 /// One translation's chapter in the compare view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +78,49 @@ fn listed(s: Study) -> Vec<String> {
 
 fn shown(s: Study) -> Vec<String> {
     fitted(listed(s), layout(s))
+}
+
+/// What compare holds of the numbered text, for the word sheet.
+pub(super) enum NumberedText {
+    /// Not answered yet.
+    Waiting,
+    /// No KJV column on this screen.
+    Absent,
+    /// The KJV column's read failed: its retry may still bring the word.
+    Failed,
+    /// `only` = the one verse a phone shows.
+    Here {
+        verses: Vec<StudyVerse>,
+        only: Option<u16>,
+    },
+}
+
+pub(super) fn numbered_text(s: Study) -> NumberedText {
+    let Some(at) = spot(s) else {
+        return NumberedText::Absent;
+    };
+    if s.translations.with(Vec::is_empty) {
+        return NumberedText::Waiting;
+    }
+    if !shown(s).iter().any(|code| code == STRONGS_TRANSLATION) {
+        return NumberedText::Absent;
+    }
+    let key = chapter_key(STRONGS_TRANSLATION, &at.book, at.chapter);
+    s.compare.with(|cells| match cells.get(&key) {
+        Some(CompareCell::Ready(chapter)) => NumberedText::Here {
+            verses: chapter.verses.clone(),
+            only: (layout(s) == CompareLayout::Stacked).then_some(at.verse),
+        },
+        Some(CompareCell::Failed(_)) => NumberedText::Failed,
+        Some(CompareCell::Loading) | None => NumberedText::Waiting,
+    })
+}
+
+fn shows_numbers(s: Study) -> bool {
+    let NumberedText::Here { verses, .. } = numbered_text(s) else {
+        return false;
+    };
+    has_numbers(&verses)
 }
 
 fn place_of(spot: &Spot, translation: &str) -> ChapterPlace {
@@ -304,7 +351,7 @@ fn row(
     verse: u16,
 ) -> AnyView {
     let key = place_of(at, code).key();
-    let text = match cells.get(&key) {
+    let held = match cells.get(&key) {
         Some(CompareCell::Failed(message)) => {
             let message = message.clone();
             return view! {
@@ -326,7 +373,7 @@ fn row(
             .verses
             .iter()
             .find(|held| held.verse == verse)
-            .map(|held| held.text.clone()),
+            .cloned(),
         Some(CompareCell::Loading) | None => {
             return view! {
                 <p class="study-compare__text" data-kind="loading">"Načítava sa\u{2026}"</p>
@@ -334,10 +381,11 @@ fn row(
             .into_any();
         }
     };
-    match text {
-        Some(text) => {
-            view! { <p class="study-compare__text" data-kind="text">{text}</p> }.into_any()
+    match held {
+        Some(verse) => view! {
+            <VerseBody s=s verse=verse class="study-compare__text" kind="text" />
         }
+        .into_any(),
         None => view! {
             <p class="study-compare__text" data-kind="missing">{MISSING_VERSE}</p>
         }
@@ -450,7 +498,8 @@ fn columns(s: Study, codes: &[String], at: &Spot) -> AnyView {
     })
 }
 
-fn title(s: Study, at: &Spot, codes: &[String]) -> String {
+/// The book's name and `11:1`.
+fn title_parts(s: Study, at: &Spot, codes: &[String]) -> (String, String) {
     let book = s.compare.with(|cells| {
         codes
             .iter()
@@ -461,12 +510,15 @@ fn title(s: Study, at: &Spot, codes: &[String]) -> String {
                 _ => None,
             })
     });
-    format!(
-        "{} {}:{}",
+    (
         book.unwrap_or_else(|| at.book.clone()),
-        at.chapter,
-        at.verse
+        format!("{}:{}", at.chapter, at.verse),
     )
+}
+
+fn title(s: Study, at: &Spot, codes: &[String]) -> String {
+    let (book, place) = title_parts(s, at, codes);
+    format!("{book} {place}")
 }
 
 #[component]
@@ -514,6 +566,12 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
         })
     };
     let heading = move || place.get().map(|at| title(s, &at, &codes.get()));
+    let numbered = Memo::new(move |_| shows_numbers(s));
+    // The bar has little room: a long name gives way, the place never does.
+    let bar_part = move |part: usize| {
+        let (book, place) = title_parts(s, &place.get()?, &codes.get());
+        Some(if part == 0 { book } else { format!(" {place}") })
+    };
     let step = move |dir| Memo::new(move |_| step_target(s, dir));
     let (previous, next) = (step(Step::Prev), step(Step::Next));
 
@@ -537,11 +595,14 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
                 data-columns=columns_count
                 data-loaded-for=move || settled.get()
             >
-                <h2 class="study-compare__title" data-role="compare-title">{heading}</h2>
+                <div class="study-chapter__head">
+                    <h2 class="study-compare__title" data-role="compare-title">{heading}</h2>
+                    <NumbersChip s=s shown=numbered />
+                </div>
                 <div class="study-compare__grid">{column_chips} {body}</div>
             </section>
         </main>
-        <footer class="study-bar">
+        <footer class="study-bar study-bar--compare">
             <button
                 type="button"
                 class="study-button study-bar__step"
@@ -553,7 +614,8 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
                 <span aria-hidden="true">"\u{25C0}"</span>
             </button>
             <span class="study-compare__nav" data-role="compare-place">
-                {move || place.get().map(|at| format!("{}:{}", at.chapter, at.verse))}
+                <span class="study-compare__book">{move || bar_part(0)}</span>
+                <span class="study-compare__verse">{move || bar_part(1)}</span>
             </span>
             <button
                 type="button"

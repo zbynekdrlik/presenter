@@ -225,13 +225,29 @@ test("a sermon deleted while it is picked leaves nothing to show", async ({ brow
   await context.close();
 });
 
+test("a today's-sermons read cut off by a reload leaves no warning in the console", async ({ browser }) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  // What a reload does to a read on its way: the fetch rejects as it is torn down.
+  await page.route(/\/bible\/sermons\/today/, (route) => route.abort());
+  const line = page.waitForEvent("console", (msg) => msg.text().startsWith("todays sermons"));
+  await page.goto("/ui/operator/bible");
+  expect((await line).type()).toBe("log");
+  expect(errors.filter((text) => text.includes("todays sermons"))).toEqual([]);
+  await context.close();
+});
+
 test("the Prepared tab shows a sermon read-only and a card still plays it", async ({ browser }) => {
   const id = await sermon("Na čítanie", [1], "2031-03-09");
   const stored = await sermonOf(id);
   const { context, page, errors } = await openOperator(browser, { viewport: { width: 1280, height: 800 } } as never);
   await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
   await page.locator(`[data-role="presentation-card"][data-presentation-id="${id}"]`).click();
-  await expect(role(page, "presentation-sermon-badge")).toHaveText(/^Kázeň · ne 9\. 3\.$/);
+  await expect(
+    page.locator(`[data-role="presentation-card"][data-presentation-id="${id}"] [data-role="presentation-sermon-badge"]`),
+  ).toHaveText(/^Kázeň · ne 9\. 3\.$/);
   await expect(role(page, "sermon-badge")).toHaveText(/^Kázeň · ne 9\. 3\.$/);
   await expect(role(page, "sermon-edit-link")).toHaveAttribute("href", `/ui/study?view=sermon&id=${id}`);
   await expect(role(page, "add-empty-slide")).toHaveCount(0);

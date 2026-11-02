@@ -60,6 +60,11 @@ pub(super) fn setup_prepared(c: Console) {
                     }
                     c.sermons.set(fresh);
                 }
+                // A reload during the read lands here too, and the next
+                // bump of the version reads again: no warning for that.
+                Err(err) if err.is_cut_off() => {
+                    leptos::logging::log!("todays sermons: {err}");
+                }
                 Err(err) => {
                     leptos::logging::warn!("todays sermons: {err}");
                 }

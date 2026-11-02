@@ -5,11 +5,16 @@
 //! is in `state::study_history`.
 
 use presenter_core::bible::canonical_book_by_code;
-use presenter_core::bible::resolver::{lookup, parse, Resolution, Step, Versification};
+use presenter_core::bible::resolver::{Step, Versification};
 use presenter_core::bible::sermon::translation_short_code;
+use presenter_core::bible::{normalize_strongs, VerseMarkup};
 use serde::{Deserialize, Serialize};
 
-use crate::state::bible_console::{console_view, ConsoleView};
+pub use crate::state::study_field::{
+    chapter_grid, preview_target, suggest, suggest_unresolved, ChapterGrid, FieldEnter,
+    StudySuggest, StudyTarget,
+};
+use crate::state::study_word::{normalize_scope, WordPlace, SCOPE_ALL};
 
 /// localStorage / sessionStorage keys (spec §6.1), after `presenter:`.
 pub const KEY_LAST: &str = "study.last";
@@ -26,7 +31,7 @@ pub const START_CHAPTER: u16 = 1;
 pub const DEFAULT_FAVOURITES: [&str; 5] = ["slk-seb", "slk-roh", "slk-sevp", "eng-kjv", "eng-nlt"];
 
 /// The server's minimum for `/bible/search`.
-const MIN_SEARCH_CHARS: usize = 2;
+pub(crate) const MIN_SEARCH_CHARS: usize = 2;
 /// A translation with this few books holds only the gospels (`slk-mil`).
 const GOSPELS_ONLY_BOOKS: usize = 4;
 
@@ -55,6 +60,8 @@ pub enum StudySheet {
     Reorder,
     /// The cross-references of the first selected verse.
     CrossRefs,
+    /// A tagged word (`StudyRoute::word`), over the reader or compare.
+    Word,
 }
 
 impl StudySheet {
@@ -63,8 +70,9 @@ impl StudySheet {
         matches!(self, Self::Actions | Self::CrossRefs)
     }
 
-    fn to_param(self) -> String {
-        match self {
+    /// `s=`. The word sheet has its own parameters (`w`, `wv`).
+    fn to_param(self) -> Option<String> {
+        Some(match self {
             Self::Actions => "akcie".to_string(),
             Self::History => "historia".to_string(),
             Self::TextSize => "pismo".to_string(),
@@ -73,7 +81,8 @@ impl StudySheet {
             Self::Preview => "nahlad".to_string(),
             Self::Reorder => "poradie".to_string(),
             Self::CrossRefs => "odkazy".to_string(),
-        }
+            Self::Word => return None,
+        })
     }
 
     fn parse(param: &str) -> Option<Self> {
@@ -113,6 +122,12 @@ pub enum StudyView {
         verse: u16,
         translations: Vec<String>,
     },
+    /// Where a Strong's number occurs (`n`, not the spec's `s`: that is the
+    /// sheets'). `scope` = `all|ot|nt|<BOOK>`.
+    Strongs {
+        number: String,
+        scope: String,
+    },
     Sermons,
     Sermon {
         id: String,
@@ -128,6 +143,8 @@ pub struct StudyRoute {
     /// The highlighted verses of the reader, in reading order.
     pub verses: Option<(u16, u16)>,
     pub sheet: Option<StudySheet>,
+    /// The word under `StudySheet::Word`.
+    pub word: Option<WordPlace>,
     /// The sermon open beside the reader or the search on a wide screen.
     pub pane: Option<String>,
 }
@@ -142,6 +159,7 @@ impl StudyRoute {
             },
             verses: None,
             sheet: None,
+            word: None,
             pane: None,
         }
     }
@@ -154,6 +172,7 @@ impl StudyRoute {
             },
             verses: None,
             sheet: None,
+            word: None,
             pane: None,
         }
     }
@@ -173,6 +192,21 @@ impl StudyRoute {
             },
             verses: None,
             sheet: None,
+            word: None,
+            pane: None,
+        }
+    }
+
+    pub fn strongs(translation: Option<String>, number: &str, scope: &str) -> Self {
+        Self {
+            translation,
+            view: StudyView::Strongs {
+                number: number.to_string(),
+                scope: scope.to_string(),
+            },
+            verses: None,
+            sheet: None,
+            word: None,
             pane: None,
         }
     }
@@ -183,6 +217,7 @@ impl StudyRoute {
             view: StudyView::Sermons,
             verses: None,
             sheet: None,
+            word: None,
             pane: None,
         }
     }
@@ -193,6 +228,7 @@ impl StudyRoute {
             view: StudyView::Sermon { id: id.to_string() },
             verses: None,
             sheet: None,
+            word: None,
             pane: None,
         }
     }
@@ -204,7 +240,22 @@ impl StudyRoute {
 
     pub fn with_sheet(mut self, sheet: Option<StudySheet>) -> Self {
         self.sheet = sheet;
+        self.word = None;
         self
+    }
+
+    /// The word sheet on this word.
+    pub fn with_word(mut self, word: WordPlace) -> Self {
+        self.sheet = Some(StudySheet::Word);
+        self.word = Some(word);
+        self
+    }
+
+    /// Only a sheet opened, closed or changed: the reader stays where it is.
+    /// Another verse of the same chapter is a move, not a closed sheet.
+    pub fn only_sheet_differs(&self, other: &Self) -> bool {
+        (self.sheet != other.sheet || self.word != other.word)
+            && self.without_sheet().with_verses(None) == other.without_sheet().with_verses(None)
     }
 
     /// The route for a location's query string (with or without `?`). `None`
@@ -220,6 +271,10 @@ impl StudyRoute {
         let mut sheet = None;
         let mut id = None;
         let mut pane = None;
+        let mut number = None;
+        let mut scope = None;
+        let mut word_number = None;
+        let mut word_place = None;
         for pair in search.trim_start_matches('?').split('&') {
             let Some((name, value)) = pair.split_once('=') else {
                 continue;
@@ -238,6 +293,10 @@ impl StudyRoute {
                 "s" => sheet = StudySheet::parse(&value),
                 "id" => id = Some(value).filter(|id| !id.is_empty()),
                 "pane" => pane = Some(value).filter(|id| !id.is_empty()),
+                "n" => number = normalize_strongs(&value),
+                "scope" => scope = Some(normalize_scope(&value)),
+                "w" => word_number = Some(value),
+                "wv" => word_place = Some(value),
                 _ => {}
             }
         }
@@ -254,6 +313,10 @@ impl StudyRoute {
                     translations: compared,
                 }
             }
+            Some("strongs") => StudyView::Strongs {
+                number: number?,
+                scope: scope.unwrap_or_else(|| SCOPE_ALL.to_string()),
+            },
             Some("sermons") => StudyView::Sermons,
             Some("sermon") => StudyView::Sermon { id: id? },
             None => {
@@ -264,17 +327,22 @@ impl StudyRoute {
         };
         let reading = matches!(view, StudyView::Reader { .. });
         // Compare covers the sermon, but keeps it for the way back to the text.
-        let beside_text = matches!(
-            view,
-            StudyView::Reader { .. } | StudyView::Search { .. } | StudyView::Compare { .. }
-        );
+        let beside_text = keeps_sermon(&view);
         let verses = verses.filter(|_| reading);
+        // These sheets are about the verses: none, no sheet.
+        let sheet = sheet.filter(|sheet| !sheet.needs_verses() || verses.is_some());
+        // A word sits in the text of the reader or of compare.
+        let word = word_number
+            .zip(word_place)
+            .and_then(|(number, place)| WordPlace::parse(&number, &place))
+            .filter(|_| sheet.is_none())
+            .filter(|_| reading || matches!(view, StudyView::Compare { .. }));
         Some(Self {
             translation,
             view,
             verses,
-            // These sheets are about the verses: none, no sheet.
-            sheet: sheet.filter(|sheet| !sheet.needs_verses() || verses.is_some()),
+            sheet: word.as_ref().map(|_| StudySheet::Word).or(sheet),
+            word,
             pane: pane.filter(|_| beside_text),
         })
     }
@@ -285,6 +353,7 @@ impl StudyRoute {
             StudyView::Reader { .. } => {}
             StudyView::Search { .. } => params.push("view=search".to_string()),
             StudyView::Compare { .. } => params.push("view=compare".to_string()),
+            StudyView::Strongs { .. } => params.push("view=strongs".to_string()),
             StudyView::Sermons => params.push("view=sermons".to_string()),
             StudyView::Sermon { .. } => params.push("view=sermon".to_string()),
         }
@@ -323,14 +392,21 @@ impl StudyRoute {
                     params.push(format!("tt={}", codes.join(",")));
                 }
             }
+            StudyView::Strongs { number, scope } => {
+                params.push(format!("n={}", urlencoding::encode(number)));
+                params.push(format!("scope={}", urlencoding::encode(scope)));
+            }
             StudyView::Sermons => {}
             StudyView::Sermon { id } => params.push(format!("id={}", urlencoding::encode(id))),
         }
         if let Some(id) = &self.pane {
             params.push(format!("pane={}", urlencoding::encode(id)));
         }
-        if let Some(sheet) = self.sheet {
-            params.push(format!("s={}", sheet.to_param()));
+        if let Some(param) = self.sheet.and_then(StudySheet::to_param) {
+            params.push(format!("s={param}"));
+        }
+        if let Some(word) = &self.word {
+            params.extend(word.to_params());
         }
         format!("{PATH}?{}", params.join("&"))
     }
@@ -350,11 +426,7 @@ impl StudyRoute {
 
     /// A move inside the text keeps the sermon beside it.
     pub fn keeping_pane(mut self, current: &Self) -> Self {
-        if matches!(
-            self.view,
-            StudyView::Reader { .. } | StudyView::Search { .. } | StudyView::Compare { .. }
-        ) && self.pane.is_none()
-        {
+        if keeps_sermon(&self.view) && self.pane.is_none() {
             self.pane.clone_from(&current.pane);
         }
         self
@@ -370,6 +442,7 @@ impl StudyRoute {
                 view: reading.view,
                 verses: None,
                 sheet: self.sheet,
+                word: None,
                 pane: Some(id.clone()),
             }),
             (_, Some(id)) if !wide && self.shows_pane() => {
@@ -387,6 +460,17 @@ impl StudyRoute {
     pub fn without_sheet(&self) -> Self {
         self.clone().with_sheet(None)
     }
+}
+
+/// The views of the text: a sermon stays beside them.
+fn keeps_sermon(view: &StudyView) -> bool {
+    matches!(
+        view,
+        StudyView::Reader { .. }
+            | StudyView::Search { .. }
+            | StudyView::Compare { .. }
+            | StudyView::Strongs { .. }
+    )
 }
 
 fn decode(value: &str) -> String {
@@ -700,127 +784,6 @@ pub fn extend_selection(current: Option<(u16, u16)>, tapped: u16) -> Option<(u16
     }
 }
 
-// ---------------------------------------------------------------------------
-// The search field
-// ---------------------------------------------------------------------------
-
-/// Where a pick from the field goes in the reader.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StudyTarget {
-    pub book: String,
-    pub chapter: u16,
-    pub verses: Option<(u16, u16)>,
-}
-
-/// A book of the chapter grid.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChapterGrid {
-    pub code: String,
-    pub name: String,
-    pub chapters: Vec<u16>,
-}
-
-/// What the field offers under it for one input.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StudySuggest {
-    pub view: ConsoleView,
-    pub grid: Option<ChapterGrid>,
-    /// The text to search for, when the input can be words of a verse.
-    pub text_search: Option<String>,
-}
-
-impl StudySuggest {
-    /// What Enter opens: the first passage, or a book's first chapter.
-    pub fn enter_target(&self) -> Option<StudyTarget> {
-        if let Some(target) = self.view.default_target() {
-            return Some(preview_target(target));
-        }
-        let grid = self.grid.as_ref()?;
-        Some(StudyTarget {
-            book: grid.code.clone(),
-            chapter: *grid.chapters.first()?,
-            verses: None,
-        })
-    }
-}
-
-/// A resolver target as a reader position.
-pub fn preview_target(target: &crate::state::bible_console::PreviewTarget) -> StudyTarget {
-    let verses = target.segment.verse_start.map(|start| {
-        let end = target.segment.verse_end.unwrap_or(start).max(start);
-        (start, end)
-    });
-    StudyTarget {
-        book: target.book.code.clone(),
-        chapter: target.segment.chapter,
-        verses,
-    }
-}
-
-/// The resolver's reading of `input` against the reader's translation (spec
-/// §6.4), through the verse console's row builder. Words that are no reference
-/// offer the text search, and so does a word that happens to name a book
-/// ("Mojžiš", "kráľ"), under its chapters; Enter still opens the book. A hint
-/// about numbers ("Napíš aj knihu") or a chapter past the end searches nothing.
-pub fn suggest(input: &str, structure: &Versification, translation: &str) -> StudySuggest {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return StudySuggest::default();
-    }
-    let resolution = lookup(input, structure);
-    let view = console_view(&resolution, translation);
-    let grid = match &resolution {
-        Resolution::BookOnly { book, .. } => chapter_grid(structure, &book.code),
-        _ => None,
-    };
-    let wordy = trimmed.chars().count() >= MIN_SEARCH_CHARS
-        && matches!(
-            resolution,
-            Resolution::NoBook { hint: None, .. } | Resolution::BookOnly { .. }
-        );
-    StudySuggest {
-        view,
-        grid,
-        text_search: wordy.then(|| trimmed.to_string()),
-    }
-}
-
-/// The field without the translation's structure: nothing can be resolved. Words
-/// that name no book can still be searched, but a reference must not fall into
-/// the text search and come back as a false "Nič sa nenašlo".
-pub fn suggest_unresolved(input: &str) -> StudySuggest {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return StudySuggest::default();
-    }
-    let parsed = parse(input);
-    if !parsed.candidates.is_empty() || parsed.spec.is_some() || parsed.bare_ordinal.is_some() {
-        return StudySuggest {
-            view: ConsoleView {
-                hint: Some("Zoznam kníh nie je načítaný, odkaz sa nedá otvoriť".to_string()),
-                ..ConsoleView::default()
-            },
-            ..StudySuggest::default()
-        };
-    }
-    StudySuggest {
-        text_search: (trimmed.chars().count() >= MIN_SEARCH_CHARS).then(|| trimmed.to_string()),
-        ..StudySuggest::default()
-    }
-}
-
-/// The chapters of a book in this translation.
-pub fn chapter_grid(structure: &Versification, code: &str) -> Option<ChapterGrid> {
-    let book = structure.book(code)?;
-    Some(ChapterGrid {
-        code: book.code.clone(),
-        name: book.name.clone(),
-        chapters: (1..=book.chapter_count())
-            .filter(|chapter| book.verse_count(*chapter).is_some())
-            .collect(),
-    })
-}
-
 /// A hit's text cut at the words the query matched. The server searches word
 /// prefixes without diacritics, and so does this; `true` = marked.
 pub fn mark_matches(text: &str, query: &str) -> Vec<(String, bool)> {
@@ -890,6 +853,10 @@ fn fold_char(c: char) -> char {
 pub struct StudyVerse {
     pub verse: u16,
     pub text: String,
+    /// The segments of a verse with anything more than text (spec §5.2). `text`
+    /// stays what a copy or a sermon takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markup: Option<VerseMarkup>,
 }
 
 /// The chapter cache's key and the reader's settle marker: `slk-seb:HEB.11`.
@@ -1015,6 +982,97 @@ mod tests {
         assert_eq!(route.sheet, None);
         let other = StudyRoute::parse("p=HEB.11&s=pismo").expect("a route");
         assert_eq!(other.sheet, Some(StudySheet::TextSize));
+    }
+
+    #[test]
+    fn a_word_url_round_trips_over_the_reader_and_compare() {
+        for url in [
+            "/ui/study?t=eng-kjv&p=HEB.11&w=G4102&wv=1.3",
+            "/ui/study?view=compare&t=slk-seb&p=HEB.11.1&w=G4102&wv=1.3",
+        ] {
+            let route = StudyRoute::parse(url.split_once('?').expect("query").1).expect(url);
+            assert_eq!(route.sheet, Some(StudySheet::Word), "{url}");
+            assert_eq!(route.to_url(), url);
+        }
+    }
+
+    #[test]
+    fn a_word_needs_both_parameters_and_a_text_under_it() {
+        for query in [
+            "t=eng-kjv&p=HEB.11&w=G4102",
+            "t=eng-kjv&p=HEB.11&wv=1.3",
+            "t=eng-kjv&p=HEB.11&w=nie&wv=1.3",
+            "view=search&q=viera&w=G4102&wv=1.3",
+        ] {
+            let route = StudyRoute::parse(query).expect(query);
+            assert_eq!((route.sheet, route.word), (None, None), "{query}");
+        }
+    }
+
+    #[test]
+    fn closing_the_word_sheet_forgets_the_word() {
+        let route = StudyRoute::reader("eng-kjv", "HEB", 11);
+        let word = WordPlace::parse("G4102", "1.3").expect("a word");
+        let open = route.clone().with_word(word);
+        assert_eq!(open.without_sheet(), route);
+    }
+
+    #[test]
+    fn a_sheet_change_is_no_move_and_another_verse_or_chapter_is() {
+        let route = StudyRoute::reader("eng-kjv", "HEB", 11);
+        let word = |number: &str, place: &str| {
+            route
+                .clone()
+                .with_word(WordPlace::parse(number, place).expect("a word"))
+        };
+        assert!(word("G4102", "1.3").only_sheet_differs(&route));
+        // A derivation link and the Back from it.
+        assert!(word("G3982", "1.3").only_sheet_differs(&word("G4102", "1.3")));
+        assert!(!route.only_sheet_differs(&route));
+        let verse = |number| {
+            route
+                .clone()
+                .with_verses(Some((number, number)))
+                .with_sheet(Some(StudySheet::Actions))
+        };
+        assert!(!verse(1).only_sheet_differs(&verse(2)));
+        assert!(!word("G4102", "1.3").only_sheet_differs(&StudyRoute::reader("eng-kjv", "HEB", 12)));
+    }
+
+    #[test]
+    fn a_strongs_url_round_trips_and_a_bad_number_names_no_view() {
+        let route = StudyRoute::strongs(Some("slk-seb".to_string()), "G4102", "nt");
+        let url = route.to_url();
+        assert_eq!(url, "/ui/study?view=strongs&t=slk-seb&n=G4102&scope=nt");
+        assert_eq!(
+            StudyRoute::parse(url.split_once('?').expect("query").1),
+            Some(route)
+        );
+        assert_eq!(StudyRoute::parse("view=strongs"), None);
+        assert_eq!(StudyRoute::parse("view=strongs&n=nie"), None);
+    }
+
+    #[test]
+    fn a_strongs_url_normalizes_its_number_and_scope() {
+        let route = StudyRoute::parse("view=strongs&n=g0026&scope=heb").expect("a route");
+        assert_eq!(
+            route.view,
+            StudyView::Strongs {
+                number: "G26".to_string(),
+                scope: "HEB".to_string()
+            }
+        );
+        let bare = StudyRoute::parse("view=strongs&n=G26&scope=nie").expect("a route");
+        assert!(bare.to_url().ends_with("scope=all"));
+    }
+
+    #[test]
+    fn the_sermon_stays_beside_the_strongs_view() {
+        let reader = StudyRoute::parse("t=eng-kjv&p=HEB.11&pane=abc").expect("a route");
+        let view =
+            StudyRoute::strongs(reader.translation.clone(), "G26", "all").keeping_pane(&reader);
+        assert_eq!(view.pane.as_deref(), Some("abc"));
+        assert!(view.to_url().contains("pane=abc"));
     }
 
     #[test]
@@ -1223,11 +1281,32 @@ mod tests {
     }
 
     #[test]
-    fn g26_stays_a_reference_while_there_are_no_strongs_numbers() {
-        let target = suggest("G26", &structure("seb"), "slk-seb")
-            .enter_target()
-            .expect("Genezis 26");
+    fn g26_opens_the_number_and_keeps_the_resolvers_reading_as_a_row() {
+        let found = suggest("G26", &structure("seb"), "slk-seb");
+        assert_eq!(found.enter(), Some(FieldEnter::Strongs("G26".to_string())));
+        let target = found.enter_target().expect("Genezis 26");
         assert_eq!((target.book.as_str(), target.chapter), ("GEN", 26));
+    }
+
+    #[test]
+    fn g_26_with_a_space_stays_the_passage_and_offers_the_number() {
+        let found = suggest("g 26", &structure("seb"), "slk-seb");
+        let offer = found.strongs.clone().expect("the alternative");
+        assert_eq!((offer.number.as_str(), offer.first), ("G26", false));
+        assert!(matches!(found.enter(), Some(FieldEnter::Open(target)) if target.book == "GEN"));
+    }
+
+    #[test]
+    fn a_number_needs_no_structure_and_words_still_search_on_enter() {
+        let found = suggest_unresolved("G4102");
+        assert_eq!(
+            found.enter(),
+            Some(FieldEnter::Strongs("G4102".to_string()))
+        );
+        assert_eq!(
+            suggest("viera", &structure("seb"), "slk-seb").enter(),
+            Some(FieldEnter::Search("viera".to_string()))
+        );
     }
 
     #[test]

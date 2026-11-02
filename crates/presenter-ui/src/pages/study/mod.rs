@@ -14,6 +14,7 @@ mod field;
 mod header;
 mod history;
 mod long_press;
+mod markup_view;
 mod nav;
 mod reader;
 mod results;
@@ -28,9 +29,11 @@ mod sermon_reorder;
 mod sermon_undo;
 mod sermons;
 mod sheet;
+mod strongs_view;
 mod swipe;
 mod text_size;
 mod verse_actions;
+mod word_sheet;
 
 use std::collections::HashMap;
 
@@ -43,7 +46,7 @@ use presenter_core::BibleTranslation;
 
 use crate::api::bible::{self as bible_api, BibleSearchHit};
 use crate::api::sermons::{is_not_found, SermonItem, SermonPassage};
-use crate::api::study::{load_chapter, ChapterCache, ChapterText};
+use crate::api::study::{load_chapter, BookCount, ChapterCache, ChapterText};
 use crate::state::bible_console::versification;
 use crate::state::session;
 use crate::state::study::{
@@ -52,6 +55,7 @@ use crate::state::study::{
     START_CHAPTER,
 };
 use crate::state::study_history::StudyHistory;
+use crate::state::study_word::KEY_NUMBERS;
 
 use add_to_sermon::AddToSermonSheet;
 use compare::{CompareCell, CompareView};
@@ -68,8 +72,10 @@ use sermon_pane::SermonPane;
 use sermon_preview::PreviewSheet;
 use sermon_reorder::ReorderSheet;
 use sermons::SermonListView;
+use strongs_view::{Occurrences, StrongsView};
 use text_size::TextSizeSheet;
 use verse_actions::VerseActionsSheet;
+use word_sheet::{LexiconEntries, WordSheet};
 
 /// `/bible/search` answers at most this many verses.
 const SEARCH_LIMIT: u32 = 100;
@@ -168,6 +174,17 @@ struct Study {
     compare: RwSignal<HashMap<String, CompareCell>>,
     /// The cross-references of the verse the sheets are about.
     crossrefs: RwSignal<CrossRefs>,
+    /// The "Čísla" chip (`study.strongsNumbers`).
+    numbers: RwSignal<bool>,
+    /// The Strong's entries read so far.
+    lexicon: RwSignal<LexiconEntries>,
+    /// What the Strong's view has loaded.
+    occurrences: RwSignal<Occurrences>,
+    /// `perBook` of the last number answered: the scope chips outlive a change
+    /// of scope and a failed read.
+    book_counts: RwSignal<Option<(String, Vec<BookCount>)>>,
+    /// What a walk through the history leaves for its `popstate`.
+    after_pop: StoredValue<Option<nav::AfterPop>>,
     /// The passage being added: a double tap adds it once.
     adding: StoredValue<Option<SermonPassage>>,
     /// One editor per opened sermon, owned by the page: its save queue outlives
@@ -419,6 +436,7 @@ fn start_route() -> StudyRoute {
         },
         verses: None,
         sheet: None,
+        word: None,
         pane: None,
     }
 }
@@ -496,6 +514,7 @@ enum ViewKind {
     Reader,
     Search,
     Compare,
+    Strongs,
     Sermons,
     Sermon(String),
 }
@@ -533,6 +552,11 @@ pub fn StudyPage() -> impl IntoView {
         phone,
         compare: RwSignal::new(HashMap::new()),
         crossrefs: RwSignal::new(CrossRefs::default()),
+        numbers: RwSignal::new(session::get_persistent(KEY_NUMBERS).as_deref() == Some("1")),
+        lexicon: RwSignal::new(LexiconEntries::new()),
+        occurrences: RwSignal::new(Occurrences::default()),
+        book_counts: RwSignal::new(None),
+        after_pop: StoredValue::new(None),
         adding: StoredValue::new(None),
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
@@ -550,6 +574,8 @@ pub fn StudyPage() -> impl IntoView {
     sermon_editor::install(s);
     compare::install(s);
     crossrefs::install(s);
+    word_sheet::install(s);
+    strongs_view::install(s);
     fetch_translations(s);
 
     let place = Memo::new(move |_| s.place());
@@ -609,11 +635,13 @@ pub fn StudyPage() -> impl IntoView {
             StudyView::Reader { .. } => ViewKind::Reader,
             StudyView::Search { .. } => ViewKind::Search,
             StudyView::Compare { .. } => ViewKind::Compare,
+            StudyView::Strongs { .. } => ViewKind::Strongs,
             StudyView::Sermons => ViewKind::Sermons,
             StudyView::Sermon { id } => ViewKind::Sermon(id.clone()),
         })
     });
     let bible_view = move || matches!(view_kind.get(), ViewKind::Reader | ViewKind::Search);
+    let field_view = move || bible_view() || view_kind.get() == ViewKind::Strongs;
     let body = move || match view_kind.get() {
         ViewKind::Reader => view! {
             <Reader s=s />
@@ -622,6 +650,7 @@ pub fn StudyPage() -> impl IntoView {
         .into_any(),
         ViewKind::Search => view! { <SearchResults s=s /> }.into_any(),
         ViewKind::Compare => view! { <CompareView s=s /> }.into_any(),
+        ViewKind::Strongs => view! { <StrongsView s=s /> }.into_any(),
         ViewKind::Sermons => view! { <SermonListView s=s /> }.into_any(),
         ViewKind::Sermon(id) => view! { <SermonEditor s=s id=id /> }.into_any(),
     };
@@ -632,6 +661,7 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::Favourite(slot)) => view! { <FavouriteSheet s=s index=slot /> }.into_any(),
         Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
         Some(StudySheet::CrossRefs) => view! { <CrossRefSheet s=s /> }.into_any(),
+        Some(StudySheet::Word) => view! { <WordSheet s=s /> }.into_any(),
         Some(StudySheet::Preview) => open_editor(s)
             .map(|e| view! { <PreviewSheet e=e /> })
             .into_any(),
@@ -649,8 +679,10 @@ pub fn StudyPage() -> impl IntoView {
             data-pane=move || s.route.with(StudyRoute::shows_pane).then_some("true")
         >
             <StudyHeader s=s />
-            <Show when=bible_view>
+            <Show when=field_view>
                 <StudyField s=s />
+            </Show>
+            <Show when=bible_view>
                 <Favourites s=s />
             </Show>
             {move || {

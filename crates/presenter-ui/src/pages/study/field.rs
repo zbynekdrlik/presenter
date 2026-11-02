@@ -10,9 +10,10 @@ use super::scroll::ScrollPlan;
 use super::{nav, Study};
 use crate::state::bible_console::{ConsoleRow, RowTarget};
 use crate::state::study::{
-    chapter_grid, preview_target, suggest, suggest_unresolved, ChapterGrid, StudyRoute,
+    chapter_grid, preview_target, suggest, suggest_unresolved, ChapterGrid, FieldEnter, StudyRoute,
     StudySuggest, StudyTarget, StudyView,
 };
+use crate::state::study_word::{StrongsOffer, SCOPE_ALL};
 
 #[derive(Clone, Copy)]
 struct Field {
@@ -57,6 +58,17 @@ impl Field {
         };
         self.leave();
         nav::go(self.s, StudyRoute::search(&code, text), ScrollPlan::Top);
+    }
+
+    fn open_number(self, number: &str) {
+        let translation = self
+            .s
+            .route
+            .with_untracked(|route| route.translation.clone());
+        self.input.set(String::new());
+        self.leave();
+        let route = StudyRoute::strongs(translation, number, SCOPE_ALL);
+        nav::go(self.s, route, ScrollPlan::Top);
     }
 
     fn complete(self, text: &str) {
@@ -111,11 +123,11 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
         "Enter" => {
             ev.prevent_default();
-            let found = suggestions.get_untracked();
-            if let Some(target) = found.enter_target() {
-                f.open(target);
-            } else if let Some(text) = found.text_search {
-                f.search(&text);
+            match suggestions.get_untracked().enter() {
+                Some(FieldEnter::Open(target)) => f.open(target),
+                Some(FieldEnter::Strongs(number)) => f.open_number(&number),
+                Some(FieldEnter::Search(text)) => f.search(&text),
+                None => {}
             }
         }
         "Escape" => {
@@ -136,8 +148,8 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                 class="study-field__input"
                 data-role="study-field"
                 node_ref=f.element
-                placeholder="Odkaz alebo slová\u{2026}"
-                aria-label="Odkaz alebo slová"
+                placeholder="Odkaz, slová alebo G26\u{2026}"
+                aria-label="Odkaz, slová alebo Strongovo číslo"
                 enterkeyhint="search"
                 autocapitalize="off"
                 autocomplete="off"
@@ -201,6 +213,9 @@ fn Suggestions(f: Field, suggestions: Memo<StudySuggest>) -> impl IntoView {
         })
         .unwrap_or_default()
     });
+    let number = move || suggestions.with(|found| found.strongs.clone());
+    let number_first = move || number().filter(|offer| offer.first);
+    let number_after = move || number().filter(|offer| !offer.first);
     let book_grid = move |code: String| {
         f.s.with_structure(|structure| chapter_grid(structure?, &code))
             .flatten()
@@ -212,11 +227,13 @@ fn Suggestions(f: Field, suggestions: Memo<StudySuggest>) -> impl IntoView {
             data-role="study-suggest"
             on:mousedown=|ev| ev.prevent_default()
         >
+            {move || number_first().map(|offer| view! { <NumberRow f=f offer=offer /> })}
             <For
                 each=rows
                 key=|row| row.key.clone()
                 children=move |row| view! { <Row f=f row=row /> }
             />
+            {move || number_after().map(|offer| view! { <NumberChip f=f offer=offer /> })}
             {move || {
                 hint()
                     .map(|hint| {
@@ -281,6 +298,43 @@ fn Suggestions(f: Field, suggestions: Memo<StudySuggest>) -> impl IntoView {
                     />
                 </div>
             </Show>
+        </div>
+    }
+}
+
+/// `G26`: first, and what Enter opens.
+#[component]
+fn NumberRow(f: Field, offer: StrongsOffer) -> impl IntoView {
+    let number = offer.number.clone();
+    view! {
+        <button
+            type="button"
+            class="study-row"
+            data-role="study-strongs"
+            data-strongs=offer.number.clone()
+            on:click=move |_| f.open_number(&number)
+        >
+            <span class="study-row__label">{format!("Strongovo číslo {}", offer.number)}</span>
+            <small class="study-row__detail">"Všetky výskyty v KJV"</small>
+        </button>
+    }
+}
+
+/// `g 26`: the resolver keeps its passage, the number is the alternative.
+#[component]
+fn NumberChip(f: Field, offer: StrongsOffer) -> impl IntoView {
+    let number = offer.number.clone();
+    view! {
+        <div class="study-chips">
+            <button
+                type="button"
+                class="study-chip"
+                data-role="study-strongs"
+                data-strongs=offer.number.clone()
+                on:click=move |_| f.open_number(&number)
+            >
+                {offer.number.clone()}
+            </button>
         </div>
     }
 }

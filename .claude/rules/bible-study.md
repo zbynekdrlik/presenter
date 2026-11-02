@@ -3,6 +3,8 @@ paths:
   - "crates/presenter-ui/src/pages/study/**"
   - "crates/presenter-ui/src/state/study.rs"
   - "crates/presenter-ui/src/state/study_history.rs"
+  - "crates/presenter-ui/src/state/study_word.rs"
+  - "crates/presenter-ui/src/state/study_field.rs"
   - "crates/presenter-ui/src/api/study.rs"
   - "crates/presenter-ui/styles/study.css"
   - "crates/presenter-server/src/router/study_pwa.rs"
@@ -12,7 +14,7 @@ paths:
   - "crates/presenter-server/src/state/bible_source/study.rs"
 ---
 
-# The study page `/ui/study` (#851 S1–S3)
+# The study page `/ui/study` (#851 S1–S5)
 
 The preacher's reader, replacing MySword on his phone and tablet: reading, searching and sermon
 preparation (the sermon views are in `sermon-prep.md`).
@@ -58,8 +60,7 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.
-- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); S5 adds
-  the word sheet.
+- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`).
   A new view is a `StudyView` variant. Scope chips and the quoted phrase are the server's (`scope`, D4):
   never filter on the client.
 - **CSS:** `study.css` carries its own tokens on `.study` (`position: fixed` over the body). No `inset`
@@ -80,8 +81,11 @@ preparation (the sermon views are in `sermon-prep.md`).
   --features mock-integrations,test-helpers`, ~11 min) and stop `presenter-dev` for the run (the mock
   Resolume binds 8091). That cargo build re-runs trunk unpatched: the `integrity` console warnings
   in `finish()` are this local dist only.
-- **Local UI builds need nightly** (`.cargo/config.toml` has `build-std`): `RUSTUP_TOOLCHAIN=nightly
-  trunk build`; on stable, wasm-bindgen fails with `__wbindgen_externref_table_alloc`.
+- **Local UI builds need nightly and `--release`** (`.cargo/config.toml` has `build-std`):
+  `RUSTUP_TOOLCHAIN=nightly trunk build --release`; on stable, wasm-bindgen fails with
+  `__wbindgen_externref_table_alloc`, and a debug build floods the console with reactive warnings.
+- **`refresh-dev-data` refuses as stale:** `cargo build --release -p presenter-importer --bin
+  import_propresenter --bin ingest_bibles`.
 
 ## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
 
@@ -105,6 +109,35 @@ preparation (the sermon views are in `sermon-prep.md`).
   opens the KJV from the SEB, which has no such verse. Only the NLT stays itself. A reference across
   chapters has no add button: a sermon passage stays in one chapter.
 
+## Word sheet and Strong's view (#851 S5, `pages/study/{markup_view,word_sheet,strongs_view}.rs`)
+
+- **`VerseBody` is the ONE verse renderer** of the reader and compare. A tap is read once per verse by
+  delegation (`tapped_word`), not one closure per word; the chip re-renders a verse, one closure each.
+  Badges are rendered only while on: a hidden badge would still be `textContent` and break
+  `toContainText("Through faith")`. `text` stays what a copy or a sermon takes.
+- **`w`/`wv` is the place, `w` may be foreign:** `wv` must name a tagged word on the page (`find_word`),
+  `w` may be a derivation link's number. `word_sheet::install` drops a place with no word once the text
+  answered (`Gone`, never while `Waiting`), so a bad URL leaves no sheet and a reload keeps a good one.
+  Compare's page = the KJV column, on a phone only the verse shown: ◀ ▶ stay in it.
+- **Links add entries, ◀ ▶ and tabs replace.** `popstate` uses `only_sheet_differs`, which also sees a
+  change of word under the same sheet, or Back from a link scrolls. ✕ and the backdrop walk the whole run
+  of word entries (`close_word_sheet`), only Back walks one. A list starting on the sheet: the walk ends on
+  its first entry and `AfterPop::CloseSheet` closes it there, one ✕. "Všetky výskyty" walks the links first
+  (`leave_word_sheet`), or a later Back reopens one; a `popstate` finishes what a walk left (`after_pop`).
+- **A failed read keeps the word:** `TextFailed`, never `Gone` (only a Ready text with no such word or a
+  chapter the translation lacks, or no KJV column in compare). The sheet has its own retry: a phone's
+  backdrop covers the text's.
+- **The modal word sheet reserves no space at ≥ 1024 px** (`:not([data-role="word-sheet"])`): §6.6, the
+  reading position never moves. The other docked sheets still do.
+- **A click ending a mouse selection is no tap** (`text_selected`).
+- **No KJV word has two numbers in today's data** (0 of all verses): the tab test mocks a chapter.
+- **The Strong's list stays in `Study::occurrences`:** Back asks nothing. A page lands only on the list
+  that asked for it, right after what it holds (`land_page`). A scope chip is a `nav::replace`. The chips
+  read `Study::book_counts`, so they outlive a scope change and a failed read. On a phone they are one
+  sideways row (`assertNoHorizontalOverflow` flags such a row, so the spec checks the page itself).
+- **`study-*` local E2E pace:** every test fails `finish()` on the local `integrity` line, so each one
+  starts a new worker and re-imports: ~30 s per test.
+
 ## The read API (#851 D4, `router/bible/study.rs`, `state/bible_source/study.rs`)
 
 - **Counts are verses, not words.** `occurrenceCount`, `total` and `perBook` count rows of
@@ -124,3 +157,7 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **A study read has a book code, not a name.** `idx_bible_passages_reference` starts with the name, so
   `idx_bible_passages_place` (translation, code, chapter, verse) serves these lookups; without it each
   one scans the translation.
+
+## Sermon specs
+
+- **A spec opens its own sermon by id,** never `.first()`: the server lives through the whole file and the list runs by service date, so an earlier test's sermon comes first. Only the retry's fresh database hid this.
