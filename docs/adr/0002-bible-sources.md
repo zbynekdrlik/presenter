@@ -20,6 +20,14 @@ Adopt a mixed-source ingestion pipeline: pull the King James Version (KJV) from 
 - Integration tests rely on synthetic archives for each format (USFM, MySword, Obohu) so we can keep the pipeline deterministic; production ingestion still requires outbound HTTPS access to download/source the live archives.
 - A dedicated reset script (`scripts/dev/refresh-dev-data.sh`) now nukes the SQLite database and re-runs both the ProPresenter import and Bible ingestion so developers can recover from failed runs quickly.
 
+## Study sources
+
+Strong's dictionaries (Open Scriptures XML, public domain) and cross-references (OpenBible.info,
+CC BY, rows with at least 2 votes) are committed in `data/study/`, pinned by SHA-256 in
+`sources.json`, and compiled into `ingest_bibles` alone. `scripts/dev/fetch_study_sources.py
+--check` verifies them in CI. Rejected: the CC BY-SA `strongs-*-dictionary.js`, STEPBible TBESH
+(needs permission), the raw TSK module (no votes to rank by).
+
 ## Follow-up
 - Extend coverage with the remaining Czech translations (issue #5) once licensing is clarified.
 - Extend the parser to handle richer USFM markers (poetry, footnotes) and confirm formatting for stage displays.

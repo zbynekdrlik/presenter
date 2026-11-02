@@ -5,6 +5,10 @@ paths:
   - "crates/presenter-importer/src/bin/ingest_bibles.rs"
   - "crates/presenter-persistence/src/repository/bible/import.rs"
   - "data/bibles/**"
+  - "data/study/**"
+  - "crates/presenter-importer/src/study_sources.rs"
+  - "crates/presenter-persistence/src/repository/bible/study_sources.rs"
+  - "scripts/dev/fetch_study_sources.py"
   - "scripts/ci/check_public_bibles.py"
   - "scripts/ci/test_check_public_bibles.py"
 ---
@@ -138,3 +142,17 @@ words' numbers); database 187 → 240 MB. `\add` depth lives in `PassageBuilder`
 stvoril Bôh nebesia a zem.", 0 KJV rows with `¶` or `+ N.N`, KJV GEN 2:14 ends "Euphrates.",
 0 SEB rows `GLOB '* [.,;:!?]*'`, ROH MAT 17:21 ends "[a pôstom].", KJV HEB 13:25 = "Grace be
 with you all. Amen.". The deploy log shows five `Imported … (digest …)` lines after a bump.
+
+## Study sources (#851 D3a, D3b)
+
+- `data/study/` is public (public domain, CC BY), pinned by `sources.json`; `fetch_study_sources.py --check` runs in
+  `quality`. The bytes are compiled into `ingest_bibles` alone, so no workflow copies them.
+- OpenBible republishes `cross-references.zip` under the same URL: a fetch fails on changed bytes, and the row counts
+  in the tests and the spec follow the committed file. A new file = update `sources.json` and the counts on purpose.
+- `STUDY_PARSER_VERSION` is separate from `PARSER_VERSION`, so a study parse change never re-imports the Bibles.
+- Strong's text is NFC. A Hebrew `x-typo` note sits INSIDE an exegesis note: skip it, keep the text after it.
+- Greek: `<greek>` and `<pronunciation>` before any field are the head, inside a field they are text. The markers are
+  `:--` or just `--`. Text after the fields joins the renderings. G302 and G1473 have no `strongs_def`: their meaning
+  is in the derivation.
+- 16 cross-references cross a book, hence `to_book_number_end`. A reader of a target range must use it.
+- An unknown OSIS id fails even on a row the votes filter would drop.

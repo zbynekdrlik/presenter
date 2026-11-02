@@ -1,5 +1,11 @@
+mod crossrefs;
+mod lexicon;
 mod markup;
+mod osis;
 mod parsers;
+
+pub use crossrefs::parse_cross_references;
+pub use lexicon::{parse_greek_lexicon, parse_hebrew_lexicon, read_zip_member};
 
 #[cfg(test)]
 mod import_fixes_tests;

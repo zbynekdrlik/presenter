@@ -14,8 +14,10 @@ tokio.workspace = true
 zip = { version = "9", default-features = false, features = ["deflate"] }
 tracing.workspace = true
 regex = "1"
+quick-xml = "0.39"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3.10"
+unicode-normalization.workspace = true
 
 
 [dev-dependencies]

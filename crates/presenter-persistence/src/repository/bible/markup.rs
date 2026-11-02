@@ -25,7 +25,7 @@ pub(super) struct MarkupRow {
     pub markup: VerseMarkup,
 }
 
-async fn insert_chunk(
+pub(super) async fn insert_chunk(
     txn: &DatabaseTransaction,
     head: &str,
     tail: &str,

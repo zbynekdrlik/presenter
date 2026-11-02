@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "file": "strongs.zip",
+      "source": "Open Scriptures strongs, commit 0acd2f25",
+      "license": "Public Domain",
+      "members": [
+        {
+          "name": "StrongHebrewG.xml",
+          "url": "https://raw.githubusercontent.com/openscriptures/strongs/0acd2f25/hebrew/StrongHebrewG.xml",
+          "sha256": "1f9659ea208f4c498843a0280dacb1448627c33ca77712642d8705793ab66061"
+        },
+        {
+          "name": "strongsgreek.xml",
+          "url": "https://raw.githubusercontent.com/openscriptures/strongs/0acd2f25/greek/StrongsGreekDictionaryXML_1.4/strongsgreek.xml",
+          "sha256": "df928f01b37632f8af9f16289ce58d10b958014cb5dbd1e1ea715a8d311a0625"
+        }
+      ]
+    },
+    {
+      "file": "openbible-cross-references.zip",
+      "source": "OpenBible.info cross-references, dated 2026-10-26",
+      "license": "CC BY",
+      "url": "https://a.openbible.info/data/cross-references.zip",
+      "sha256": "045f1c5db8a331e3d2a185b44646b6ff220b72dd54669fd1976270a7351afcf4"
+    }
+  ]
+}

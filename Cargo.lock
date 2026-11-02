@@ -3446,6 +3446,7 @@ version = "0.4.339"
 dependencies = [
  "anyhow",
  "presenter-core",
+ "quick-xml",
  "regex",
  "reqwest",
  "rusqlite",
@@ -3454,6 +3455,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicode-normalization",
  "zip",
 ]
 

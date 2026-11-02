@@ -458,6 +458,13 @@ jobs:
           python3 -m unittest discover -s scripts/ci -p 'test_check_public_bibles.py' -v
           python3 scripts/ci/check_public_bibles.py
 
+      # The committed study data matches sources.json, offline (#851 D3a).
+      - name: Check study sources (#851)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev -p 'test_fetch_study_sources.py' -v
+          python3 scripts/dev/fetch_study_sources.py --check
+
       # Regression test for #802: the E2E harness (startTestServer,
       # refresh-dev-data.sh, the synthetic NDI sender) must never silently
       # fall back to a local `cargo run` — Tier-0 compiles in CI only. A
