@@ -282,10 +282,10 @@ fn letters_behind_a_closing_marker_stay_in_the_kjv() {
     let passages = batch.passages();
     for (book, chapter, verse, words) in [
         ("Mark", 4, 24, "shall more be given."),
-        ("Luke", 7, 38, "with tears,"),
+        ("Luke", 7, 44, "with tears,"),
         ("Luke", 8, 25, "being afraid wondered"),
         ("John", 13, 20, "He that receiveth"),
-        ("Galatians", 6, 8, "he that soweth"),
+        ("Galatians", 6, 8, "but he that soweth"),
         ("Ephesians", 6, 12, "against the rulers"),
         ("Hebrews", 3, 3, "inasmuch as"),
         ("Hebrews", 7, 20, "inasmuch as"),
