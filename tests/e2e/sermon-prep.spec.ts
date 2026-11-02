@@ -35,6 +35,9 @@ test.afterAll(async () => {
 const role = (page: Page, name: string) => page.locator(`[data-role="${name}"]`);
 const token = (page: Page, verse: number, index: number) =>
   page.locator(`[data-role="sermon-token"][data-verse="${verse}"][data-index="${index}"]`);
+/** By id: the list runs by service date, so older tests' sermons come first. */
+const openRow = (page: Page, id: string) =>
+  page.locator(`[data-role="sermon-row"][data-sermon-id="${id}"] [data-role="sermon-open"]`).tap();
 const saved = (page: Page) =>
   expect(role(page, "sermon-save")).toHaveAttribute("data-save-state", "saved");
 
@@ -216,7 +219,7 @@ test("a save that failed waits for the preacher's return, on screen", async ({ b
   await expect(role(page, "sermon-list")).toHaveAttribute("data-state", "ready");
   await page.unroute(edits);
 
-  await role(page, "sermon-open").first().tap();
+  await openRow(page, id);
   await expect(token(page, 1, 0)).toHaveAttribute("data-state", "struck");
   await role(page, "sermon-save-retry").tap();
   await saved(page);
@@ -271,7 +274,7 @@ test("an old answer never takes back a saved tap", async ({ browser }) => {
     landed = true;
   });
   await role(page, "study-sermons").tap();
-  await role(page, "sermon-open").first().tap();
+  await openRow(page, id);
   await expect.poll(() => stalled).toBeGreaterThanOrEqual(1);
   await token(page, 1, 0).tap();
   await saved(page);
@@ -397,7 +400,7 @@ test("Späť on an added verse reaches the open editor", async ({ browser }) => 
   await role(page, "verse-add-to-sermon").tap();
   await expect(role(page, "study-notice-undo")).toBeVisible();
   await role(page, "study-sermons").tap();
-  await role(page, "sermon-open").first().tap();
+  await openRow(page, id);
   await expect(role(page, "sermon-item")).toHaveCount(1);
 
   await role(page, "study-notice-undo").tap();
