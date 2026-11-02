@@ -17,6 +17,15 @@ Copyright (c) 2026 Stephen Smith — full text in `data/bible-book-names/LICENSE
 cross-reference votes in <https://a.openbible.info/data/cross-references.zip>
 (OpenBible.info, Creative Commons Attribution license), downloaded 2026-10-12.
 
+`data/study/openbible-cross-references.zip` is that file, dated 2026-10-26, unchanged; the study
+views show its references. See `data/study/sources.json`.
+
+## Open Scriptures Strong's dictionaries (public domain)
+
+`data/study/strongs.zip` holds `StrongHebrewG.xml` and `strongsgreek.xml` from
+<https://github.com/openscriptures/strongs> at commit `0acd2f25`, both marked public domain
+(Strong 1890/1894). The TWOT numbers and the Hebrew outline are not imported.
+
 ## biblia.sk book menus
 
 `data/bible-book-names/biblia-sk.json` lists the book abbreviations and titles of the SEB,

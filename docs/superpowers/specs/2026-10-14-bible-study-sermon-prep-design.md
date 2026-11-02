@@ -296,11 +296,14 @@ another `bible_study_sources` row later).
 - **Not imported:** the TWOT numbers (`w/@gloss`, copyrighted) and the Hebrew `<list>` outline (unstated
   source; abridged-BDB outlines carry the TBESH permission problem). `<hi>` keeps its text; an embedded
   `<w src="433" xlit="…"/>` or `<strongsref strongs="3982"/>` becomes the text "H433 (ʼĕlôwahh)" / "G3982",
-  which the UI links.
+  which the UI links. Text is NFC (the Greek file uses oxia code points). 212 Greek entries have loose text after
+  their fields ("Compare G5"); it joins `kjv_renderings`, where the Hebrew file keeps the same remark. `<see>` adds
+  to `related` like `strongsref`. A Hebrew `<w>` with no `src` is another form: its `xlit`. A Greek entry's first form
+  is the headword, its other forms lead `derivation`, as in the Hebrew file. The 101 Greek numbers Strong left "Not Used" stay as empty rows; no KJV tag uses them.
 - Parser: `presenter-bible/src/lexicon.rs` with `quick-xml = "0.39"` (already locked). Rejected: a hand-written
   scanner (entities, nested `<w>` inside notes).
 
-Migration `m20261014_000002_bible_study_sources.rs`:
+Migration `m20261102_000001_bible_study_sources.rs` (all three tables of §5.4 and §5.5):
 
 ```sql
 CREATE TABLE bible_study_sources (
@@ -326,24 +329,25 @@ largely the Treasury of Scripture Knowledge plus user votes).
 
 Rejected: the raw TSK module (public domain, no votes to rank by, SWORD format).
 
-- Import keeps rows with votes ≥ 2: 328,119 rows covering 29,233 verses (≥ 5 would cover only 19,892 verses and
-  leave 11,210 with nothing).
+- Import keeps rows with votes ≥ 2: 328,139 rows covering 29,234 verses in the file dated 2026-10-26 (≥ 5 would
+  cover only 19,892 verses and leave 11,210 with nothing).
 - OSIS ids map through an exact 66-entry table in `presenter-bible/src/osis.rs`; an unknown id fails the
   import loudly (script-failure policy). Fuzzy matching is never used at ingest (A+B §5.2).
-- A target may be a range, also across chapters (`Gen.1.1-Gen.2.3`; 88,150 rows are ranges).
+- A target may be a range, also across chapters (`Gen.1.1-Gen.2.3`; 84,096 kept rows are ranges) and, 16 times,
+  across books (`2John.1.1-3John.1.15`), so the table also has `to_book_number_end`.
 
 ```sql
 CREATE TABLE bible_cross_references (
   source_code TEXT NOT NULL REFERENCES bible_study_sources(code) ON DELETE CASCADE,
   from_book_number INTEGER NOT NULL, from_chapter INTEGER NOT NULL, from_verse INTEGER NOT NULL,
   to_book_number INTEGER NOT NULL, to_chapter INTEGER NOT NULL, to_verse INTEGER NOT NULL,
-  to_chapter_end INTEGER NOT NULL, to_verse_end INTEGER NOT NULL,
+  to_book_number_end INTEGER NOT NULL, to_chapter_end INTEGER NOT NULL, to_verse_end INTEGER NOT NULL,
   votes INTEGER NOT NULL,
   PRIMARY KEY (from_book_number, from_chapter, from_verse, to_book_number, to_chapter, to_verse)
 ) WITHOUT ROWID;
 ```
 
-Migration `m20261014_000004_bible_cross_references.rs`. Numbering is the KJV's. A Slovak translation is read at the
+Numbering is the KJV's. A Slovak translation is read at the
 same code/chapter/verse; a missing verse falls
 back to KJV with the note "číslovanie sa môže líšiť" (the rule part C uses, C draft §7.3).
 
@@ -889,7 +893,7 @@ No error is silent: every failed request shows a message and logs at WARN with i
   `testdata/kjv-content.sha256`; 348,884 tags and 310,076 distinct pairs; nested `\+w` inside `\nd`; `\add` →
   italic; footnote → note; MySword `<FI>[…]<Fi>` → note, `<FI>word<Fi>` → italic, `<TS>` → heading.
 - D3a/D3b: H430 and G4102 fields exactly as in §5.4; ":--" stripped; `<list>` and `gloss` absent; 8,674 / 5,624
-  entries; cross-references: OSIS mapping, ranges, votes ≥ 2 → 328,119 rows, an unknown OSIS id fails.
+  entries; cross-references: OSIS mapping, ranges, votes ≥ 2 → 328,139 rows, an unknown OSIS id fails.
 
 **presenter-persistence:**
 

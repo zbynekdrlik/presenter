@@ -6,6 +6,7 @@
 //! - [`markup`]     — verse markup + Strong's occurrences (written by the import).
 //! - [`presentations`] — bible-presentation CRUD + slide row-mapping helpers.
 //! - [`sermons`]    — sermons: a presentation plus its source items.
+//! - [`study_sources`] — Strong's dictionaries and cross-references.
 //!
 //! Every method stays a method on [`crate::repository::Repository`], so all
 //! public paths are unchanged from when this lived in a single `bible.rs`.
@@ -15,6 +16,7 @@ mod markup;
 mod presentations;
 mod query;
 mod sermons;
+mod study_sources;
 
 pub use sermons::{
     NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,

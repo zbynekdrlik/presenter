@@ -1,11 +1,17 @@
 use anyhow::Context;
 use presenter_bible::{default_translation_specs, read_local_file_bytes};
 use presenter_importer::bible::BibleIngestionService;
+use presenter_importer::study_sources::{import_study_sources, StudyFiles};
 use presenter_importer::{compute_source_digest, PARSER_VERSION};
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::env;
 
 const DEFAULT_DB_URL: &str = "sqlite://presenter_dev.db";
+/// Public study data, compiled into this binary alone (spec §5.6).
+const STUDY_FILES: StudyFiles<'static> = StudyFiles {
+    strongs_zip: include_bytes!("../../../../data/study/strongs.zip"),
+    cross_references_zip: include_bytes!("../../../../data/study/openbible-cross-references.zip"),
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -94,6 +100,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!("Bible import done: {imported} imported, {skipped} skipped (up-to-date).");
+
+    for line in import_study_sources(&repository, &STUDY_FILES)
+        .await
+        .context("study source import failed")?
+    {
+        println!("{line}");
+    }
 
     Ok(())
 }
