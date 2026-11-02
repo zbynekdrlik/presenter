@@ -267,3 +267,18 @@ test("the tablet opens on today's sermon and redraws a later cut", async ({ brow
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("a hung sermon read leaves the tablet's list usable", async ({ browser }) => {
+  const { id } = await json<{ id: string }>("/bible/presentations", "POST", { name: "Bez kázne" });
+  const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await page.route("**/bible/sermons/today**", () => undefined);
+  await page.goto("/ui/tablet");
+  const row = page.locator(`[data-role="presentation-button"][data-presentation-id="${id}"]`);
+  await row.click();
+  await expect(row).toHaveAttribute("data-active", "true");
+  expect(errors).toEqual([]);
+  await context.close();
+});

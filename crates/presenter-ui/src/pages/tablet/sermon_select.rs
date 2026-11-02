@@ -115,4 +115,11 @@ mod tests {
         ));
         assert!(!slides_differ(&[slide("a", "text")], &[slide("a", "text")]));
     }
+
+    #[test]
+    fn a_changed_reference_alone_is_a_difference() {
+        let mut changed = slide("a", "text");
+        changed.bible_translation_reference = "Heb 11:1 (ROH)".to_string();
+        assert!(slides_differ(&[slide("a", "text")], &[changed]));
+    }
 }
