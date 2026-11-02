@@ -559,6 +559,16 @@ pub fn search_label(query: &str, translation: &str) -> String {
     )
 }
 
+/// `slk-seb:viera`, or `slk-seb|HEB:viera` with a scope: a query can hold any
+/// character, so the scope stands before it.
+pub fn search_marker(translation: &str, query: &str, scope: &str) -> String {
+    if scope == SCOPE_ALL {
+        format!("{translation}:{query}")
+    } else {
+        format!("{translation}|{scope}:{query}")
+    }
+}
+
 /// `Hebrejom 11:1-3 (SEB)`, the form every quotation carries (NLT attribution).
 pub fn verse_reference(book: &str, chapter: u16, verses: (u16, u16), translation: &str) -> String {
     let (start, end) = verses;
@@ -841,6 +851,11 @@ fn phrase_words(query: &str) -> Option<Vec<String>> {
     if inner.contains(quote) {
         return None;
     }
+    // Combining marks count for nothing, as in the server's phrase.
+    let inner: String = inner
+        .chars()
+        .filter(|c| !('\u{300}'..='\u{36F}').contains(c))
+        .collect();
     let words: Vec<String> = inner
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -1456,6 +1471,25 @@ mod tests {
         assert_eq!(none, vec![("Viera je".to_string(), false)]);
         let two = mark_matches("a b a b", "\"a b\"");
         assert_eq!(two.iter().filter(|(_, marked)| *marked).count(), 2);
+    }
+
+    #[test]
+    fn a_decomposed_query_marks_what_the_server_found() {
+        let parts = mark_matches("Viera a nádej", "\"na\u{301}dej\"");
+        assert_eq!(parts[1], ("nádej".to_string(), true));
+    }
+
+    #[test]
+    fn a_query_holding_a_bar_is_not_taken_for_a_scope() {
+        assert_eq!(search_marker("slk-seb", "viera", "all"), "slk-seb:viera");
+        assert_eq!(
+            search_marker("slk-seb", "viera", "HEB"),
+            "slk-seb|HEB:viera"
+        );
+        assert_ne!(
+            search_marker("slk-seb", "a|HEB", "all"),
+            search_marker("slk-seb", "a", "HEB")
+        );
     }
 
     #[test]

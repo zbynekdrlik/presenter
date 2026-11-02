@@ -49,6 +49,7 @@ use crate::api::sermons::{is_not_found, SermonItem, SermonPassage};
 use crate::api::study::{load_chapter, BookCount, ChapterCache, ChapterText};
 use crate::state::bible_console::versification;
 use crate::state::session;
+use crate::state::study::search_marker;
 use crate::state::study::{
     chapter_key, failure_text, parse_favourites, visible_favourites, StudyRoute, StudySheet,
     StudyView, TextSize, KEY_ACTIVE_SERMON, KEY_FAVOURITES, KEY_HISTORY, KEY_TEXT_SIZE, START_BOOK,
@@ -352,15 +353,6 @@ fn show_chapter(s: Study, chapter: Chapter) {
         nav::label_current(s, &book);
     }
     scroll::settle(s);
-}
-
-/// `slk-seb:viera`, with `|HEB` when the search has a scope.
-fn search_marker(translation: &str, query: &str, scope: &str) -> String {
-    if scope == SCOPE_ALL {
-        format!("{translation}:{query}")
-    } else {
-        format!("{translation}:{query}|{scope}")
-    }
 }
 
 fn fetch_search(s: Study, translation: String, query: String, scope: String) {

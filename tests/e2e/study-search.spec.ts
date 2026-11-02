@@ -323,19 +323,19 @@ test("scope chips narrow a search and the URL keeps the scope", async ({ browser
   await expect(chip("all")).toHaveAttribute("aria-pressed", "true");
 
   await chip("ot").tap();
-  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou|ot");
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb|ot:viera zárukou");
   await expect(page).toHaveURL(/scope=ot/);
   await expect(chip("ot")).toHaveAttribute("aria-pressed", "true");
   await expect(hits(page).filter({ hasText: "Hebrejom" })).toHaveCount(0);
 
   await chip("HEB").tap();
-  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou|HEB");
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb|HEB:viera zárukou");
   await expect(hits(page).first()).toHaveAttribute("data-book-code", "HEB");
   const books = await hits(page).evaluateAll((all) => all.map((el) => el.getAttribute("data-book-code")));
   expect(new Set(books)).toEqual(new Set(["HEB"]));
 
   await page.reload();
-  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou|HEB");
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb|HEB:viera zárukou");
   await expect(chip("HEB")).toHaveAttribute("aria-pressed", "true");
   await expect(chip("HEB")).toHaveText("Hebrejom");
   await assertNoHorizontalOverflow(page);

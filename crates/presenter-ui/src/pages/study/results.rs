@@ -228,6 +228,7 @@ fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
             );
         }
     };
+    let has_book = reference.book_code.is_some();
     let on_compare = {
         let reference = reference.clone();
         let translation = translation.clone();
@@ -279,15 +280,17 @@ fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
                 <span class="study-hit__label">{label}</span>
                 <span class="study-hit__text">{snippet}</span>
             </button>
-            <button
-                type="button"
-                class="study-icon"
-                data-role="search-hit-compare"
-                aria-label="Porovnať"
-                on:click=on_compare
-            >
-                "\u{2261}"
-            </button>
+            {has_book.then(|| view! {
+                <button
+                    type="button"
+                    class="study-icon"
+                    data-role="search-hit-compare"
+                    aria-label="Porovnať"
+                    on:click=on_compare
+                >
+                    "\u{2261}"
+                </button>
+            })}
             <button
                 type="button"
                 class="study-icon"

@@ -217,7 +217,7 @@ fn open(s: Study, verse: u16) {
     nav::go(s, route, ScrollPlan::Top);
 }
 
-/// From a search hit, in the hit's translation.
+/// From a search hit: the favourites, led by the hit's translation.
 pub(super) fn open_at(s: Study, translation: &str, place: (&str, u16, u16)) {
     let route = StudyRoute::compare(Some(translation.to_string()), place, Vec::new());
     nav::go(s, route, ScrollPlan::Top);
