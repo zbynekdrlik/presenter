@@ -14,6 +14,11 @@ paths:
   - "crates/presenter-ui/src/state/sermon_*.rs"
   - "crates/presenter-ui/src/api/sermons.rs"
   - "tests/e2e/sermon-*.spec.ts"
+  - "crates/presenter-ui/src/pages/bible_console/prepared.rs"
+  - "crates/presenter-ui/src/state/bible_console_prepared.rs"
+  - "crates/presenter-ui/src/pages/bible_prepared_sermon.rs"
+  - "crates/presenter-ui/src/pages/tablet/sermon_select.rs"
+  - "tests/e2e/sermon-handoff.spec.ts"
 ---
 
 # Sermon preparation (#851 P and E units)
@@ -215,3 +220,7 @@ paths:
 - `sermon_error`: only `ApiError::Refused` shows the server's text, so sermon calls use the `*_refusal`
   helpers.
 - **A refusal lives until HOTOVO has named it (or the sermon is opened again):** a later landed write never clears `Editor::refused`, or HOTOVO would say "Kázeň je uložená" over a change that was thrown away.
+- **Hand-off (H1):** "Pripravené kazateľom" is `pages/bible_console/prepared.rs` + pure `state/bible_console_prepared.rs`. A pick (`Console::prepared`) replaces `target`: `target_key` = `prepared:<sermon>:<revision>`, the preview holds ALL the sermon's slides and a step only moves its index; no `/bible/resolve`, stored text is the truth even after a translation switch. ZOBRAZIŤ goes through `/bible/presentations/{id}/slides/{slide}/trigger` (log `source=prepared`). Typing and an old-inputs load let go of the pick; a refresh follows the slide id. A sermon keeps ids and count when it is cut, so the tablet compares the open sermon's slides on its 10 s poll.
+- **The tablet's open slides have one read ticket** (`sermon_select::next_slide_read`): the tap, the live
+  event, the 10 s poll and a visibility change all take it, or an older answer redraws newer text. The
+  list is set before the today's-sermon read, so a hung read costs only the preselection.

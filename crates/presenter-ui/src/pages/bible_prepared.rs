@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible;
+use crate::pages::bible_prepared_sermon::sermon_badge;
 use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
@@ -93,6 +94,7 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
     let id_for_click = id.clone();
     let id_for_edit = id.clone();
     let name_for_edit = name.clone();
+    let badge = sermon_badge(&presentation);
 
     let is_active = {
         let id = id.clone();
@@ -101,9 +103,18 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
 
     let on_click = move |_| {
         let id = id_for_click.clone();
+        // Cards of the previous presentation must not stay clickable under the
+        // new id: the server would refuse their slide ids.
+        if active_presentation_id.get_untracked().as_ref() != Some(&id) {
+            active_presentation_slides.set(Vec::new());
+        }
         active_presentation_id.set(Some(id.clone()));
         leptos::task::spawn_local(async move {
-            if let Ok(detail) = bible::get_presentation(&id).await {
+            let answer = bible::get_presentation(&id).await;
+            if active_presentation_id.get_untracked().as_ref() != Some(&id) {
+                return;
+            }
+            if let Ok(detail) = answer {
                 active_presentation_slides.set(detail.slides);
             }
         });
@@ -133,6 +144,7 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
                     title="Edit presentation"
                 >"\u{270F}\u{FE0F}"</button>
             </div>
+            {badge.map(|badge| view! { <p data-role="presentation-sermon-badge">{badge}</p> })}
             <p>{format!("{} slide(s)", count)}</p>
         </div>
     }
