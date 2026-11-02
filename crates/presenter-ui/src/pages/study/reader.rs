@@ -7,13 +7,16 @@ use leptos::prelude::*;
 use presenter_core::bible::resolver::Step;
 use presenter_core::bible::sermon::translation_short_code;
 
+use super::markup_view::{NumbersChip, VerseBody};
 use super::scroll::{self, ScrollPlan};
 use super::swipe::SwipeTracker;
 use super::{compare, nav, Chapter, ChapterPlace, Study};
 use crate::components::version_label::VersionLabel;
 use crate::state::study::{
-    extend_selection, missing_text, step_chapter, step_label, StudyRoute, StudySheet, StudyView,
+    extend_selection, missing_text, step_chapter, step_label, StudyRoute, StudySheet, StudyVerse,
+    StudyView,
 };
+use crate::state::study_word::has_numbers;
 
 fn step_target(s: Study, dir: Step) -> Option<(String, u16)> {
     let (book, chapter) = s.route.with(|route| match &route.view {
@@ -121,6 +124,12 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
             _ => Vec::new(),
         })
     };
+    let numbered = Memo::new(move |_| {
+        s.chapter.with(|chapter| match chapter {
+            Chapter::Ready(_, text) => has_numbers(&text.verses),
+            _ => false,
+        })
+    });
     let missing = move || {
         s.chapter.with(|chapter| {
             matches!(chapter, Chapter::Missing(_))
@@ -157,21 +166,24 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
                 data-loaded-for=move || loaded.get().map(|place| place.key())
                 data-state=state
             >
-                {move || {
-                    title()
-                        .map(|(name, code)| {
-                            view! {
-                                <h2 class="study-chapter__title" data-role="study-title">
-                                    {name}
-                                    <span class="study-chapter__code">{code}</span>
-                                </h2>
-                            }
-                        })
-                }}
+                <div class="study-chapter__head">
+                    {move || {
+                        title()
+                            .map(|(name, code)| {
+                                view! {
+                                    <h2 class="study-chapter__title" data-role="study-title">
+                                        {name}
+                                        <span class="study-chapter__code">{code}</span>
+                                    </h2>
+                                }
+                            })
+                    }}
+                    <NumbersChip s=s shown=numbered />
+                </div>
                 <For
                     each=verses
                     key=|(key, verse)| (key.clone(), verse.verse)
-                    children=move |(_, verse)| {
+                    children=move |(_, verse): (String, StudyVerse)| {
                         let number = verse.verse;
                         let selected = Memo::new(move |_| {
                             s.route
@@ -198,7 +210,7 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
                                 >
                                     {number}
                                 </button>
-                                <p class="study-verse__text">{verse.text.clone()}</p>
+                                <VerseBody s=s verse=verse class="study-verse__text" />
                             </div>
                         }
                     }

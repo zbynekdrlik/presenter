@@ -106,6 +106,7 @@ mod tests {
             .map(|verse| StudyVerse {
                 verse: *verse,
                 text: String::new(),
+                markup: None,
             })
             .collect()
     }

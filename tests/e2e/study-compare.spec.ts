@@ -126,6 +126,28 @@ test("a verse one translation lacks says so and the rest stays aligned", async (
   await finish(opened);
 });
 
+test("the current row is equally tall across the columns and the bar names the book", async ({
+  browser,
+}) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    TABLET_1180,
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.5&tt=slk-seb,slk-roh,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  const heights = await Promise.all(
+    ["slk-seb", "slk-roh", "eng-kjv"].map(
+      async (code) => (await row(page, code, 5).boundingBox())?.height,
+    ),
+  );
+  expect(new Set(heights).size, `row heights ${heights}`).toBe(1);
+  await expect(page.locator('[data-role="compare-place"]')).toHaveText("Hebrejom 11:5");
+  await finish(opened);
+});
+
 test("a tablet shows the chapter in aligned columns and a chip switches one", async ({ browser }) => {
   const opened = await openStudy(
     browser,

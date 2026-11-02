@@ -13,6 +13,7 @@ use crate::state::study::{
     KEY_LAST,
 };
 use crate::state::study_history::{parse_state, HistoryEntry, StudyHistory};
+use crate::state::study_word::strongs_label;
 
 fn browser_history() -> Option<web_sys::History> {
     crate::utils::window::window().history().ok()
@@ -47,6 +48,7 @@ fn entry(s: Study, route: &StudyRoute) -> HistoryEntry {
             verse,
             ..
         } => compare_label(&book_name(s, route, book, *chapter), *chapter, *verse),
+        StudyView::Strongs { number, .. } => strongs_label(number),
         StudyView::Sermons => "Kázne".to_string(),
         StudyView::Sermon { .. } => "Kázeň".to_string(),
     };
@@ -134,10 +136,16 @@ pub(super) fn open_sheet(s: Study, route: StudyRoute) {
 /// Close the open sheet. A sheet that came with the URL has nothing behind it
 /// to go back to, so it goes in place, and the verse sheet's selection with it.
 pub(super) fn close_sheet(s: Study) {
-    if s.history.with_untracked(|history| history.can_go_back()) {
+    if s.route.with_untracked(|route| route.sheet) == Some(StudySheet::Word) {
+        close_word_sheet(s);
+    } else if s.history.with_untracked(|history| history.can_go_back()) {
         back();
-        return;
+    } else {
+        close_in_place(s);
     }
+}
+
+fn close_in_place(s: Study) {
     let route = s.route.get_untracked();
     let selected = route.sheet.is_some_and(StudySheet::needs_verses);
     let closed = route.without_sheet();
@@ -149,6 +157,27 @@ pub(super) fn close_sheet(s: Study) {
             closed
         },
     );
+}
+
+fn is_word_entry(entry: &HistoryEntry) -> bool {
+    entry
+        .url
+        .split_once('?')
+        .and_then(|(_, query)| StudyRoute::parse(query))
+        .is_some_and(|route| route.sheet == Some(StudySheet::Word))
+}
+
+/// ✕ and a tap beside it leave the sheet, whatever entries a derivation link
+/// put on the way; only Back walks those. A list that starts on the sheet has
+/// nothing behind that run: the walk stops on its first entry.
+fn close_word_sheet(s: Study) {
+    let (run, behind) = s
+        .history
+        .with_untracked(|history| (history.run_behind(is_word_entry), history.behind()));
+    match (run + 1).min(behind) {
+        0 => close_in_place(s),
+        steps => step_history(-(steps as i32)),
+    }
 }
 
 pub(super) fn back() {
@@ -243,12 +272,9 @@ pub(super) fn install(s: Study) {
             Some(index) => s.history.update(|history| history.moved_to(index)),
             None => start_list(s, &route),
         }
-        // Another verse of the same chapter is a move, not a closed sheet.
-        let sheet_only = s.route.with_untracked(|current| {
-            current.sheet != route.sheet
-                && current.without_sheet().with_verses(None)
-                    == route.without_sheet().with_verses(None)
-        });
+        let sheet_only = s
+            .route
+            .with_untracked(|current| current.only_sheet_differs(&route));
         if !sheet_only {
             let offset = index
                 .and_then(|index| s.offsets.with_value(|offsets| offsets.get(&index).copied()));

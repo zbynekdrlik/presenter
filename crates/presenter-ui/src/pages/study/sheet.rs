@@ -13,6 +13,12 @@ pub(super) fn Sheet(
     role: &'static str,
     title: Signal<String>,
     #[prop(optional)] modal: bool,
+    /// The word sheet's `data-state`.
+    #[prop(optional, into)]
+    state: Option<Signal<&'static str>>,
+    /// The word sheet's `data-strongs`.
+    #[prop(optional, into)]
+    strongs: Option<Signal<String>>,
     children: Children,
 ) -> impl IntoView {
     // Only a press that STARTED here closes: the finger of the long press that
@@ -35,7 +41,14 @@ pub(super) fn Sheet(
                     ></div>
                 }
             })}
-        <section class="study-sheet" data-role=role role="dialog" aria-label=move || title.get()>
+        <section
+            class="study-sheet"
+            data-role=role
+            data-state=move || state.map(|state| state.get())
+            data-strongs=move || strongs.map(|strongs| strongs.get())
+            role="dialog"
+            aria-label=move || title.get()
+        >
             <div class="study-sheet__head">
                 <h2 class="study-sheet__title">{move || title.get()}</h2>
                 <button

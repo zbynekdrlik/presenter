@@ -157,13 +157,22 @@ test("an empty field lists the books, and a book leads to its chapters", async (
   await finish(opened);
 });
 
-test("G26 stays Genezis 26: there are no Strong's numbers yet", async ({ browser }) => {
+test("g 26 with a space stays Genezis 26 and offers the number", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
   await field(page).tap();
-  await field(page).fill("G26");
+  await field(page).fill("g 26");
+  const number = page.locator('[data-role="study-strongs"]');
+  await expect(number).toHaveText("G26");
   await field(page).press("Enter");
   await expectChapter(page, "slk-seb:GEN.26");
+  await field(page).tap();
+  await field(page).fill("g 26");
+  await number.tap();
+  await expect(page.locator('[data-role="strongs-results"]')).toHaveAttribute(
+    "data-loaded-for",
+    "G26:all",
+  );
   await finish(opened);
 });
 

@@ -3,6 +3,8 @@ paths:
   - "crates/presenter-ui/src/pages/study/**"
   - "crates/presenter-ui/src/state/study.rs"
   - "crates/presenter-ui/src/state/study_history.rs"
+  - "crates/presenter-ui/src/state/study_word.rs"
+  - "crates/presenter-ui/src/state/study_field.rs"
   - "crates/presenter-ui/src/api/study.rs"
   - "crates/presenter-ui/styles/study.css"
   - "crates/presenter-server/src/router/study_pwa.rs"
@@ -12,7 +14,7 @@ paths:
   - "crates/presenter-server/src/state/bible_source/study.rs"
 ---
 
-# The study page `/ui/study` (#851 S1–S3)
+# The study page `/ui/study` (#851 S1–S5)
 
 The preacher's reader, replacing MySword on his phone and tablet: reading, searching and sermon
 preparation (the sermon views are in `sermon-prep.md`).
@@ -58,8 +60,7 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.
-- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); S5 adds
-  the word sheet.
+- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`).
   A new view is a `StudyView` variant. Scope chips and the quoted phrase are the server's (`scope`, D4):
   never filter on the client.
 - **CSS:** `study.css` carries its own tokens on `.study` (`position: fixed` over the body). No `inset`
@@ -104,6 +105,25 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **A row's tap and add use the translation of the text it shows** (`fallbackTranslation`): Joel 2:28
   opens the KJV from the SEB, which has no such verse. Only the NLT stays itself. A reference across
   chapters has no add button: a sermon passage stays in one chapter.
+
+## Word sheet and Strong's view (#851 S5, `pages/study/{markup_view,word_sheet,strongs_view}.rs`)
+
+- **`VerseBody` is the ONE verse renderer** of the reader and compare. A tap is read once per verse by
+  delegation (`tapped_word`), not one closure per word; the chip re-renders a verse, one closure each.
+  Badges are rendered only while on: a hidden badge would still be `textContent` and break
+  `toContainText("Through faith")`. `text` stays what a copy or a sermon takes.
+- **`w`/`wv` is the place, `w` may be foreign:** `wv` must name a tagged word on the page (`find_word`),
+  `w` may be a derivation link's number. `word_sheet::install` drops a place with no word once the text
+  answered (`Gone`, never while `Waiting`), so a bad URL leaves no sheet and a reload keeps a good one.
+  Compare's page = the KJV column, on a phone only the verse shown: ◀ ▶ stay in it.
+- **Links add entries, ◀ ▶ and tabs replace.** `popstate` uses `only_sheet_differs`, which also sees a
+  change of word under the same sheet, or Back from a link scrolls. ✕ and the backdrop walk the whole run
+  of word entries (`close_word_sheet`), only Back walks one.
+- **No KJV word has two numbers in today's data** (0 of all verses): the tab test mocks a chapter.
+- **The Strong's list stays in `Study::occurrences`:** Back asks nothing. A page lands only on the list
+  that asked for it, right after what it holds (`land_page`). A scope chip is a `nav::replace`.
+- **`study-*` local E2E pace:** every test fails `finish()` on the local `integrity` line, so each one
+  starts a new worker and re-imports: ~30 s per test.
 
 ## The read API (#851 D4, `router/bible/study.rs`, `state/bible_source/study.rs`)
 
