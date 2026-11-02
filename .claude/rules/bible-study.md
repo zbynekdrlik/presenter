@@ -63,8 +63,8 @@ preparation (the sermon views are in `sermon-prep.md`).
   prevents `mousedown`'s default, or the blur removes a row before its `click`.
 - **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); S4 adds
   "Porovnať" and "Odkazy", S5 the word sheet.
-  A new view is a `StudyView` variant. Scope chips and the quoted phrase wait for D4's server
-  support: never filter on the client.
+  A new view is a `StudyView` variant. Scope chips and the quoted phrase are the server's (`scope`, D4):
+  never filter on the client.
 - **CSS:** `study.css` carries its own tokens on `.study` (`position: fixed` over the body). No `inset`
   shorthand: the bundle targets Safari 12. The phone test is `body[data-shell]`, the landscape row
   keys on `(orientation: landscape) and (min-width: 560px)` like the rail. ≥ 1024 px docks the

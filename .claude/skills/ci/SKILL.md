@@ -525,3 +525,9 @@ exact failing REQUEST url is only in the `playwright-traces-shard-<n>` artifact,
 Cross-check pass/fail history with `gh run list --limit 8 --json headSha,workflowName,conclusion`
 (NOT `--branch dev`, which returned stale week-old runs here) to bisect which merge introduced a
 regression.
+
+## Hosted runner out of disk (#851 D4)
+
+`rustc-LLVM ERROR: IO failure on output stream: No space left on device` in the Test job = the hosted
+runner's disk, not the code. The job's "Free runner disk space" step removes Android, .NET and GHC
+before the build and prints `df -h /`; read that line first when the error comes back.
