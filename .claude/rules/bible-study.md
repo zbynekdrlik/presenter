@@ -23,11 +23,8 @@ preparation (the sermon views are in `sermon-prep.md`).
   stage.
 - **No pill in the operator's surface nav.** That row is absolutely positioned at the header's limit:
   a seventh pill slid the AI chip under the stage preview at 1280 px. The page is entered from `/`.
-- **A chapter comes from `POST /bible/resolve` with `characterLimit: 1`, in ONE function**
-  (`api/study.rs::load_chapter`), until D4's `/bible/study/chapter` replaces it. `/bible/passage`
-  cannot: it matches a row whose verse span EQUALS the request and rows are single verses, so a
-  chapter is `null`. Resolve goes through `bible_source` (NLT included), stores nothing, and a lone
-  verse is never split (#434), so each slide is one verse written `"{verse}. {text}"`.
+- **A chapter comes from `GET /bible/study/chapter`, in ONE function** (`api/study.rs::load_chapter`).
+  An empty `verses` = this translation lacks it; specs gate it with a URL regex, it has no body.
 - **The URL is the state.** `state::study::StudyRoute::{parse,to_url}`; every view AND sheet has a
   URL (`s=akcie|historia|pismo|prekladN`), so the system Back closes a sheet. `v=3-12` = the
   selected verses. Moves go through `pages/study/nav.rs`, never a direct `route.set`.
@@ -61,10 +58,10 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.
-- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); S4 adds
-  "Porovnať" and "Odkazy", S5 the word sheet.
-  A new view is a `StudyView` variant. Scope chips and the quoted phrase wait for D4's server
-  support: never filter on the client.
+- **No dead buttons.** New actions are one `VerseAction` + its arm in `run` (`verse_actions.rs`); S5 adds
+  the word sheet.
+  A new view is a `StudyView` variant. Scope chips and the quoted phrase are the server's (`scope`, D4):
+  never filter on the client.
 - **CSS:** `study.css` carries its own tokens on `.study` (`position: fixed` over the body). No `inset`
   shorthand: the bundle targets Safari 12. The phone test is `body[data-shell]`, the landscape row
   keys on `(orientation: landscape) and (min-width: 560px)` like the rail. ≥ 1024 px docks the
@@ -85,6 +82,28 @@ preparation (the sermon views are in `sermon-prep.md`).
   in `finish()` are this local dist only.
 - **Local UI builds need nightly** (`.cargo/config.toml` has `build-std`): `RUSTUP_TOOLCHAIN=nightly
   trunk build`; on stable, wasm-bindgen fails with `__wbindgen_externref_table_alloc`.
+
+## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
+
+- **Compare is a view, its ◀ ▶ a `nav::replace`:** Back leaves it at once, the verses are no history
+  rows. Stacked = phone shell; columns = `CompareLayout` (2, 3 at ≥ 1024 px), the spec's aligned grid.
+- **One `CompareCell` per chapter:** a chapter left behind drops its cell, so a late answer has nowhere
+  to land; only what is on screen is asked (the NLT's 500 requests). A step inside a chapter asks nothing.
+- **`study-compare[data-loaded-for="HEB.11.1"]`** = every shown translation answered or failed.
+- **A chip writes the WHOLE list back (`listed`), never the fitted one** (`shown`): a narrow tablet must
+  not shorten what a wider screen shows. `data-columns` = the columns on screen, not the layout's room:
+  a grid with an empty track runs the verses diagonally.
+- **Landing is keyed on the place AND the layout** (a rotation lands, a retry does not); Back's offset
+  wins. Compare keeps `pane` in its route without showing it, so a tap on a row returns to the sermon.
+- **A sheet in the way of a sheet:** "Odkazy" replaces the verse sheet, or `nav::go` closes only the top
+  entry and a second Back lands on a sheet. `popstate`'s `sheet_only` needs the sheets to DIFFER: another
+  verse of the same chapter is a move and scrolls.
+- **Cross-references come once, whole (`limit=500`)** when the verse sheet opens, so the button can say
+  `Odkazy (N)`; ten show first, the rest is local. URL: `v=16&s=odkazy`, not the spec's `x=`: a sheet
+  over the selection like the others.
+- **A row's tap and add use the translation of the text it shows** (`fallbackTranslation`): Joel 2:28
+  opens the KJV from the SEB, which has no such verse. Only the NLT stays itself. A reference across
+  chapters has no add button: a sermon passage stays in one chapter.
 
 ## The read API (#851 D4, `router/bible/study.rs`, `state/bible_source/study.rs`)
 

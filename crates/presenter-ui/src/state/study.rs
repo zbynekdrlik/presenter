@@ -53,9 +53,16 @@ pub enum StudySheet {
     Preview,
     /// The open sermon's items in their order.
     Reorder,
+    /// The cross-references of the first selected verse.
+    CrossRefs,
 }
 
 impl StudySheet {
+    /// A sheet about the selected verses.
+    pub fn needs_verses(self) -> bool {
+        matches!(self, Self::Actions | Self::CrossRefs)
+    }
+
     fn to_param(self) -> String {
         match self {
             Self::Actions => "akcie".to_string(),
@@ -65,6 +72,7 @@ impl StudySheet {
             Self::AddToSermon => "pridat".to_string(),
             Self::Preview => "nahlad".to_string(),
             Self::Reorder => "poradie".to_string(),
+            Self::CrossRefs => "odkazy".to_string(),
         }
     }
 
@@ -75,6 +83,7 @@ impl StudySheet {
             "pismo" => Some(Self::TextSize),
             "nahlad" => Some(Self::Preview),
             "poradie" => Some(Self::Reorder),
+            "odkazy" => Some(Self::CrossRefs),
             // `pridat` is no sheet of a URL: the passage it adds is gone.
             other => other
                 .strip_prefix("preklad")?
@@ -89,10 +98,25 @@ impl StudySheet {
 /// The reader, the text search, the sermon list and one sermon's editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StudyView {
-    Reader { book: String, chapter: u16 },
-    Search { query: String },
+    Reader {
+        book: String,
+        chapter: u16,
+    },
+    Search {
+        query: String,
+    },
+    /// One verse (a phone) or its chapter (wider) across translations. An empty
+    /// `translations` = the favourites.
+    Compare {
+        book: String,
+        chapter: u16,
+        verse: u16,
+        translations: Vec<String>,
+    },
     Sermons,
-    Sermon { id: String },
+    Sermon {
+        id: String,
+    },
 }
 
 /// Everything a study URL says.
@@ -127,6 +151,25 @@ impl StudyRoute {
             translation: Some(translation.to_string()),
             view: StudyView::Search {
                 query: query.to_string(),
+            },
+            verses: None,
+            sheet: None,
+            pane: None,
+        }
+    }
+
+    pub fn compare(
+        translation: Option<String>,
+        (book, chapter, verse): (&str, u16, u16),
+        translations: Vec<String>,
+    ) -> Self {
+        Self {
+            translation,
+            view: StudyView::Compare {
+                book: book.to_string(),
+                chapter,
+                verse,
+                translations,
             },
             verses: None,
             sheet: None,
@@ -169,6 +212,8 @@ impl StudyRoute {
     pub fn parse(search: &str) -> Option<Self> {
         let mut translation = None;
         let mut passage = None;
+        let mut place = None;
+        let mut compared = Vec::new();
         let mut view = None;
         let mut query = None;
         let mut verses = None;
@@ -182,7 +227,11 @@ impl StudyRoute {
             let value = decode(value);
             match name {
                 "t" => translation = Some(value).filter(|code| !code.is_empty()),
-                "p" => passage = parse_passage(&value),
+                "p" => {
+                    passage = parse_passage(&value);
+                    place = parse_verse_place(&value);
+                }
+                "tt" => compared = parse_translations(&value),
                 "view" => view = Some(value),
                 "q" => query = Some(value),
                 "v" => verses = parse_verses(&value),
@@ -196,6 +245,15 @@ impl StudyRoute {
             Some("search") => StudyView::Search {
                 query: query.filter(|text| !text.trim().is_empty())?,
             },
+            Some("compare") => {
+                let (book, chapter, verse) = place?;
+                StudyView::Compare {
+                    book,
+                    chapter,
+                    verse,
+                    translations: compared,
+                }
+            }
             Some("sermons") => StudyView::Sermons,
             Some("sermon") => StudyView::Sermon { id: id? },
             None => {
@@ -205,14 +263,18 @@ impl StudyRoute {
             Some(_) => return None,
         };
         let reading = matches!(view, StudyView::Reader { .. });
-        let beside_text = matches!(view, StudyView::Reader { .. } | StudyView::Search { .. });
+        // Compare covers the sermon, but keeps it for the way back to the text.
+        let beside_text = matches!(
+            view,
+            StudyView::Reader { .. } | StudyView::Search { .. } | StudyView::Compare { .. }
+        );
         let verses = verses.filter(|_| reading);
         Some(Self {
             translation,
             view,
             verses,
-            // The verse sheet is about its verses: none, no sheet.
-            sheet: sheet.filter(|sheet| *sheet != StudySheet::Actions || verses.is_some()),
+            // These sheets are about the verses: none, no sheet.
+            sheet: sheet.filter(|sheet| !sheet.needs_verses() || verses.is_some()),
             pane: pane.filter(|_| beside_text),
         })
     }
@@ -222,6 +284,7 @@ impl StudyRoute {
         match &self.view {
             StudyView::Reader { .. } => {}
             StudyView::Search { .. } => params.push("view=search".to_string()),
+            StudyView::Compare { .. } => params.push("view=compare".to_string()),
             StudyView::Sermons => params.push("view=sermons".to_string()),
             StudyView::Sermon { .. } => params.push("view=sermon".to_string()),
         }
@@ -245,6 +308,21 @@ impl StudyRoute {
                     urlencoding::encode(query).replace("%20", "+")
                 ));
             }
+            StudyView::Compare {
+                book,
+                chapter,
+                verse,
+                translations,
+            } => {
+                params.push(format!("p={}.{chapter}.{verse}", urlencoding::encode(book)));
+                if !translations.is_empty() {
+                    let codes: Vec<_> = translations
+                        .iter()
+                        .map(|code| urlencoding::encode(code).into_owned())
+                        .collect();
+                    params.push(format!("tt={}", codes.join(",")));
+                }
+            }
             StudyView::Sermons => {}
             StudyView::Sermon { id } => params.push(format!("id={}", urlencoding::encode(id))),
         }
@@ -265,11 +343,16 @@ impl StudyRoute {
         }
     }
 
+    /// Is a sermon on screen beside the text? Compare has the whole width.
+    pub fn shows_pane(&self) -> bool {
+        self.pane.is_some() && !matches!(self.view, StudyView::Compare { .. })
+    }
+
     /// A move inside the text keeps the sermon beside it.
     pub fn keeping_pane(mut self, current: &Self) -> Self {
         if matches!(
             self.view,
-            StudyView::Reader { .. } | StudyView::Search { .. }
+            StudyView::Reader { .. } | StudyView::Search { .. } | StudyView::Compare { .. }
         ) && self.pane.is_none()
         {
             self.pane.clone_from(&current.pane);
@@ -289,7 +372,7 @@ impl StudyRoute {
                 sheet: self.sheet,
                 pane: Some(id.clone()),
             }),
-            (_, Some(id)) if !wide => {
+            (_, Some(id)) if !wide && self.shows_pane() => {
                 let mut alone = Self::sermon(self.translation.clone(), id);
                 alone.sheet = self
                     .sheet
@@ -311,6 +394,23 @@ fn decode(value: &str) -> String {
     urlencoding::decode(&spaced)
         .map(|text| text.into_owned())
         .unwrap_or(spaced)
+}
+
+/// `HEB.11.1`: a chapter and a verse.
+fn parse_verse_place(value: &str) -> Option<(String, u16, u16)> {
+    let (chapter, verse) = value.rsplit_once('.')?;
+    let (book, chapter) = parse_passage(chapter)?;
+    let verse = verse.parse().ok().filter(|verse| *verse > 0)?;
+    Some((book, chapter, verse))
+}
+
+/// `slk-seb,eng-kjv`.
+fn parse_translations(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .filter(|code| !code.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// `HEB.11`: a three-character book code and a chapter.
@@ -335,6 +435,29 @@ fn parse_verses(value: &str) -> Option<(u16, u16)> {
 /// `Hebrejom 11 · SEB`: the history list's row.
 pub fn reader_label(book: &str, chapter: u16, translation: &str) -> String {
     format!("{book} {chapter} · {}", translation_short_code(translation))
+}
+
+/// The cross-references shown before "Ďalšie (N)" (spec §6.7).
+pub const FIRST_CROSSREFS: usize = 10;
+
+/// What "Ďalšie (N)" still holds.
+pub fn hidden_crossrefs(total: usize, shown: usize) -> usize {
+    total.saturating_sub(shown)
+}
+
+/// The verses a cross-reference selects in the reader. A range leaving its
+/// chapter selects its first verse: `v=` stays inside one chapter.
+pub fn crossref_target(chapter: u16, verse: u16, chapter_end: u16, verse_end: u16) -> (u16, u16) {
+    if chapter == chapter_end {
+        (verse, verse_end.max(verse))
+    } else {
+        (verse, verse)
+    }
+}
+
+/// `Porovnanie: Hebrejom 11:1`.
+pub fn compare_label(book: &str, chapter: u16, verse: u16) -> String {
+    format!("Porovnanie: {book} {chapter}:{verse}")
 }
 
 /// `Hľadanie: viera · SEB`.
@@ -1293,5 +1416,87 @@ mod tests {
         assert_eq!(narrow.sheet, None);
         assert_eq!(narrow.for_width(false, reading.clone()), None);
         assert_eq!(beside.for_width(true, reading), None);
+    }
+
+    #[test]
+    fn a_compare_url_round_trips_with_its_verse_and_translations() {
+        let route = StudyRoute::compare(
+            Some("slk-seb".to_string()),
+            ("HEB", 11, 1),
+            vec!["slk-seb".to_string(), "eng-kjv".to_string()],
+        );
+        let url = route.to_url();
+        assert_eq!(
+            url,
+            "/ui/study?view=compare&t=slk-seb&p=HEB.11.1&tt=slk-seb,eng-kjv"
+        );
+        assert_eq!(
+            StudyRoute::parse(url.split_once('?').unwrap().1),
+            Some(route)
+        );
+    }
+
+    #[test]
+    fn a_compare_url_without_a_list_means_the_favourites() {
+        let route = StudyRoute::parse("view=compare&p=HEB.11.1").expect("a route");
+        assert_eq!(
+            route.view,
+            StudyView::Compare {
+                book: "HEB".to_string(),
+                chapter: 11,
+                verse: 1,
+                translations: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_compare_url_needs_a_verse() {
+        assert_eq!(StudyRoute::parse("view=compare&p=HEB.11"), None);
+        assert_eq!(StudyRoute::parse("view=compare&p=HEB.11.0"), None);
+    }
+
+    #[test]
+    fn the_cross_reference_sheet_has_a_url_and_needs_a_verse() {
+        let route = StudyRoute::reader("slk-seb", "HEB", 11)
+            .with_verses(Some((1, 1)))
+            .with_sheet(Some(StudySheet::CrossRefs));
+        let url = route.to_url();
+        assert_eq!(
+            StudyRoute::parse(url.split_once('?').unwrap().1),
+            Some(route)
+        );
+        let bare = StudyRoute::parse("t=slk-seb&p=HEB.11&s=odkazy").expect("a route");
+        assert_eq!(bare.sheet, None);
+    }
+
+    #[test]
+    fn more_cross_references_count_what_is_left() {
+        assert_eq!(hidden_crossrefs(23, FIRST_CROSSREFS), 13);
+        assert_eq!(hidden_crossrefs(4, FIRST_CROSSREFS), 0);
+        assert_eq!(hidden_crossrefs(23, 23), 0);
+    }
+
+    #[test]
+    fn a_cross_reference_selects_its_verses_inside_one_chapter() {
+        assert_eq!(crossref_target(4, 9, 4, 10), (9, 10));
+        assert_eq!(crossref_target(4, 9, 5, 2), (9, 9));
+    }
+
+    #[test]
+    fn compare_keeps_the_sermon_for_the_way_back_without_showing_it() {
+        let reader = StudyRoute::parse("t=slk-seb&p=HEB.11&pane=abc").expect("a route");
+        let compare = StudyRoute::compare(Some("slk-seb".to_string()), ("HEB", 11, 1), Vec::new())
+            .keeping_pane(&reader);
+        assert_eq!(compare.pane.as_deref(), Some("abc"));
+        assert!(!compare.shows_pane());
+        assert_eq!(
+            compare.for_width(false, reader.clone()),
+            None,
+            "a rotation stays"
+        );
+        let back = StudyRoute::reader("slk-seb", "HEB", 11).keeping_pane(&compare);
+        assert_eq!(back.pane.as_deref(), Some("abc"));
+        assert!(back.shows_pane());
     }
 }

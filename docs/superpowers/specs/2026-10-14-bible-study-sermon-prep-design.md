@@ -428,8 +428,8 @@ Every view has its own URL, so the system Back gesture works. `state/study.rs` h
 |---|---|
 | Reader | `/ui/study?t=slk-seb&p=HEB.11` (`&v=1` = highlighted verse) |
 | Word sheet over the reader | `…&w=G4102&wv=1.3` (verse 1, token 3) |
-| Cross-references over the reader | `…&x=HEB.11.1` |
-| Compare | `/ui/study?view=compare&p=HEB.11.1&tt=slk-seb,slk-roh,slk-sevp,eng-kjv,eng-nlt` |
+| Cross-references over the reader | `…&v=1&s=odkazy` |
+| Compare | `/ui/study?view=compare&t=slk-seb&p=HEB.11.1&tt=slk-seb,slk-roh,slk-sevp,eng-kjv,eng-nlt` |
 | Text search | `/ui/study?view=search&t=slk-seb&q=viera+zarukou&scope=nt` |
 | Strong's occurrences | `/ui/study?view=strongs&s=G4102&scope=all` |
 | Sermon list / one sermon | `/ui/study?view=sermons` / `/ui/study?view=sermon&id=<uuid>` |

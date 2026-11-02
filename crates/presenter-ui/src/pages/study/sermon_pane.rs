@@ -70,7 +70,10 @@ fn close_when_gone(s: Study, id: String) {
 
 #[component]
 pub(super) fn SermonPane(s: Study) -> impl IntoView {
-    let open = Memo::new(move |_| s.route.with(|route| route.pane.clone()));
+    let open = Memo::new(move |_| {
+        s.route
+            .with(|route| route.shows_pane().then(|| route.pane.clone()).flatten())
+    });
     move || {
         open.get().map(|id| {
             close_when_gone(s, id.clone());

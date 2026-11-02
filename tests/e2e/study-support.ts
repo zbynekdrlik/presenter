@@ -105,6 +105,13 @@ export async function openStudy(
   return { context, page, errors, wallRequests };
 }
 
+/** Chrome logs each deliberate NLT 503 (ui skill #718): takes exactly these out. */
+export function dropDeliberateNlt503(opened: OpenedStudy): void {
+  const deliberate = /Failed to load resource: the server responded with a status of 503\b/;
+  expect(opened.errors.filter((text) => deliberate.test(text)).length).toBeGreaterThanOrEqual(1);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((text) => !deliberate.test(text)));
+}
+
 /** T10 + T11, the last assertions of every test. */
 export async function finish(opened: OpenedStudy): Promise<void> {
   expect(opened.wallRequests, "nothing may reach a wall").toEqual([]);

@@ -34,6 +34,18 @@ pub async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
     response.json().await.map_err(ApiError::Deserialize)
 }
 
+/// `get_json`, but a non-2xx carries the server's message ("NLT nedostupné…").
+pub async fn get_json_detail<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
+    let response = Request::get(&api_url(path))
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_detail(response).await);
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
 pub async fn post_json<B: serde::Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,

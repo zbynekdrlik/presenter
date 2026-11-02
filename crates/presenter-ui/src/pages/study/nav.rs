@@ -9,7 +9,8 @@ use super::scroll::{self, ScrollPlan};
 use super::{Chapter, Study};
 use crate::state::session;
 use crate::state::study::{
-    reader_label, search_label, StudyRoute, StudySheet, StudyView, KEY_HISTORY, KEY_LAST,
+    compare_label, reader_label, search_label, StudyRoute, StudySheet, StudyView, KEY_HISTORY,
+    KEY_LAST,
 };
 use crate::state::study_history::{parse_state, HistoryEntry, StudyHistory};
 
@@ -40,6 +41,12 @@ fn entry(s: Study, route: &StudyRoute) -> HistoryEntry {
             reader_label(&book_name(s, route, book, *chapter), *chapter, translation)
         }
         StudyView::Search { query } => search_label(query, translation),
+        StudyView::Compare {
+            book,
+            chapter,
+            verse,
+            ..
+        } => compare_label(&book_name(s, route, book, *chapter), *chapter, *verse),
         StudyView::Sermons => "Kázne".to_string(),
         StudyView::Sermon { .. } => "Kázeň".to_string(),
     };
@@ -132,7 +139,7 @@ pub(super) fn close_sheet(s: Study) {
         return;
     }
     let route = s.route.get_untracked();
-    let selected = route.sheet == Some(StudySheet::Actions);
+    let selected = route.sheet.is_some_and(StudySheet::needs_verses);
     let closed = route.without_sheet();
     replace(
         s,
@@ -236,8 +243,11 @@ pub(super) fn install(s: Study) {
             Some(index) => s.history.update(|history| history.moved_to(index)),
             None => start_list(s, &route),
         }
+        // Another verse of the same chapter is a move, not a closed sheet.
         let sheet_only = s.route.with_untracked(|current| {
-            current.without_sheet().with_verses(None) == route.without_sheet().with_verses(None)
+            current.sheet != route.sheet
+                && current.without_sheet().with_verses(None)
+                    == route.without_sheet().with_verses(None)
         });
         if !sheet_only {
             let offset = index
