@@ -1146,6 +1146,15 @@
   padding: 8px 0;
 }
 
+.sermon-bar .study-button {
+  flex: none;
+}
+
+.sermon-bar .study-button--primary {
+  flex: 1 1 0;
+  width: auto;
+}
+
 .sermon-preview,
 .sermon-order {
   display: flex;
