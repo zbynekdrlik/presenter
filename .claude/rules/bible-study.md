@@ -157,3 +157,7 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **A study read has a book code, not a name.** `idx_bible_passages_reference` starts with the name, so
   `idx_bible_passages_place` (translation, code, chapter, verse) serves these lookups; without it each
   one scans the translation.
+
+## Sermon specs
+
+- **A spec opens its own sermon by id,** never `.first()`: the server lives through the whole file and the list runs by service date, so an earlier test's sermon comes first. Only the retry's fresh database hid this.

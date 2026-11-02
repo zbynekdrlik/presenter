@@ -471,6 +471,19 @@ pub enum ApiError {
     NotFound(String),
 }
 
+impl ApiError {
+    /// The request or its body never finished, as when a reload tears the
+    /// page down mid-read. Reading the body fails as `Deserialize`, not
+    /// `Network`, with the same browser text.
+    pub fn is_cut_off(&self) -> bool {
+        match self {
+            Self::Network(_) => true,
+            Self::Deserialize(err) => err.to_string().contains("Failed to fetch"),
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -488,6 +501,16 @@ impl std::fmt::Display for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_cut_off_is_told_from_a_wrong_answer() {
+        let lost = || gloo_net::Error::GlooError("TypeError: Failed to fetch".to_string());
+        let garbled = gloo_net::Error::GlooError("expected value at line 1".to_string());
+        assert!(ApiError::Network(lost()).is_cut_off());
+        assert!(ApiError::Deserialize(lost()).is_cut_off());
+        assert!(!ApiError::Deserialize(garbled).is_cut_off());
+        assert!(!ApiError::Status(500, "boom".to_string()).is_cut_off());
+    }
 
     #[test]
     fn only_the_servers_json_error_body_gives_a_message() {

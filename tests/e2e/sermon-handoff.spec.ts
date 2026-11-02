@@ -232,11 +232,10 @@ test("a today's-sermons read cut off by a reload leaves no warning in the consol
   attachConsoleErrorCollector(page, errors);
   // What a reload does to a read on its way: the fetch rejects as it is torn down.
   await page.route(/\/bible\/sermons\/today/, (route) => route.abort());
+  const line = page.waitForEvent("console", (msg) => msg.text().startsWith("todays sermons"));
   await page.goto("/ui/operator/bible");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached", timeout: 30_000 });
-  await expect(role(page, "console-field")).toBeVisible();
-  await expect.poll(() => page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/bible/sermons/today")))).toBe(true);
-  expect(errors.filter((line) => line.includes("todays sermons"))).toEqual([]);
+  expect((await line).type()).toBe("log");
+  expect(errors.filter((text) => text.includes("todays sermons"))).toEqual([]);
   await context.close();
 });
 
