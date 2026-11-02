@@ -104,6 +104,8 @@ pub struct StudyRoute {
     /// The highlighted verses of the reader, in reading order.
     pub verses: Option<(u16, u16)>,
     pub sheet: Option<StudySheet>,
+    /// The sermon open beside the reader or the search on a wide screen.
+    pub pane: Option<String>,
 }
 
 impl StudyRoute {
@@ -116,6 +118,7 @@ impl StudyRoute {
             },
             verses: None,
             sheet: None,
+            pane: None,
         }
     }
 
@@ -127,6 +130,7 @@ impl StudyRoute {
             },
             verses: None,
             sheet: None,
+            pane: None,
         }
     }
 
@@ -136,6 +140,7 @@ impl StudyRoute {
             view: StudyView::Sermons,
             verses: None,
             sheet: None,
+            pane: None,
         }
     }
 
@@ -145,6 +150,7 @@ impl StudyRoute {
             view: StudyView::Sermon { id: id.to_string() },
             verses: None,
             sheet: None,
+            pane: None,
         }
     }
 
@@ -168,6 +174,7 @@ impl StudyRoute {
         let mut verses = None;
         let mut sheet = None;
         let mut id = None;
+        let mut pane = None;
         for pair in search.trim_start_matches('?').split('&') {
             let Some((name, value)) = pair.split_once('=') else {
                 continue;
@@ -181,6 +188,7 @@ impl StudyRoute {
                 "v" => verses = parse_verses(&value),
                 "s" => sheet = StudySheet::parse(&value),
                 "id" => id = Some(value).filter(|id| !id.is_empty()),
+                "pane" => pane = Some(value).filter(|id| !id.is_empty()),
                 _ => {}
             }
         }
@@ -197,6 +205,7 @@ impl StudyRoute {
             Some(_) => return None,
         };
         let reading = matches!(view, StudyView::Reader { .. });
+        let beside_text = matches!(view, StudyView::Reader { .. } | StudyView::Search { .. });
         let verses = verses.filter(|_| reading);
         Some(Self {
             translation,
@@ -204,6 +213,7 @@ impl StudyRoute {
             verses,
             // The verse sheet is about its verses: none, no sheet.
             sheet: sheet.filter(|sheet| *sheet != StudySheet::Actions || verses.is_some()),
+            pane: pane.filter(|_| beside_text),
         })
     }
 
@@ -238,10 +248,56 @@ impl StudyRoute {
             StudyView::Sermons => {}
             StudyView::Sermon { id } => params.push(format!("id={}", urlencoding::encode(id))),
         }
+        if let Some(id) = &self.pane {
+            params.push(format!("pane={}", urlencoding::encode(id)));
+        }
         if let Some(sheet) = self.sheet {
             params.push(format!("s={}", sheet.to_param()));
         }
         format!("{PATH}?{}", params.join("&"))
+    }
+
+    /// The sermon on this route, as the whole view or beside the text.
+    pub fn open_sermon(&self) -> Option<&str> {
+        match &self.view {
+            StudyView::Sermon { id } => Some(id),
+            _ => self.pane.as_deref(),
+        }
+    }
+
+    /// A move inside the text keeps the sermon beside it.
+    pub fn keeping_pane(mut self, current: &Self) -> Self {
+        if matches!(
+            self.view,
+            StudyView::Reader { .. } | StudyView::Search { .. }
+        ) && self.pane.is_none()
+        {
+            self.pane.clone_from(&current.pane);
+        }
+        self
+    }
+
+    /// Where this route belongs at this width, when that is somewhere else: a
+    /// wide screen reads `reading` with the sermon beside it, a narrow one
+    /// shows the sermon alone. So a rotation loses neither.
+    pub fn for_width(&self, wide: bool, reading: Self) -> Option<Self> {
+        match (&self.view, &self.pane) {
+            (StudyView::Sermon { id }, _) if wide => Some(Self {
+                translation: self.translation.clone().or(reading.translation),
+                view: reading.view,
+                verses: None,
+                sheet: self.sheet,
+                pane: Some(id.clone()),
+            }),
+            (_, Some(id)) if !wide => {
+                let mut alone = Self::sermon(self.translation.clone(), id);
+                alone.sheet = self
+                    .sheet
+                    .filter(|sheet| matches!(sheet, StudySheet::Preview | StudySheet::Reorder));
+                Some(alone)
+            }
+            _ => None,
+        }
     }
 
     /// The same position with a sheet closed: what the history list shows.
@@ -1182,5 +1238,60 @@ mod tests {
     #[test]
     fn the_settle_key_names_translation_book_and_chapter() {
         assert_eq!(chapter_key("slk-seb", "HEB", 11), "slk-seb:HEB.11");
+    }
+
+    #[test]
+    fn a_pane_survives_the_url_beside_text_only() {
+        let mut route = StudyRoute::reader("slk-seb", "HEB", 11);
+        route.pane = Some("abc-1".to_string());
+        let url = route.to_url();
+        assert!(url.contains("pane=abc-1"), "{url}");
+        assert_eq!(
+            StudyRoute::parse(url.split_once('?').unwrap().1),
+            Some(route)
+        );
+        let list = StudyRoute::parse("view=sermons&pane=abc-1").unwrap();
+        assert_eq!(list.pane, None);
+    }
+
+    #[test]
+    fn a_move_in_the_text_keeps_the_sermon_and_a_move_to_the_list_leaves_it() {
+        let mut current = StudyRoute::reader("slk-seb", "HEB", 11);
+        current.pane = Some("abc-1".to_string());
+        let next = StudyRoute::reader("slk-seb", "HEB", 12).keeping_pane(&current);
+        assert_eq!(next.open_sermon(), Some("abc-1"));
+        let list = StudyRoute::sermons(None).keeping_pane(&current);
+        assert_eq!(list.open_sermon(), None);
+    }
+
+    #[test]
+    fn a_wide_screen_opens_the_sermon_beside_the_last_place() {
+        let mut sermon = StudyRoute::sermon(Some("slk-seb".to_string()), "abc-1");
+        sermon.sheet = Some(StudySheet::Reorder);
+        let last = StudyRoute::reader("eng-kjv", "JHN", 3).with_verses(Some((16, 16)));
+        let wide = sermon.for_width(true, last).unwrap();
+        assert_eq!(wide.view, StudyRoute::reader("x", "JHN", 3).view);
+        assert_eq!(wide.translation.as_deref(), Some("slk-seb"));
+        assert_eq!(wide.verses, None);
+        assert_eq!(wide.sheet, Some(StudySheet::Reorder));
+        assert_eq!(wide.pane.as_deref(), Some("abc-1"));
+    }
+
+    #[test]
+    fn a_narrow_screen_shows_the_sermon_alone_and_drops_a_verse_sheet() {
+        let mut beside = StudyRoute::reader("slk-seb", "HEB", 11).with_verses(Some((1, 1)));
+        beside.pane = Some("abc-1".to_string());
+        beside.sheet = Some(StudySheet::Actions);
+        let reading = StudyRoute::reader("slk-seb", "JHN", 3);
+        let narrow = beside.for_width(false, reading.clone()).unwrap();
+        assert_eq!(
+            narrow.view,
+            StudyView::Sermon {
+                id: "abc-1".to_string()
+            }
+        );
+        assert_eq!(narrow.sheet, None);
+        assert_eq!(narrow.for_width(false, reading.clone()), None);
+        assert_eq!(beside.for_width(true, reading), None);
     }
 }

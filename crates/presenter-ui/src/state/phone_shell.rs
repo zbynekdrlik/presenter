@@ -15,17 +15,23 @@ pub const PHONE_SHELL_QUERY: &str = "(max-width: 768px), (pointer: coarse) and (
 /// Safari before 14 has no `MediaQueryList.addEventListener`; the old
 /// `addListener` covers it (the app still supports iOS 12).
 pub fn install_phone_shell(phone_shell: RwSignal<bool>) {
+    watch_media(PHONE_SHELL_QUERY, move |phone| apply(phone_shell, phone));
+}
+
+/// Call `on_change` with the query's answer now and on every change. A browser
+/// that cannot answer counts as a no.
+pub fn watch_media(query: &str, on_change: impl Fn(bool) + 'static) {
     let list = crate::utils::window::window()
-        .match_media(PHONE_SHELL_QUERY)
+        .match_media(query)
         .ok()
         .flatten();
     let Some(list) = list else {
-        apply(phone_shell, false);
+        on_change(false);
         return;
     };
-    apply(phone_shell, list.matches());
+    on_change(list.matches());
     let watched = list.clone();
-    let on_change = Closure::<dyn Fn()>::new(move || apply(phone_shell, watched.matches()));
+    let on_change = Closure::<dyn Fn()>::new(move || on_change(watched.matches()));
     let callback = on_change.as_ref().unchecked_ref();
     if list
         .add_event_listener_with_callback("change", callback)

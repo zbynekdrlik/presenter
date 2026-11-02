@@ -18,6 +18,7 @@ paths:
   - "crates/presenter-ui/src/state/bible_console_prepared.rs"
   - "crates/presenter-ui/src/pages/bible_prepared_sermon.rs"
   - "crates/presenter-ui/src/pages/tablet/sermon_select.rs"
+  - "crates/presenter-ui/src/pages/study/sermon_pane.rs"
   - "tests/e2e/sermon-handoff.spec.ts"
 ---
 
@@ -224,3 +225,5 @@ paths:
 - **The tablet's open slides have one read ticket** (`sermon_select::next_slide_read`): the tap, the live
   event, the 10 s poll and a visibility change all take it, or an older answer redraws newer text. The
   list is set before the today's-sermon read, so a hung read costs only the preselection.
+- **Wide screens (E3b):** the sermon beside the text is `route.pane` on a Reader/Search route (`pages/study/sermon_pane.rs`), never a second view: all reader code keeps reading `route.view`, `nav::go` carries the pane (`keeping_pane`), `open_sermon()` answers "which sermon" for both layouts. One effect moves the route between the two layouts at 1024 px (`for_width`), so `view=sermon` links work everywhere and a rotation loses nothing. `study.last` never stores the pane. `.study[data-pane]`, not `:has`, for the padding: a pane is a real layout, not a transient sheet.
+  A refusal is cleared by an explicit open from the list (`forget_refusal`), never by a mount: the width change remounts the editor. A sheet docks LEFT of the pane; below 1200 px it lies over the text instead of squeezing it. A sermon deleted elsewhere drops the pane in place (`close_when_gone`). A sermon opens beside the last READER place: `study.last` holds no search.

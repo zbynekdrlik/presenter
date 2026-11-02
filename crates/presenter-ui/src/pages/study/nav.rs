@@ -53,7 +53,10 @@ fn entry(s: Study, route: &StudyRoute) -> HistoryEntry {
 /// `study.last` holds the reader's place; the list lives as long as the tab.
 fn remember(s: Study, route: &StudyRoute) {
     if route.sheet.is_none() && matches!(route.view, StudyView::Reader { .. }) {
-        session::set_persistent(KEY_LAST, &route.to_url());
+        // Only the place: the sermon beside it may be gone at the next visit.
+        let mut place = route.clone();
+        place.pane = None;
+        session::set_persistent(KEY_LAST, &place.to_url());
     }
     session::set(KEY_HISTORY, &s.history.with_untracked(|h| h.to_stored()));
 }
@@ -96,6 +99,7 @@ fn replace_entry(s: Study, route: StudyRoute, entry: HistoryEntry) {
 /// Back never lands on it.
 pub(super) fn go(s: Study, route: StudyRoute, plan: ScrollPlan) {
     let current = s.route.get_untracked();
+    let route = route.keeping_pane(&current);
     if current == route {
         // The same place asked for again: the reader may have scrolled away.
         s.scroll_plan.set_value(plan);

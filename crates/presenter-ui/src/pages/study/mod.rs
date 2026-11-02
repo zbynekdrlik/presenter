@@ -20,6 +20,7 @@ mod sermon_add;
 mod sermon_editor;
 mod sermon_item;
 mod sermon_live;
+mod sermon_pane;
 mod sermon_preview;
 mod sermon_reorder;
 mod sermon_undo;
@@ -58,6 +59,7 @@ use reader::{ChapterBar, Reader};
 use results::SearchResults;
 use scroll::ScrollPlan;
 use sermon_editor::{open_editor, Editor, SermonEditor};
+use sermon_pane::SermonPane;
 use sermon_preview::PreviewSheet;
 use sermon_reorder::ReorderSheet;
 use sermons::SermonListView;
@@ -153,6 +155,8 @@ struct Study {
     active_sermon: RwSignal<Option<String>>,
     /// The passage the add sheet is asking about.
     pending_passage: RwSignal<Option<SermonPassage>>,
+    /// Wide enough for the sermon beside the text.
+    wide: RwSignal<bool>,
     /// The passage being added: a double tap adds it once.
     adding: StoredValue<Option<SermonPassage>>,
     /// One editor per opened sermon, owned by the page: its save queue outlives
@@ -393,6 +397,19 @@ fn settle_translation(s: Study) {
 
 /// The route of this visit: the URL, else the last position (and the verse it
 /// was scrolled to), else the start.
+fn start_route() -> StudyRoute {
+    StudyRoute {
+        translation: None,
+        view: StudyView::Reader {
+            book: START_BOOK.to_string(),
+            chapter: START_CHAPTER,
+        },
+        verses: None,
+        sheet: None,
+        pane: None,
+    }
+}
+
 fn opening_route() -> (StudyRoute, Option<u16>) {
     let search = crate::utils::window::window()
         .location()
@@ -411,18 +428,7 @@ fn opening_route() -> (StudyRoute, Option<u16>) {
             let verse = scroll::saved_verse(&route);
             (route, verse)
         }
-        None => (
-            StudyRoute {
-                translation: None,
-                view: StudyView::Reader {
-                    book: START_BOOK.to_string(),
-                    chapter: START_CHAPTER,
-                },
-                verses: None,
-                sheet: None,
-            },
-            None,
-        ),
+        None => (start_route(), None),
     }
 }
 
@@ -508,6 +514,7 @@ pub fn StudyPage() -> impl IntoView {
         later: StoredValue::new(None),
         active_sermon: RwSignal::new(session::get_persistent(KEY_ACTIVE_SERMON)),
         pending_passage: RwSignal::new(None),
+        wide: RwSignal::new(false),
         adding: StoredValue::new(None),
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
@@ -575,6 +582,7 @@ pub fn StudyPage() -> impl IntoView {
             .then(|| Timeout::new(stay, move || end_undo_toast(s)))
     });
 
+    sermon_pane::follow_width(s);
     let open_sheet = Memo::new(move |_| s.route.with(|route| route.sheet));
     let view_kind = Memo::new(move |_| {
         s.route.with(|route| match &route.view {
@@ -615,6 +623,7 @@ pub fn StudyPage() -> impl IntoView {
             class="study"
             data-role="study"
             data-text-size=move || s.text_size.get().key()
+            data-pane=move || s.route.with(|route| route.pane.is_some()).then_some("true")
         >
             <StudyHeader s=s />
             <Show when=bible_view>
@@ -664,6 +673,7 @@ pub fn StudyPage() -> impl IntoView {
                     })
             }}
             {body}
+            <SermonPane s=s />
             {sheets}
             <div
                 class="study-notice"
