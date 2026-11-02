@@ -23,7 +23,7 @@ export function attachConsoleErrorCollector(page: Page, errors: string[]): void 
     }
   });
   page.on("pageerror", (err) => {
-    errors.push(`[pageerror] ${err.message}`);
+    errors.push(`[pageerror] ${err.message}\n${err.stack ?? "no stack"}`);
   });
 }
 
@@ -49,7 +49,7 @@ export function attachEditorConsoleCollector(page: Page, errors: string[]): void
     errors.push(`[${type}] ${msg.text()}`);
   });
   page.on("pageerror", (err) => {
-    errors.push(`[pageerror] ${err.message}`);
+    errors.push(`[pageerror] ${err.message}\n${err.stack ?? "no stack"}`);
   });
 }
 
