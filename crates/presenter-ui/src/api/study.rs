@@ -1,24 +1,21 @@
 //! The study page's reads (#851). [`load_chapter`] is the ONE place a chapter
-//! is fetched, so the chapter endpoint of unit D4 replaces it here.
-//!
-//! Until then the chapter comes from `POST /bible/resolve`: `/bible/passage`
-//! finds only a row whose verse span equals the request, and rows are single
-//! verses, so it can never answer a chapter. Resolve composes through the
-//! server's one verse dispatch (`bible_source`, NLT included), stores nothing,
-//! and with `characterLimit: 1` every verse is a slide of its own (a lone verse
-//! is never split, #434), written `"{verse}. {text}"`.
+//! is fetched; every verse read of the server goes through `bible_source`, so
+//! the NLT arrives here like any other translation.
 
 use std::collections::VecDeque;
 
-use super::bible::{resolve_slides, BibleSlideDto, ResolveRequest};
-use super::ApiError;
+use serde::Deserialize;
+
+use super::{get_json_detail, ApiError};
 use crate::state::study::StudyVerse;
 
 /// The last chapters kept in memory (spec §6.3).
 const CACHED_CHAPTERS: usize = 30;
+/// The most cross-references the server answers for a verse.
+const MAX_CROSS_REFERENCES: u32 = 500;
 
 /// One chapter of one translation, as the reader shows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ChapterText {
     /// The name this translation gives the book.
     pub book: String,
@@ -32,44 +29,55 @@ pub async fn load_chapter(
     book_code: &str,
     chapter: u16,
 ) -> Result<ChapterText, ApiError> {
-    let answer = resolve_slides(&chapter_request(translation, book_code, chapter)).await?;
-    Ok(chapter_text(&answer.slides))
+    get_json_detail(&chapter_path(translation, book_code, chapter)).await
 }
 
-fn chapter_request(translation: &str, book_code: &str, chapter: u16) -> ResolveRequest {
-    ResolveRequest {
-        main_translation: translation.to_string(),
-        secondary_translation: None,
-        book: book_code.to_string(),
-        book_code: Some(book_code.to_string()),
-        chapter,
-        verse_start: 1,
-        verse_end: None,
-        character_limit: Some(1),
-    }
+fn chapter_path(translation: &str, book_code: &str, chapter: u16) -> String {
+    format!(
+        "/bible/study/chapter?translation={}&book_code={}&chapter={chapter}",
+        urlencoding::encode(translation),
+        urlencoding::encode(book_code),
+    )
 }
 
-fn chapter_text(slides: &[BibleSlideDto]) -> ChapterText {
-    let book = slides
-        .first()
-        .and_then(|slide| slide.metadata.as_ref()?.bible.as_ref()?.book.clone())
-        .unwrap_or_default();
-    ChapterText {
-        book,
-        verses: slides
-            .iter()
-            .filter_map(|slide| verse_of(&slide.bible_main))
-            .collect(),
-    }
+/// A passage that shares a theme with a verse (OpenBible.info).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossReference {
+    pub label: String,
+    pub book_code: String,
+    pub chapter: u16,
+    pub verse: u16,
+    pub chapter_end: u16,
+    pub verse_end: u16,
+    pub votes: i32,
+    pub text: String,
+    /// Whose text this is, when the asked translation has none here.
+    #[serde(default)]
+    pub fallback_translation: Option<String>,
 }
 
-/// A composer line back into its verse number and text.
-fn verse_of(line: &str) -> Option<StudyVerse> {
-    let (number, text) = line.split_once(". ")?;
-    Some(StudyVerse {
-        verse: number.parse().ok()?,
-        text: text.to_string(),
-    })
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CrossReferences {
+    pub total: usize,
+    pub items: Vec<CrossReference>,
+}
+
+/// All the cross-references of a verse, the most voted first.
+pub async fn load_cross_references(
+    translation: &str,
+    book_code: &str,
+    (chapter, verse): (u16, u16),
+) -> Result<CrossReferences, ApiError> {
+    get_json_detail(&crossrefs_path(translation, book_code, chapter, verse)).await
+}
+
+fn crossrefs_path(translation: &str, book_code: &str, chapter: u16, verse: u16) -> String {
+    format!(
+        "/bible/study/crossrefs?translation={}&book_code={}&chapter={chapter}&verse={verse}&limit={MAX_CROSS_REFERENCES}",
+        urlencoding::encode(translation),
+        urlencoding::encode(book_code),
+    )
 }
 
 /// The most recently read chapters by [`crate::state::study::chapter_key`].
@@ -101,55 +109,55 @@ impl ChapterCache {
 mod tests {
     use super::*;
 
-    fn slide(main: &str) -> BibleSlideDto {
-        serde_json::from_value(serde_json::json!({
-            "id": "s", "order": 0, "bibleMain": main, "bibleTranslation": "",
-            "bibleMainReference": "", "bibleTranslationReference": "",
-            "metadata": { "bible": { "book": "Hebrejom", "verses": [] } }
-        }))
-        .expect("a resolve slide")
-    }
-
     #[test]
-    fn the_request_asks_for_the_whole_chapter_one_verse_per_slide() {
-        let request = chapter_request("slk-seb", "HEB", 11);
-        assert_eq!(request.verse_start, 1);
-        assert_eq!(request.verse_end, None, "None = to the chapter's end");
-        assert_eq!(request.character_limit, Some(1));
-        assert_eq!(request.secondary_translation, None);
-        assert_eq!(request.book_code.as_deref(), Some("HEB"));
-    }
-
-    #[test]
-    fn slides_become_numbered_verses_and_the_translations_book_name() {
-        let chapter = chapter_text(&[
-            slide("1. Viera je zárukou."),
-            slide("2. Pre ňu. Druhá veta."),
-        ]);
-        assert_eq!(chapter.book, "Hebrejom");
+    fn a_chapter_is_read_by_book_code() {
         assert_eq!(
-            chapter.verses,
-            [
-                StudyVerse {
-                    verse: 1,
-                    text: "Viera je zárukou.".to_string()
-                },
-                StudyVerse {
-                    verse: 2,
-                    text: "Pre ňu. Druhá veta.".to_string()
-                },
-            ]
+            chapter_path("slk-seb", "HEB", 11),
+            "/bible/study/chapter?translation=slk-seb&book_code=HEB&chapter=11"
         );
     }
 
     #[test]
-    fn no_slides_is_a_chapter_this_translation_lacks() {
+    fn the_server_chapter_becomes_the_reader_text() {
+        let chapter: ChapterText = serde_json::from_value(serde_json::json!({
+            "translation": "slk-seb", "bookCode": "HEB", "bookNumber": 58,
+            "book": "Hebrejom", "chapter": 11, "verseCount": 40,
+            "prev": null, "next": null,
+            "verses": [{ "verse": 1, "text": "Viera", "markup": {} }]
+        }))
+        .expect("a chapter");
+        assert_eq!(chapter.book, "Hebrejom");
         assert_eq!(
-            chapter_text(&[]),
-            ChapterText {
-                book: String::new(),
-                verses: Vec::new()
-            }
+            chapter.verses,
+            [StudyVerse {
+                verse: 1,
+                text: "Viera".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn cross_references_ask_for_every_row_of_the_verse() {
+        assert_eq!(
+            crossrefs_path("slk-seb", "JHN", 3, 16),
+            "/bible/study/crossrefs?translation=slk-seb&book_code=JHN&chapter=3&verse=16&limit=500"
+        );
+    }
+
+    #[test]
+    fn a_cross_reference_knows_whose_text_it_carries() {
+        let answer: CrossReferences = serde_json::from_value(serde_json::json!({
+            "total": 1,
+            "items": [{
+                "label": "Joel 2:28", "bookCode": "JOL", "chapter": 2, "verse": 28,
+                "chapterEnd": 2, "verseEnd": 28, "votes": 9, "text": "And it shall",
+                "fallbackTranslation": "eng-kjv"
+            }]
+        }))
+        .expect("cross references");
+        assert_eq!(
+            answer.items[0].fallback_translation.as_deref(),
+            Some("eng-kjv")
         );
     }
 

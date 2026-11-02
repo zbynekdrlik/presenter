@@ -7,6 +7,8 @@
 //! components only read `Study`.
 
 mod add_to_sermon;
+mod compare;
+mod crossrefs;
 mod favourites;
 mod field;
 mod header;
@@ -26,6 +28,7 @@ mod sermon_reorder;
 mod sermon_undo;
 mod sermons;
 mod sheet;
+mod swipe;
 mod text_size;
 mod verse_actions;
 
@@ -51,6 +54,8 @@ use crate::state::study::{
 use crate::state::study_history::StudyHistory;
 
 use add_to_sermon::AddToSermonSheet;
+use compare::{CompareCell, CompareView};
+use crossrefs::{CrossRefSheet, CrossRefs};
 use favourites::{FavouriteSheet, Favourites};
 use field::StudyField;
 use header::StudyHeader;
@@ -157,6 +162,12 @@ struct Study {
     pending_passage: RwSignal<Option<SermonPassage>>,
     /// Wide enough for the sermon beside the text.
     wide: RwSignal<bool>,
+    /// The phone shell: compare stacks one verse.
+    phone: RwSignal<bool>,
+    /// The compare view's chapters by `chapter_key`.
+    compare: RwSignal<HashMap<String, CompareCell>>,
+    /// The cross-references of the verse the sheets are about.
+    crossrefs: RwSignal<CrossRefs>,
     /// The passage being added: a double tap adds it once.
     adding: StoredValue<Option<SermonPassage>>,
     /// One editor per opened sermon, owned by the page: its save queue outlives
@@ -482,13 +493,15 @@ fn install_pwa() {
 enum ViewKind {
     Reader,
     Search,
+    Compare,
     Sermons,
     Sermon(String),
 }
 
 #[component]
 pub fn StudyPage() -> impl IntoView {
-    crate::state::phone_shell::install_phone_shell(RwSignal::new(false));
+    let phone = RwSignal::new(false);
+    crate::state::phone_shell::install_phone_shell(phone);
     crate::state::keyboard_inset::install_keyboard_inset();
     install_pwa();
 
@@ -515,6 +528,9 @@ pub fn StudyPage() -> impl IntoView {
         active_sermon: RwSignal::new(session::get_persistent(KEY_ACTIVE_SERMON)),
         pending_passage: RwSignal::new(None),
         wide: RwSignal::new(false),
+        phone,
+        compare: RwSignal::new(HashMap::new()),
+        crossrefs: RwSignal::new(CrossRefs::default()),
         adding: StoredValue::new(None),
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
@@ -530,6 +546,8 @@ pub fn StudyPage() -> impl IntoView {
     }
     nav::install(s);
     sermon_editor::install(s);
+    compare::install(s);
+    crossrefs::install(s);
     fetch_translations(s);
 
     let place = Memo::new(move |_| s.place());
@@ -588,6 +606,7 @@ pub fn StudyPage() -> impl IntoView {
         s.route.with(|route| match &route.view {
             StudyView::Reader { .. } => ViewKind::Reader,
             StudyView::Search { .. } => ViewKind::Search,
+            StudyView::Compare { .. } => ViewKind::Compare,
             StudyView::Sermons => ViewKind::Sermons,
             StudyView::Sermon { id } => ViewKind::Sermon(id.clone()),
         })
@@ -600,6 +619,7 @@ pub fn StudyPage() -> impl IntoView {
         }
         .into_any(),
         ViewKind::Search => view! { <SearchResults s=s /> }.into_any(),
+        ViewKind::Compare => view! { <CompareView s=s /> }.into_any(),
         ViewKind::Sermons => view! { <SermonListView s=s /> }.into_any(),
         ViewKind::Sermon(id) => view! { <SermonEditor s=s id=id /> }.into_any(),
     };
@@ -609,6 +629,7 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::TextSize) => view! { <TextSizeSheet s=s /> }.into_any(),
         Some(StudySheet::Favourite(slot)) => view! { <FavouriteSheet s=s index=slot /> }.into_any(),
         Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
+        Some(StudySheet::CrossRefs) => view! { <CrossRefSheet s=s /> }.into_any(),
         Some(StudySheet::Preview) => open_editor(s)
             .map(|e| view! { <PreviewSheet e=e /> })
             .into_any(),

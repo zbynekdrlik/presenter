@@ -1,12 +1,11 @@
 //! The verse sheet (spec §6.3): what can be done with the selected verses.
 //! It leaves the text tappable: another verse number extends the selection. A
-//! new action is one [`VerseAction`] and its arm in [`run`] (S4 adds "Porovnať"
-//! and "Odkazy").
+//! new action is one [`VerseAction`] and its arm in [`run`].
 
 use leptos::prelude::*;
 
 use super::sheet::Sheet;
-use super::{add_to_sermon, nav, Chapter, Study};
+use super::{add_to_sermon, compare, crossrefs, nav, Chapter, Study};
 use crate::api::sermons::SermonPassage;
 use crate::components::timer_panel::copy_to_clipboard;
 use crate::state::study::{copy_text, verse_reference};
@@ -14,26 +13,37 @@ use crate::state::study::{copy_text, verse_reference};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerseAction {
     AddToSermon,
+    Compare,
+    CrossRefs,
     Copy,
 }
 
 impl VerseAction {
-    fn label(self) -> &'static str {
+    fn label(self, s: Study) -> String {
         match self {
-            Self::AddToSermon => "Pridať do kázne",
-            Self::Copy => "Kopírovať",
+            Self::AddToSermon => "Pridať do kázne".to_string(),
+            Self::Compare => "Porovnať".to_string(),
+            Self::CrossRefs => crossrefs::button_label(s),
+            Self::Copy => "Kopírovať".to_string(),
         }
     }
 
     fn role(self) -> &'static str {
         match self {
             Self::AddToSermon => "verse-add-to-sermon",
+            Self::Compare => "verse-compare",
+            Self::CrossRefs => "verse-crossrefs",
             Self::Copy => "verse-copy",
         }
     }
 }
 
-const VERSE_ACTIONS: [VerseAction; 2] = [VerseAction::AddToSermon, VerseAction::Copy];
+const VERSE_ACTIONS: [VerseAction; 4] = [
+    VerseAction::AddToSermon,
+    VerseAction::Compare,
+    VerseAction::CrossRefs,
+    VerseAction::Copy,
+];
 
 /// The selection's reference, and its text for the clipboard.
 fn selection(s: Study) -> Option<(String, String)> {
@@ -77,6 +87,8 @@ fn run(s: Study, action: VerseAction) {
                 add_to_sermon::add(s, passage);
             }
         }
+        VerseAction::Compare => compare::open_from_selection(s),
+        VerseAction::CrossRefs => crossrefs::open(s),
         VerseAction::Copy => {
             let Some((_, text)) = selection(s) else {
                 return;
@@ -111,7 +123,7 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
                                 data-role=action.role()
                                 on:click=move |_| run(s, action)
                             >
-                                {action.label()}
+                                {move || action.label(s)}
                             </button>
                         }
                     })

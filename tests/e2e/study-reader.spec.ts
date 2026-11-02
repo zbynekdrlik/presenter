@@ -35,6 +35,8 @@ import {
 
 test.describe.configure({ timeout: 180_000 });
 
+const CHAPTER_READ = /\/bible\/study\/chapter\?/;
+
 let serverHandle: ServerHandle | undefined;
 let baseURL = "";
 
@@ -136,16 +138,14 @@ test("a chapter on its way leaves the text in place and only the newest lands", 
   const { page } = opened;
   let release: () => void = () => undefined;
   const held = new Promise<void>((resolve) => (release = resolve));
-  const asksFor = (body: unknown, chapterNumber: number) =>
-    (body as { chapter: number }).chapter === chapterNumber;
-  await page.route("**/bible/resolve", async (route) => {
-    if (asksFor(route.request().postDataJSON(), 12)) await held;
+  const asksFor = (url: string, chapterNumber: number) =>
+    new URL(url).searchParams.get("chapter") === String(chapterNumber);
+  await page.route(CHAPTER_READ, async (route) => {
+    if (asksFor(route.request().url(), 12)) await held;
     await route.fallback();
   });
   const late = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/bible/resolve") &&
-      asksFor(response.request().postDataJSON(), 12),
+    (response) => CHAPTER_READ.test(response.url()) && asksFor(response.url(), 12),
   );
   await page.locator(nextChapter).tap();
   await expect(chapter(page)).toHaveAttribute("data-state", "loading");
@@ -165,14 +165,13 @@ test("a quick second translation wins over a slow first one", async ({ browser }
   const { page } = opened;
   let release: () => void = () => undefined;
   const held = new Promise<void>((resolve) => (release = resolve));
-  const isKjv = (body: unknown) => (body as { mainTranslation: string }).mainTranslation === "eng-kjv";
-  await page.route("**/bible/resolve", async (route) => {
-    if (isKjv(route.request().postDataJSON())) await held;
+  const isKjv = (url: string) => new URL(url).searchParams.get("translation") === "eng-kjv";
+  await page.route(CHAPTER_READ, async (route) => {
+    if (isKjv(route.request().url())) await held;
     await route.fallback();
   });
   const late = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/bible/resolve") && isKjv(response.request().postDataJSON()),
+    (response) => CHAPTER_READ.test(response.url()) && isKjv(response.url()),
   );
   await favourite(page, "eng-kjv").tap();
   await expect(chapter(page)).toHaveAttribute("data-state", "loading");
@@ -189,8 +188,8 @@ test("a quick second translation wins over a slow first one", async ({ browser }
 test("a verse number does nothing while another chapter is on its way", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
-  const answer = page.waitForResponse("**/bible/resolve");
-  const release = await gateRoute(page, "**/bible/resolve");
+  const answer = page.waitForResponse(CHAPTER_READ);
+  const release = await gateRoute(page, CHAPTER_READ);
   await page.locator(nextChapter).tap();
   await expect(chapter(page)).toHaveAttribute("data-state", "loading");
   await expect(page).toHaveURL(/p=HEB\.12/);
@@ -254,7 +253,7 @@ test("a failed chapter shows why and retries inline", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
   let failed = false;
-  await page.route("**/bible/resolve", async (route) => {
+  await page.route(CHAPTER_READ, async (route) => {
     if (failed) return route.fallback();
     failed = true;
     await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });

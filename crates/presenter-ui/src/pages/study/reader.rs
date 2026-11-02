@@ -8,15 +8,12 @@ use presenter_core::bible::resolver::Step;
 use presenter_core::bible::sermon::translation_short_code;
 
 use super::scroll::{self, ScrollPlan};
-use super::{nav, Chapter, ChapterPlace, Study};
+use super::swipe::SwipeTracker;
+use super::{compare, nav, Chapter, ChapterPlace, Study};
 use crate::components::version_label::VersionLabel;
 use crate::state::study::{
-    extend_selection, missing_text, step_chapter, step_label, swipe_step, StudyRoute, StudySheet,
-    StudyView,
+    extend_selection, missing_text, step_chapter, step_label, StudyRoute, StudySheet, StudyView,
 };
-
-/// Where the finger went down; `None` once it no longer can be a swipe.
-type SwipeStart = Option<(i32, f64, f64)>;
 
 fn step_target(s: Study, dir: Step) -> Option<(String, u16)> {
     let (book, chapter) = s.route.with(|route| match &route.view {
@@ -77,7 +74,7 @@ fn chapter_settled_untracked(s: Study) -> bool {
 
 #[component]
 pub(super) fn Reader(s: Study) -> impl IntoView {
-    let swipe: StoredValue<SwipeStart> = StoredValue::new(None);
+    let swipe = StoredValue::new(SwipeTracker::default());
     let settled = Memo::new(move |_| chapter_settled(s));
     let save_ticket = StoredValue::new(0_u32);
     let loaded = Memo::new(move |_| {
@@ -137,39 +134,19 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
         })
     };
 
-    let on_pointerdown = move |ev: web_sys::PointerEvent| {
-        let touch = ev.pointer_type() != "mouse";
-        swipe.set_value((touch && ev.is_primary()).then(|| {
-            (
-                ev.pointer_id(),
-                f64::from(ev.client_x()),
-                f64::from(ev.client_y()),
-            )
-        }));
-    };
-    let on_pointerup = move |ev: web_sys::PointerEvent| {
-        let Some((id, x, y)) = swipe.get_value() else {
-            return;
-        };
-        swipe.set_value(None);
-        if id != ev.pointer_id() {
-            return;
-        }
-        let moved = (f64::from(ev.client_x()) - x, f64::from(ev.client_y()) - y);
-        if let Some(dir) = swipe_step(moved.0, moved.1) {
-            turn(s, dir);
-        }
-    };
-
     view! {
         <main
             class="study-scroll"
             data-role="study-scroll"
             node_ref=s.scroller
             on:scroll=move |_| scroll::save_after_scroll(s, save_ticket)
-            on:pointerdown=on_pointerdown
-            on:pointerup=on_pointerup
-            on:pointercancel=move |_| swipe.set_value(None)
+            on:pointerdown=move |ev| swipe.update_value(|held| held.down(&ev))
+            on:pointerup=move |ev| {
+                if let Some(dir) = swipe.try_update_value(|held| held.up(&ev)).flatten() {
+                    turn(s, dir);
+                }
+            }
+            on:pointercancel=move |_| swipe.update_value(SwipeTracker::cancel)
         >
             <article
                 class="study-chapter"
@@ -260,7 +237,7 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
     }
 }
 
-/// `◀ kap. 10 · kap. 12 ▶`, above the safe area.
+/// `◀ kap. 10 · Porovnať · kap. 12 ▶`, above the safe area.
 #[component]
 pub(super) fn ChapterBar(s: Study) -> impl IntoView {
     let target = move |dir| Memo::new(move |_| step_target(s, dir));
@@ -297,6 +274,15 @@ pub(super) fn ChapterBar(s: Study) -> impl IntoView {
             >
                 <span aria-hidden="true">"\u{25C0}"</span>
                 <span class="study-bar__label">{move || label(previous, "Začiatok")}</span>
+            </button>
+            <button
+                type="button"
+                class="study-button study-bar__compare"
+                data-role="study-compare-open"
+                disabled=move || s.place().is_none()
+                on:click=move |_| compare::open_from_reader(s)
+            >
+                "Porovnať"
             </button>
             <button
                 type="button"
