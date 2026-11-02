@@ -29,12 +29,38 @@ pub(super) fn slides_differ(shown: &[BibleSlideDto], stored: &[BibleSlideDto]) -
                 || shown.bible_main != stored.bible_main
                 || shown.bible_translation != stored.bible_translation
                 || shown.bible_main_reference != stored.bible_main_reference
+                || shown.bible_translation_reference != stored.bible_translation_reference
         })
 }
 
-/// The newest `refresh_open_sermon`: the 10 s poll and a visibility change
-/// overlap on slow Wi-Fi, and an older answer must not redraw newer text.
-static REFRESH: AtomicU32 = AtomicU32::new(0);
+/// The newest read of the open slides: the 10 s poll, a visibility change, a
+/// live event and a tap overlap on slow Wi-Fi, and an older answer must not
+/// redraw newer text. Every path that writes `ctx.slides` takes a ticket here.
+static SLIDE_READ: AtomicU32 = AtomicU32::new(0);
+
+pub(super) fn next_slide_read() -> u32 {
+    SLIDE_READ.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+}
+
+pub(super) fn is_newest_slide_read(ticket: u32) -> bool {
+    SLIDE_READ.load(Ordering::Relaxed) == ticket
+}
+
+/// The live event's reload of the open presentation.
+pub(super) async fn reload_open_slides(ctx: &TabletContext, id: &str) {
+    let mine = next_slide_read();
+    let Ok(detail) = get_presentation(id).await else {
+        return;
+    };
+    if !is_newest_slide_read(mine) {
+        return;
+    }
+    ctx.slides_cache
+        .update(|cache| drop(cache.insert(id.to_string(), detail.slides.clone())));
+    if ctx.current_presentation_id.get_untracked().as_deref() == Some(id) {
+        ctx.slides.set(detail.slides);
+    }
+}
 
 /// A sermon cut after the tablet read it keeps its ids and its count: the open
 /// one is compared with what is stored, and redrawn only when it differs.
@@ -48,11 +74,11 @@ pub(super) async fn refresh_open_sermon(ctx: &TabletContext, fresh: &[BiblePrese
     {
         return;
     }
-    let mine = REFRESH.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let mine = next_slide_read();
     let Ok(detail) = get_presentation(&id).await else {
         return;
     };
-    if REFRESH.load(Ordering::Relaxed) != mine {
+    if !is_newest_slide_read(mine) {
         return;
     }
     if ctx.current_presentation_id.get_untracked().as_deref() != Some(id.as_str()) {
@@ -114,6 +140,15 @@ mod tests {
             &[slide("a", "krátky")]
         ));
         assert!(!slides_differ(&[slide("a", "text")], &[slide("a", "text")]));
+    }
+
+    #[test]
+    fn a_later_read_retires_an_earlier_one() {
+        let first = next_slide_read();
+        assert!(is_newest_slide_read(first));
+        let second = next_slide_read();
+        assert!(!is_newest_slide_read(first));
+        assert!(is_newest_slide_read(second));
     }
 
     #[test]

@@ -79,7 +79,13 @@ pub(super) fn SermonSlides(badge: String) -> impl IntoView {
         <For
             each=move || slides.get()
             key=|slide| {
-                (slide.id.clone(), slide.bible_main.clone(), slide.bible_translation.clone())
+                (
+                    slide.id.clone(),
+                    slide.bible_main.clone(),
+                    slide.bible_translation.clone(),
+                    slide.bible_main_reference.clone(),
+                    slide.bible_translation_reference.clone(),
+                )
             }
             children=move |slide| view! { <SermonSlideCard slide=slide /> }
         />

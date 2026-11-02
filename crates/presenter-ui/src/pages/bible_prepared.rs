@@ -103,9 +103,18 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
 
     let on_click = move |_| {
         let id = id_for_click.clone();
+        // Cards of the previous presentation must not stay clickable under the
+        // new id: the server would refuse their slide ids.
+        if active_presentation_id.get_untracked().as_ref() != Some(&id) {
+            active_presentation_slides.set(Vec::new());
+        }
         active_presentation_id.set(Some(id.clone()));
         leptos::task::spawn_local(async move {
-            if let Ok(detail) = bible::get_presentation(&id).await {
+            let answer = bible::get_presentation(&id).await;
+            if active_presentation_id.get_untracked().as_ref() != Some(&id) {
+                return;
+            }
+            if let Ok(detail) = answer {
                 active_presentation_slides.set(detail.slides);
             }
         });
