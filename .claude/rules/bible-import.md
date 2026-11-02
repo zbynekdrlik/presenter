@@ -54,7 +54,7 @@ paths:
   `.github/workflows/*.yml` and `*.yaml`. A new public-domain module goes on the allow-list;
   a new restricted one goes to the private repo plus a checkout in each consuming job.
 
-## What a verse may carry (`presenter-bible/src/cleanup.rs`)
+## What a verse may carry (`presenter-bible/src/markup/`)
 
 - **MySword (SEB, ROH, MIL).** `<FI>[ … ]<Fi>` is a translator's note: it goes WITH the
   whitespace around it, leaving ONE space (so "slovo <FI>[…]<Fi>ďalšie" never fuses into
@@ -76,9 +76,19 @@ paths:
   not list it.
 - **Obohu (SEVP)** is unchanged: its 3 rows with a space before punctuation stay (the rule is
   MySword-only, spec §5.1).
-- D2a (`markup/`) replaces these helpers, keeps notes and headings as study markup, and must
-  reproduce D1's KJV `content` byte for byte (`testdata/kjv-content.sha256`, computed from
-  this parser). The 35 glued heading lines become `Heading` segments there, not text.
+- **Segments are the source (#851 D2a):** `content` is `VerseMarkup::plain_text()`, whitespace is
+  decided once over the whole verse (`markup::normalize`; a gap stays in the segment where the
+  whitespace was, so a tagged word stays clean), `BibleIngestionBatch::with_markup` refuses
+  markup that does not spell its passage.
+- **A closing USFM marker ends at its `*`:** the source splits words over it (`\w afrai|…\w*d`,
+  8 verses); the old reader ate those letters and Mark 4:24 said "give".
+- **Headings:** a heading line opens the next verse of its chapter (`\d` Psalm titles, PSA 119's
+  acrostic letters); one no verse follows (the epistles' subscriptions) goes to the END of the
+  chapter's last verse. Spec §5.2's "all 31,102" KJV rows is 31,100: Mark 9:43 and Luke 6:41 have
+  no tag at all.
+- **A parser change: dump all five modules before and after and `diff`** (a throwaway test
+  writing `data/bibles-private` output): D2a changed exactly the 8 KJV verses and nothing else.
+  `testdata/kjv-content.sha256` then pins the KJV, the private four have only synthetic tests.
 
 ## Every parse change bumps `PARSER_VERSION`
 
