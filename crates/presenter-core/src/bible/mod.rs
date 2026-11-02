@@ -1,3 +1,4 @@
+mod book_scope;
 mod canonical;
 pub mod markup;
 mod presentation;
@@ -8,6 +9,7 @@ pub mod sermon;
 mod study_sources;
 mod translation;
 
+pub use book_scope::BookScope;
 pub use canonical::{
     canonical_book_by_code, canonical_book_by_name, canonical_book_by_number, BibleBookCanonical,
 };

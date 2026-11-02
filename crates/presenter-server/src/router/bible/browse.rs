@@ -86,6 +86,8 @@ pub(crate) struct BibleSearchQuery {
     pub(crate) query: String,
     #[serde(default)]
     pub(crate) limit: Option<u32>,
+    #[serde(default)]
+    pub(crate) scope: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -105,8 +107,9 @@ pub(crate) async fn search_bible_passages(
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
+    let scope = super::study::parse_scope(params.scope.as_deref())?;
     let passages = state
-        .search_bible_passages_cross(translation_code, trimmed, limit)
+        .search_bible_passages_cross(translation_code, trimmed, scope, limit)
         .await?;
     Ok(Json(passages))
 }

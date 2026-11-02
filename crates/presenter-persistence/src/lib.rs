@@ -30,7 +30,7 @@ pub use audit::{ResolumePushAuditEntry, SettingsAuditEntry, SettingsAuditSource}
 pub use repository::{
     sync_should_apply, DatabaseSettings, NewInterpreterTip, NewSermon, NewStreamAsset,
     NewStreamFont, Repository, RepositoryError, SermonItemRecord, SermonRecord, SermonSnapshot,
-    SermonSummary, SermonWrite, SyncApplyOutcome, SyncLibraryManifestRow, SyncManifestRow,
-    SyncPresentation, TrashedLibrary, TrashedPresentation, PRUNE_HORIZON, SERMON_CONFLICT,
-    SERMON_NOT_FOUND,
+    SermonSummary, SermonWrite, StrongsVerse, SyncApplyOutcome, SyncLibraryManifestRow,
+    SyncManifestRow, SyncPresentation, TrashedLibrary, TrashedPresentation, PRUNE_HORIZON,
+    SERMON_CONFLICT, SERMON_NOT_FOUND,
 };

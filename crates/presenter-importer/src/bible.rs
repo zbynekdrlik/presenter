@@ -69,6 +69,7 @@ where
 mod tests {
     use super::*;
     use presenter_bible::{BibleSource, BibleSourceFormat};
+    use presenter_core::bible::BookScope;
     use presenter_core::{BibleReference, BibleTranslation};
     use presenter_persistence::Repository;
     use rusqlite::Connection;
@@ -316,7 +317,7 @@ mod tests {
 
         // No ingest_with_bytes call was made — passages must still be empty.
         let hits = repo
-            .search_bible_passages("en-test", "god", 10)
+            .search_bible_passages("en-test", "god", BookScope::All, 10)
             .await
             .unwrap();
         assert!(
@@ -362,7 +363,7 @@ mod tests {
 
         // After import, FTS search should find at least one passage.
         let hits = repo
-            .search_bible_passages("en-test", "god", 10)
+            .search_bible_passages("en-test", "god", BookScope::All, 10)
             .await
             .unwrap();
         assert!(

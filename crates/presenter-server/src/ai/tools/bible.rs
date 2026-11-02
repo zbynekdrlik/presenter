@@ -3,6 +3,7 @@
 use super::{slide_to_json, str_field, u64_field};
 use crate::state::bible::BibleTriggerOverrides;
 use crate::state::AppState;
+use presenter_core::bible::BookScope;
 use presenter_core::BibleReference;
 use serde_json::{json, Value};
 
@@ -13,7 +14,7 @@ pub(super) async fn search_bible(
     let query = str_field(args, "query")?;
     let translation = args["translation"].as_str();
     let passages = state
-        .search_bible_passages_cross(translation, &query, 10)
+        .search_bible_passages_cross(translation, &query, BookScope::All, 10)
         .await?;
     let results: Vec<Value> = passages
         .iter()

@@ -12,8 +12,11 @@ use super::AppState;
 use crate::bible_remote;
 use presenter_core::bible::{
     canonical_book_by_code, canonical_book_by_name, BibleBookCanonical, BibleBookChapterSummary,
+    BookScope,
 };
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+pub(crate) mod study;
 
 impl AppState {
     /// The installed translations, then the remote ones. `eng-nlt` is listed
@@ -39,6 +42,7 @@ impl AppState {
         &self,
         translation_code: Option<&str>,
         query: &str,
+        scope: BookScope,
         limit: u32,
     ) -> anyhow::Result<Vec<BiblePassage>> {
         if let Some(code) =
@@ -51,7 +55,7 @@ impl AppState {
             return Ok(Vec::new());
         }
         self.repository
-            .search_bible_passages_cross(translation_code, query, limit)
+            .search_bible_passages_cross(translation_code, query, scope, limit)
             .await
     }
 

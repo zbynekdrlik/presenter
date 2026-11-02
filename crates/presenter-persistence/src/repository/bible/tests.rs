@@ -297,7 +297,12 @@ mod fast_import_tests {
             .expect("import");
 
         let hits = repo
-            .search_bible_passages("eng-fast", "beginning", 10)
+            .search_bible_passages(
+                "eng-fast",
+                "beginning",
+                presenter_core::bible::BookScope::All,
+                10,
+            )
             .await
             .expect("search");
         assert!(
@@ -327,7 +332,12 @@ mod fast_import_tests {
             .await
             .unwrap();
         let first_hits = repo
-            .search_bible_passages("eng-idem", "beginning", 10)
+            .search_bible_passages(
+                "eng-idem",
+                "beginning",
+                presenter_core::bible::BookScope::All,
+                10,
+            )
             .await
             .unwrap();
 
@@ -336,7 +346,12 @@ mod fast_import_tests {
             .await
             .unwrap();
         let second_hits = repo
-            .search_bible_passages("eng-idem", "beginning", 10)
+            .search_bible_passages(
+                "eng-idem",
+                "beginning",
+                presenter_core::bible::BookScope::All,
+                10,
+            )
             .await
             .unwrap();
 

@@ -455,7 +455,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(stream_playback::routes())
         // #851: sermons + the Access identity (`/bible/sermons*`,
         // `/bible/study/identity`); static `/today` wins over `/{id}`.
-        .merge(bible::sermons::routes());
+        .merge(bible::sermons::routes())
+        .merge(bible::study::routes());
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
     request_log::with_request_log(router).with_state(state)
 }

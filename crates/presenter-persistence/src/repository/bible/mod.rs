@@ -4,6 +4,7 @@
 //! - [`query`]      — read/search methods (translations, passages, FTS).
 //! - [`import`]     — translation write/import methods (fast-import, digests).
 //! - [`markup`]     — verse markup + Strong's occurrences (written by the import).
+//! - [`occurrences`] — where a Strong's number stands.
 //! - [`presentations`] — bible-presentation CRUD + slide row-mapping helpers.
 //! - [`sermons`]    — sermons: a presentation plus its source items.
 //! - [`study_sources`] — Strong's dictionaries and cross-references.
@@ -13,11 +14,13 @@
 
 mod import;
 mod markup;
+mod occurrences;
 mod presentations;
 mod query;
 mod sermons;
 mod study_sources;
 
+pub use occurrences::StrongsVerse;
 pub use sermons::{
     NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,
     SERMON_CONFLICT, SERMON_NOT_FOUND,
