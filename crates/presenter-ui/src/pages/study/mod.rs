@@ -46,7 +46,7 @@ use presenter_core::BibleTranslation;
 
 use crate::api::bible::{self as bible_api, BibleSearchHit};
 use crate::api::sermons::{is_not_found, SermonItem, SermonPassage};
-use crate::api::study::{load_chapter, ChapterCache, ChapterText};
+use crate::api::study::{load_chapter, BookCount, ChapterCache, ChapterText};
 use crate::state::bible_console::versification;
 use crate::state::session;
 use crate::state::study::{
@@ -180,6 +180,11 @@ struct Study {
     lexicon: RwSignal<LexiconEntries>,
     /// What the Strong's view has loaded.
     occurrences: RwSignal<Occurrences>,
+    /// `perBook` of the last number answered: the scope chips outlive a change
+    /// of scope and a failed read.
+    book_counts: RwSignal<Option<(String, Vec<BookCount>)>>,
+    /// What a walk through the history leaves for its `popstate`.
+    after_pop: StoredValue<Option<nav::AfterPop>>,
     /// The passage being added: a double tap adds it once.
     adding: StoredValue<Option<SermonPassage>>,
     /// One editor per opened sermon, owned by the page: its save queue outlives
@@ -550,6 +555,8 @@ pub fn StudyPage() -> impl IntoView {
         numbers: RwSignal::new(session::get_persistent(KEY_NUMBERS).as_deref() == Some("1")),
         lexicon: RwSignal::new(LexiconEntries::new()),
         occurrences: RwSignal::new(Occurrences::default()),
+        book_counts: RwSignal::new(None),
+        after_pop: StoredValue::new(None),
         adding: StoredValue::new(None),
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),

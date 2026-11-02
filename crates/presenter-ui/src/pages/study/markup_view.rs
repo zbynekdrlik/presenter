@@ -30,6 +30,15 @@ fn tapped_word(ev: &web_sys::Event) -> Option<WordPlace> {
     })
 }
 
+/// Text dragged over with a mouse: the click that ends it is no tap.
+fn text_selected() -> bool {
+    crate::utils::window::window()
+        .get_selection()
+        .ok()
+        .flatten()
+        .is_some_and(|selection| !selection.is_collapsed())
+}
+
 fn word_view(
     verse: u16,
     token: usize,
@@ -159,6 +168,9 @@ pub(super) fn VerseBody(
             .into_any()
     };
     let on_click = move |ev: web_sys::MouseEvent| {
+        if text_selected() {
+            return;
+        }
         if let Some(word) = tapped_word(&ev) {
             ev.stop_propagation();
             word_sheet::open(s, word);

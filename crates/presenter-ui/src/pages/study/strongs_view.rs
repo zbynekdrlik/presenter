@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use super::scroll::{self, ScrollPlan};
 use super::word_sheet::Lexicon;
 use super::{nav, study_error, Study};
-use crate::api::study::{load_occurrences, BookCount, Occurrence, OccurrencePage};
+use crate::api::study::{load_occurrences, Occurrence, OccurrencePage};
 use crate::state::study::StudyRoute;
 use crate::state::study::StudyView;
 use crate::state::study_word::{
@@ -30,7 +30,6 @@ pub(super) enum Occurrences {
     Ready {
         key: String,
         total: u64,
-        per_book: Vec<BookCount>,
         items: Vec<Occurrence>,
         more: More,
     },
@@ -70,13 +69,15 @@ fn fetch_first(s: Study, number: String, scope: String) {
             return;
         }
         s.occurrences.set(match answer {
-            Ok(page) => Occurrences::Ready {
-                key,
-                total: page.total,
-                per_book: page.per_book,
-                items: page.items,
-                more: More::Idle,
-            },
+            Ok(page) => {
+                s.book_counts.set(Some((number, page.per_book)));
+                Occurrences::Ready {
+                    key,
+                    total: page.total,
+                    items: page.items,
+                    more: More::Idle,
+                }
+            }
             Err(err) => Occurrences::Failed {
                 key,
                 message: study_error(&err),
@@ -220,9 +221,9 @@ fn Hit(s: Study, number: String, item: Occurrence) -> impl IntoView {
 
 fn scope_row(s: Study) -> impl IntoView {
     let chips = move || {
-        let current = on_route(s).map(|(_, scope)| scope).unwrap_or_default();
-        s.occurrences.with(|held| match held {
-            Occurrences::Ready { per_book, .. } => {
+        let (number, current) = on_route(s).unwrap_or_default();
+        s.book_counts.with(|held| match held {
+            Some((counted, per_book)) if *counted == number => {
                 let counts: Vec<_> = per_book
                     .iter()
                     .map(|book| (book.book_code.clone(), book.count))

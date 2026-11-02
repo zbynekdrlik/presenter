@@ -36,6 +36,8 @@ pub(super) type LexiconEntries = HashMap<String, Lexicon>;
 enum WordOnPage {
     /// The text is on its way.
     Waiting,
+    /// The text's read failed: its retry may still bring the word.
+    TextFailed,
     /// No such word here: nothing to show a sheet about.
     Gone,
     Here(WordInfo),
@@ -54,7 +56,8 @@ fn in_reader(s: Study, word: &WordPlace) -> WordOnPage {
     }
     s.chapter.with(|chapter| match chapter {
         Chapter::Ready(place, text) if *place == wanted => among(&text.verses, word, None),
-        Chapter::Missing(place) | Chapter::Failed(place, _) if *place == wanted => WordOnPage::Gone,
+        Chapter::Missing(place) if *place == wanted => WordOnPage::Gone,
+        Chapter::Failed(place, _) if *place == wanted => WordOnPage::TextFailed,
         _ => WordOnPage::Waiting,
     })
 }
@@ -70,6 +73,7 @@ fn word_on_page(s: Study) -> Option<WordOnPage> {
     Some(match compare::numbered_text(s) {
         NumberedText::Waiting => WordOnPage::Waiting,
         NumberedText::Absent => WordOnPage::Gone,
+        NumberedText::Failed => WordOnPage::TextFailed,
         NumberedText::Here { verses, only } => among(&verses, &word, only),
     })
 }
@@ -148,7 +152,7 @@ fn follow(s: Study, number: &str) {
 
 fn open_occurrences(s: Study, number: &str) {
     let translation = s.route.with_untracked(|route| route.translation.clone());
-    nav::go(
+    nav::leave_word_sheet(
         s,
         StudyRoute::strongs(translation, number, SCOPE_ALL),
         ScrollPlan::Top,
@@ -318,6 +322,8 @@ pub(super) fn WordSheet(s: Study) -> impl IntoView {
         .into_any(),
     };
     let tabs = move || info.get().map(|word| tabs_view(s, word.numbers, number));
+    // A phone's backdrop covers the text's own retry.
+    let text_failed = move || word_on_page(s) == Some(WordOnPage::TextFailed);
     let target = move |dir| {
         info.with(|word| {
             word.as_ref()
@@ -338,6 +344,19 @@ pub(super) fn WordSheet(s: Study) -> impl IntoView {
             state=Signal::derive(move || if full.get() { "full" } else { "peek" })
             strongs=Signal::derive(move || number.get())
         >
+            <Show when=text_failed>
+                <div class="study-error" data-role="word-sheet-text-error" role="alert">
+                    <p>"Text sa nepodarilo načítať."</p>
+                    <button
+                        type="button"
+                        class="study-button"
+                        data-role="study-retry"
+                        on:click=move |_| s.retry.update(|n| *n = n.wrapping_add(1))
+                    >
+                        "Skúsiť znova"
+                    </button>
+                </div>
+            </Show>
             {tabs}
             <div class="study-word-entry">{body}</div>
             <div class="study-word-steps">

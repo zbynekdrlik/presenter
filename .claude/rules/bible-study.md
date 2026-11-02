@@ -81,8 +81,11 @@ preparation (the sermon views are in `sermon-prep.md`).
   --features mock-integrations,test-helpers`, ~11 min) and stop `presenter-dev` for the run (the mock
   Resolume binds 8091). That cargo build re-runs trunk unpatched: the `integrity` console warnings
   in `finish()` are this local dist only.
-- **Local UI builds need nightly** (`.cargo/config.toml` has `build-std`): `RUSTUP_TOOLCHAIN=nightly
-  trunk build`; on stable, wasm-bindgen fails with `__wbindgen_externref_table_alloc`.
+- **Local UI builds need nightly and `--release`** (`.cargo/config.toml` has `build-std`):
+  `RUSTUP_TOOLCHAIN=nightly trunk build --release`; on stable, wasm-bindgen fails with
+  `__wbindgen_externref_table_alloc`, and a debug build floods the console with reactive warnings.
+- **`refresh-dev-data` refuses as stale:** `cargo build --release -p presenter-importer --bin
+  import_propresenter --bin ingest_bibles`.
 
 ## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
 
@@ -118,10 +121,20 @@ preparation (the sermon views are in `sermon-prep.md`).
   Compare's page = the KJV column, on a phone only the verse shown: ◀ ▶ stay in it.
 - **Links add entries, ◀ ▶ and tabs replace.** `popstate` uses `only_sheet_differs`, which also sees a
   change of word under the same sheet, or Back from a link scrolls. ✕ and the backdrop walk the whole run
-  of word entries (`close_word_sheet`), only Back walks one.
+  of word entries (`close_word_sheet`), only Back walks one. A list starting on the sheet: the walk ends on
+  its first entry and `AfterPop::CloseSheet` closes it there, one ✕. "Všetky výskyty" walks the links first
+  (`leave_word_sheet`), or a later Back reopens one; a `popstate` finishes what a walk left (`after_pop`).
+- **A failed read keeps the word:** `TextFailed`, never `Gone` (only a Ready text with no such word or a
+  chapter the translation lacks, or no KJV column in compare). The sheet has its own retry: a phone's
+  backdrop covers the text's.
+- **The modal word sheet reserves no space at ≥ 1024 px** (`:not([data-role="word-sheet"])`): §6.6, the
+  reading position never moves. The other docked sheets still do.
+- **A click ending a mouse selection is no tap** (`text_selected`).
 - **No KJV word has two numbers in today's data** (0 of all verses): the tab test mocks a chapter.
 - **The Strong's list stays in `Study::occurrences`:** Back asks nothing. A page lands only on the list
-  that asked for it, right after what it holds (`land_page`). A scope chip is a `nav::replace`.
+  that asked for it, right after what it holds (`land_page`). A scope chip is a `nav::replace`. The chips
+  read `Study::book_counts`, so they outlive a scope change and a failed read. On a phone they are one
+  sideways row (`assertNoHorizontalOverflow` flags such a row, so the spec checks the page itself).
 - **`study-*` local E2E pace:** every test fails `finish()` on the local `integrity` line, so each one
   starts a new worker and re-imports: ~30 s per test.
 

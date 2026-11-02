@@ -8,6 +8,7 @@ import {
   assertMinTapTarget,
   assertNoHorizontalOverflow,
   deriveTestConfig,
+  PHONE_360,
   PHONE_390,
   refreshDevData,
   startTestServer,
@@ -123,6 +124,28 @@ test("a verse one translation lacks says so and the rest stays aligned", async (
     "v tomto preklade tento verš nie je",
   );
   await expect(row(page, "eng-kjv", 5)).toContainText("Elijah");
+  await finish(opened);
+});
+
+test("the longest book name leaves the bar's buttons whole at 360 px", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_360,
+    "/ui/study?view=compare&t=slk-sevp&p=2TH.3.18&tt=slk-sevp,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "2TH.3.18");
+  const place = page.locator('[data-role="compare-place"]');
+  await expect(place).toHaveText("Druhýlist apoštola Pavla Tesalonickým 3:18");
+  await expect(place.locator(".study-compare__verse")).toBeInViewport({ ratio: 1 });
+  for (const role of ["compare-prev", "compare-next"]) {
+    const button = page.locator(`[data-role="${role}"]`);
+    await assertMinTapTarget(button, 44);
+    await expect(button).toBeInViewport({ ratio: 1 });
+  }
+  await assertNoHorizontalOverflow(page);
   await finish(opened);
 });
 

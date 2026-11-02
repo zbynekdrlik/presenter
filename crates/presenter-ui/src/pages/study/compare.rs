@@ -84,8 +84,10 @@ fn shown(s: Study) -> Vec<String> {
 pub(super) enum NumberedText {
     /// Not answered yet.
     Waiting,
-    /// No KJV column on this screen, or its text failed.
+    /// No KJV column on this screen.
     Absent,
+    /// The KJV column's read failed: its retry may still bring the word.
+    Failed,
     /// `only` = the one verse a phone shows.
     Here {
         verses: Vec<StudyVerse>,
@@ -109,7 +111,7 @@ pub(super) fn numbered_text(s: Study) -> NumberedText {
             verses: chapter.verses.clone(),
             only: (layout(s) == CompareLayout::Stacked).then_some(at.verse),
         },
-        Some(CompareCell::Failed(_)) => NumberedText::Absent,
+        Some(CompareCell::Failed(_)) => NumberedText::Failed,
         Some(CompareCell::Loading) | None => NumberedText::Waiting,
     })
 }
@@ -496,7 +498,8 @@ fn columns(s: Study, codes: &[String], at: &Spot) -> AnyView {
     })
 }
 
-fn title(s: Study, at: &Spot, codes: &[String]) -> String {
+/// The book's name and `11:1`.
+fn title_parts(s: Study, at: &Spot, codes: &[String]) -> (String, String) {
     let book = s.compare.with(|cells| {
         codes
             .iter()
@@ -507,12 +510,15 @@ fn title(s: Study, at: &Spot, codes: &[String]) -> String {
                 _ => None,
             })
     });
-    format!(
-        "{} {}:{}",
+    (
         book.unwrap_or_else(|| at.book.clone()),
-        at.chapter,
-        at.verse
+        format!("{}:{}", at.chapter, at.verse),
     )
+}
+
+fn title(s: Study, at: &Spot, codes: &[String]) -> String {
+    let (book, place) = title_parts(s, at, codes);
+    format!("{book} {place}")
 }
 
 #[component]
@@ -561,6 +567,11 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
     };
     let heading = move || place.get().map(|at| title(s, &at, &codes.get()));
     let numbered = Memo::new(move |_| shows_numbers(s));
+    // The bar has little room: a long name gives way, the place never does.
+    let bar_part = move |part: usize| {
+        let (book, place) = title_parts(s, &place.get()?, &codes.get());
+        Some(if part == 0 { book } else { format!(" {place}") })
+    };
     let step = move |dir| Memo::new(move |_| step_target(s, dir));
     let (previous, next) = (step(Step::Prev), step(Step::Next));
 
@@ -591,7 +602,7 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
                 <div class="study-compare__grid">{column_chips} {body}</div>
             </section>
         </main>
-        <footer class="study-bar">
+        <footer class="study-bar study-bar--compare">
             <button
                 type="button"
                 class="study-button study-bar__step"
@@ -603,7 +614,8 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
                 <span aria-hidden="true">"\u{25C0}"</span>
             </button>
             <span class="study-compare__nav" data-role="compare-place">
-                {heading}
+                <span class="study-compare__book">{move || bar_part(0)}</span>
+                <span class="study-compare__verse">{move || bar_part(1)}</span>
             </span>
             <button
                 type="button"

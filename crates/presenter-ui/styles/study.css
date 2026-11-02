@@ -1108,7 +1108,9 @@
     transform: none;
   }
 
-  .study:has(.study-sheet),
+  /* The word sheet lies over the text behind its backdrop: spec §6.6, the
+     reading position never moves. */
+  .study:has(.study-sheet:not([data-role="word-sheet"])),
   .study[data-pane="true"] {
     padding-right: clamp(380px, 32vw, 480px);
   }
@@ -1136,7 +1138,7 @@
 /* Room for the text beside both; narrower, the sheet lies over it and the text
    keeps its width (264 px at 1024 is no reading column). */
 @media (min-width: 1200px) {
-  .study[data-pane="true"]:has(.study-sheet) {
+  .study[data-pane="true"]:has(.study-sheet:not([data-role="word-sheet"])) {
     padding-right: calc(2 * clamp(380px, 32vw, 480px));
   }
 }
@@ -1351,13 +1353,27 @@
   font-size: 16px;
 }
 
+.study-bar--compare {
+  grid-template-columns: minmax(44px, 1fr) minmax(0, auto) minmax(44px, 1fr);
+}
+
 .study-compare__nav {
   display: flex;
   align-items: center;
   justify-content: center;
   min-width: 0;
   font-weight: 700;
-  white-space: nowrap;
+  white-space: pre;
+}
+
+.study-compare__book {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.study-compare__verse {
+  flex: none;
 }
 
 /* Cross-references (spec §6.7). */
@@ -1535,4 +1551,14 @@
   flex: none;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* 36 books would push the verses off a phone: one row, sideways. */
+body[data-shell="phone"] .study-scopes {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+body[data-shell="phone"] .study-scopes .study-chip {
+  flex: none;
 }

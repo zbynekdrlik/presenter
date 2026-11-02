@@ -167,16 +167,52 @@ fn is_word_entry(entry: &HistoryEntry) -> bool {
         .is_some_and(|route| route.sheet == Some(StudySheet::Word))
 }
 
+/// What is left to do once the browser finished a walk through the history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AfterPop {
+    /// The walk ended on the list's first entry, still a sheet.
+    CloseSheet,
+    Go(StudyRoute, ScrollPlan),
+}
+
+fn word_run(s: Study) -> (usize, usize) {
+    s.history
+        .with_untracked(|history| (history.run_behind(is_word_entry), history.behind()))
+}
+
+fn walk_then(s: Study, steps: usize, next: AfterPop) {
+    s.after_pop.set_value(Some(next));
+    step_history(-(steps as i32));
+}
+
 /// ✕ and a tap beside it leave the sheet, whatever entries a derivation link
 /// put on the way; only Back walks those. A list that starts on the sheet has
-/// nothing behind that run: the walk stops on its first entry.
+/// nothing behind that run: the walk ends on its first entry and closes it there.
 fn close_word_sheet(s: Study) {
-    let (run, behind) = s
-        .history
-        .with_untracked(|history| (history.run_behind(is_word_entry), history.behind()));
-    match (run + 1).min(behind) {
-        0 => close_in_place(s),
-        steps => step_history(-(steps as i32)),
+    let (run, behind) = word_run(s);
+    if run == 0 && behind == 0 {
+        close_in_place(s);
+    } else if run < behind {
+        step_history(-((run + 1) as i32));
+    } else {
+        walk_then(s, run, AfterPop::CloseSheet);
+    }
+}
+
+/// Leave the word sheet for another place. `go` closes only the top entry, so
+/// the entries of derivation links are walked first, or Back would reopen one.
+pub(super) fn leave_word_sheet(s: Study, route: StudyRoute, plan: ScrollPlan) {
+    match word_run(s).0 {
+        0 => go(s, route, plan),
+        run => walk_then(s, run, AfterPop::Go(route, plan)),
+    }
+}
+
+fn finish_walk(s: Study) {
+    match s.after_pop.try_update_value(Option::take).flatten() {
+        Some(AfterPop::CloseSheet) => close_in_place(s),
+        Some(AfterPop::Go(route, plan)) => go(s, route, plan),
+        None => {}
     }
 }
 
@@ -287,5 +323,6 @@ pub(super) fn install(s: Study) {
         remember(s, &route);
         s.route.set(route);
         scroll::settle(s);
+        finish_walk(s);
     });
 }

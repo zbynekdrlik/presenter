@@ -9,6 +9,7 @@ import {
   assertMinTapTarget,
   assertNoHorizontalOverflow,
   deriveTestConfig,
+  PHONE_360,
   PHONE_390,
   refreshDevData,
   startTestServer,
@@ -57,6 +58,19 @@ const scopeChip = (page: Page, scope: string): Locator =>
   page.locator(`[data-role="search-scope"][data-scope="${scope}"]`);
 const scrollTop = (page: Page): Promise<number> =>
   role(page, "study-scroll").evaluate((el) => el.scrollTop);
+
+/** The chips scroll inside their own row on a phone; nothing else may pass the edge. */
+async function expectNoPageOverflow(page: Page): Promise<void> {
+  const offenders = await page.evaluate(() =>
+    Array.from(document.body.querySelectorAll<HTMLElement>("*"))
+      .filter((el) => !el.closest(".study-scopes .study-chip"))
+      .filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1)
+      .map((el) => el.dataset.role ?? el.tagName),
+  );
+  expect(offenders).toEqual([]);
+  const width = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(width).toBeLessThanOrEqual(0);
+}
 
 async function openFaith(page: Page): Promise<void> {
   await word(page, 1, 2).tap();
@@ -236,7 +250,7 @@ test("Všetky výskyty lists the verses, marks the word, and a scope chip narrow
   await expect(scopeChip(page, "nt")).toContainText("NZ (228)");
   await expect(scopeChip(page, "ot"), "no such verses: no dead chip").toHaveCount(0);
   await expect(scopeChip(page, "HEB")).toContainText("(31)");
-  await assertNoHorizontalOverflow(page);
+  await expectNoPageOverflow(page);
   await assertMinTapTarget(scopeChip(page, "HEB"), 44);
 
   await scopeChip(page, "HEB").tap();
@@ -560,5 +574,200 @@ test("a copy of a tagged verse stays the plain text", async ({ browser }) => {
   expect(copied.startsWith("Now faith is the substance")).toBe(true);
   expect(copied).not.toContain("G4102");
   expect(await verseOffset(page, 1)).toBeGreaterThanOrEqual(0);
+  await finish(opened);
+});
+
+test("Back from the occurrences of a linked entry never lands on a word sheet", async ({
+  browser,
+}) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
+  const { page } = opened;
+  await openFaith(page);
+  await role(page, "word-sheet-full").tap();
+  await page.locator('[data-role="word-sheet-link"][data-strongs="G3982"]').tap();
+  await expect(sheet(page)).toHaveAttribute("data-strongs", "G3982");
+  await role(page, "word-sheet-occurrences").tap();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "G3982:all");
+
+  await page.goBack();
+  await expectChapter(page, "eng-kjv:HEB.11");
+  await expect(sheet(page)).toHaveCount(0);
+  await expect(page).not.toHaveURL(/[?&]w=/);
+  await page.goBack();
+  await settled(page);
+  await expect(sheet(page)).toHaveCount(0);
+  await expect(page).not.toHaveURL(/[?&]w=/);
+  await finish(opened);
+});
+
+test("a failed chapter keeps the word in the URL and its retry brings the sheet back", async ({
+  browser,
+}) => {
+  let broken = true;
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_390,
+    `${KJV_HEB}&w=G4102&wv=1.2`,
+    null,
+    async (page) => {
+      await page.route(/\/bible\/study\/chapter\?/, async (route) => {
+        if (broken) await route.fulfill({ status: 200, contentType: "application/json", body: "nie" });
+        else await route.fallback();
+      });
+    },
+  );
+  const { page } = opened;
+  await expect(role(page, "word-sheet-text-error")).toBeVisible();
+  await expect(page).toHaveURL(/w=G4102&wv=1\.2/);
+  broken = false;
+  await role(page, "word-sheet-text-error").locator('[data-role="study-retry"]').tap();
+  await expectChapter(page, "eng-kjv:HEB.11");
+  await expect(sheet(page).locator(".study-sheet__title")).toHaveText("faith · G4102");
+  await expect(role(page, "word-sheet-text-error")).toHaveCount(0);
+  await expect(page).toHaveURL(/w=G4102&wv=1\.2/);
+  await finish(opened);
+});
+
+test("a failed KJV column in compare keeps the word too", async ({ browser }) => {
+  let broken = true;
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_390,
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.1&tt=slk-seb,eng-kjv&w=G4102&wv=1.2",
+    null,
+    async (page) => {
+      await page.route(/\/bible\/study\/chapter\?translation=eng-kjv/, async (route) => {
+        if (broken) await route.fulfill({ status: 200, contentType: "application/json", body: "nie" });
+        else await route.fallback();
+      });
+    },
+  );
+  const { page } = opened;
+  await expect(role(page, "word-sheet-text-error")).toBeVisible();
+  await expect(page).toHaveURL(/w=G4102&wv=1\.2/);
+  broken = false;
+  await role(page, "word-sheet-text-error").locator('[data-role="study-retry"]').tap();
+  await expect(sheet(page).locator(".study-sheet__title")).toHaveText("faith · G4102");
+  await finish(opened);
+});
+
+test("many scope chips stay one row on a phone and the first verse stays on screen", async ({
+  browser,
+}) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_360,
+    "/ui/study?view=strongs&t=eng-kjv&n=H3068&scope=all",
+    null,
+  );
+  const { page } = opened;
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "H3068:all");
+  expect(await role(page, "search-scope").count()).toBeGreaterThan(30);
+  await assertMinTapTarget(role(page, "search-scope"), 44);
+  await expect(hits(page).first()).toBeInViewport({ ratio: 1 });
+  await expectNoPageOverflow(page);
+  await scopeChip(page, "ZEC").tap();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "H3068:ZEC");
+  await finish(opened);
+});
+
+test("the chips stay through a change of scope and a failed read", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_390,
+    "/ui/study?view=strongs&t=eng-kjv&n=G4102&scope=all",
+    null,
+  );
+  const { page } = opened;
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "G4102:all");
+  const release = await gateRoute(page, /strongs\/G4102\?scope=ROM/);
+  await scopeChip(page, "ROM").tap();
+  await expect(results(page)).toHaveAttribute("data-state", "loading");
+  await expect(scopeChip(page, "HEB")).toContainText("(31)");
+  release();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "G4102:ROM");
+
+  await page.route(/strongs\/G4102\?scope=GAL/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "nie" }),
+  );
+  await scopeChip(page, "GAL").tap();
+  await expect(role(page, "strongs-error")).toBeVisible();
+  await scopeChip(page, "HEB").tap();
+  await expect(results(page)).toHaveAttribute("data-loaded-for", "G4102:HEB");
+  await expect(hits(page)).toHaveCount(31);
+  await finish(opened);
+});
+
+test("the word sheet at 1024 px leaves the text where it was, other sheets still dock", async ({
+  browser,
+}) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    { viewport: { width: 1024, height: 768 } },
+    KJV_HEB,
+    "eng-kjv:HEB.11",
+  );
+  const { page } = opened;
+  const before = await word(page, 1, 2).boundingBox();
+  await word(page, 1, 2).click();
+  await expect(sheet(page)).toBeVisible();
+  await settled(page);
+  expect(await word(page, 1, 2).boundingBox()).toEqual(before);
+  await role(page, "study-sheet-close").click();
+  await expect(sheet(page)).toHaveCount(0);
+
+  await role(page, "study-text-size").click();
+  await expect(role(page, "study-text-sheet")).toBeVisible();
+  const padding = await role(page, "study").evaluate((el) => getComputedStyle(el).paddingRight);
+  expect(parseFloat(padding)).toBeGreaterThan(300);
+  await finish(opened);
+});
+
+test("✕ closes a sheet that came with the URL in one tap, links or not", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_390,
+    `${KJV_HEB}&w=G4102&wv=1.2`,
+    "eng-kjv:HEB.11",
+  );
+  const { page } = opened;
+  await role(page, "word-sheet-full").tap();
+  await page.locator('[data-role="word-sheet-link"][data-strongs="G3982"]').tap();
+  await expect(sheet(page)).toHaveAttribute("data-strongs", "G3982");
+  await role(page, "study-sheet-close").tap();
+  await expect(sheet(page)).toHaveCount(0);
+  await expect(page).not.toHaveURL(/[?&]w=/);
+  await finish(opened);
+});
+
+test("text selected with a mouse opens no sheet, a plain click still does", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    { viewport: { width: 1180, height: 820 } },
+    KJV_HEB,
+    "eng-kjv:HEB.11",
+  );
+  const { page } = opened;
+  const box = await word(page, 1, 6).boundingBox();
+  expect(box).not.toBeNull();
+  const y = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+  await page.mouse.move((box?.x ?? 0) + 2, y);
+  await page.mouse.down();
+  await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) - 2, y, { steps: 6 });
+  await page.mouse.up();
+  await settled(page);
+  expect(await page.evaluate(() => window.getSelection()?.toString().length)).toBeGreaterThan(0);
+  await expect(sheet(page)).toHaveCount(0);
+
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await word(page, 1, 6).click();
+  await expect(sheet(page)).toHaveAttribute("data-strongs", "G5287");
   await finish(opened);
 });
