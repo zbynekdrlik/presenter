@@ -5,6 +5,7 @@ use leptos::prelude::*;
 
 use super::add_to_sermon::set_active;
 use super::scroll::ScrollPlan;
+use super::sermon_editor::forget_refusal;
 use super::{nav, sermon_error, snapshot_translation, Study};
 use crate::api::sermons::{self, SermonList, SermonSummary};
 use crate::state::sermon_list::{count_text, only_mine, short_date, split_sermons};
@@ -27,6 +28,7 @@ fn fetch(list: RwSignal<Loaded>) {
 }
 
 fn open_sermon(s: Study, id: &str) {
+    forget_refusal(s, id);
     let translation = s.route.with_untracked(|route| route.translation.clone());
     nav::go(s, StudyRoute::sermon(translation, id), ScrollPlan::Top);
 }

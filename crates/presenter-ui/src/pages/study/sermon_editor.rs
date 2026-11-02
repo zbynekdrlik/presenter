@@ -118,6 +118,20 @@ pub(super) fn editor_for(s: Study, id: &str) -> Editor {
     e
 }
 
+/// The preacher opened this sermon anew: an old refusal is no longer news. Not
+/// on a mount: a rotation remounts the editor, and a refusal lives until HOTOVO
+/// has named it.
+pub(super) fn forget_refusal(s: Study, id: &str) {
+    editor_for(s, id).refused.set_value(None);
+}
+
+/// This sermon does not exist any more (tracked).
+pub(super) fn is_gone(s: Study, id: &str) -> bool {
+    editor_for(s, id)
+        .loaded
+        .with(|loaded| matches!(loaded, Loaded::Missing))
+}
+
 /// The editor of the sermon on the route.
 pub(super) fn open_editor(s: Study) -> Option<Editor> {
     let id = s
@@ -578,7 +592,6 @@ fn finish(e: Editor) {
 pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
     let e = editor_for(s, &id);
     listen_live(s);
-    e.refused.set_value(None);
     if e.detail.with_untracked(Option::is_none) {
         e.loaded.set(Loaded::Waiting);
     }

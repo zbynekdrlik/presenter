@@ -1109,6 +1109,15 @@
     padding-right: clamp(380px, 32vw, 480px);
   }
 
+  /* A sheet docks beside the sermon: what it adds must stay in view. */
+  .study[data-pane="true"] .study-sheet {
+    right: clamp(380px, 32vw, 480px);
+  }
+
+  .study[data-pane="true"]:has(.study-sheet) {
+    padding-right: calc(2 * clamp(380px, 32vw, 480px));
+  }
+
   .study-sermon-pane {
     position: absolute;
     top: 0;

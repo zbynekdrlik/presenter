@@ -6,8 +6,8 @@
 use leptos::prelude::*;
 
 use super::add_to_sermon::set_active;
-use super::scroll::{saved_verse, ScrollPlan};
-use super::sermon_editor::SermonEditor;
+use super::scroll::{saved_verse, settle, ScrollPlan};
+use super::sermon_editor::{is_gone, SermonEditor};
 use super::{nav, start_route, Study};
 use crate::state::phone_shell::watch_media;
 use crate::state::session;
@@ -44,6 +44,27 @@ pub(super) fn follow_width(s: Study) {
                 .set_value(verse.map_or(ScrollPlan::Top, ScrollPlan::Verse));
         }
         nav::replace(s, next);
+        settle(s);
+    });
+}
+
+/// A sermon deleted elsewhere must not stay in the way of the reading.
+fn close_when_gone(s: Study, id: String) {
+    Effect::new(move |_| {
+        if !is_gone(s, &id) {
+            return;
+        }
+        let route = s.route.get_untracked();
+        if route.pane.as_deref() != Some(id.as_str()) {
+            return;
+        }
+        if s.active_sermon.get_untracked().as_deref() == Some(id.as_str()) {
+            set_active(s, None);
+        }
+        let mut reading = route;
+        reading.pane = None;
+        nav::replace(s, reading);
+        s.tell("Kázeň už neexistuje".to_string());
     });
 }
 
@@ -52,6 +73,7 @@ pub(super) fn SermonPane(s: Study) -> impl IntoView {
     let open = Memo::new(move |_| s.route.with(|route| route.pane.clone()));
     move || {
         open.get().map(|id| {
+            close_when_gone(s, id.clone());
             view! {
                 <aside class="study-sermon-pane" data-role="study-sermon-pane">
                     <SermonEditor s=s id=id />
