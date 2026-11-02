@@ -25,7 +25,7 @@ use crate::api::sermons::{
 use crate::api::ApiError;
 use crate::state::sermon_edit::{ItemDraft, SaveState, TapMode};
 use crate::state::sermon_list::{count_text, short_date};
-use crate::state::study::{StudyRoute, StudySheet, StudyView};
+use crate::state::study::{StudyRoute, StudySheet};
 
 const SAVE_AFTER_MS: u32 = 300;
 const WAIT_STEP_MS: u32 = 50;
@@ -120,10 +120,9 @@ pub(super) fn editor_for(s: Study, id: &str) -> Editor {
 
 /// The editor of the sermon on the route.
 pub(super) fn open_editor(s: Study) -> Option<Editor> {
-    let id = s.route.with_untracked(|route| match &route.view {
-        StudyView::Sermon { id } => Some(id.clone()),
-        _ => None,
-    })?;
+    let id = s
+        .route
+        .with_untracked(|route| route.open_sermon().map(str::to_string))?;
     Some(editor_for(s, &id))
 }
 

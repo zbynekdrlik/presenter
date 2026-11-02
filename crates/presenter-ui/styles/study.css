@@ -1104,8 +1104,23 @@
     transform: none;
   }
 
-  .study:has(.study-sheet) {
+  .study:has(.study-sheet),
+  .study[data-pane="true"] {
     padding-right: clamp(380px, 32vw, 480px);
+  }
+
+  .study-sermon-pane {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    width: clamp(380px, 32vw, 480px);
+    border-left: 1px solid var(--study-line);
+    background: var(--study-bg);
   }
 }
 
