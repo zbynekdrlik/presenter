@@ -4,12 +4,13 @@ use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseBackend, EntityTrait, Set, Statement,
     TransactionTrait,
 };
-use tracing::instrument;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
+use super::markup::{insert_markup, MarkupRow};
 use crate::entities::{bible_passage, bible_translation};
 use presenter_core::{
-    bible::{canonical_book_by_name, BibleIngestionBatch},
+    bible::{canonical_book_by_name, BibleIngestionBatch, VerseMarkup},
     BibleTranslation,
 };
 
@@ -28,8 +29,8 @@ impl Repository {
     /// other connection can write `bible_passages` while they are missing
     /// (the server never writes it anyway). SNV's deploy runs `ingest_bibles`
     /// with the new server running (dev and PP stop it first); the server's
-    /// writes wait for the commit (`busy_timeout` 5 s, ~1.9 s per
-    /// translation on SNV) and its reads see the old text until then.
+    /// writes wait for the commit (`busy_timeout` 5 s; the KJV with its
+    /// markup holds the lock about that long, the others ~2 s) and its reads see the old text until then.
     pub async fn replace_bible_translation_passages(
         &self,
         batch: &BibleIngestionBatch,
@@ -37,7 +38,7 @@ impl Repository {
         use presenter_migration::bible_fts_triggers::{CREATE_TRIGGER_STATEMENTS, TRIGGER_NAMES};
         const SQLITE: DatabaseBackend = DatabaseBackend::Sqlite;
 
-        let (translation, passages) = batch.clone().into_parts();
+        let (translation, passages, markup) = batch.clone().into_parts_with_markup();
         let existing = bible_translation::Entity::find_by_id(translation.code.clone())
             .one(&self.db)
             .await?;
@@ -89,7 +90,10 @@ impl Repository {
             .await?;
 
         // 5. Batch-insert passages (no trigger overhead because triggers are dropped)
-        insert_bible_passages_chunked(&txn, &translation.code, passages).await?;
+        let marked =
+            insert_bible_passages_chunked(&txn, &translation.code, passages, markup).await?;
+        let (markup_rows, occurrence_rows) =
+            insert_markup(&txn, &translation.code, &marked).await?;
 
         // 6. Bulk populate FTS from the freshly-inserted passages
         txn.execute(Statement::from_sql_and_values(
@@ -110,6 +114,10 @@ impl Repository {
         }
 
         txn.commit().await?;
+        info!(
+            translation = %translation.code,
+            markup_rows, occurrence_rows, "bible translation replaced"
+        );
         Ok(())
     }
 
@@ -178,14 +186,17 @@ impl Repository {
 /// overhead — the caller drops the `bible_passage_fts` triggers before this
 /// runs and recreates them after). Extracted from
 /// `replace_bible_translation_passages` (#590) to keep that function under
-/// the 120-line hard cap.
+/// the 120-line hard cap. Returns the passages that have markup with the ids
+/// they were given (#851 D2b).
 async fn insert_bible_passages_chunked(
     txn: &sea_orm::DatabaseTransaction,
     translation_code: &str,
     passages: Vec<presenter_core::bible::BiblePassage>,
-) -> anyhow::Result<()> {
+    markup: Vec<Option<VerseMarkup>>,
+) -> anyhow::Result<Vec<MarkupRow>> {
     let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
-    for passage in passages {
+    let mut marked = Vec::new();
+    for (passage, markup) in passages.into_iter().zip(markup) {
         let reference = &passage.reference;
         let (code, number) = match &reference.book_code {
             Some(c) => (c.clone(), reference.book_number.unwrap_or(0) as i32),
@@ -194,8 +205,19 @@ async fn insert_bible_passages_chunked(
                 None => (reference.book.clone(), 0),
             },
         };
+        let id = Uuid::new_v4().to_string();
+        if let Some(markup) = markup {
+            marked.push(MarkupRow {
+                passage_id: id.clone(),
+                book_code: code.clone(),
+                book_number: number,
+                chapter: i32::from(reference.chapter),
+                verse: i32::from(reference.verse_start),
+                markup,
+            });
+        }
         let model = bible_passage::ActiveModel {
-            id: Set(Uuid::new_v4().to_string()),
+            id: Set(id),
             translation_code: Set(translation_code.to_string()),
             book: Set(reference.book.clone()),
             book_code: Set(code),
@@ -219,5 +241,5 @@ async fn insert_bible_passages_chunked(
     if !chunk.is_empty() {
         bible_passage::Entity::insert_many(chunk).exec(txn).await?;
     }
-    Ok(())
+    Ok(marked)
 }

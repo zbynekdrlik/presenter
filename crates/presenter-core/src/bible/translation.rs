@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use thiserror::Error;
 
+use super::markup::VerseMarkup;
 use super::reference::BibleReference;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,12 +219,22 @@ pub enum BibleIngestionError {
         start: u16,
         end: u16,
     },
+    #[error("{found} markup entries for {expected} passages")]
+    MarkupCount { expected: usize, found: usize },
+    #[error("markup of {book} {chapter}:{start} does not spell the passage text")]
+    MarkupText {
+        book: String,
+        chapter: u16,
+        start: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BibleIngestionBatch {
     translation: BibleTranslation,
     passages: Vec<BiblePassage>,
+    /// One entry per passage; `None` for a verse with nothing to tell.
+    markup: Vec<Option<VerseMarkup>>,
 }
 
 impl BibleIngestionBatch {
@@ -256,10 +267,39 @@ impl BibleIngestionBatch {
                 });
             }
         }
+        let markup = vec![None; passages.len()];
         Ok(Self {
             translation,
             passages,
+            markup,
         })
+    }
+
+    /// The batch with one markup entry per passage (#851 D2a). Each must spell
+    /// its passage's text exactly: the wall text and the study text are one.
+    pub fn with_markup(
+        self,
+        markup: Vec<Option<VerseMarkup>>,
+    ) -> Result<Self, BibleIngestionError> {
+        if markup.len() != self.passages.len() {
+            return Err(BibleIngestionError::MarkupCount {
+                expected: self.passages.len(),
+                found: markup.len(),
+            });
+        }
+        for (passage, entry) in self.passages.iter().zip(&markup) {
+            if entry
+                .as_ref()
+                .is_some_and(|m| m.plain_text() != passage.text)
+            {
+                return Err(BibleIngestionError::MarkupText {
+                    book: passage.reference.book.clone(),
+                    chapter: passage.reference.chapter,
+                    start: passage.reference.verse_start,
+                });
+            }
+        }
+        Ok(Self { markup, ..self })
     }
 
     pub fn translation(&self) -> &BibleTranslation {
@@ -270,7 +310,21 @@ impl BibleIngestionBatch {
         &self.passages
     }
 
+    pub fn markup(&self) -> &[Option<VerseMarkup>] {
+        &self.markup
+    }
+
     pub fn into_parts(self) -> (BibleTranslation, Vec<BiblePassage>) {
         (self.translation, self.passages)
+    }
+
+    pub fn into_parts_with_markup(
+        self,
+    ) -> (
+        BibleTranslation,
+        Vec<BiblePassage>,
+        Vec<Option<VerseMarkup>>,
+    ) {
+        (self.translation, self.passages, self.markup)
     }
 }

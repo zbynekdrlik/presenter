@@ -1,7 +1,10 @@
 //! Bible archive parsing: USFM, MySword SQLite, and Obohu SQLite formats.
 
 use anyhow::{anyhow, Context, Result};
-use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation};
+use presenter_core::{
+    bible::{BibleIngestionBatch, MarkupSegment, VerseMarkup},
+    BiblePassage, BibleReference, BibleTranslation,
+};
 use rusqlite::{types::ValueRef, Connection};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -11,14 +14,17 @@ use tempfile::NamedTempFile;
 use tracing::warn;
 use zip::read::ZipArchive;
 
-use crate::cleanup;
+use crate::markup::{self, finish, usfm, Spacing};
 use crate::{BibleImportSummary, BibleSourceFormat, BibleTranslationSpec};
+
+/// A passage with its markup when that says more than the text.
+type Verse = (BiblePassage, Option<VerseMarkup>);
 
 pub(crate) fn build_ingestion_batch(
     bytes: &[u8],
     spec: &BibleTranslationSpec,
 ) -> Result<(BibleIngestionBatch, BibleImportSummary)> {
-    let passages = match &spec.format {
+    let verses = match &spec.format {
         BibleSourceFormat::UsfmZip { .. } => {
             parse_usfm_zip(bytes, &spec.translation, &spec.format)?
         }
@@ -27,8 +33,10 @@ pub(crate) fn build_ingestion_batch(
         }
         BibleSourceFormat::ObohuSqlite => parse_obohu_sqlite_zip(bytes, &spec.translation)?,
     };
-    let passage_count = passages.len();
-    let batch = BibleIngestionBatch::new(spec.translation.clone(), passages)?;
+    let passage_count = verses.len();
+    let (passages, markup) = verses.into_iter().unzip();
+    let batch =
+        BibleIngestionBatch::new(spec.translation.clone(), passages)?.with_markup(markup)?;
     let summary = BibleImportSummary {
         translation_code: spec.translation.code.clone(),
         passage_count,
@@ -40,7 +48,7 @@ fn parse_usfm_zip(
     bytes: &[u8],
     translation: &BibleTranslation,
     format: &BibleSourceFormat,
-) -> Result<Vec<BiblePassage>> {
+) -> Result<Vec<Verse>> {
     let mut archive =
         ZipArchive::new(Cursor::new(bytes)).context("failed to read bible archive as zip")?;
     let mut passages = Vec::new();
@@ -67,7 +75,7 @@ fn parse_mysword_sqlite_zip(
     bytes: &[u8],
     translation: &BibleTranslation,
     book_names: &[String],
-) -> Result<Vec<BiblePassage>> {
+) -> Result<Vec<Verse>> {
     let mut archive =
         ZipArchive::new(Cursor::new(bytes)).context("failed to read MySword archive as zip")?;
     let mut sqlite_bytes: Option<Vec<u8>> = None;
@@ -148,8 +156,11 @@ fn parse_mysword_sqlite_zip(
             )
         })?;
 
-        let text = sanitize_mysword_text(&scripture);
-        if text.is_empty() {
+        let parsed = finish(
+            markup::mysword::segments(&scripture),
+            Spacing::NoneBeforePunctuation,
+        );
+        if parsed.text.is_empty() {
             continue;
         }
 
@@ -159,17 +170,14 @@ fn parse_mysword_sqlite_zip(
         let book_code = mysword_book_code(book_number);
         let reference =
             BibleReference::new_with_code(&book, book_code, book_number, chapter, verse, verse)?;
-        let passage = BiblePassage::new(reference, translation.clone(), text);
-        passages.push(passage);
+        let passage = BiblePassage::new(reference, translation.clone(), parsed.text);
+        passages.push((passage, parsed.markup));
     }
 
     Ok(passages)
 }
 
-fn parse_obohu_sqlite_zip(
-    bytes: &[u8],
-    translation: &BibleTranslation,
-) -> Result<Vec<BiblePassage>> {
+fn parse_obohu_sqlite_zip(bytes: &[u8], translation: &BibleTranslation) -> Result<Vec<Verse>> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .context("failed to read Slovak SQLite archive as zip")?;
 
@@ -236,7 +244,7 @@ fn parse_obohu_sqlite_zip(
         }
         let reference = BibleReference::new(book.clone(), chapter, verse, verse)?;
         let passage = BiblePassage::new(reference, translation.clone(), content);
-        passages.push(passage);
+        passages.push((passage, None));
     }
 
     Ok(passages)
@@ -246,10 +254,11 @@ fn parse_usfm_document(
     contents: &str,
     translation: &BibleTranslation,
     format: &BibleSourceFormat,
-) -> Result<Vec<BiblePassage>> {
+) -> Result<Vec<Verse>> {
     let mut book_name: Option<String> = None;
     let mut current_chapter: Option<u16> = None;
     let mut current_builder: Option<PassageBuilder> = None;
+    let mut headings: Vec<MarkupSegment> = Vec::new();
     let mut passages = Vec::new();
 
     for raw_line in contents.lines() {
@@ -258,6 +267,7 @@ fn parse_usfm_document(
             continue;
         }
         if let Some(rest) = line.strip_prefix("\\id ") {
+            close_chapter(&mut current_builder, &mut headings);
             flush_current_passage(
                 &mut passages,
                 &mut current_builder,
@@ -281,6 +291,7 @@ fn parse_usfm_document(
         }
 
         if let Some(rest) = line.strip_prefix("\\c ") {
+            close_chapter(&mut current_builder, &mut headings);
             flush_current_passage(
                 &mut passages,
                 &mut current_builder,
@@ -316,23 +327,28 @@ fn parse_usfm_document(
                 .split_once(' ')
                 .ok_or_else(|| anyhow!("missing verse text after \\v marker"))?;
             let (start, end) = parse_verse_range(verse_range)?;
-            let clean_text = clean_usfm_text(text);
-            current_builder = Some(PassageBuilder::new(start, end, clean_text));
+            let mut segments = std::mem::take(&mut headings);
+            let mut italic = 0;
+            segments.extend(usfm::verse_line(text, &mut italic));
+            current_builder = Some(PassageBuilder::new(start, end, segments, italic));
+            continue;
+        }
+
+        // A heading line (`\s1`, `\d`, …) is never verse text: it opens the
+        // next verse of its chapter (#851 D2a).
+        if usfm::is_heading_line(line) {
+            if book_name.is_some() && current_chapter.is_some() {
+                headings.extend(usfm::heading(line));
+            }
             continue;
         }
 
         if let Some(builder) = current_builder.as_mut() {
-            // #851 D1: a heading line (`\s1`, `\d`, …) is never verse text.
-            if cleanup::is_usfm_heading_line(line) {
-                continue;
-            }
-            let clean_text = clean_usfm_text(line);
-            if !clean_text.is_empty() {
-                builder.push_text(&clean_text);
-            }
+            builder.push_line(line);
         }
     }
 
+    close_chapter(&mut current_builder, &mut headings);
     flush_current_passage(
         &mut passages,
         &mut current_builder,
@@ -342,6 +358,15 @@ fn parse_usfm_document(
     )?;
 
     Ok(passages)
+}
+
+/// A heading no verse follows (an epistle's subscription) stays with the last
+/// verse of its chapter, at its end.
+fn close_chapter(builder: &mut Option<PassageBuilder>, headings: &mut Vec<MarkupSegment>) {
+    if let Some(builder) = builder.as_mut() {
+        builder.segments.append(headings);
+    }
+    headings.clear();
 }
 
 fn read_i64(row: &rusqlite::Row<'_>, index: usize, column: &str) -> Result<i64> {
@@ -369,7 +394,7 @@ fn read_u16(row: &rusqlite::Row<'_>, index: usize, column: &str) -> Result<u16> 
 }
 
 fn flush_current_passage(
-    passages: &mut Vec<BiblePassage>,
+    passages: &mut Vec<Verse>,
     builder: &mut Option<PassageBuilder>,
     book_name: &Option<String>,
     chapter: Option<u16>,
@@ -385,8 +410,9 @@ fn flush_current_passage(
             return Ok(());
         };
         let reference = BibleReference::new(book, chapter, current.start, current.end)?;
-        let passage = BiblePassage::new(reference, translation.clone(), current.text);
-        passages.push(passage);
+        let verse = finish(current.segments, Spacing::Plain);
+        let passage = BiblePassage::new(reference, translation.clone(), verse.text);
+        passages.push((passage, verse.markup));
     }
     Ok(())
 }
@@ -413,99 +439,7 @@ fn parse_verse_number(value: &str) -> Result<u16> {
         .context("failed to parse verse number into u16")
 }
 
-/// One USFM line as verse text (#851 D1): footnotes and cross-references out
-/// with their text, markers out, no leading `¶` (it sits behind `\wj` in the
-/// words of Jesus, so it goes AFTER the markers).
-fn clean_usfm_text(text: &str) -> String {
-    cleanup::strip_leading_pilcrow(sanitize_text(&cleanup::strip_usfm_notes(text)))
-}
-
-fn sanitize_text(input: &str) -> String {
-    let mut result = String::new();
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            // consume marker name (letters, digits, +, and closing *)
-            let mut is_closing = false;
-            while let Some(&next) = chars.peek() {
-                if next.is_ascii_alphanumeric() || next == '+' {
-                    chars.next();
-                } else if next == '*' {
-                    is_closing = true;
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            // consume trailing whitespace only for opening markers, not
-            // closing markers like \w* where the space is content spacing
-            if !is_closing {
-                while let Some(&next) = chars.peek() {
-                    if next.is_whitespace() {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        // Strip USFM word-level attributes: |strong="G1234" etc.
-        // These appear between the word text and the closing \w* marker.
-        if ch == '|' {
-            while let Some(&next) = chars.peek() {
-                if next == '\\' {
-                    break;
-                }
-                chars.next();
-            }
-            continue;
-        }
-        result.push(ch);
-    }
-    result
-        .split_whitespace()
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn sanitize_mysword_text(input: &str) -> String {
-    // #851 D1: only `<FI>[ … ]<Fi>` notes and `<TS>…<Ts>` headings go; a bare
-    // `[ … ]` is translation text and stays.
-    let without_variants = cleanup::strip_mysword_notes_and_headings(input);
-
-    let mut output = String::with_capacity(without_variants.len());
-    let mut i = 0;
-    while i < without_variants.len() {
-        let rest = &without_variants[i..];
-        if starts_with_ci(rest, "<f") {
-            if let Some(end) = rest.find("</f>") {
-                i += end + 4;
-                continue;
-            }
-        }
-        if rest.starts_with('<') {
-            if let Some(end) = rest.find('>') {
-                i += end + 1;
-                continue;
-            } else {
-                break;
-            }
-        }
-        // Safety: rest is non-empty since i < without_variants.len() and we slice at valid UTF-8 boundaries
-        if let Some(ch) = rest.chars().next() {
-            output.push(ch);
-            i += ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-
-    cleanup::drop_space_before_punctuation(&sanitize_markup_text(&output))
-}
-
-fn sanitize_markup_text(input: &str) -> String {
+pub(crate) fn sanitize_markup_text(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut inside_tag = false;
     for ch in input.chars() {
@@ -529,7 +463,7 @@ fn sanitize_markup_text(input: &str) -> String {
         .join(" ")
 }
 
-fn starts_with_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn starts_with_ci(haystack: &str, needle: &str) -> bool {
     let h_bytes = haystack.as_bytes();
     let n_bytes = needle.as_bytes();
     if h_bytes.len() < n_bytes.len() {
@@ -545,19 +479,25 @@ fn starts_with_ci(haystack: &str, needle: &str) -> bool {
 struct PassageBuilder {
     start: u16,
     end: u16,
-    text: String,
+    segments: Vec<MarkupSegment>,
+    /// `\\add` depth left open by the last line.
+    italic: u8,
 }
 
 impl PassageBuilder {
-    fn new(start: u16, end: u16, text: String) -> Self {
-        Self { start, end, text }
+    fn new(start: u16, end: u16, segments: Vec<MarkupSegment>, italic: u8) -> Self {
+        Self {
+            start,
+            end,
+            segments,
+            italic,
+        }
     }
 
-    fn push_text(&mut self, text: &str) {
-        if !self.text.is_empty() {
-            self.text.push(' ');
-        }
-        self.text.push_str(text);
+    fn push_line(&mut self, line: &str) {
+        self.segments.push(MarkupSegment::text(" "));
+        self.segments
+            .extend(usfm::verse_line(line, &mut self.italic));
     }
 }
 
@@ -778,57 +718,6 @@ mod tests {
         assert_eq!(default_book_name("1SA"), Some("1 Samuel"));
         assert_eq!(default_book_name("2KI"), Some("2 Kings"));
         assert_eq!(default_book_name("1TH"), Some("1 Thessalonians"));
-    }
-
-    #[test]
-    fn sanitize_text_preserves_plain_text() {
-        assert_eq!(sanitize_text("Hello world"), "Hello world");
-    }
-
-    #[test]
-    fn sanitize_text_strips_usfm_markers() {
-        assert_eq!(
-            sanitize_text("\\v 1 In the beginning"),
-            "1 In the beginning"
-        );
-    }
-
-    #[test]
-    fn sanitize_text_strips_word_level_attributes() {
-        assert_eq!(sanitize_text("\\w God|strong=\"H430\"\\w*"), "God");
-    }
-
-    #[test]
-    fn sanitize_text_normalises_whitespace() {
-        assert_eq!(sanitize_text("  hello   world  "), "hello world");
-    }
-
-    #[test]
-    fn sanitize_text_handles_empty_input() {
-        assert_eq!(sanitize_text(""), "");
-    }
-
-    #[test]
-    fn sanitize_mysword_strips_html_tags() {
-        assert_eq!(sanitize_mysword_text("<b>Bold</b> text"), "Bold text");
-    }
-
-    #[test]
-    fn sanitize_mysword_strips_footnotes() {
-        assert_eq!(
-            sanitize_mysword_text("Word<f>footnote content</f> rest"),
-            "Word rest"
-        );
-    }
-
-    #[test]
-    fn sanitize_mysword_strips_bracketed_notes() {
-        // A SEB translator's note is always `<FI>[ … ]<Fi>`; a bare `[ … ]` is
-        // translation text and stays (#851 D1, `import_fixes_tests`).
-        assert_eq!(
-            sanitize_mysword_text("text <FI>[ Var.: + extra]<Fi> more"),
-            "text more"
-        );
     }
 
     #[test]

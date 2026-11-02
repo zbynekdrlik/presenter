@@ -1,4 +1,5 @@
 mod canonical;
+pub mod markup;
 mod presentation;
 mod reference;
 pub mod resolver;
@@ -9,6 +10,7 @@ mod translation;
 pub use canonical::{
     canonical_book_by_code, canonical_book_by_name, canonical_book_by_number, BibleBookCanonical,
 };
+pub use markup::{normalize_strongs, MarkupSegment, SegmentKind, VerseMarkup};
 pub use presentation::{BiblePresentation, BiblePresentationSlide, BiblePresentationSummary};
 pub use reference::{BibleReference, BibleReferenceError};
 pub use search::normalise_book_key;

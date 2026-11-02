@@ -1,8 +1,10 @@
-mod cleanup;
+mod markup;
 mod parsers;
 
 #[cfg(test)]
 mod import_fixes_tests;
+#[cfg(test)]
+mod markup_corpus_tests;
 
 use anyhow::{anyhow, Context, Result};
 use presenter_core::bible::BibleIngestionBatch;

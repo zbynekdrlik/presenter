@@ -271,3 +271,26 @@ fn the_bundled_kjv_has_no_import_defects() {
         "I will keep thy statutes: O forsake me not utterly."
     );
 }
+
+/// A word whose last letters sit behind its closing marker (`\w afrai|…\w*d`):
+/// the marker ended at the `*`, and these letters were eaten with it.
+#[test]
+fn letters_behind_a_closing_marker_stay_in_the_kjv() {
+    let bytes = std::fs::read(BUNDLED_KJV).expect("bundled KJV archive");
+    let (batch, _) =
+        parsers::build_ingestion_batch(&bytes, &king_james_spec()).expect("parse the KJV");
+    let passages = batch.passages();
+    for (book, chapter, verse, words) in [
+        ("Mark", 4, 24, "shall more be given."),
+        ("Luke", 7, 44, "with tears,"),
+        ("Luke", 8, 25, "being afraid wondered"),
+        ("John", 13, 20, "He that receiveth"),
+        ("Galatians", 6, 8, "but he that soweth"),
+        ("Ephesians", 6, 12, "against the rulers"),
+        ("Hebrews", 3, 3, "inasmuch as"),
+        ("Hebrews", 7, 20, "inasmuch as"),
+    ] {
+        let text = text_of(passages, book, chapter, verse);
+        assert!(text.contains(words), "{book} {chapter}:{verse}: {text}");
+    }
+}

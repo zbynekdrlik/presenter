@@ -8,7 +8,8 @@
 use sha2::{Digest, Sha256};
 
 /// 2 = #851 D1 (notes, headings, footnotes, `¶`, punctuation spacing).
-pub const PARSER_VERSION: u32 = 2;
+/// 3 = #851 D2b (markup and Strong's tables, 8 repaired KJV verses).
+pub const PARSER_VERSION: u32 = 3;
 
 pub fn compute_source_digest(file_bytes: &[u8], parser_version: u32) -> String {
     let mut h = Sha256::new();
@@ -63,6 +64,16 @@ mod tests {
         assert_eq!(
             compute_source_digest(b"hello world", 1),
             "08f06e2c00ab9ba6aed0980a436856b02feec3435bae117aeb8bdb2b35b444ba",
+        );
+    }
+
+    #[test]
+    fn the_d2b_markup_import_changes_every_stored_digest() {
+        // #851 D2b: a digest stored under version 2 would skip the import, and
+        // the markup tables and the 8 repaired KJV verses would never arrive.
+        assert_ne!(
+            compute_source_digest(b"archive", PARSER_VERSION),
+            compute_source_digest(b"archive", 2),
         );
     }
 
