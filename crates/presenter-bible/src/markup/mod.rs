@@ -33,13 +33,15 @@ pub(crate) fn finish(segments: Vec<MarkupSegment>, spacing: Spacing) -> ParsedVe
 /// One space between words, none at the edges, over all Text segments. The
 /// space stays in the segment where the whitespace was, so `faith` keeps a
 /// clean word and the gap keeps its own segment.
-fn normalize(segments: Vec<MarkupSegment>, spacing: Spacing) -> Vec<MarkupSegment> {
+pub(crate) fn normalize(segments: Vec<MarkupSegment>, spacing: Spacing) -> Vec<MarkupSegment> {
     let mut out: Vec<MarkupSegment> = Vec::with_capacity(segments.len());
     let mut gap: Option<usize> = None;
     let mut started = false;
     for segment in segments {
         if !segment.kind.is_text() {
-            out.push(segment);
+            if !segment.text.trim().is_empty() {
+                out.push(segment);
+            }
             continue;
         }
         let index = out.len();
@@ -134,6 +136,19 @@ mod tests {
             "Rieka. Tečie"
         );
         assert_eq!(text(verse, Spacing::Plain), "Rieka . Tečie");
+    }
+
+    #[test]
+    fn an_empty_note_or_heading_is_no_markup() {
+        let done = finish(
+            vec![
+                MarkupSegment::heading(""),
+                MarkupSegment::text("A"),
+                MarkupSegment::note(" "),
+            ],
+            Spacing::Plain,
+        );
+        assert!(done.markup.is_none());
     }
 
     #[test]

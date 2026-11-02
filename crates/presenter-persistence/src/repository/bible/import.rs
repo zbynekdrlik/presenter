@@ -29,8 +29,8 @@ impl Repository {
     /// other connection can write `bible_passages` while they are missing
     /// (the server never writes it anyway). SNV's deploy runs `ingest_bibles`
     /// with the new server running (dev and PP stop it first); the server's
-    /// writes wait for the commit (`busy_timeout` 5 s, ~1.9 s per
-    /// translation on SNV) and its reads see the old text until then.
+    /// writes wait for the commit (`busy_timeout` 5 s; the KJV with its
+    /// markup holds the lock about that long, the others ~2 s) and its reads see the old text until then.
     pub async fn replace_bible_translation_passages(
         &self,
         batch: &BibleIngestionBatch,

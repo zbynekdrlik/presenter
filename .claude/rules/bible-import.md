@@ -113,7 +113,8 @@ the constant.
 transaction, by `repository/bible/markup.rs`; the delete of the translation row cascades the old
 ones away. `bible_passage` stays untouched, so search and passage reads load no markup; read it
 with `bible_chapter_markup`. Real numbers (copy of the dev DB): KJV 31,100 rows, ROH 2,785, SEB
-1,025, MIL 0, SEVP 0; 310,076 occurrences; database 187 → 240 MB.
+1,025, MIL 0, SEVP 0; 310,488 occurrences (349,308 tags, Psalm titles included: a Heading keeps its
+words' numbers); database 187 → 240 MB. `\add` depth lives in `PassageBuilder`: it can span lines.
 
 ## Tests
 

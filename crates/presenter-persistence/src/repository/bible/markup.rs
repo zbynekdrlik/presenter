@@ -28,6 +28,7 @@ pub(super) struct MarkupRow {
 async fn insert_chunk(
     txn: &DatabaseTransaction,
     head: &str,
+    tail: &str,
     columns: usize,
     values: Vec<Value>,
 ) -> anyhow::Result<()> {
@@ -35,7 +36,7 @@ async fn insert_chunk(
     let rows = vec![row; values.len() / columns].join(",");
     txn.execute(Statement::from_sql_and_values(
         SQLITE,
-        format!("{head} VALUES {rows}"),
+        format!("{head} VALUES {rows} {tail}"),
         values,
     ))
     .await?;
@@ -58,6 +59,7 @@ pub(super) async fn insert_markup(
         insert_chunk(
             txn,
             r#"INSERT INTO "bible_passage_markup" ("passage_id", "markup_json")"#,
+            "",
             2,
             values,
         )
@@ -86,6 +88,8 @@ pub(super) async fn insert_markup(
             txn,
             r#"INSERT INTO "bible_strongs_occurrences" ("translation_code", "strongs",
                "book_code", "book_number", "chapter", "verse", "word_count")"#,
+            // `\v 1-2` beside `\v 1` is one place: its words add up.
+            r#"ON CONFLICT DO UPDATE SET "word_count" = "word_count" + excluded."word_count""#,
             7,
             values,
         )
@@ -258,6 +262,45 @@ mod tests {
             .expect("second");
         assert_eq!(count(&repo, "bible_passage_markup").await, 0);
         assert_eq!(count(&repo, "bible_strongs_occurrences").await, 0);
+    }
+
+    #[tokio::test]
+    async fn rows_past_one_insert_chunk_all_arrive() {
+        let repo = Repository::connect_in_memory().await.expect("repo");
+        let verses = 1..=1_210_u16;
+        let passages = verses
+            .clone()
+            .map(|verse| passage(verse, "x"))
+            .collect::<Vec<_>>();
+        let tagged = VerseMarkup(vec![word("x", "G1")]);
+        let batch = BibleIngestionBatch::new(translation(), passages)
+            .expect("batch")
+            .with_markup(verses.map(|_| Some(tagged.clone())).collect())
+            .expect("markup");
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .expect("import");
+        assert_eq!(count(&repo, "bible_passage_markup").await, 1_210);
+        assert_eq!(count(&repo, "bible_strongs_occurrences").await, 1_210);
+    }
+
+    #[tokio::test]
+    async fn overlapping_verses_add_their_words_up() {
+        let repo = Repository::connect_in_memory().await.expect("repo");
+        let span = |end: u16| {
+            let reference =
+                BibleReference::new_with_code("Hebrews", "HEB", 58, 11, 1, end).expect("ref");
+            BiblePassage::new(reference, translation(), "x".to_string())
+        };
+        let tagged = VerseMarkup(vec![word("x", "G1")]);
+        let batch = BibleIngestionBatch::new(translation(), vec![span(1), span(2)])
+            .expect("batch")
+            .with_markup(vec![Some(tagged.clone()), Some(tagged)])
+            .expect("markup");
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .expect("import");
+        assert_eq!(occurrence(&repo, "G1").await, Some((58, 1, 2)));
     }
 
     #[tokio::test]

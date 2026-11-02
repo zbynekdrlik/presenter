@@ -7,7 +7,9 @@
 
 use presenter_core::bible::MarkupSegment;
 use regex::{Captures, Regex};
+use std::borrow::Cow;
 use std::sync::LazyLock;
+use tracing::warn;
 
 use crate::parsers::{sanitize_markup_text, starts_with_ci};
 
@@ -21,7 +23,20 @@ const NOTE_CLOSE: char = '\u{E001}';
 const ITALIC_ON: char = '\u{E002}';
 const ITALIC_OFF: char = '\u{E003}';
 
+/// The verse without characters the placeholders use: one in the source would
+/// swallow the verse behind it.
+fn without_reserved(input: &str) -> Cow<'_, str> {
+    let reserved = [NOTE_OPEN, NOTE_CLOSE, ITALIC_ON, ITALIC_OFF];
+    if !input.contains(reserved) {
+        return Cow::Borrowed(input);
+    }
+    warn!("dropping private-use characters from a MySword verse");
+    Cow::Owned(input.replace(reserved, ""))
+}
+
 pub(crate) fn segments(input: &str) -> Vec<MarkupSegment> {
+    let input = without_reserved(input);
+    let input = input.as_ref();
     let mut notes = Vec::new();
     let marked = match NOTE_RE.as_ref() {
         // A note with the whitespace around it leaves ONE space, so two words
@@ -209,6 +224,19 @@ mod tests {
             "slovom. Pán, áno; nie: prečo? hej!"
         );
         assert_eq!(text("bez zmeny – pomlčka"), "bez zmeny – pomlčka");
+    }
+
+    #[test]
+    fn a_placeholder_character_in_the_source_swallows_nothing() {
+        assert_eq!(
+            text("slovo\u{E000} ďalšie\u{E002} text"),
+            "slovo ďalšie text"
+        );
+    }
+
+    #[test]
+    fn an_empty_note_or_heading_leaves_no_markup() {
+        assert!(parse("<TS><Ts>Text <FI>[ ]<Fi>ďalej").markup.is_none());
     }
 
     #[test]

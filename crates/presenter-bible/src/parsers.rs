@@ -328,8 +328,9 @@ fn parse_usfm_document(
                 .ok_or_else(|| anyhow!("missing verse text after \\v marker"))?;
             let (start, end) = parse_verse_range(verse_range)?;
             let mut segments = std::mem::take(&mut headings);
-            segments.extend(usfm::line_segments(text));
-            current_builder = Some(PassageBuilder::new(start, end, segments));
+            let mut italic = 0;
+            segments.extend(usfm::verse_line(text, &mut italic));
+            current_builder = Some(PassageBuilder::new(start, end, segments, italic));
             continue;
         }
 
@@ -337,13 +338,13 @@ fn parse_usfm_document(
         // next verse of its chapter (#851 D2a).
         if usfm::is_heading_line(line) {
             if book_name.is_some() && current_chapter.is_some() {
-                headings.push(usfm::heading(line));
+                headings.extend(usfm::heading(line));
             }
             continue;
         }
 
         if let Some(builder) = current_builder.as_mut() {
-            builder.push_line(usfm::line_segments(line));
+            builder.push_line(line);
         }
     }
 
@@ -479,20 +480,24 @@ struct PassageBuilder {
     start: u16,
     end: u16,
     segments: Vec<MarkupSegment>,
+    /// `\\add` depth left open by the last line.
+    italic: u8,
 }
 
 impl PassageBuilder {
-    fn new(start: u16, end: u16, segments: Vec<MarkupSegment>) -> Self {
+    fn new(start: u16, end: u16, segments: Vec<MarkupSegment>, italic: u8) -> Self {
         Self {
             start,
             end,
             segments,
+            italic,
         }
     }
 
-    fn push_line(&mut self, segments: Vec<MarkupSegment>) {
+    fn push_line(&mut self, line: &str) {
         self.segments.push(MarkupSegment::text(" "));
-        self.segments.extend(segments);
+        self.segments
+            .extend(usfm::verse_line(line, &mut self.italic));
     }
 }
 

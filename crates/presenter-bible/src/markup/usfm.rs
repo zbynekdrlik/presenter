@@ -2,8 +2,8 @@
 //! a Strong's number, `\add` is italic, the `\ft` text of a `\f … \f*` is a
 //! note, `\x … \x*` goes with its text, every other marker only goes.
 
-use super::{finish, Spacing};
-use presenter_core::bible::{normalize_strongs, MarkupSegment};
+use super::{finish, normalize, Spacing};
+use presenter_core::bible::{normalize_strongs, MarkupSegment, SegmentKind};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -36,13 +36,29 @@ fn plain(line: &str) -> String {
     finish(line_segments(line), Spacing::Plain).text
 }
 
-pub(crate) fn heading(line: &str) -> MarkupSegment {
-    MarkupSegment::heading(plain(line))
+/// A heading line as Heading segments. A Psalm title's words keep their
+/// Strong's numbers (424 tags), so a word search finds the title too.
+pub(crate) fn heading(line: &str) -> Vec<MarkupSegment> {
+    let mut segments = normalize(line_segments(line), Spacing::Plain);
+    segments.retain(|segment| segment.kind.is_text());
+    for segment in &mut segments {
+        segment.kind = SegmentKind::Heading;
+    }
+    segments
 }
 
-/// One USFM line. A note without its end marker is left in the text.
+/// One USFM line that stands alone.
 pub(crate) fn line_segments(line: &str) -> Vec<MarkupSegment> {
-    let mut run = Run::default();
+    verse_line(line, &mut 0)
+}
+
+/// One USFM line of a verse; `italic` is the `\add` depth, which a line can
+/// leave open for the next one. A note without its end marker stays in the text.
+pub(crate) fn verse_line(line: &str, italic: &mut u8) -> Vec<MarkupSegment> {
+    let mut run = Run {
+        italic: *italic,
+        ..Run::default()
+    };
     let mut from = 0;
     if let Some(notes) = NOTE_RE.as_ref() {
         for found in notes.find_iter(line) {
@@ -55,6 +71,7 @@ pub(crate) fn line_segments(line: &str) -> Vec<MarkupSegment> {
     }
     run.feed(&line[from..]);
     run.flush();
+    *italic = run.italic;
     drop_leading_pilcrow(&mut run.segments);
     run.segments
 }
@@ -77,19 +94,24 @@ struct Run {
     segments: Vec<MarkupSegment>,
     text: String,
     strongs: Vec<String>,
-    italic: bool,
+    italic: u8,
 }
 
 impl Run {
     fn flush(&mut self) {
         if self.text.is_empty() {
+            // The number came after a break in its word: it is that word's.
+            let word = self.segments.iter_mut().rev().find(|s| s.kind.is_text());
+            if let Some(word) = word {
+                word.strongs.append(&mut self.strongs);
+            }
             self.strongs.clear();
             return;
         }
         self.segments.push(MarkupSegment {
             text: std::mem::take(&mut self.text),
             strongs: std::mem::take(&mut self.strongs),
-            italic: self.italic,
+            italic: self.italic > 0,
             ..MarkupSegment::default()
         });
     }
@@ -107,12 +129,15 @@ impl Run {
         }
     }
 
-    fn marker(&mut self, name: &str) {
+    fn marker(&mut self, name: &str, closing: bool) {
         match name.trim_start_matches('+') {
             "w" => self.flush(),
             "add" => {
                 self.flush();
-                self.italic = !self.italic;
+                self.italic = match closing {
+                    true => self.italic.saturating_sub(1),
+                    false => self.italic.saturating_add(1),
+                };
             }
             _ => {}
         }
@@ -136,7 +161,7 @@ impl Run {
                     name.push(next);
                     chars.next();
                 }
-                self.marker(&name);
+                self.marker(&name, closing);
                 // The space after a closing marker is the verse's own.
                 if !closing {
                     while chars.next_if(|next| next.is_whitespace()).is_some() {}
@@ -269,12 +294,47 @@ mod tests {
     }
 
     #[test]
+    fn a_title_word_keeps_its_number() {
+        let done = heading(r#"\d A \w Psalm|strong="H4210"\w* of David"#);
+        assert!(done.iter().all(|s| s.kind == SegmentKind::Heading));
+        assert_eq!(done[1].strongs, ["H4210"]);
+        let text: String = done.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "A Psalm of David");
+    }
+
+    #[test]
+    fn nested_add_stays_italic_until_the_outer_end() {
+        let segments = line_segments(r"\add a \+add b\+add* c\add* d");
+        let italic: Vec<_> = segments.iter().map(|s| (s.text.trim(), s.italic)).collect();
+        assert_eq!(
+            italic,
+            [("a", true), ("b", true), ("c", true), ("d", false)]
+        );
+    }
+
+    #[test]
+    fn add_can_span_two_lines_of_a_verse() {
+        let mut depth = 0;
+        let first = verse_line(r"\q1 \add word", &mut depth);
+        let second = verse_line(r"\q2 more\add* rest", &mut depth);
+        assert!(first[0].italic);
+        assert!(second[0].italic);
+        assert!(!second[1].italic);
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn a_note_inside_a_word_leaves_the_number_on_the_word() {
+        let segments = line_segments(r#"\w a\f + \fr 1.1 \ft x\f*|strong="G1"\w*"#);
+        assert_eq!(segments[0], word("a", "G1"));
+        assert_eq!(segments[1].kind, SegmentKind::Note);
+    }
+
+    #[test]
     fn a_heading_is_its_words() {
         let done = heading(r"\s1 \tl  ב BETH.\tl*  ");
-        assert_eq!(
-            (done.text.as_str(), done.kind),
-            ("ב BETH.", SegmentKind::Heading)
-        );
+        assert_eq!(done, [MarkupSegment::heading("ב BETH.")]);
+        assert!(heading(r"\s").is_empty());
     }
 
     #[test]
