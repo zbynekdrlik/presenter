@@ -243,8 +243,11 @@ pub(super) fn install(s: Study) {
             Some(index) => s.history.update(|history| history.moved_to(index)),
             None => start_list(s, &route),
         }
+        // Another verse of the same chapter is a move, not a closed sheet.
         let sheet_only = s.route.with_untracked(|current| {
-            current.without_sheet().with_verses(None) == route.without_sheet().with_verses(None)
+            current.sheet != route.sheet
+                && current.without_sheet().with_verses(None)
+                    == route.without_sheet().with_verses(None)
         });
         if !sheet_only {
             let offset = index

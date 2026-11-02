@@ -86,7 +86,9 @@ async fn add_now(s: Study, id: String, passage: SermonPassage) {
                 format!("Pridané do kázne „{}“", sermon.title),
                 Undo::Added { sermon: id, item },
             );
-            if s.route.with_untracked(|route| route.sheet.is_some()) {
+            // The list stays: a preacher adds several references from it.
+            let sheet = s.route.with_untracked(|route| route.sheet);
+            if sheet.is_some() && sheet != Some(StudySheet::CrossRefs) {
                 nav::close_sheet(s);
             }
         }

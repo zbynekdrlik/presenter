@@ -32,12 +32,14 @@ impl CompareLayout {
     }
 }
 
-/// The translations on screen: the URL's installed ones, else the favourites.
-pub fn shown_translations(
+/// The whole list of the view: the URL's installed ones, else the reader's
+/// translation and the favourites. Writing a change back uses this list, so a
+/// narrow screen never shortens what a wider one shows.
+pub fn listed_translations(
     named: &[String],
+    reader: Option<&str>,
     favourites: &[String],
     installed: &[String],
-    layout: CompareLayout,
 ) -> Vec<String> {
     let usable = |codes: &[String]| {
         codes
@@ -46,14 +48,26 @@ pub fn shown_translations(
             .cloned()
             .collect::<Vec<_>>()
     };
-    let mut shown = usable(named);
-    if shown.is_empty() {
-        shown = usable(favourites);
+    let listed = usable(named);
+    if !listed.is_empty() {
+        return listed;
     }
+    let mut chosen: Vec<String> = reader.map(ToString::to_string).into_iter().collect();
+    chosen.extend(
+        favourites
+            .iter()
+            .filter(|code| Some(code.as_str()) != reader)
+            .cloned(),
+    );
+    usable(&chosen)
+}
+
+/// What this layout has room for.
+pub fn fitted(mut listed: Vec<String>, layout: CompareLayout) -> Vec<String> {
     if let CompareLayout::Columns(columns) = layout {
-        shown.truncate(columns);
+        listed.truncate(columns);
     }
-    shown
+    listed
 }
 
 /// `shown` with this column switched to `code`. A translation already in
@@ -117,43 +131,47 @@ mod tests {
     }
 
     #[test]
-    fn no_url_list_falls_back_to_the_installed_favourites() {
-        let shown = shown_translations(
+    fn no_url_list_is_the_reader_first_and_the_installed_favourites() {
+        let listed = listed_translations(
             &[],
-            &codes(&["a", "gone", "b"]),
+            Some("c"),
+            &codes(&["a", "gone", "c", "b"]),
             &codes(&["a", "b", "c"]),
-            CompareLayout::Stacked,
         );
-        assert_eq!(shown, codes(&["a", "b"]));
+        assert_eq!(listed, codes(&["c", "a", "b"]));
+    }
+
+    #[test]
+    fn a_reader_translation_outside_the_favourites_still_shows() {
+        let listed = listed_translations(&[], Some("mil"), &codes(&["a"]), &codes(&["a", "mil"]));
+        assert_eq!(listed, codes(&["mil", "a"]));
     }
 
     #[test]
     fn the_url_list_wins_and_loses_what_is_not_installed() {
-        let shown = shown_translations(
+        let listed = listed_translations(
             &codes(&["c", "gone"]),
+            Some("a"),
             &codes(&["a"]),
             &codes(&["a", "c"]),
-            CompareLayout::Stacked,
         );
-        assert_eq!(shown, codes(&["c"]));
+        assert_eq!(listed, codes(&["c"]));
     }
 
     #[test]
     fn a_url_naming_only_unknown_translations_shows_the_favourites() {
-        let shown = shown_translations(
-            &codes(&["gone"]),
-            &codes(&["a"]),
-            &codes(&["a"]),
-            CompareLayout::Stacked,
-        );
-        assert_eq!(shown, codes(&["a"]));
+        let listed = listed_translations(&codes(&["gone"]), None, &codes(&["a"]), &codes(&["a"]));
+        assert_eq!(listed, codes(&["a"]));
     }
 
     #[test]
-    fn columns_cut_the_list_to_what_fits() {
+    fn columns_cut_the_list_to_what_fits_and_a_phone_keeps_it() {
         let all = codes(&["a", "b", "c", "d"]);
-        let shown = shown_translations(&all, &[], &all, CompareLayout::Columns(3));
-        assert_eq!(shown, codes(&["a", "b", "c"]));
+        assert_eq!(
+            fitted(all.clone(), CompareLayout::Columns(3)),
+            codes(&["a", "b", "c"])
+        );
+        assert_eq!(fitted(all.clone(), CompareLayout::Stacked), all);
     }
 
     #[test]

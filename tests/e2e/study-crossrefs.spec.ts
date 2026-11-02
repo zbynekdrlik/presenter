@@ -13,7 +13,7 @@ import {
   stopServer,
   type ServerHandle,
 } from "./support";
-import { expectChapter, finish, openStudy, verseNumber } from "./study-support";
+import { expectChapter, finish, openStudy, verse, verseNumber } from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -82,6 +82,11 @@ test("a reference opens its place, and Back returns to the verse", async ({ brow
   await page.goBack();
   await expectChapter(page, "slk-seb:JHN.3");
   await expect(page).toHaveURL(/p=JHN\.3/);
+  await expect(page.locator('[data-role="study-sheet-close"]')).toHaveCount(0);
+  // Nothing behind it is a sheet either.
+  await page.goBack();
+  await expect(page).not.toHaveURL(/s=/);
+  await expect(page.locator('[data-role="study-sheet-close"]')).toHaveCount(0);
   await finish(opened);
 });
 
@@ -119,5 +124,43 @@ test("a failed list says why and retries inline", async ({ browser }) => {
   await expect(card).toContainText("Nepodarilo sa načítať");
   await card.locator('[data-role="study-retry"]').tap();
   await expect(items(page)).toHaveCount(10);
+  await finish(opened);
+});
+
+test("Back from a reference in the same chapter scrolls to the verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, JOHN_3, "slk-seb:JHN.3");
+  const { page } = opened;
+  await openReferences(page, 2);
+  const more = page.locator('[data-role="crossref-more"]');
+  if ((await more.count()) > 0) await more.tap();
+  await items(page).filter({ hasText: "Ján 3:26" }).locator('[data-role="crossref-open"]').tap();
+  await expect(page).toHaveURL(/v=26/);
+  await expect(verse(page, 26)).toBeInViewport();
+  await page.goBack();
+  await expect(page).toHaveURL(/v=2(&|$)/);
+  await expect(verse(page, 2)).toBeInViewport();
+  await finish(opened);
+});
+
+test("adding a reference leaves the list open for the next one", async ({ browser }) => {
+  const created = await fetch(`${baseURL}/bible/sermons`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: "Odkazy", serviceDate: "2030-06-02", defaultTranslation: "slk-seb" }),
+  });
+  expect(created.status).toBe(200);
+  const id = ((await created.json()) as { id: string }).id;
+  const opened = await openStudy(browser, baseURL, PHONE_390, JOHN_3, "slk-seb:JHN.3", async (page) => {
+    await page.addInitScript((sermon) => {
+      localStorage.setItem("presenter:study.activeSermon", JSON.stringify(sermon));
+    }, id);
+  });
+  const { page } = opened;
+  await openReferences(page, 16);
+  await items(page).first().locator('[data-role="crossref-add"]').tap();
+  await expect(page.locator('[data-role="study-notice"]')).toContainText("Pridané do kázne „Odkazy“");
+  await expect(items(page)).toHaveCount(10);
+  const sermon = (await (await fetch(`${baseURL}/bible/sermons/${id}`)).json()) as { items: unknown[] };
+  expect(sermon.items).toHaveLength(1);
   await finish(opened);
 });

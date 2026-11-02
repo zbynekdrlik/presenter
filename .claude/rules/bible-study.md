@@ -90,6 +90,14 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **One `CompareCell` per chapter:** a chapter left behind drops its cell, so a late answer has nowhere
   to land; only what is on screen is asked (the NLT's 500 requests). A step inside a chapter asks nothing.
 - **`study-compare[data-loaded-for="HEB.11.1"]`** = every shown translation answered or failed.
+- **A chip writes the WHOLE list back (`listed`), never the fitted one** (`shown`): a narrow tablet must
+  not shorten what a wider screen shows. `data-columns` = the columns on screen, not the layout's room:
+  a grid with an empty track runs the verses diagonally.
+- **Landing is keyed on the place AND the layout** (a rotation lands, a retry does not); Back's offset
+  wins. Compare keeps `pane` in its route without showing it, so a tap on a row returns to the sermon.
+- **A sheet in the way of a sheet:** "Odkazy" replaces the verse sheet, or `nav::go` closes only the top
+  entry and a second Back lands on a sheet. `popstate`'s `sheet_only` needs the sheets to DIFFER: another
+  verse of the same chapter is a move and scrolls.
 - **Cross-references come once, whole (`limit=500`)** when the verse sheet opens, so the button can say
   `Odkazy (N)`; ten show first, the rest is local. URL: `v=16&s=odkazy`, not the spec's `x=`: a sheet
   over the selection like the others.

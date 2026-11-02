@@ -9,13 +9,15 @@ use leptos::prelude::*;
 use presenter_core::bible::resolver::Step;
 use presenter_core::bible::sermon::translation_short_code;
 
+use super::reader::chapter_settled_untracked;
 use super::scroll::{self, ScrollPlan};
 use super::swipe::SwipeTracker;
 use super::{nav, study_error, ChapterPlace, Study};
+use crate::api::sermons::is_not_found;
 use crate::api::study::{load_chapter, ChapterText};
 use crate::state::study::{step_chapter, visible_favourites, StudyRoute, StudyView};
 use crate::state::study_compare::{
-    shown_translations, switch_column, verse_numbers, CompareLayout, MISSING_VERSE,
+    fitted, listed_translations, switch_column, verse_numbers, CompareLayout, MISSING_VERSE,
 };
 
 /// One translation's chapter in the compare view.
@@ -54,17 +56,24 @@ fn layout(s: Study) -> CompareLayout {
     CompareLayout::for_screen(s.phone.get(), s.wide.get())
 }
 
-fn shown(s: Study) -> Vec<String> {
-    let named = s.route.with(|route| match &route.view {
-        StudyView::Compare { translations, .. } => translations.clone(),
-        _ => Vec::new(),
+/// Every translation of the view, whatever fits on this screen.
+fn listed(s: Study) -> Vec<String> {
+    let (named, reader) = s.route.with(|route| match &route.view {
+        StudyView::Compare { translations, .. } => {
+            (translations.clone(), route.translation.clone())
+        }
+        _ => (Vec::new(), None),
     });
     let installed = s.installed_codes();
     let favourites: Vec<String> = visible_favourites(&s.favourites.get(), &installed)
         .into_iter()
         .map(|(_, code)| code)
         .collect();
-    shown_translations(&named, &favourites, &installed, layout(s))
+    listed_translations(&named, reader.as_deref(), &favourites, &installed)
+}
+
+fn shown(s: Study) -> Vec<String> {
+    fitted(listed(s), layout(s))
 }
 
 fn place_of(spot: &Spot, translation: &str) -> ChapterPlace {
@@ -107,6 +116,13 @@ fn load(s: Study, places: Vec<ChapterPlace>) {
 
 async fn fetch(s: Study, place: ChapterPlace, key: String) {
     let answer = load_chapter(&place.translation, &place.book, place.chapter).await;
+    // A step back to this chapter must not pay for it twice (the NLT's limit).
+    if let Ok(text) = &answer {
+        if !text.verses.is_empty() {
+            s.cache
+                .update_value(|cache| cache.put(key.clone(), text.clone()));
+        }
+    }
     let waiting = s
         .compare
         .with_untracked(|cells| cells.get(&key) == Some(&CompareCell::Loading));
@@ -114,13 +130,11 @@ async fn fetch(s: Study, place: ChapterPlace, key: String) {
         return;
     }
     let cell = match answer {
-        Ok(text) => {
-            if !text.verses.is_empty() {
-                s.cache
-                    .update_value(|cache| cache.put(key.clone(), text.clone()));
-            }
-            CompareCell::Ready(text)
-        }
+        Ok(text) => CompareCell::Ready(text),
+        Err(err) if is_not_found(&err) => CompareCell::Ready(ChapterText {
+            book: String::new(),
+            verses: Vec::new(),
+        }),
         Err(err) => CompareCell::Failed(study_error(&err)),
     };
     s.compare.update(|cells| {
@@ -159,10 +173,9 @@ fn open(s: Study, verse: u16) {
 /// From the bottom bar: the selected verse, else the one in view.
 pub(super) fn open_from_reader(s: Study) {
     let selected = s.route.with_untracked(|route| route.verses.map(|v| v.0));
-    open(
-        s,
-        selected.or_else(|| scroll::verse_in_view(s)).unwrap_or(1),
-    );
+    // While a chapter loads, the text on screen is the previous one.
+    let in_view = || chapter_settled_untracked(s).then(|| scroll::verse_in_view(s))?;
+    open(s, selected.or_else(in_view).unwrap_or(1));
 }
 
 pub(super) fn open_from_selection(s: Study) {
@@ -178,7 +191,12 @@ fn step_target(s: Study, dir: Step) -> Option<Spot> {
     s.with_structure(|structure| {
         let structure = structure?;
         if stacked {
-            let (book, chapter, verse) = structure.step(&at.book, at.chapter, at.verse, dir)?;
+            // A chapter the reader's translation lacks has no verse steps.
+            let stepped = structure.step(&at.book, at.chapter, at.verse, dir);
+            let (book, chapter, verse) = stepped.or_else(|| {
+                step_chapter(structure, &at.book, at.chapter, dir)
+                    .map(|(book, chapter)| (book, chapter, 1))
+            })?;
             Some(Spot {
                 book,
                 chapter,
@@ -210,12 +228,25 @@ fn go_to(s: Study, target: Spot) {
     }
     nav::replace(s, route);
     s.scroll_plan.set_value(ScrollPlan::Keep);
-    scroll_to_current(s);
 }
 
 fn turn(s: Study, dir: Step) {
     if let Some(target) = step_target(s, dir) {
         go_to(s, target);
+    }
+}
+
+/// Back restores its offset; anything else lands on the verse.
+fn land(s: Study) {
+    let plan = s.scroll_plan.get_value();
+    s.scroll_plan.set_value(ScrollPlan::Keep);
+    match plan {
+        ScrollPlan::Offset(offset) => request_animation_frame(move || {
+            if let Some(scroller) = s.scroller.get_untracked() {
+                scroller.set_scroll_top(offset);
+            }
+        }),
+        _ => scroll_to_current(s),
     }
 }
 
@@ -256,7 +287,7 @@ fn open_reader(s: Study, translation: &str, at: &Spot, verse: u16) {
 }
 
 fn switch(s: Study, column: usize, code: &str) {
-    let next = switch_column(&shown(s), column, code);
+    let next = switch_column(&listed(s), column, code);
     let mut route = s.route.get_untracked();
     if let StudyView::Compare { translations, .. } = &mut route.view {
         *translations = next;
@@ -384,6 +415,14 @@ fn column_chip(s: Study, column: usize, code: String) -> impl IntoView {
     }
 }
 
+fn chips(s: Study, codes: &[String]) -> impl IntoView {
+    codes
+        .iter()
+        .enumerate()
+        .map(|(column, code)| column_chip(s, column, code.clone()))
+        .collect_view()
+}
+
 fn columns(s: Study, codes: &[String], at: &Spot) -> AnyView {
     s.compare.with(|cells| {
         let numbers =
@@ -399,20 +438,15 @@ fn columns(s: Study, codes: &[String], at: &Spot) -> AnyView {
         } else {
             numbers
         };
-        let chips = codes
-            .iter()
-            .enumerate()
-            .map(|(column, code)| column_chip(s, column, code.clone()))
-            .collect_view();
-        let rows = numbers
+        numbers
             .into_iter()
             .flat_map(|verse| {
                 codes
                     .iter()
                     .map(move |code| row_view(s, cells, code, at, verse, verse.to_string()))
             })
-            .collect_view();
-        view! { {chips} {rows} }.into_any()
+            .collect_view()
+            .into_any()
     })
 }
 
@@ -454,17 +488,23 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
             });
         ready.then(|| format!("{}.{}.{}", at.book, at.chapter, at.verse))
     });
-    Effect::new(move |previous: Option<Option<String>>| {
-        let key = settled.get();
-        if key.is_some() && previous.as_ref() != Some(&key) {
-            scroll_to_current(s);
+    // A retry passes through "not settled": it lands nowhere, a rotation does.
+    Effect::new(move |previous: Option<Option<(String, &'static str)>>| {
+        let landed = settled.get().map(|key| (key, layout(s).key()));
+        if landed.is_none() {
+            return previous.flatten();
         }
-        key
+        if previous.flatten() != landed {
+            land(s);
+        }
+        landed
     });
     let columns_count = move || match layout(s) {
-        CompareLayout::Columns(count) => Some(count),
+        CompareLayout::Columns(_) => Some(codes.with(Vec::len).max(1)),
         CompareLayout::Stacked => None,
     };
+    let column_chips =
+        move || matches!(layout(s), CompareLayout::Columns(_)).then(|| chips(s, &codes.get()));
     let body = move || {
         let at = place.get()?;
         let codes = codes.get();
@@ -498,7 +538,7 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
                 data-loaded-for=move || settled.get()
             >
                 <h2 class="study-compare__title" data-role="compare-title">{heading}</h2>
-                <div class="study-compare__grid">{body}</div>
+                <div class="study-compare__grid">{column_chips} {body}</div>
             </section>
         </main>
         <footer class="study-bar">

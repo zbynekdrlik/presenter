@@ -68,7 +68,7 @@ fn on_verse_tap(s: Study, verse: u16) {
     }
 }
 
-fn chapter_settled_untracked(s: Study) -> bool {
+pub(super) fn chapter_settled_untracked(s: Study) -> bool {
     leptos::prelude::untrack(|| chapter_settled(s))
 }
 

@@ -263,7 +263,11 @@ impl StudyRoute {
             Some(_) => return None,
         };
         let reading = matches!(view, StudyView::Reader { .. });
-        let beside_text = matches!(view, StudyView::Reader { .. } | StudyView::Search { .. });
+        // Compare covers the sermon, but keeps it for the way back to the text.
+        let beside_text = matches!(
+            view,
+            StudyView::Reader { .. } | StudyView::Search { .. } | StudyView::Compare { .. }
+        );
         let verses = verses.filter(|_| reading);
         Some(Self {
             translation,
@@ -339,11 +343,16 @@ impl StudyRoute {
         }
     }
 
+    /// Is a sermon on screen beside the text? Compare has the whole width.
+    pub fn shows_pane(&self) -> bool {
+        self.pane.is_some() && !matches!(self.view, StudyView::Compare { .. })
+    }
+
     /// A move inside the text keeps the sermon beside it.
     pub fn keeping_pane(mut self, current: &Self) -> Self {
         if matches!(
             self.view,
-            StudyView::Reader { .. } | StudyView::Search { .. }
+            StudyView::Reader { .. } | StudyView::Search { .. } | StudyView::Compare { .. }
         ) && self.pane.is_none()
         {
             self.pane.clone_from(&current.pane);
@@ -363,7 +372,7 @@ impl StudyRoute {
                 sheet: self.sheet,
                 pane: Some(id.clone()),
             }),
-            (_, Some(id)) if !wide => {
+            (_, Some(id)) if !wide && self.shows_pane() => {
                 let mut alone = Self::sermon(self.translation.clone(), id);
                 alone.sheet = self
                     .sheet
@@ -1472,5 +1481,22 @@ mod tests {
     fn a_cross_reference_selects_its_verses_inside_one_chapter() {
         assert_eq!(crossref_target(4, 9, 4, 10), (9, 10));
         assert_eq!(crossref_target(4, 9, 5, 2), (9, 9));
+    }
+
+    #[test]
+    fn compare_keeps_the_sermon_for_the_way_back_without_showing_it() {
+        let reader = StudyRoute::parse("t=slk-seb&p=HEB.11&pane=abc").expect("a route");
+        let compare = StudyRoute::compare(Some("slk-seb".to_string()), ("HEB", 11, 1), Vec::new())
+            .keeping_pane(&reader);
+        assert_eq!(compare.pane.as_deref(), Some("abc"));
+        assert!(!compare.shows_pane());
+        assert_eq!(
+            compare.for_width(false, reader.clone()),
+            None,
+            "a rotation stays"
+        );
+        let back = StudyRoute::reader("slk-seb", "HEB", 11).keeping_pane(&compare);
+        assert_eq!(back.pane.as_deref(), Some("abc"));
+        assert!(back.shows_pane());
     }
 }

@@ -99,9 +99,9 @@ pub(super) fn button_label(s: Study) -> String {
     })
 }
 
+/// It takes the verse sheet's place: Back never lands on a sheet behind it.
 pub(super) fn open(s: Study) {
-    let route = nav::sheet_route(s, StudySheet::CrossRefs);
-    nav::open_sheet(s, route);
+    nav::replace(s, nav::sheet_route(s, StudySheet::CrossRefs));
 }
 
 /// The translation whose text the row shows. The NLT reads the KJV's text but

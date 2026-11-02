@@ -38,6 +38,18 @@ const compare = (page: Page): Locator => page.locator('[data-role="study-compare
 const row = (page: Page, code: string, verse: number): Locator =>
   page.locator(`[data-role="compare-row"][data-translation="${code}"][data-verse="${verse}"]`);
 
+/** The verse's row sits at one height across the columns. */
+async function expectAligned(page: Page, codes: string[], verse: number): Promise<void> {
+  const tops = await Promise.all(
+    codes.map(async (code) => {
+      const box = await row(page, code, verse).boundingBox();
+      expect(box, `${code} ${verse} is on the page`).not.toBeNull();
+      return box?.y;
+    }),
+  );
+  expect(new Set(tops).size, "a verse's row lines up across the columns").toBe(1);
+}
+
 test("the bar opens a phone's verse across the favourites, each row labelled", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
@@ -127,13 +139,7 @@ test("a tablet shows the chapter in aligned columns and a chip switches one", as
   await expect(compare(page)).toHaveAttribute("data-layout", "columns");
   await expect(compare(page)).toHaveAttribute("data-columns", "3");
 
-  const tops = await Promise.all(
-    ["slk-seb", "slk-roh", "eng-kjv"].map(async (code) => {
-      const box = await row(page, code, 7).boundingBox();
-      return box?.y;
-    }),
-  );
-  expect(new Set(tops).size, "a verse's row lines up across the columns").toBe(1);
+  await expectAligned(page, ["slk-seb", "slk-roh", "eng-kjv"], 7);
   await expect(row(page, "slk-seb", 5)).toHaveAttribute("data-current", "true");
   await expect(row(page, "slk-seb", 5)).toBeInViewport();
 
@@ -150,5 +156,93 @@ test("a tablet shows the chapter in aligned columns and a chip switches one", as
   );
   await page.goBack();
   await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await finish(opened);
+});
+
+test("two translations on a wide screen stay two aligned columns", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    TABLET_1180,
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.5&tt=slk-seb,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await expect(compare(page)).toHaveAttribute("data-columns", "2");
+  await expectAligned(page, ["slk-seb", "eng-kjv"], 7);
+  await finish(opened);
+});
+
+test("a chip on a narrow tablet does not shorten what a wider screen shows", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    { ...TABLET_1180, viewport: { width: 820, height: 1180 } },
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.5",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-columns", "2");
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await page.locator('[data-role="compare-column"]').nth(1).selectOption("eng-kjv");
+  await expect(row(page, "eng-kjv", 5).locator('[data-kind="text"]')).not.toBeEmpty();
+
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(compare(page)).toHaveAttribute("data-columns", "3");
+  await expect(page.locator('[data-role="compare-column"]')).toHaveCount(3);
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await finish(opened);
+});
+
+test("turning a tablet lands the columns on the verse", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    { ...TABLET_1180, viewport: { width: 700, height: 1000 } },
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.20&tt=slk-seb,slk-roh",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-layout", "stacked");
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.20");
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await expect(compare(page)).toHaveAttribute("data-layout", "columns");
+  await expect(row(page, "slk-seb", 20)).toBeInViewport();
+  await finish(opened);
+});
+
+test("Back into the columns returns to where the reader had scrolled", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    TABLET_1180,
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.5&tt=slk-seb,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await row(page, "slk-seb", 30).scrollIntoViewIfNeeded();
+  await row(page, "slk-seb", 30).locator('[data-role="compare-open"]').click();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await page.goBack();
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await expect(row(page, "slk-seb", 30)).toBeInViewport();
+  await expect(row(page, "slk-seb", 5)).not.toBeInViewport();
+  await finish(opened);
+});
+
+test("a chapter the reader's translation lacks does not trap ◀ ▶", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_390,
+    "/ui/study?view=compare&t=slk-seb&p=MAL.4.5&tt=slk-seb,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "MAL.4.5");
+  await page.locator('[data-role="compare-next"]').tap();
+  await expect(page).not.toHaveURL(/p=MAL\.4\.5/);
   await finish(opened);
 });

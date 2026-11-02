@@ -42,7 +42,7 @@ use presenter_core::bible::sermon::ItemEdits;
 use presenter_core::BibleTranslation;
 
 use crate::api::bible::{self as bible_api, BibleSearchHit};
-use crate::api::sermons::{SermonItem, SermonPassage};
+use crate::api::sermons::{is_not_found, SermonItem, SermonPassage};
 use crate::api::study::{load_chapter, ChapterCache, ChapterText};
 use crate::state::bible_console::versification;
 use crate::state::session;
@@ -317,6 +317,8 @@ fn fetch_chapter(s: Study, place: ChapterPlace) {
                 s.cache.update_value(|cache| cache.put(key, text.clone()));
                 Chapter::Ready(place, text)
             }
+            // An unknown book is a place this translation lacks, not a network fault.
+            Err(err) if is_not_found(&err) => Chapter::Missing(place),
             Err(err) => Chapter::Failed(place, study_error(&err)),
         };
         show_chapter(s, chapter);
@@ -644,7 +646,7 @@ pub fn StudyPage() -> impl IntoView {
             class="study"
             data-role="study"
             data-text-size=move || s.text_size.get().key()
-            data-pane=move || s.route.with(|route| route.pane.is_some()).then_some("true")
+            data-pane=move || s.route.with(StudyRoute::shows_pane).then_some("true")
         >
             <StudyHeader s=s />
             <Show when=bible_view>
