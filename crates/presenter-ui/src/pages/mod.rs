@@ -3,6 +3,7 @@ pub mod bible;
 pub mod bible_console;
 pub mod bible_controls;
 pub mod bible_prepared;
+pub mod bible_prepared_sermon;
 pub mod bible_reference;
 pub mod bible_slides;
 pub mod camera;

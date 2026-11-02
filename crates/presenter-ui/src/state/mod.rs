@@ -1,5 +1,6 @@
 pub mod bible;
 pub mod bible_console;
+pub mod bible_console_prepared;
 pub mod bible_console_step;
 pub mod bible_range;
 pub mod interpreter;

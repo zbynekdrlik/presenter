@@ -322,3 +322,42 @@ body.operator.operator--bible[data-shell="phone"] .operator__catalog-top,
 body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   overflow: visible;
 }
+
+/* "Pripravené kazateľom" (#851 H1) */
+.console-prepared {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* A row carries 80 characters of verse text: it wraps under its label. */
+.console-prepared .console-row {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.console-prepared .console-row__detail {
+  flex: 1 1 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.console-prepared__heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.console-prepared__title {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+}

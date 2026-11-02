@@ -497,3 +497,9 @@ body.tablet {
   pointer-events: none;
   z-index: 1;
 }
+
+/* A sermon in the list (#851 H1). */
+.tablet-button__sermon {
+  font-size: 13px;
+  opacity: 0.8;
+}

@@ -3,11 +3,13 @@ use presenter_core::{LiveEvent, TimerState, TimersOverview};
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto, BibleSlideMetaBible};
+use crate::api::sermons;
 use crate::components::info_popover::InfoPopover;
 use crate::components::version_label::VersionLabel;
 use crate::state::tablet::TabletContext;
 use crate::ws::{self, WsState};
 
+mod sermon_select;
 mod slide_list;
 use slide_list::SlideList;
 
@@ -64,16 +66,9 @@ pub fn TabletPage() -> impl IntoView {
                     if ctx.current_presentation_id.get_untracked().as_deref()
                         == Some(&presentation_id)
                     {
-                        let pid = presentation_id;
-                        let slides_sig = ctx.slides;
-                        let cache_sig = ctx.slides_cache;
+                        let ctx = ctx.clone();
                         leptos::task::spawn_local(async move {
-                            if let Ok(detail) = bible::get_presentation(&pid).await {
-                                cache_sig.update(|c| {
-                                    c.insert(pid, detail.slides.clone());
-                                });
-                                slides_sig.set(detail.slides);
-                            }
+                            sermon_select::reload_open_slides(&ctx, &presentation_id).await;
                         });
                     }
                 }
@@ -96,11 +91,19 @@ pub fn TabletPage() -> impl IntoView {
 
             // Fetch presentations
             if let Ok(presentations) = bible::list_presentations().await {
-                let first = presentations.first().cloned();
-                ctx.presentations.set(presentations);
+                // The list comes first: a hung sermon read must not hide it.
+                ctx.presentations.set(presentations.clone());
+                // A failed read only loses the preselection.
+                let today: Vec<String> = sermons::todays_sermons()
+                    .await
+                    .map(|details| details.into_iter().map(|sermon| sermon.id).collect())
+                    .unwrap_or_default();
+                let first = sermon_select::initial_presentation(&presentations, &today).cloned();
 
-                // Auto-select first presentation
-                if let Some(pres) = first {
+                // Auto-select today's sermon, else the first presentation,
+                // unless a tap chose while the read was on its way.
+                let untouched = ctx.current_presentation_id.get_untracked().is_none();
+                if let Some(pres) = first.filter(|_| untouched) {
                     ctx.current_presentation_id.set(Some(pres.id.clone()));
                     ctx.current_presentation_name.set(pres.name.clone());
                     load_presentation_slides(&ctx, &pres.id).await;
@@ -372,6 +375,7 @@ fn PresentationList() -> impl IntoView {
                     let pres_id = pres.id.clone();
                     let pres_name = pres.name.clone();
                     let slide_count = pres.slide_count;
+                    let sermon_label = crate::pages::bible_prepared_sermon::sermon_badge(&pres);
                     let is_active = {
                         let pid = pres_id.clone();
                         move || ctx.current_presentation_id.get().as_deref() == Some(&pid)
@@ -407,6 +411,11 @@ fn PresentationList() -> impl IntoView {
                                 on:click=on_click
                             >
                                 <span class="tablet-button__label">{pres_name}</span>
+                                {sermon_label.map(|label| view! {
+                                    <span class="tablet-button__sermon" data-role="presentation-sermon">
+                                        {label}
+                                    </span>
+                                })}
                                 <span class="tablet-button__meta">{slide_count}</span>
                             </button>
                         </div>
@@ -524,6 +533,7 @@ fn matches_bible_metadata(
 }
 
 async fn load_presentation_slides(ctx: &TabletContext, presentation_id: &str) {
+    let mine = sermon_select::next_slide_read();
     // Check cache first
     let cached = ctx
         .slides_cache
@@ -538,7 +548,11 @@ async fn load_presentation_slides(ctx: &TabletContext, presentation_id: &str) {
     // Clear stale slides so the UI shows the correct state while fetching
     ctx.slides.set(Vec::new());
 
-    match bible::get_presentation(presentation_id).await {
+    let answer = bible::get_presentation(presentation_id).await;
+    if !sermon_select::is_newest_slide_read(mine) {
+        return;
+    }
+    match answer {
         Ok(detail) => {
             ctx.slides_cache.update(|cache| {
                 cache.insert(presentation_id.to_string(), detail.slides.clone());
@@ -557,7 +571,7 @@ pub(super) async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
         return;
     };
     match bible::trigger_presentation_slide(&pres_id, &slide.id).await {
-        Ok(()) => {
+        Ok(_) => {
             ctx.active_slide_id.set(Some(slide.id.clone()));
             ctx.show_toast("Slide triggered", "success");
         }
@@ -573,6 +587,7 @@ async fn refresh_presentations(ctx: &TabletContext) {
     };
 
     let old = ctx.presentations.get_untracked();
+    sermon_select::refresh_open_sermon(ctx, &fresh).await;
 
     // Check if anything changed
     let changed = if fresh.len() != old.len() {

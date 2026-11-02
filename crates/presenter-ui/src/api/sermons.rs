@@ -48,6 +48,8 @@ pub struct SermonItem {
     pub edits: ItemEdits,
     pub source_changed: bool,
     pub slide_ids: Vec<String>,
+    pub label: String,
+    pub rendered_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -139,6 +141,11 @@ struct ItemPatch<'a> {
 
 pub async fn list_sermons() -> Result<SermonList, ApiError> {
     get_json("/bible/sermons").await
+}
+
+/// The sermons of the server's today (the console, the tablet).
+pub async fn todays_sermons() -> Result<Vec<SermonDetail>, ApiError> {
+    get_json("/bible/sermons/today").await
 }
 
 pub async fn get_sermon(id: &str) -> Result<SermonDetail, ApiError> {

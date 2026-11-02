@@ -52,7 +52,11 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
             return "Zobrazujem\u{2026}".to_string();
         }
         if c.at_end.get() {
-            return "KONIEC KNIHY".to_string();
+            return if c.prepared.with(Option::is_some) {
+                "KONIEC KÁZNE".to_string()
+            } else {
+                "KONIEC KNIHY".to_string()
+            };
         }
         if failed.get() {
             return "SKÚSIŤ ZNOVA".to_string();
@@ -60,8 +64,14 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
         let part = split()
             .map(|(i, n)| format!(" {i}/{n}"))
             .unwrap_or_default();
-        match (c.after_show.get(), c.target.get()) {
-            (true, Some(target)) => format!("ĎALŠÍ: {}{part}", short_label(&target)),
+        let next = if c.prepared.with(Option::is_some) {
+            c.preview
+                .with(|p| p.slide().map(|slide| slide.bible_main_reference.clone()))
+        } else {
+            c.target.get().map(|target| short_label(&target))
+        };
+        match (c.after_show.get(), next) {
+            (true, Some(next)) => format!("ĎALŠÍ: {next}{part}"),
             _ => format!("ZOBRAZIŤ{part}"),
         }
     };
@@ -108,7 +118,7 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 class="console-bar__show"
                 data-role="console-show"
                 node_ref=show_button
-                disabled=move || c.target.with(Option::is_none)
+                disabled=move || c.target_key.with(Option::is_none)
                 aria-disabled=move || {
                     let retry = failed.get() && !c.showing.get();
                     if c.can_show.get() || retry { "false" } else { "true" }

@@ -3,6 +3,7 @@ use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
 use crate::components::slide_columns::SlideColumnsControl;
+use crate::pages::bible_prepared_sermon::{active_sermon_badge, SermonSlides};
 use crate::state::bible::{slide_char_count, BibleState};
 use crate::state::AppContext;
 
@@ -14,6 +15,7 @@ use crate::state::AppContext;
 pub fn BibleSlidesColumn() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let bible_tab = bs.bible_tab;
+    let sermon = active_sermon_badge(&bs);
 
     view! {
         <section
@@ -21,14 +23,19 @@ pub fn BibleSlidesColumn() -> impl IntoView {
             data-role="slides-column"
         >
             <div class="operator__slides-toolbar operator__slides-toolbar--minimal">
-                <AddEmptySlideButton />
+                <Show when=move || sermon.with(Option::is_none)>
+                    <AddEmptySlideButton />
+                </Show>
                 <SlideColumnsControl />
             </div>
             <div class="operator__slides" data-role="slides">
                 {move || {
                     let tab = bible_tab.get();
                     if tab == "prepared" {
-                        view! { <PreparedSlides /> }.into_any()
+                        match sermon.get() {
+                            Some(badge) => view! { <SermonSlides badge=badge /> }.into_any(),
+                            None => view! { <PreparedSlides /> }.into_any(),
+                        }
                     } else {
                         view! { <LiveSlides /> }.into_any()
                     }
@@ -196,7 +203,7 @@ fn char_count_badge(field: &'static str, text: &str, limit: u32) -> impl IntoVie
 /// Bible slides have 4 fields: Main, Translation, Main Reference, Translation Reference.
 /// Group is a worship field — not used here. `limit` is the Bible character
 /// limit the count badges compare against (#828).
-fn slide_body_view(
+pub(super) fn slide_body_view(
     main: String,
     trans: String,
     main_ref: String,
