@@ -8,6 +8,8 @@ paths:
   - "crates/presenter-server/src/router/study_pwa.rs"
   - "crates/presenter-server/src/ui/study_sw.js"
   - "tests/e2e/study-*.ts"
+  - "crates/presenter-server/src/router/bible/study.rs"
+  - "crates/presenter-server/src/state/bible_source/study.rs"
 ---
 
 # The study page `/ui/study` (#851 S1–S3)
@@ -83,3 +85,23 @@ preparation (the sermon views are in `sermon-prep.md`).
   in `finish()` are this local dist only.
 - **Local UI builds need nightly** (`.cargo/config.toml` has `build-std`): `RUSTUP_TOOLCHAIN=nightly
   trunk build`; on stable, wasm-bindgen fails with `__wbindgen_externref_table_alloc`.
+
+## The read API (#851 D4, `router/bible/study.rs`, `state/bible_source/study.rs`)
+
+- **Counts are verses, not words.** `occurrenceCount`, `total` and `perBook` count rows of
+  `bible_strongs_occurrences`, the same rows the list shows. `perBook` always covers the whole Bible,
+  `total` follows the scope.
+- **Cross-references never call a remote API.** The NLT reads the KJV's text and says so with
+  `fallbackTranslation`: ten rows would spend ten of 500 daily requests and fail whole with the API.
+- **A verse a translation lacks comes from the KJV, never clamped:** Joel 2:28 is 3:1 in the SEB, whose
+  chapter 2 ends at 27, so a clamp shows a wrong verse under a true-looking label (1,337 rows in SEB and
+  SEVP). Only the KJV's own gap keeps a place inside the chapter (3 John 15 → 14). Only a range's END is
+  clamped. A range leaving the book reads to the book's end; only the label shows the other book.
+- **A chapter the translation lacks answers 200 with no verses**, `prev`/`next` still move on (Joel 4
+  exists in the SEB and not in the KJV, so the KJV is no judge of what exists); 404 = unknown translation
+  or book. `BookScope` is the one scope parser (`all|ot|nt|<BOOK>`).
+- **An exact phrase searches `content` only:** the FTS table also indexes the book name (`"job"` = 1,074
+  hits, 54 real). A phrase of no words is an empty answer, never `%%`.
+- **A study read has a book code, not a name.** `idx_bible_passages_reference` starts with the name, so
+  `idx_bible_passages_place` (translation, code, chapter, verse) serves these lookups; without it each
+  one scans the translation.

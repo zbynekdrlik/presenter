@@ -6,7 +6,7 @@ use sea_orm::{
 use tracing::instrument;
 
 use crate::entities::{bible_passage, bible_translation};
-use presenter_core::bible::BibleBookChapterSummary;
+use presenter_core::bible::{BibleBookChapterSummary, BookScope};
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 
 use crate::repository::util::{sanitize_like_input, to_domain_passage, to_domain_translation};
@@ -16,8 +16,13 @@ use crate::repository::Repository;
 ///
 /// Splits into words, drops tokens shorter than 2 chars, appends `*` for
 /// prefix matching, and joins with spaces (implicit AND in FTS5).
-/// Returns `None` if no usable tokens remain.
+/// Returns `None` if no usable tokens remain. A fully quoted input is an exact
+/// phrase (#851 spec §6.4).
 fn build_fts_query(input: &str) -> Option<String> {
+    if let Some(phrase) = quoted_phrase(input) {
+        let words: Vec<&str> = phrase.split_whitespace().collect();
+        return (!words.is_empty()).then(|| format!("content : \"{}\"", words.join(" ")));
+    }
     let tokens: Vec<String> = input
         .split_whitespace()
         .filter(|w| w.len() >= 2)
@@ -33,6 +38,23 @@ fn build_fts_query(input: &str) -> Option<String> {
     } else {
         Some(tokens.join(" "))
     }
+}
+
+/// The words of one fully quoted input, punctuation turned into spaces and
+/// combining marks dropped (the tokenizer folds them): inside an FTS5 phrase a
+/// `"` would end it. Two quoted parts are not one phrase.
+fn quoted_phrase(input: &str) -> Option<String> {
+    let inner = input.trim().strip_prefix('"')?.strip_suffix('"')?;
+    if inner.contains('"') {
+        return None;
+    }
+    Some(
+        inner
+            .chars()
+            .filter(|c| !matches!(c, '\u{0300}'..='\u{036F}'))
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect(),
+    )
 }
 
 impl Repository {
@@ -58,6 +80,7 @@ impl Repository {
         &self,
         translation_code: &str,
         query: &str,
+        scope: BookScope,
         limit: u32,
     ) -> anyhow::Result<Vec<BiblePassage>> {
         if query.trim().is_empty() {
@@ -72,7 +95,7 @@ impl Repository {
         };
 
         let rows = self
-            .fts_search(query, Some(translation_code), limit)
+            .fts_search(query, Some(translation_code), scope, limit)
             .await?;
 
         let mut results = Vec::with_capacity(rows.len());
@@ -87,10 +110,11 @@ impl Repository {
         &self,
         translation_code: Option<&str>,
         query: &str,
+        scope: BookScope,
         limit: u32,
     ) -> anyhow::Result<Vec<BiblePassage>> {
         if let Some(code) = translation_code {
-            return self.search_bible_passages(code, query, limit).await;
+            return self.search_bible_passages(code, query, scope, limit).await;
         }
 
         if query.trim().is_empty() {
@@ -109,7 +133,7 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let rows = self.fts_search(query, None, limit).await?;
+        let rows = self.fts_search(query, None, scope, limit).await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
@@ -127,11 +151,19 @@ impl Repository {
         &self,
         query: &str,
         translation_code: Option<&str>,
+        scope: BookScope,
         limit: u32,
     ) -> anyhow::Result<Vec<bible_passage::Model>> {
+        let phrase = quoted_phrase(query);
+        if phrase
+            .as_deref()
+            .is_some_and(|words| words.trim().is_empty())
+        {
+            return Ok(Vec::new());
+        }
         if let Some(fts_query) = build_fts_query(query) {
             let result = self
-                .fts_search_raw(&fts_query, translation_code, limit)
+                .fts_search_raw(&fts_query, translation_code, scope, limit)
                 .await;
             match result {
                 Ok(rows) => return Ok(rows),
@@ -143,9 +175,12 @@ impl Repository {
         }
 
         // Fallback: LIKE-based search
-        let pattern = format!("%{}%", sanitize_like_input(query));
-        let mut q =
-            bible_passage::Entity::find().filter(bible_passage::Column::Content.like(pattern));
+        let (first_book, last_book) = scope.book_numbers();
+        let text = phrase.unwrap_or_else(|| query.to_string());
+        let pattern = format!("%{}%", sanitize_like_input(text.trim()));
+        let mut q = bible_passage::Entity::find()
+            .filter(bible_passage::Column::Content.like(pattern))
+            .filter(bible_passage::Column::BookNumber.between(first_book, last_book));
         if let Some(code) = translation_code {
             q = q.filter(bible_passage::Column::TranslationCode.eq(code.to_string()));
         }
@@ -162,43 +197,35 @@ impl Repository {
         &self,
         fts_query: &str,
         translation_code: Option<&str>,
+        scope: BookScope,
         limit: u32,
     ) -> anyhow::Result<Vec<bible_passage::Model>> {
-        let (sql, values) = if let Some(code) = translation_code {
-            (
-                "SELECT bp.id, bp.translation_code, bp.book, bp.book_code, \
-                        bp.book_number, bp.chapter, bp.verse_start, bp.verse_end, \
-                        bp.content, bp.created_at \
-                 FROM bible_passage_fts fts \
-                 JOIN bible_passages bp ON bp.id = fts.passage_id \
-                 WHERE bible_passage_fts MATCH ?1 \
-                   AND fts.translation_code = ?2 \
-                 ORDER BY fts.rank \
-                 LIMIT ?3"
-                    .to_string(),
-                vec![
-                    sea_orm::Value::from(fts_query.to_string()),
-                    sea_orm::Value::from(code.to_string()),
-                    sea_orm::Value::from(limit as i32),
-                ],
-            )
-        } else {
-            (
-                "SELECT bp.id, bp.translation_code, bp.book, bp.book_code, \
-                        bp.book_number, bp.chapter, bp.verse_start, bp.verse_end, \
-                        bp.content, bp.created_at \
-                 FROM bible_passage_fts fts \
-                 JOIN bible_passages bp ON bp.id = fts.passage_id \
-                 WHERE bible_passage_fts MATCH ?1 \
-                 ORDER BY fts.rank \
-                 LIMIT ?2"
-                    .to_string(),
-                vec![
-                    sea_orm::Value::from(fts_query.to_string()),
-                    sea_orm::Value::from(limit as i32),
-                ],
-            )
+        let (first_book, last_book) = scope.book_numbers();
+        let mut values = vec![
+            sea_orm::Value::from(fts_query.to_string()),
+            sea_orm::Value::from(i32::from(first_book)),
+            sea_orm::Value::from(i32::from(last_book)),
+        ];
+        let translation_filter = match translation_code {
+            Some(code) => {
+                values.push(sea_orm::Value::from(code.to_string()));
+                "AND fts.translation_code = ?"
+            }
+            None => "",
         };
+        values.push(sea_orm::Value::from(limit as i32));
+        let sql = format!(
+            "SELECT bp.id, bp.translation_code, bp.book, bp.book_code, \
+                    bp.book_number, bp.chapter, bp.verse_start, bp.verse_end, \
+                    bp.content, bp.created_at \
+             FROM bible_passage_fts fts \
+             JOIN bible_passages bp ON bp.id = fts.passage_id \
+             WHERE bible_passage_fts MATCH ? \
+               AND bp.book_number BETWEEN ? AND ? \
+               {translation_filter} \
+             ORDER BY fts.rank \
+             LIMIT ?"
+        );
 
         let stmt = Statement::from_sql_and_values(DatabaseBackend::Sqlite, &sql, values);
         let rows = bible_passage::Model::find_by_statement(stmt)
@@ -323,5 +350,36 @@ impl Repository {
             });
         }
         Ok(summaries)
+    }
+}
+
+#[cfg(test)]
+mod fts_query_tests {
+    use super::build_fts_query;
+
+    #[test]
+    fn words_are_prefixes_and_a_fully_quoted_input_is_a_phrase() {
+        assert_eq!(
+            build_fts_query("viera nádej").as_deref(),
+            Some("viera* nádej*")
+        );
+        assert_eq!(
+            build_fts_query("\"viera, nádej-láska\"").as_deref(),
+            Some("content : \"viera nádej láska\"")
+        );
+        assert_eq!(
+            build_fts_query("\"viera\" nádej").as_deref(),
+            Some("viera* nádej*")
+        );
+        assert_eq!(
+            build_fts_query("\"\"viera\" \"nádej\"\"").as_deref(),
+            Some("viera* nádej*")
+        );
+        assert_eq!(
+            build_fts_query("\"na\u{0301}dej\"").as_deref(),
+            Some("content : \"nadej\"")
+        );
+        assert_eq!(build_fts_query("\" - \""), None);
+        assert_eq!(build_fts_query("\""), None);
     }
 }

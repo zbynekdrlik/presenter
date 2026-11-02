@@ -36,7 +36,7 @@ mod background_tasks;
 pub(crate) mod bible;
 mod bible_manager;
 pub(crate) mod bible_show_log;
-mod bible_source;
+pub(crate) mod bible_source;
 mod broadcasting;
 mod cache_manager;
 mod companion;

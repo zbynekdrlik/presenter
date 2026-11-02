@@ -4,7 +4,7 @@
 
 use crate::bible_remote::{NltClient, RemoteBibleError, NLT_CODE};
 use crate::state::AppState;
-use presenter_core::bible::BibleIngestionBatch;
+use presenter_core::bible::{BibleIngestionBatch, BookScope};
 use presenter_core::slide::BibleSlideMetadata;
 use presenter_core::{BiblePassage, BiblePreferences, BibleReference, BibleTranslation, Slide};
 use std::time::Duration;
@@ -354,11 +354,11 @@ async fn searching_the_nlt_is_empty_and_makes_no_request() {
     let server = mock_nlt(&mut state, "never", page(""), 0).await;
 
     let nlt_hits = state
-        .search_bible_passages_cross(Some(NLT_CODE), "beginning", 10)
+        .search_bible_passages_cross(Some(NLT_CODE), "beginning", BookScope::All, 10)
         .await
         .expect("no error");
     let all_hits = state
-        .search_bible_passages_cross(None, "beginning", 10)
+        .search_bible_passages_cross(None, "beginning", BookScope::All, 10)
         .await
         .expect("cross search");
 

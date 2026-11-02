@@ -312,6 +312,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The debug test binaries fill the hosted runner's disk ("No space left on
+      # device" while linking presenter-server); nothing here uses these SDKs.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         timeout-minutes: 10
