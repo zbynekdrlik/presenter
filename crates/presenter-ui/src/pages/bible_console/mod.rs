@@ -271,46 +271,7 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         grid_selection.set(Default::default());
     };
 
-    Effect::new(move |previous: Option<u32>| {
-        let loads = classic_loads.get();
-        if previous.is_some_and(|before| before != loads) {
-            owns_grid.set(false);
-            c.after_show.set(false);
-            c.at_end.set(false);
-            c.picked.set(None);
-            c.prepared.set(None);
-            c.input.set(String::new());
-        }
-        loads
-    });
-
-    // What was tapped or asked for belongs to the input it was done in, also
-    // when the same text is typed again later. A show pins the next part for
-    // the field it just emptied, that one stays. A translation switch keeps
-    // it too, but cancels a waiting Enter.
-    Effect::new(move |_| {
-        let input = c.input.get();
-        c.main.track();
-        let pinned = c
-            .picked
-            .with_untracked(|p| p.as_ref().is_some_and(|p| p.input == input));
-        if !pinned {
-            c.picked.set(None);
-        }
-        if !input.is_empty() {
-            c.prepared.set(None);
-        }
-        c.focus_show.set(false);
-    });
-
-    // The book's end belongs to the translation: another one may go on.
-    Effect::new(move |previous: Option<Option<String>>| {
-        let main = c.main.get();
-        if previous.is_some_and(|before| before != main) {
-            stepping::recheck_end(c);
-        }
-        main
-    });
+    setup_resets(c, classic_loads, owns_grid);
 
     Effect::new(move |_| {
         let key = c.target_key.get();
@@ -384,6 +345,51 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             });
         });
         *pending.borrow_mut() = Some(timer);
+    });
+}
+
+/// What a load from the old inputs, an edited field or a new translation
+/// takes back from the console.
+fn setup_resets(c: Console, classic_loads: RwSignal<u32>, owns_grid: RwSignal<bool>) {
+    Effect::new(move |previous: Option<u32>| {
+        let loads = classic_loads.get();
+        if previous.is_some_and(|before| before != loads) {
+            owns_grid.set(false);
+            c.after_show.set(false);
+            c.at_end.set(false);
+            c.picked.set(None);
+            c.prepared.set(None);
+            c.input.set(String::new());
+        }
+        loads
+    });
+
+    // What was tapped or asked for belongs to the input it was done in, also
+    // when the same text is typed again later. A show pins the next part for
+    // the field it just emptied, that one stays. A translation switch keeps
+    // it too, but cancels a waiting Enter.
+    Effect::new(move |_| {
+        let input = c.input.get();
+        c.main.track();
+        let pinned = c
+            .picked
+            .with_untracked(|p| p.as_ref().is_some_and(|p| p.input == input));
+        if !pinned {
+            c.picked.set(None);
+        }
+        if !input.is_empty() {
+            c.prepared.set(None);
+        }
+        c.focus_show.set(false);
+    });
+
+    // The book's end belongs to the translation: another one may go on.
+    Effect::new(move |previous: Option<Option<String>>| {
+        let main = c.main.get();
+        if previous.is_some_and(|before| before != main) {
+            stepping::recheck_end(c);
+        }
+        main
     });
 }
 
