@@ -590,15 +590,13 @@ async fn refresh_presentations(ctx: &TabletContext) {
     sermon_select::refresh_open_sermon(ctx, &fresh).await;
 
     // Check if anything changed
-    let changed = if fresh.len() != old.len() {
-        true
-    } else {
-        fresh.iter().any(|f| {
-            old.iter()
-                .find(|o| o.id == f.id)
-                .is_none_or(|o| o.slide_count != f.slide_count)
-        })
-    };
+    // A reorder in the Prepared tab (#874) keeps the set but changes the
+    // sequence, so compare position by position.
+    let changed = fresh.len() != old.len()
+        || fresh
+            .iter()
+            .zip(old.iter())
+            .any(|(f, o)| f.id != o.id || f.slide_count != o.slide_count);
 
     if !changed {
         return;

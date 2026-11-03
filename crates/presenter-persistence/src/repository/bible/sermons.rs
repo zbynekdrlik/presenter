@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use chrono::{DateTime, NaiveDate, Utc};
 use sea_orm::prelude::DateTimeWithTimeZone;
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, Query};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
@@ -18,6 +18,7 @@ use sea_orm::{
 use tracing::instrument;
 use uuid::Uuid;
 
+use super::presentation_order::move_to_top;
 use super::presentations::bible_slide_to_active_model;
 use crate::entities::{bible_presentation, bible_sermon, bible_sermon_item, bible_slide};
 use crate::repository::util::{parse_uuid, RepositoryError};
@@ -123,9 +124,12 @@ impl Repository {
             id: Set(id.to_string()),
             name: Set(new.title.clone()),
             created_at: Set(now.into()),
+            position: Set(0),
+            archived_at: Set(None),
         })
         .exec(&txn)
         .await?;
+        move_to_top(&txn, &id.to_string()).await?;
         bible_sermon::Entity::insert(bible_sermon::ActiveModel {
             presentation_id: Set(id.to_string()),
             service_date: Set(new.service_date.format(DATE_FORMAT).to_string()),
@@ -226,8 +230,15 @@ impl Repository {
     /// The sermons whose service date is `date`, oldest first.
     #[instrument(skip_all)]
     pub async fn sermon_ids_on(&self, date: NaiveDate) -> anyhow::Result<Vec<BiblePresentationId>> {
+        // An archived sermon is not handed to the console or tablet (#874).
+        let archived = Query::select()
+            .column(bible_presentation::Column::Id)
+            .from(bible_presentation::Entity)
+            .and_where(bible_presentation::Column::ArchivedAt.is_not_null())
+            .to_owned();
         let rows = bible_sermon::Entity::find()
             .filter(bible_sermon::Column::ServiceDate.eq(date.format(DATE_FORMAT).to_string()))
+            .filter(bible_sermon::Column::PresentationId.not_in_subquery(archived))
             .order_by_asc(bible_sermon::Column::CreatedAt)
             .all(&self.db)
             .await?;

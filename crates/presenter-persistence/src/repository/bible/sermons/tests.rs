@@ -449,3 +449,31 @@ async fn a_rename_makes_a_write_loaded_before_it_stale() {
     assert_eq!(snapshot.sermon.title, "Viera");
     assert_eq!(snapshot.sermon.revision, 1);
 }
+
+#[tokio::test]
+async fn an_archived_sermon_is_not_handed_off_for_its_day() {
+    // #874: the verse console and the tablet must not offer an archived sermon.
+    let repo = repo().await;
+    let kept = repo
+        .create_sermon(&new_sermon("Ostáva", "2026-11-08"))
+        .await
+        .expect("create");
+    let archived = repo
+        .create_sermon(&new_sermon("Archivovaná", "2026-11-08"))
+        .await
+        .expect("create");
+    repo.archive_bible_presentation(archived.id)
+        .await
+        .expect("archive");
+    assert_eq!(
+        repo.sermon_ids_on(date("2026-11-08")).await.expect("on"),
+        vec![kept.id]
+    );
+    repo.restore_bible_presentation(archived.id)
+        .await
+        .expect("restore");
+    assert_eq!(
+        repo.sermon_ids_on(date("2026-11-08")).await.expect("on"),
+        vec![kept.id, archived.id]
+    );
+}

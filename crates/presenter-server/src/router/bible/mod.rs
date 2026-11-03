@@ -7,6 +7,8 @@
 
 pub(super) mod broadcast;
 pub(super) mod browse;
+#[cfg(test)]
+mod presentation_order_tests;
 pub(super) mod presentations;
 pub(super) mod resolve;
 pub(super) mod sermons;

@@ -28,7 +28,7 @@ pub struct LoadedPassage {
 }
 
 /// Bible page specific state.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct BibleState {
     // -- Who fills `slides`: the verse console or the old inputs (#850) --
     /// Bumped by every load from the old inputs: the console lets go of the
@@ -76,6 +76,17 @@ pub struct BibleState {
 
     // -- Presentations --
     pub presentations: RwSignal<Vec<BiblePresentationSummary>>,
+    /// The archive under the active list (#874), most recently archived first.
+    pub archived_presentations: RwSignal<Vec<BiblePresentationSummary>>,
+    /// A presentation card being dragged to a new place (#874).
+    pub presentation_drag: RwSignal<Option<PresentationDrag>>,
+    /// Bumped by every list request and every local order change: a list
+    /// answer applies only while its number is the newest (#874).
+    pub presentation_list_gen: RwSignal<u64>,
+    /// A reorder PUT is on its way; list answers wait until the queue drains.
+    pub presentation_order_sending: RwSignal<bool>,
+    /// The newest order chosen while a PUT was on its way (sent next).
+    pub presentation_order_waiting: RwSignal<Option<Vec<String>>>,
     pub active_presentation_id: RwSignal<Option<String>>,
     pub active_presentation_slides: RwSignal<Vec<BibleSlideDto>>,
 
@@ -92,6 +103,14 @@ pub struct BibleState {
     // -- Presentation edit modal --
     pub modal_presentation_id: RwSignal<Option<String>>,
     pub modal_presentation_name: RwSignal<String>,
+}
+
+/// One presentation-card drag in progress (#874): the dragged card and the
+/// slot it would drop into now (`order::drop_slot`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresentationDrag {
+    pub id: String,
+    pub slot: usize,
 }
 
 impl BibleState {
@@ -125,6 +144,11 @@ impl BibleState {
             bible_tab: RwSignal::new("live".to_string()),
 
             presentations: RwSignal::new(Vec::new()),
+            archived_presentations: RwSignal::new(Vec::new()),
+            presentation_drag: RwSignal::new(None),
+            presentation_list_gen: RwSignal::new(0),
+            presentation_order_sending: RwSignal::new(false),
+            presentation_order_waiting: RwSignal::new(None),
             active_presentation_id: RwSignal::new(None),
             active_presentation_slides: RwSignal::new(Vec::new()),
 

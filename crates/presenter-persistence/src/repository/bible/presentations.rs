@@ -14,6 +14,7 @@ use presenter_core::{
     BiblePresentationSlide, BiblePresentationSummary, BibleSlideId, SlideText,
 };
 
+use super::presentation_order::move_to_top;
 use crate::repository::util::RepositoryError;
 use crate::repository::Repository;
 
@@ -25,10 +26,20 @@ impl Repository {
         &self,
     ) -> anyhow::Result<Vec<BiblePresentationSummary>> {
         let presentations = bible_presentation::Entity::find()
+            .filter(bible_presentation::Column::ArchivedAt.is_null())
+            .order_by_asc(bible_presentation::Column::Position)
             .order_by_asc(bible_presentation::Column::Name)
             .all(&self.db)
             .await?;
+        self.summaries_of(presentations).await
+    }
 
+    /// Summaries of `presentations`, in their order: slide counts and sermon
+    /// dates added.
+    pub(super) async fn summaries_of(
+        &self,
+        presentations: Vec<bible_presentation::Model>,
+    ) -> anyhow::Result<Vec<BiblePresentationSummary>> {
         #[derive(FromQueryResult)]
         struct CountRow {
             presentation_id: String,
@@ -107,14 +118,20 @@ impl Repository {
         }
         let id = BiblePresentationId::new();
         let now = Utc::now();
+        let txn = self.db.begin().await?;
         let active = bible_presentation::ActiveModel {
             id: Set(id.to_string()),
             name: Set(trimmed.to_string()),
             created_at: Set(now.into()),
+            position: Set(0),
+            archived_at: Set(None),
         };
+        // The INSERT is the transaction's first statement (write lock at once).
         bible_presentation::Entity::insert(active)
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
+        move_to_top(&txn, &id.to_string()).await?;
+        txn.commit().await?;
 
         Ok(BiblePresentation {
             id,
