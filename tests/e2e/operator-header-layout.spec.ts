@@ -62,6 +62,16 @@ async function overlappingControls(page: Page): Promise<string[]> {
   });
 }
 
+/** How many rows the view tabs take. */
+async function tabRows(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const tops = [
+      ...document.querySelectorAll<HTMLElement>('[data-role="view-toggle"]'),
+    ].map((tab) => Math.round(tab.getBoundingClientRect().top));
+    return new Set(tops).size;
+  });
+}
+
 for (const path of ["/ui/operator", "/ui/bible"]) {
   test(`no header control covers another on ${path}`, async ({ page }) => {
     const errors: string[] = [];
@@ -77,6 +87,9 @@ for (const path of ["/ui/operator", "/ui/bible"]) {
         .toEqual([]);
       const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
       expect(pageWidth, `${path} at ${width} px`).toBeLessThanOrEqual(width);
+      // 1024 px may take two rows, a stack of six single tabs is never fine.
+      const rows = await tabRows(page);
+      expect(rows, `${path} at ${width} px`).toBeLessThanOrEqual(width >= 1280 ? 1 : 2);
     }
 
     expect(errors).toEqual([]);
