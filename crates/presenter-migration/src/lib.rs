@@ -31,6 +31,7 @@ mod m20261014_000002_bible_passage_markup;
 mod m20261014_000003_bible_sermons;
 mod m20261102_000001_bible_study_sources;
 mod m20261103_000001_bible_passages_place_index;
+mod m20261104_000001_bible_presentation_order_archive;
 
 pub struct Migrator;
 
@@ -66,6 +67,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261014_000002_bible_passage_markup::Migration),
             Box::new(m20261102_000001_bible_study_sources::Migration),
             Box::new(m20261103_000001_bible_passages_place_index::Migration),
+            Box::new(m20261104_000001_bible_presentation_order_archive::Migration),
         ]
     }
 }

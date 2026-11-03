@@ -1323,11 +1323,11 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Handle confirm dialog, then click delete via JS to avoid overlay hit-test issues
-    page.once("dialog", (dialog) => dialog.accept());
+    // #874: the dialog archives instead of deleting (no confirm needed: the
+    // presentation can be restored). Click via JS to avoid overlay hit-test issues.
     await page.evaluate(() => {
       const btn = document.querySelector(
-        '[data-role="modal-delete"]',
+        '[data-role="modal-archive"]',
       ) as HTMLButtonElement;
       btn?.click();
     });

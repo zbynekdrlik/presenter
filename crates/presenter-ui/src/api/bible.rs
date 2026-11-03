@@ -341,6 +341,40 @@ pub async fn list_presentations() -> Result<Vec<BiblePresentationSummary>, ApiEr
     get_json("/bible/presentations").await
 }
 
+/// The archived presentations, most recently archived first (#874).
+/// Server: GET /bible/presentations?archived=true
+pub async fn list_archived_presentations() -> Result<Vec<BiblePresentationSummary>, ApiError> {
+    get_json("/bible/presentations?archived=true").await
+}
+
+/// Put the active list into this order; `ids` = every active presentation
+/// once (else 409). Server: PUT /bible/presentations/order
+pub async fn reorder_presentations(ids: &[String]) -> Result<(), ApiError> {
+    super::put_no_content(
+        "/bible/presentations/order",
+        &serde_json::json!({ "ids": ids }),
+    )
+    .await
+}
+
+/// Server: POST /bible/presentations/{id}/archive
+pub async fn archive_presentation(id: &str) -> Result<(), ApiError> {
+    super::post_no_content(
+        &format!("/bible/presentations/{id}/archive"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+/// Server: POST /bible/presentations/{id}/restore
+pub async fn restore_presentation(id: &str) -> Result<(), ApiError> {
+    super::post_no_content(
+        &format!("/bible/presentations/{id}/restore"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
 /// Create a new Bible presentation. Server: POST /bible/presentations
 pub async fn create_presentation(name: &str) -> Result<BiblePresentationDetail, ApiError> {
     post_json("/bible/presentations", &serde_json::json!({ "name": name })).await

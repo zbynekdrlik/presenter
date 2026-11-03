@@ -107,6 +107,18 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(bible::presentations::delete_bible_presentation_handler),
         )
         .route(
+            "/bible/presentations/order",
+            put(bible::presentations::reorder_bible_presentations_handler),
+        )
+        .route(
+            "/bible/presentations/{id}/archive",
+            post(bible::presentations::archive_bible_presentation_handler),
+        )
+        .route(
+            "/bible/presentations/{id}/restore",
+            post(bible::presentations::restore_bible_presentation_handler),
+        )
+        .route(
             "/bible/presentations/{id}/append",
             post(bible::presentations::append_bible_presentation_handler),
         )

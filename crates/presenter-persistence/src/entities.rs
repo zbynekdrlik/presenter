@@ -420,6 +420,8 @@ pub mod bible_presentation {
         pub id: String,
         pub name: String,
         pub created_at: DateTimeWithTimeZone,
+        pub position: i32,
+        pub archived_at: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

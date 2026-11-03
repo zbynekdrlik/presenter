@@ -3,7 +3,7 @@
 //! `router/bible.rs` (#590) — same pattern as `router/integrations/`. Reuses
 //! `BibleSlideDto`/`bible_slide_to_dto` from the sibling `resolve` module.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::NaiveDate;
@@ -105,11 +105,29 @@ fn bible_presentation_to_detail(presentation: &BiblePresentation) -> BiblePresen
     }
 }
 
+/// `?archived=true` lists the archive (#874), otherwise the active list.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListBiblePresentationsQuery {
+    #[serde(default)]
+    archived: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReorderBiblePresentationsRequest {
+    ids: Vec<uuid::Uuid>,
+}
+
 #[instrument(skip_all)]
 pub(crate) async fn list_bible_presentations(
     State(state): State<AppState>,
+    Query(query): Query<ListBiblePresentationsQuery>,
 ) -> Result<Json<Vec<BiblePresentationSummaryDto>>, AppError> {
-    let summaries = state.list_bible_presentations().await?;
+    let summaries = if query.archived {
+        state.list_archived_bible_presentations().await?
+    } else {
+        state.list_bible_presentations().await?
+    };
     let result = summaries
         .into_iter()
         .map(|s| BiblePresentationSummaryDto {
@@ -172,6 +190,46 @@ pub(crate) async fn delete_bible_presentation_handler(
 ) -> Result<StatusCode, AppError> {
     state
         .delete_bible_presentation(BiblePresentationId::from_uuid(id))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /bible/presentations/order — the full active set in its new order;
+/// a different set is a stale view (409).
+#[instrument(skip_all)]
+pub(crate) async fn reorder_bible_presentations_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<ReorderBiblePresentationsRequest>,
+) -> Result<StatusCode, AppError> {
+    let ids: Vec<BiblePresentationId> = payload
+        .ids
+        .into_iter()
+        .map(BiblePresentationId::from_uuid)
+        .collect();
+    state.reorder_bible_presentations(&ids).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /bible/presentations/{id}/archive
+#[instrument(skip_all)]
+pub(crate) async fn archive_bible_presentation_handler(
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, AppError> {
+    state
+        .archive_bible_presentation(BiblePresentationId::from_uuid(id))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /bible/presentations/{id}/restore
+#[instrument(skip_all)]
+pub(crate) async fn restore_bible_presentation_handler(
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, AppError> {
+    state
+        .restore_bible_presentation(BiblePresentationId::from_uuid(id))
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

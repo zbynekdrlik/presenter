@@ -134,20 +134,13 @@ pub fn BiblePage() -> impl IntoView {
 
     // Load presentations (and re-fetch when BibleSlidesChanged arrives)
     {
-        let presentations = bs.presentations;
         let version = ctx.bible_presentations_version;
-        leptos::task::spawn_local(async move {
-            if let Ok(pres) = bible::list_presentations().await {
-                presentations.set(pres);
-            }
-        });
+        // The effect's first run is the initial load.
         Effect::new(move || {
             let _v = version.get(); // track the signal
-            leptos::task::spawn_local(async move {
-                if let Ok(pres) = bible::list_presentations().await {
-                    presentations.set(pres);
-                }
-            });
+            leptos::task::spawn_local(
+                crate::pages::bible_prepared_list::reload_presentation_lists(bs),
+            );
         });
     }
 

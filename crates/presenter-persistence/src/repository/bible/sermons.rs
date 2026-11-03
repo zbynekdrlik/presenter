@@ -18,6 +18,7 @@ use sea_orm::{
 use tracing::instrument;
 use uuid::Uuid;
 
+use super::presentation_order::top_position;
 use super::presentations::bible_slide_to_active_model;
 use crate::entities::{bible_presentation, bible_sermon, bible_sermon_item, bible_slide};
 use crate::repository::util::{parse_uuid, RepositoryError};
@@ -123,6 +124,8 @@ impl Repository {
             id: Set(id.to_string()),
             name: Set(new.title.clone()),
             created_at: Set(now.into()),
+            position: Set(top_position(&txn).await?),
+            archived_at: Set(None),
         })
         .exec(&txn)
         .await?;

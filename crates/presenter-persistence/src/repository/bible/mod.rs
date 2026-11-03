@@ -15,6 +15,7 @@
 mod import;
 mod markup;
 mod occurrences;
+mod presentation_order;
 mod presentations;
 mod query;
 mod sermons;

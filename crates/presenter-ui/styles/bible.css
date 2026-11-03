@@ -165,6 +165,79 @@ body.operator.operator--bible .operator__panel--bible {
   background: rgba(99, 102, 241, 0.15);
 }
 
+/* #874: card head = drag handle, name, edit pen */
+.bible__presentation-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.bible__presentation-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bible__presentation-handle {
+  cursor: grab;
+  touch-action: none;
+  min-width: 2rem;
+  min-height: 2rem;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.bible__presentation-handle:active {
+  cursor: grabbing;
+}
+.operator__presentation-card[data-dragging="true"] {
+  opacity: 0.5;
+}
+.operator__presentation-card[data-drop="before"] {
+  box-shadow: 0 -3px 0 0 #6366f1;
+}
+.operator__presentation-card[data-drop="after"] {
+  box-shadow: 0 3px 0 0 #6366f1;
+}
+
+/* #874: the archive under the active list */
+.bible__prepared-archive {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  padding-top: 0.5rem;
+}
+.bible__prepared-archive > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+}
+.bible__prepared-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding-top: 0.5rem;
+}
+.bible__archived-card {
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  color: #cbd5e1;
+}
+.bible__archived-card p {
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+.bible__archived-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
 /* ---------- Slide card trigger/select zones ---------- */
 .operator__slide-card--bible .operator__slide-trigger-zone {
   display: flex;

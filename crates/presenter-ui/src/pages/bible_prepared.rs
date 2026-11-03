@@ -2,7 +2,9 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible;
-use crate::pages::bible_prepared_sermon::sermon_badge;
+use crate::pages::bible_prepared_list::{
+    reload_presentation_lists, PresentationArchive, PresentationList,
+};
 use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
@@ -15,14 +17,13 @@ pub(super) fn BiblePreparedTab() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
     let bible_tab = bs.bible_tab;
-    let presentations = bs.presentations;
     let active_presentation_id = bs.active_presentation_id;
 
     let on_create = {
         let ctx = ctx.clone();
         move |_| {
             let window = crate::utils::window::window();
-            let name = match window.prompt_with_message("Presentation name:") {
+            let name = match window.prompt_with_message("Názov prezentácie:") {
                 Ok(Some(n)) if !n.trim().is_empty() => n.trim().to_string(),
                 _ => return,
             };
@@ -33,15 +34,13 @@ pub(super) fn BiblePreparedTab() -> impl IntoView {
                     Ok(detail) => {
                         let new_id = detail.id.clone();
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some(format!("Created \"{}\"", detail.name)));
-                        if let Ok(pres) = bible::list_presentations().await {
-                            presentations.set(pres);
-                        }
+                        toast_message.set(Some(format!("Vytvorené: {}", detail.name)));
+                        reload_presentation_lists(bs).await;
                         active_presentation_id.set(Some(new_id));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Failed to create: {e}")));
+                        toast_message.set(Some(format!("Vytvorenie zlyhalo: {e}")));
                     }
                 }
             });
@@ -55,97 +54,18 @@ pub(super) fn BiblePreparedTab() -> impl IntoView {
             data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
         >
             <div class="bible__prepared-header">
-                <h3>"Presentations"</h3>
+                <h3>"Prezentácie"</h3>
                 <button
                     type="button"
                     class="operator__list-action"
                     data-role="presentation-create"
-                    aria-label="Create presentation"
+                    aria-label="Nová prezentácia"
+                    title="Nová prezentácia"
                     on:click=on_create
                 >"+"</button>
             </div>
-            <div class="bible__prepared-list" data-role="presentations-list">
-                {move || {
-                    let pres_list = presentations.get();
-                    if pres_list.is_empty() {
-                        view! {
-                            <p class="operator__slides-empty">"No Bible presentations yet."</p>
-                        }.into_any()
-                    } else {
-                        pres_list.into_iter().map(|p| {
-                            view! { <PresentationCard presentation=p /> }
-                        }).collect_view().into_any()
-                    }
-                }}
-            </div>
-        </div>
-    }
-}
-
-#[component]
-fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let active_presentation_id = bs.active_presentation_id;
-    let active_presentation_slides = bs.active_presentation_slides;
-
-    let id = presentation.id.clone();
-    let name = presentation.name.clone();
-    let count = presentation.slide_count;
-    let id_for_click = id.clone();
-    let id_for_edit = id.clone();
-    let name_for_edit = name.clone();
-    let badge = sermon_badge(&presentation);
-
-    let is_active = {
-        let id = id.clone();
-        move || active_presentation_id.get().as_ref() == Some(&id)
-    };
-
-    let on_click = move |_| {
-        let id = id_for_click.clone();
-        // Cards of the previous presentation must not stay clickable under the
-        // new id: the server would refuse their slide ids.
-        if active_presentation_id.get_untracked().as_ref() != Some(&id) {
-            active_presentation_slides.set(Vec::new());
-        }
-        active_presentation_id.set(Some(id.clone()));
-        leptos::task::spawn_local(async move {
-            let answer = bible::get_presentation(&id).await;
-            if active_presentation_id.get_untracked().as_ref() != Some(&id) {
-                return;
-            }
-            if let Ok(detail) = answer {
-                active_presentation_slides.set(detail.slides);
-            }
-        });
-    };
-
-    let on_edit = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        bs.modal_presentation_id.set(Some(id_for_edit.clone()));
-        bs.modal_presentation_name.set(name_for_edit.clone());
-    };
-
-    view! {
-        <div
-            class="operator__presentation-card"
-            class:is-active=is_active
-            data-presentation-id=id.clone()
-            data-role="presentation-card"
-            on:click=on_click
-        >
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <strong>{name.clone()}</strong>
-                <button
-                    type="button"
-                    class="operator__presentation-action"
-                    data-role="presentation-edit"
-                    on:click=on_edit
-                    title="Edit presentation"
-                >"\u{270F}\u{FE0F}"</button>
-            </div>
-            {badge.map(|badge| view! { <p data-role="presentation-sermon-badge">{badge}</p> })}
-            <p>{format!("{} slide(s)", count)}</p>
+            <PresentationList />
+            <PresentationArchive />
         </div>
     }
 }
@@ -184,62 +104,54 @@ pub(super) fn BiblePresentationModal() -> impl IntoView {
             if new_name.is_empty() {
                 return;
             }
-            let presentations = bs.presentations;
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
             leptos::task::spawn_local(async move {
                 match bible::rename_presentation(&id, &new_name).await {
                     Ok(()) => {
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Renamed".to_string()));
-                        if let Ok(pres) = bible::list_presentations().await {
-                            presentations.set(pres);
-                        }
+                        toast_message.set(Some("Premenované".to_string()));
+                        reload_presentation_lists(bs).await;
                         modal_id.set(None);
                         modal_name.set(String::new());
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Rename failed: {e}")));
+                        toast_message.set(Some(format!("Premenovanie zlyhalo: {e}")));
                     }
                 }
             });
         }
     };
 
-    let on_delete = {
+    // #874: an active presentation is archived, never deleted; it can be
+    // deleted for good only from the archive.
+    let on_archive = {
         let ctx = ctx.clone();
         move |_: web_sys::MouseEvent| {
             let Some(id) = modal_id.get_untracked() else {
                 return;
             };
-            let window = crate::utils::window::window();
-            if let Ok(confirmed) = window.confirm_with_message("Delete this presentation?") {
-                if !confirmed {
-                    return;
-                }
-            }
-            let presentations = bs.presentations;
             let active_id = bs.active_presentation_id;
             let active_slides = bs.active_presentation_slides;
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
             leptos::task::spawn_local(async move {
-                match bible::delete_presentation(&id).await {
+                match bible::archive_presentation(&id).await {
                     Ok(()) => {
-                        active_id.set(None);
-                        active_slides.set(Vec::new());
-                        toast_variant.set("success".to_string());
-                        toast_message.set(Some("Deleted".to_string()));
-                        if let Ok(pres) = bible::list_presentations().await {
-                            presentations.set(pres);
+                        if active_id.get_untracked().as_ref() == Some(&id) {
+                            active_id.set(None);
+                            active_slides.set(Vec::new());
                         }
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some("Archivované — nájdete v Archíve dole".to_string()));
+                        reload_presentation_lists(bs).await;
                         modal_id.set(None);
                         modal_name.set(String::new());
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Delete failed: {e}")));
+                        toast_message.set(Some(format!("Archivovanie zlyhalo: {e}")));
                     }
                 }
             });
@@ -264,9 +176,9 @@ pub(super) fn BiblePresentationModal() -> impl IntoView {
             on:click=on_backdrop
         >
             <form class="bible__modal" on:submit=on_save>
-                <h3>"Edit presentation"</h3>
+                <h3>"Upraviť prezentáciu"</h3>
                     <label class="operator__field">
-                        <span>"Name"</span>
+                        <span>"Názov"</span>
                         <input
                             type="text"
                             data-role="modal-presentation-name"
@@ -277,22 +189,23 @@ pub(super) fn BiblePresentationModal() -> impl IntoView {
                     <div class="bible__modal-actions">
                         <button
                             type="button"
-                            class="bible__modal-btn bible__modal-btn--danger"
-                            data-role="modal-delete"
-                            on:click=on_delete
-                        >"Delete"</button>
+                            class="bible__modal-btn"
+                            data-role="modal-archive"
+                            title="Presunie prezentáciu do Archívu; odtiaľ sa dá obnoviť"
+                            on:click=on_archive
+                        >"Archivovať"</button>
                         <div class="bible__modal-actions-right">
                             <button
                                 type="button"
                                 class="bible__modal-btn"
                                 data-role="modal-cancel"
                                 on:click=on_close
-                            >"Cancel"</button>
+                            >"Zrušiť"</button>
                             <button
                                 type="submit"
                                 class="bible__modal-btn bible__modal-btn--primary"
                                 data-role="modal-save"
-                            >"Save"</button>
+                            >"Uložiť"</button>
                         </div>
                     </div>
             </form>
