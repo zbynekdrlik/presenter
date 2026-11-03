@@ -71,10 +71,19 @@ fn save_order(bs: BibleState, ctx: AppContext, moved: String, ids: Vec<String>) 
             .try_update(Option::take)
             .flatten()
         {
-            if let Err(e) = bible::reorder_presentations(&ids).await {
-                toast(&ctx, "error", format!("Poradie sa neuložilo: {e}"));
-                bs.presentation_order_waiting.set(None);
-                break;
+            match bible::reorder_presentations(&ids).await {
+                Ok(()) => {}
+                // 409: the list changed meanwhile (archived, added or moved
+                // elsewhere, even on this page): the reload below shows it.
+                Err(crate::api::ApiError::Status(409, _)) => {
+                    bs.presentation_order_waiting.set(None);
+                    break;
+                }
+                Err(e) => {
+                    toast(&ctx, "error", format!("Poradie sa neuložilo: {e}"));
+                    bs.presentation_order_waiting.set(None);
+                    break;
+                }
             }
         }
         bs.presentation_order_sending.set(false);

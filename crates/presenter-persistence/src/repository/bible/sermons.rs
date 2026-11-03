@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use chrono::{DateTime, NaiveDate, Utc};
 use sea_orm::prelude::DateTimeWithTimeZone;
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, Query};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
@@ -231,21 +231,17 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn sermon_ids_on(&self, date: NaiveDate) -> anyhow::Result<Vec<BiblePresentationId>> {
         // An archived sermon is not handed to the console or tablet (#874).
-        let archived: std::collections::HashSet<String> = bible_presentation::Entity::find()
-            .filter(bible_presentation::Column::ArchivedAt.is_not_null())
-            .all(&self.db)
-            .await?
-            .into_iter()
-            .map(|presentation| presentation.id)
-            .collect();
+        let archived = Query::select()
+            .column(bible_presentation::Column::Id)
+            .from(bible_presentation::Entity)
+            .and_where(bible_presentation::Column::ArchivedAt.is_not_null())
+            .to_owned();
         let rows = bible_sermon::Entity::find()
             .filter(bible_sermon::Column::ServiceDate.eq(date.format(DATE_FORMAT).to_string()))
+            .filter(bible_sermon::Column::PresentationId.not_in_subquery(archived))
             .order_by_asc(bible_sermon::Column::CreatedAt)
             .all(&self.db)
-            .await?
-            .into_iter()
-            .filter(|row| !archived.contains(&row.presentation_id))
-            .collect();
+            .await?;
         sermon_ids(rows)
     }
 
