@@ -8,7 +8,7 @@ use presenter_core::bible::resolver::Step;
 use presenter_core::bible::sermon::translation_short_code;
 
 use super::markup_view::{NumbersChip, VerseBody};
-use super::scroll::{self, ScrollPlan};
+use super::scroll::{save_on_scroll, ScrollPlan};
 use super::swipe::SwipeTracker;
 use super::{compare, nav, Chapter, ChapterPlace, Study};
 use crate::components::version_label::VersionLabel;
@@ -148,7 +148,7 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
             class="study-scroll"
             data-role="study-scroll"
             node_ref=s.scroller
-            on:scroll=move |_| scroll::save_after_scroll(s, save_ticket)
+            use:save_on_scroll=(s, save_ticket)
             on:pointerdown=move |ev| swipe.update_value(|held| held.down(&ev))
             on:pointerup=move |ev| {
                 if let Some(dir) = swipe.try_update_value(|held| held.up(&ev)).flatten() {

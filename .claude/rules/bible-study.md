@@ -163,3 +163,7 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **A spec opens its own sermon by id,** never `.first()`: the server lives through the whole file and the list runs by service date, so an earlier test's sermon comes first. Only the retry's fresh database hid this.
 - **Repeating a spec locally:** the local-only `integrity` warning fails every test at `finish`, so each repeat restarts the server (~20 s). Filter it in a throwaway edit first. A `[pageerror]` line now carries the stack: read it before calling a failure a scroll or timing problem.
 - **Search scope** lives in the URL (`scope=`, left out for `all`) and in the settle marker (`slk-seb|HEB:viera`, the scope before the query: a query holds any character); the book chip is the chapter still held behind the search, so a search opened from a bare URL has none. A quoted query matches the server's phrase rule, curly quotes included: `mark_matches` marks the whole run.
+
+## No `on:scroll` on a view's scroller (#851)
+
+Leptos 0.7 drops an `on:` closure with its view but leaves the listener on the element; the browser still delivers a scroll queued for that `<main>` (the reader landing on a verse, then Back in the same frame) → page error "closure invoked recursively or after being dropped" (intermittent CI flake in `study-compare`). The reader uses `use:save_on_scroll=(s, ticket)` (`scroll.rs`): its own `Closure`, removed in `on_cleanup` (cleanups run before the owner's stored values go). Spec: dispatch `scroll` on the detached element after Back.
