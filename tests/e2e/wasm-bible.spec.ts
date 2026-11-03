@@ -2206,15 +2206,14 @@ test.describe("WASM Operator Bible Tests", () => {
     // 5. Switch to Prepared tab and select the newly created presentation
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
-    // Wait for any presentation to appear
-    await page.waitForFunction(
-      () => document.querySelector("[data-presentation-id]") !== null,
-      { timeout: 10_000 },
-    );
-
-    // Click the last presentation (the newly created one)
-    const allPres = page.locator("[data-presentation-id]");
-    await allPres.last().click();
+    // #874: a new presentation goes to the TOP of the active list, and the
+    // archive below it carries `data-presentation-id` too — pick the new
+    // card by its name (the newest of that name is the first).
+    const newPres = biblePanel(page)
+      .locator('[data-role="presentation-card"]', { hasText: "Full Workflow Pres" })
+      .first();
+    await expect(newPres).toBeVisible({ timeout: 10_000 });
+    await newPres.click();
 
     // 7. Wait for prepared slides to appear
     await page.waitForFunction(
@@ -2253,7 +2252,7 @@ test.describe("WASM Operator Bible Tests", () => {
     }, baseURL);
 
     // Cleanup — get the presentation ID from the prepared tab
-    const lastPresId = await allPres.last().getAttribute("data-presentation-id");
+    const lastPresId = await newPres.getAttribute("data-presentation-id");
     if (lastPresId) {
       await page.evaluate(
         async ({ url, id }: { url: string; id: string }) => {
