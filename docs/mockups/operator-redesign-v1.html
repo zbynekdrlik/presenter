@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nový vzhľad Presentera</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,500;7..72,650&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Reading column for the text; desktop mockups drawn in the app's own dark palette at a fixed 1200 px design width, scaled down to fit. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --ink: #17202e; --muted: #5a6577; --line: #dde1e8;
+  --accent: #2f5d8a; --accent-soft: #e4ecf5; --code-bg: #eef1f5; --bad: #b42318; --bad-soft: #fdecea; --good: #1f7a3a; --good-soft: #e6f4ea;
+  --app-bg: #0f172a; --app-panel: #1e293b; --app-panel2: #273449; --app-line: #334155;
+  --app-ink: #e2e8f0; --app-muted: #94a3b8; --app-blue: #3b82f6; --app-live: #dc2626; --app-live-soft: #3b1418; --app-ok: #22c55e; --app-warn: #f59e0b;
+  --display: "Literata", Georgia, serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #11161f; --surface: #182030; --ink: #e6eaf1; --muted: #9aa5b6; --line: #2a3446; --accent: #8fb5dc; --accent-soft: #1f2d42; --code-bg: #1e2738; --bad: #f19a90; --bad-soft: #3a1d1b; --good: #8fd3a3; --good-soft: #17301f; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #11161f; --surface: #182030; --ink: #e6eaf1; --muted: #9aa5b6; --line: #2a3446; --accent: #8fb5dc; --accent-soft: #1f2d42; --code-bg: #1e2738; --bad: #f19a90; --bad-soft: #3a1d1b; --good: #8fd3a3; --good-soft: #17301f; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; padding-inline: 16px; padding-block: 0 64px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+.col { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+header.top { padding-block: 40px 0; display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-family: var(--display); font-weight: 650; font-size: clamp(30px, 6vw, 44px); line-height: 1.12; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 650; font-size: 26px; line-height: 1.2; margin: 0; text-wrap: balance; }
+h3 { font-size: 17px; font-weight: 600; margin: 0; }
+p { margin: 0; max-width: 70ch; }
+.lede { font-size: 18px; }
+.meta { font-size: 14px; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 18px; }
+code { font-family: var(--mono); font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+ul.plain, ol.plain { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; max-width: 70ch; }
+.status { display: inline-flex; gap: 8px; font-size: 13px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 4px 12px; width: fit-content; }
+
+/* problem / fix pairs */
+.pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; border-radius: 999px; padding: 2px 9px; width: fit-content; }
+.tag.bad { color: var(--bad); background: var(--bad-soft); }
+.tag.good { color: var(--good); background: var(--good-soft); }
+.card p { font-size: 15px; }
+
+/* desktop mockup frame: fixed design width, scaled to the column */
+.shot { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.shot figcaption { font-size: 14px; color: var(--muted); max-width: 80ch; }
+.scaler { width: 100%; overflow: hidden; border-radius: 12px; border: 1px solid var(--line); background: var(--app-bg); }
+.app { width: 1200px; height: 700px; transform-origin: top left; background: var(--app-bg); color: var(--app-ink); font-family: var(--body); font-size: 14px; line-height: 1.35; display: grid; grid-template-rows: 56px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); }
+.app.short { height: 120px; grid-template-rows: auto; }
+
+/* NEW top bar */
+.bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 0 14px; border-bottom: 1px solid var(--app-line); background: #0b1222; }
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand b { font-size: 16px; }
+.brand small { color: var(--app-muted); font-size: 11px; }
+.tabs { display: flex; gap: 4px; justify-self: center; }
+.tab { height: 40px; padding: 0 16px; border-radius: 10px; display: inline-flex; align-items: center; color: var(--app-muted); font-weight: 500; font-size: 15px; }
+.tab.on { background: var(--app-panel2); color: #fff; box-shadow: inset 0 -2px 0 var(--app-blue); }
+.tab.new { color: #cfe2ff; }
+.right { display: flex; align-items: center; gap: 8px; }
+.health { height: 36px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--app-line); color: var(--app-ink); font-size: 13px; }
+.health i { width: 9px; height: 9px; border-radius: 50%; background: var(--app-ok); display: inline-block; }
+.health.warn i { background: var(--app-warn); }
+.seg { display: inline-flex; background: var(--app-panel); border: 1px solid var(--app-line); border-radius: 10px; padding: 3px; }
+.seg span { height: 32px; padding: 0 14px; border-radius: 7px; display: inline-flex; align-items: center; font-size: 14px; color: var(--app-muted); font-weight: 500; }
+.seg span.live { background: var(--app-live); color: #fff; }
+.seg span.edit { background: var(--app-blue); color: #fff; }
+.icon-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--app-line); display: inline-flex; align-items: center; justify-content: center; color: var(--app-ink); font-size: 17px; }
+
+/* body: list | work area | wall panel */
+.body3 { display: grid; grid-template-columns: 280px minmax(0, 1fr) 300px; min-height: 0; }
+.pane { border-right: 1px solid var(--app-line); padding: 14px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: hidden; }
+.pane:last-child { border-right: 0; border-left: 1px solid var(--app-line); background: #111b30; }
+.search { height: 42px; border-radius: 10px; background: var(--app-panel); border: 1px solid var(--app-line); display: flex; align-items: center; padding: 0 12px; color: var(--app-muted); font-size: 14px; gap: 8px; }
+.h { font-size: 13px; color: var(--app-muted); font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.h .add { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--app-line); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; color: var(--app-ink); text-transform: none; }
+.row { height: 40px; border-radius: 9px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; background: var(--app-panel); font-size: 14px; }
+.row.sel { background: #1d3a5f; box-shadow: inset 3px 0 0 var(--app-blue); }
+.row em { font-style: normal; color: var(--app-muted); font-size: 12px; }
+.slides { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px; align-content: start; }
+.slide { aspect-ratio: 16 / 9; border-radius: 10px; background: var(--app-panel); border: 1px solid var(--app-line); padding: 10px; display: flex; flex-direction: column; justify-content: space-between; font-size: 13px; }
+.slide.live { border: 2px solid var(--app-live); background: var(--app-live-soft); }
+.slide small { color: var(--app-muted); font-size: 11px; }
+.worktop { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 0; }
+.worktop b { font-size: 17px; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; color: var(--app-muted); font-size: 13px; }
+.stepper span { width: 32px; height: 32px; border: 1px solid var(--app-line); border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--app-ink); }
+
+/* wall panel */
+.preview { aspect-ratio: 16 / 9; border-radius: 10px; background: #000; border: 1px solid var(--app-line); display: flex; align-items: flex-end; padding: 10px; font-size: 13px; color: #fff; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 12px; color: var(--app-muted); }
+.select { height: 40px; border-radius: 9px; background: var(--app-panel); border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 14px; }
+.toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tog { height: 40px; border-radius: 9px; border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; }
+.tog.on { border-color: var(--app-ok); color: #bbf7d0; }
+.clear { height: 48px; border-radius: 10px; background: #3a1d1b; border: 1px solid #7f1d1d; color: #fecaca; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 15px; }
+.nowall { font-size: 13px; color: var(--app-muted); }
+.nowall b { color: #fff; }
+
+/* bible */
+.ref { height: 52px; border-radius: 12px; background: var(--app-panel); border: 2px solid var(--app-blue); display: flex; align-items: center; padding: 0 14px; font-size: 18px; color: #fff; }
+.show { height: 48px; border-radius: 10px; background: var(--app-blue); color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.nav2 { display: grid; grid-template-columns: 48px 1fr 48px; gap: 8px; }
+.nav2 .arr { height: 48px; border-radius: 10px; border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.subtabs { display: flex; gap: 4px; background: var(--app-panel); border-radius: 10px; padding: 3px; }
+.subtabs span { flex: 1; height: 34px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--app-muted); }
+.subtabs span.on { background: var(--app-panel2); color: #fff; }
+.trs { display: flex; gap: 6px; }
+.trs span { flex: 1; height: 36px; border-radius: 8px; border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+.trs span.on { background: var(--app-blue); border-color: var(--app-blue); color: #fff; }
+.trs span.on2 { background: #1e3a5f; border-color: var(--app-blue); color: #cfe2ff; }
+.verse { padding: 10px 14px; border-radius: 10px; background: var(--app-panel); font-size: 14px; line-height: 1.5; }
+.verse sup { color: var(--app-blue); font-weight: 600; margin-right: 4px; }
+
+/* OLD header (current state) */
+.old { padding: 8px 14px; display: grid; grid-template-columns: 170px 1fr 330px 90px; gap: 8px; align-items: start; background: var(--app-bg); }
+.old .links, .old .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.old .l { font-size: 12px; border: 1px solid var(--app-line); border-radius: 999px; padding: 2px 9px; }
+.old .c { font-size: 11px; border: 1px solid var(--app-line); border-radius: 999px; padding: 2px 9px; color: var(--app-muted); }
+.old .c::before { content: "● "; color: var(--app-ok); }
+.old .t { font-size: 13px; padding: 4px 10px; color: var(--app-muted); }
+.old .t.on { background: #e2e8f0; color: #0f172a; border-radius: 999px; }
+.old .lab { font-size: 10px; letter-spacing: .06em; color: var(--app-muted); }
+.old .sel { font-size: 12px; border: 1px solid var(--app-line); border-radius: 6px; padding: 4px 8px; }
+.ring { outline: 2px dashed #f87171; outline-offset: 3px; border-radius: 6px; }
+
+/* table */
+table { border-collapse: collapse; width: 100%; max-width: 760px; font-size: 15px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.qs { display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+.q { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 12px 16px; }
+.q b { display: block; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <span class="eyebrow">Presenter · návrh #875 (kvalita UI) · v1</span>
+  <h1>Nový vzhľad operátora: jeden pás hore, všetko po slovensky, „Na stene“ vždy vpravo</h1>
+  <p class="lede">Návrh na schválenie pred prerábaním. Rieši sťažnosť „škaredé, nedá sa normálne ovládať, ovládacie prvky sa prepisujú“. Na obrazovkách sú skutočné časti Presentera, len inak usporiadané.</p>
+  <span class="status">Na schválenie — nič z toho ešte nie je naprogramované</span>
+</header>
+
+<section class="col">
+  <h2>Čo je dnes zlé (zmerané na v0.4.346)</h2>
+  <p>Prekrývanie tlačidiel v hlavičke je už opravené (v0.4.344). Ostali tieto problémy:</p>
+</section>
+
+<div class="pairs">
+  <div class="card"><span class="tag bad">Dnes</span><h3>Hlavička má 3 poschodia</h3><p>Odkazy Stage/Camera/Tablet/Timer/Stream, štyri stavové čipy, vyhľadávanie, záložky, dva výbery, náhľad, metla, Ableton, Follow a Live/Edit. Na 1600 px zaberá 170 px výšky a oko nevie, kam sa pozrieť.</p></div>
+  <div class="card"><span class="tag bad">Dnes</span><h3>Zmes angličtiny a slovenčiny</h3><p>LIBRARIES, PRESENTATIONS, STAGE OUTPUT, Translation, Find book, Live/Edit, MAIN/SECONDARY, „Select a presentation to load slides.“ — vedľa „Piesne“, „Zobraziť“, „Na stene: nič“.</p></div>
+  <div class="card"><span class="tag bad">Dnes</span><h3>Drobné tlačidlá</h3><p>Pri meraní: na stránke Stream 75 a v Nastaveniach 34 ovládacích prvkov menších ako 32 px. Krokovač stĺpcov (− 3 +) má 24 px, metla 32 px a ⋮ pri knižnici 20 px.</p></div>
+  <div class="card"><span class="tag bad">Dnes</span><h3>Čo je na stene, sa hľadá</h3><p>Náhľad, „0 / 0“, výber výstupu a metla sú roztrúsené po hlavičke. Na stránke Biblia náhľad chýba úplne (len „No active passage“).</p></div>
+  <div class="card"><span class="tag bad">Dnes</span><h3>Každá stránka iná</h3><p>Biblia má vlastné podzáložky (LIVE/PREPARED/SETTINGS veľkými písmenami), Nastavenia vlastný štýl kariet, Stream vlastné tlačidlá. Rovnaká vec vyzerá na každej stránke inak.</p></div>
+  <div class="card"><span class="tag bad">Dnes</span><h3>Štúdium je mimo</h3><p>Stránka na čítanie a prípravu kázní (<code>/ui/study</code>) nemá záložku. Dá sa na ňu dostať len cez priamu adresu.</p></div>
+</div>
+
+<figure class="shot">
+  <div class="scaler" data-h="120"><div class="app short">
+    <div class="old">
+      <div><b>Presenter</b> <small style="color:var(--app-muted);font-size:11px">v0.4.346 (dev)</small></div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="links ring"><span class="l">Stage ↗</span><span class="l">Camera ↗</span><span class="l">Tablet ↗</span><span class="l">Timer ↗</span><span class="l">Stream ↗</span></div>
+        <div class="chips ring"><span class="c">bridge snv (m…</span><span class="c">cg-resolume (…</span><span class="c">resolume-pp (…</span><span class="c">AI: pripojené</span></div>
+        <div style="display:flex;gap:4px;align-items:center"><span class="sel" style="width:220px">🔍 Search libraries, songs, slides</span><span class="t on">Piesne</span><span class="t">Biblia</span><span class="t">Časovače</span><span class="t">AI</span><span class="t">Menovky</span><span class="t">Nastavenia</span></div>
+      </div>
+      <div style="display:flex;gap:10px" class="ring"><div><div class="lab">STAGE OUTPUT</div><div class="sel">API + CG VIDEO ▾</div></div><div><div class="lab">STAGE TEXT</div><div class="sel">Translation ▾</div></div><div style="width:110px;height:60px;background:#000;border-radius:6px"></div></div>
+      <div style="display:flex;flex-direction:column;gap:4px"><span class="sel">Ableton ON</span><span class="sel">Follow OFF</span><span class="sel">Live / Edit</span></div>
+    </div>
+  </div></div>
+  <figcaption>Dnešná hlavička (zjednodušene). Červeno orámované časti sa v návrhu presúvajú: odkazy do jedného menu, čipy do jedného ukazovateľa stavu, výbery výstupu a náhľad do panelu „Na stene“ vpravo.</figcaption>
+</figure>
+
+<section class="col">
+  <h2>1 · Piesne v novom usporiadaní</h2>
+  <p>Hore jeden pás vysoký 56 px: názov, záložky v strede a vpravo stav, Naživo/Úprava a ozubené koliesko. Pod ním tri stĺpce. Vľavo je zoznam, v strede práca a vpravo je vždy panel <b>Na stene</b> na každej stránke na rovnakom mieste.</p>
+</section>
+
+<figure class="shot">
+  <div class="scaler"><div class="app">
+    <div class="bar">
+      <div class="brand"><b>Presenter</b><small>v0.4.346</small></div>
+      <div class="tabs"><span class="tab on">Piesne</span><span class="tab">Biblia</span><span class="tab new">Štúdium</span><span class="tab">Časovače</span><span class="tab">AI</span><span class="tab">Menovky</span></div>
+      <div class="right"><span class="health"><i></i>Všetko pripojené</span><span class="icon-btn" title="Obrazovky">⧉</span><span class="seg"><span class="live">Naživo</span><span>Úprava</span></span><span class="icon-btn" title="Nastavenia">⚙</span></div>
+    </div>
+    <div class="body3">
+      <div class="pane">
+        <div class="search">🔍 Hľadať pieseň alebo text</div>
+        <div class="h">Knižnice <span class="add">+</span></div>
+        <div class="row">Bohatý Music <em>20</em></div>
+        <div class="row sel">New Level <em>166</em></div>
+        <div class="row">Rejoice <em>26</em></div>
+        <div class="row">Rockstanders <em>27</em></div>
+        <div class="h" style="margin-top:6px">Piesne v knižnici <span class="add">+</span></div>
+        <div class="row sel">Veľký Boh <em>8 snímok</em></div>
+        <div class="row">Milosť <em>6 snímok</em></div>
+        <div class="row">Ty si dobrý <em>9 snímok</em></div>
+      </div>
+      <div style="display:flex;flex-direction:column;min-height:0">
+        <div class="worktop"><b>Veľký Boh</b><span class="stepper">Snímok v riadku <span>−</span> 3 <span>+</span></span></div>
+        <div class="slides">
+          <div class="slide"><span>Veľký Boh, Ty si Pán<br>nad nebom aj zemou</span><small>1 · Sloha 1</small></div>
+          <div class="slide live"><span>Sláva, sláva<br>Tvojmu menu</span><small>2 · Refrén · NA STENE</small></div>
+          <div class="slide"><span>Ty si verný<br>každý deň</span><small>3 · Sloha 2</small></div>
+          <div class="slide"><span>Sláva, sláva<br>Tvojmu menu</span><small>4 · Refrén</small></div>
+          <div class="slide"><span>Nik nie je ako Ty</span><small>5 · Most</small></div>
+          <div class="slide"><span>Sláva, sláva<br>Tvojmu menu</span><small>6 · Refrén</small></div>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="h">Na stene</div>
+        <div class="preview">Sláva, sláva Tvojmu menu</div>
+        <div class="nowall">Pieseň <b>Veľký Boh</b> · snímka 2 z 8</div>
+        <div class="field"><label>Rozloženie na pódiových obrazovkách</label><div class="select">API + CG video <span>▾</span></div></div>
+        <div class="field"><label>Text na pódiu</label><div class="select">Preklad <span>▾</span></div></div>
+        <div class="toggles"><span class="tog on">● Ableton</span><span class="tog">Sledovať pódium</span></div>
+        <div style="flex:1"></div>
+        <div class="clear">Vymazať stenu</div>
+      </div>
+    </div>
+  </div></div>
+  <figcaption>Ukazovateľ „Všetko pripojené“ po kliknutí rozbalí zoznam (bridge SNV, CG Resolume, Resolume PP, AI). Keď niečo vypadne, zmení sa na oranžové „1 odpojené“. Ikonka ⧉ otvára menu s odkazmi na obrazovky Pódium, Kamera, Tablet, Časovač a Stream. Kliknuteľné prvky majú výšku aspoň 40 px.</figcaption>
+</figure>
+
+<section class="col">
+  <h2>2 · Biblia v rovnakom rámci</h2>
+  <p>Vľavo sú odkaz, preklady a tlačidlo Zobraziť. Hlavný a druhý preklad sa prepínajú ťuknutím, rovnako ako na telefóne (už schválené v návrhu #850). V strede je text veršov, ktorý sa bude zobrazovať. Vpravo je ten istý panel <b>Na stene</b> ako pri piesňach, takže je vždy jasné, čo práve ide.</p>
+</section>
+
+<figure class="shot">
+  <div class="scaler"><div class="app">
+    <div class="bar">
+      <div class="brand"><b>Presenter</b><small>v0.4.346</small></div>
+      <div class="tabs"><span class="tab">Piesne</span><span class="tab on">Biblia</span><span class="tab new">Štúdium</span><span class="tab">Časovače</span><span class="tab">AI</span><span class="tab">Menovky</span></div>
+      <div class="right"><span class="health"><i></i>Všetko pripojené</span><span class="icon-btn">⧉</span><span class="seg"><span class="live">Naživo</span><span>Úprava</span></span><span class="icon-btn">⚙</span></div>
+    </div>
+    <div class="body3">
+      <div class="pane">
+        <div class="subtabs"><span class="on">Naživo</span><span>Pripravené</span><span>Nastavenie</span></div>
+        <div class="ref">Ján 3:16-18</div>
+        <div class="h">Hlavný preklad</div>
+        <div class="trs"><span class="on">SEB</span><span>ROH</span><span>KJV</span></div>
+        <div class="h">Druhý preklad</div>
+        <div class="trs"><span>žiadny</span><span class="on2">NLT</span><span>KJV</span></div>
+        <div class="nav2"><span class="arr">◀</span><span class="show">Zobraziť</span><span class="arr">▶</span></div>
+        <div class="h" style="margin-top:4px">Kniha</div>
+        <div class="search">Začni písať názov knihy</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;padding:14px;min-height:0">
+        <div class="worktop" style="padding:0"><b>Ján 3:16-18 · SEB + NLT</b><span class="stepper">3 snímky</span></div>
+        <div class="verse"><sup>16</sup>Veď Boh tak miloval svet, že dal svojho jednorodeného Syna, aby nezahynul nik, kto v neho verí, ale aby mal večný život.</div>
+        <div class="verse"><sup>17</sup>Boh neposlal svojho Syna na svet, aby svet odsúdil, ale aby bol svet skrze neho spasený.</div>
+        <div class="verse"><sup>18</sup>Kto verí v neho, nie je odsúdený; kto však neverí, už je odsúdený, lebo neuveril v meno jednorodeného Božieho Syna.</div>
+        <div class="slides" style="padding:0">
+          <div class="slide live"><span>Ján 3:16</span><small>1 · NA STENE</small></div>
+          <div class="slide"><span>Ján 3:17</span><small>2</small></div>
+          <div class="slide"><span>Ján 3:18</span><small>3</small></div>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="h">Na stene</div>
+        <div class="preview">Veď Boh tak miloval svet… · Ján 3:16</div>
+        <div class="nowall">Biblia <b>Ján 3:16</b> · snímka 1 z 3</div>
+        <div class="field"><label>Rozloženie na pódiových obrazovkách</label><div class="select">API + CG video <span>▾</span></div></div>
+        <div class="field"><label>Text na pódiu</label><div class="select">Preklad <span>▾</span></div></div>
+        <div style="flex:1"></div>
+        <div class="clear">Vymazať stenu</div>
+      </div>
+    </div>
+  </div></div>
+  <figcaption>Záložka <b>Štúdium</b> je nová a otvára dnešnú stránku na čítanie a prípravu kázní (porovnanie prekladov, slová, poznámky). Pripravené kázne sú v Biblii pod „Pripravené“, kde pribudne presúvanie poradia a archív namiesto mazania (#874, ďalšia úloha v poradí).</figcaption>
+</figure>
+
+<section class="col">
+  <h2>3 · Pravidlá pre všetky stránky</h2>
+  <ul class="plain">
+    <li><b>Jeden horný pás</b> na všetkých stránkach operátora vrátane Nastavení a Streamu. Žiadne druhé a tretie poschodie.</li>
+    <li><b>Panel Na stene</b> vpravo všade, kde sa niečo púšťa na stenu (Piesne, Biblia, Časovače, AI, Menovky). Na telefóne ostáva dnešný spodný panel.</li>
+    <li><b>Najmenšie tlačidlo má 40 px</b> a hlavná akcia (Zobraziť, Vymazať stenu) má 48 px. Ikony bez textu len tam, kde sú zrozumiteľné (⚙, ◀ ▶, +).</li>
+    <li><b>Všetko po slovensky</b>, malé písmená s veľkým začiatočným písmenom. Žiadne CELÉ VEĽKÉ nadpisy.</li>
+    <li><b>Jeden vzhľad prvkov</b>: rovnaké tlačidlo, výber, prepínač a riadok zoznamu na každej stránke. Nastavenia a Stream sa prestavia na tie isté prvky.</li>
+    <li><b>Hlášky</b> ostávajú tak, ako sú opravené v časti 1: dole v strede, samy zmiznú a neblokujú klikanie.</li>
+  </ul>
+</section>
+
+<section class="col">
+  <h3>Preklad nápisov (výber)</h3>
+  <table>
+    <thead><tr><th>Dnes</th><th>Nové</th></tr></thead>
+    <tbody>
+      <tr><td>LIBRARIES / PRESENTATIONS</td><td>Knižnice / Piesne v knižnici</td></tr>
+      <tr><td>STAGE OUTPUT / STAGE TEXT</td><td>Rozloženie na pódiových obrazovkách / Text na pódiu</td></tr>
+      <tr><td>Translation / Original / Both</td><td>Preklad / Originál / Oboje</td></tr>
+      <tr><td>Live / Edit</td><td>Naživo / Úprava</td></tr>
+      <tr><td>Follow ON/OFF</td><td>Sledovať pódium</td></tr>
+      <tr><td>LIVE / PREPARED / SETTINGS (Biblia)</td><td>Naživo / Pripravené / Nastavenie</td></tr>
+      <tr><td>MAIN / SECONDARY</td><td>Hlavný preklad / Druhý preklad</td></tr>
+      <tr><td>Find book · Start typing…</td><td>Kniha · Začni písať názov knihy</td></tr>
+      <tr><td>Select a presentation to load slides.</td><td>Vyber pieseň vľavo.</td></tr>
+      <tr><td>Stage ↗ Camera ↗ Tablet ↗ Timer ↗ Stream ↗</td><td>menu ⧉ Obrazovky: Pódium, Kamera, Tablet, Časovač, Stream</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="col">
+  <h2>Poradie prác po schválení</h2>
+  <ol class="plain">
+    <li>Horný pás + menu Obrazovky + ukazovateľ stavu + záložka Štúdium (všetky stránky naraz, jedna verzia).</li>
+    <li>Panel Na stene vpravo (Piesne, Biblia, potom ostatné).</li>
+    <li>Slovenské nápisy a veľkosti tlačidiel na všetkých stránkach operátora.</li>
+    <li>Nastavenia a Stream na spoločné prvky.</li>
+  </ol>
+  <p class="meta">Každý krok ide ako samostatná verzia s testami, ktoré merajú prekrývanie a veľkosť tlačidiel na šírkach 1024 až 2560 px, a s kontrolou naživo na SNV aj PP.</p>
+</section>
+
+<section class="col">
+  <h2>Otázky na teba</h2>
+  <div class="qs">
+    <div class="q"><b>Panel Na stene vpravo natrvalo?</b>Zaberá 300 px. Na menšom notebooku (1280 px) by sa dal zbaliť do úzkeho pruhu s náhľadom. Návrh: natrvalo od 1440 px, pod tým zbaliteľný.</div>
+    <div class="q"><b>Záložka Štúdium hneď vedľa Biblie?</b>Alebo až na konci za Menovkami?</div>
+  </div>
+</section>
+
+</div>
+<script>
+/* scale each fixed-width mockup to its column */
+(function () {
+  function fit() {
+    document.querySelectorAll('.scaler').forEach(function (s) {
+      var app = s.querySelector('.app');
+      if (!app) return;
+      var k = s.clientWidth / 1200;
+      app.style.transform = 'scale(' + k + ')';
+      s.style.height = (app.offsetHeight * k) + 'px';
+    });
+  }
+  window.addEventListener('resize', fit);
+  if (document.fonts && document.fonts.ready) { document.fonts.ready.then(fit); }
+  fit();
+})();
+</script>
+</body>
+</html>
