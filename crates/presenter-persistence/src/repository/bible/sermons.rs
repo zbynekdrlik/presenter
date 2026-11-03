@@ -18,7 +18,7 @@ use sea_orm::{
 use tracing::instrument;
 use uuid::Uuid;
 
-use super::presentation_order::top_position;
+use super::presentation_order::move_to_top;
 use super::presentations::bible_slide_to_active_model;
 use crate::entities::{bible_presentation, bible_sermon, bible_sermon_item, bible_slide};
 use crate::repository::util::{parse_uuid, RepositoryError};
@@ -124,11 +124,12 @@ impl Repository {
             id: Set(id.to_string()),
             name: Set(new.title.clone()),
             created_at: Set(now.into()),
-            position: Set(top_position(&txn).await?),
+            position: Set(0),
             archived_at: Set(None),
         })
         .exec(&txn)
         .await?;
+        move_to_top(&txn, &id.to_string()).await?;
         bible_sermon::Entity::insert(bible_sermon::ActiveModel {
             presentation_id: Set(id.to_string()),
             service_date: Set(new.service_date.format(DATE_FORMAT).to_string()),
@@ -229,11 +230,22 @@ impl Repository {
     /// The sermons whose service date is `date`, oldest first.
     #[instrument(skip_all)]
     pub async fn sermon_ids_on(&self, date: NaiveDate) -> anyhow::Result<Vec<BiblePresentationId>> {
+        // An archived sermon is not handed to the console or tablet (#874).
+        let archived: std::collections::HashSet<String> = bible_presentation::Entity::find()
+            .filter(bible_presentation::Column::ArchivedAt.is_not_null())
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|presentation| presentation.id)
+            .collect();
         let rows = bible_sermon::Entity::find()
             .filter(bible_sermon::Column::ServiceDate.eq(date.format(DATE_FORMAT).to_string()))
             .order_by_asc(bible_sermon::Column::CreatedAt)
             .all(&self.db)
-            .await?;
+            .await?
+            .into_iter()
+            .filter(|row| !archived.contains(&row.presentation_id))
+            .collect();
         sermon_ids(rows)
     }
 

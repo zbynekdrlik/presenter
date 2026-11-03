@@ -168,6 +168,9 @@ test("a drag above the first, below the last and into the middle reorders and pe
   await mouseDrag(page, panel, a, between);
   await expectOrder(panel, request, [b, d, a, c]);
 
+  // No card is left looking dragged.
+  await expect(panel.locator(`${CARD}[data-dragging="true"]`)).toHaveCount(0);
+
   // A drop on the card's own place sends nothing and keeps the order.
   let puts = 0;
   page.on("request", (r) => {
@@ -191,15 +194,22 @@ test("the arrow keys on a focused handle move the card step by step", async ({ p
   const panel = await openPrepared(page);
   await expectOrder(panel, request, [a, b, c]);
 
+  // Focused ONCE: the handle keeps the focus across each move, so a second
+  // press moves the card again (a `locator.press` would refocus every time
+  // and hide a lost focus).
   await card(panel, c).locator(DRAG).focus();
   await page.keyboard.press("ArrowUp");
   await expectOrder(panel, request, [a, c, b]);
-  await card(panel, c).locator(DRAG).focus();
+  await expect(card(panel, c).locator(DRAG)).toBeFocused();
   await page.keyboard.press("ArrowUp");
   await expectOrder(panel, request, [c, a, b]);
-  await card(panel, a).locator(DRAG).focus();
+  await expect(card(panel, c).locator(DRAG)).toBeFocused();
   await page.keyboard.press("ArrowDown");
-  await expectOrder(panel, request, [c, b, a]);
+  await page.keyboard.press("ArrowDown");
+  // Two quick presses: the PUTs go one after the other, the server ends on
+  // the last order.
+  await expectOrder(panel, request, [a, b, c]);
+  await expect(card(panel, c).locator(DRAG)).toBeFocused();
   expect(messages).toEqual([]);
 });
 

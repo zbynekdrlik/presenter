@@ -2,11 +2,15 @@
 //! ordered by `position` (smallest first); an archived presentation has
 //! `archived_at` set and is out of that list (tablet, verse console, AI tools
 //! never offer it), but every read by id still finds it.
+//!
+//! Every write transaction starts with its WRITE (sermon-prep rule): two
+//! deferred readers upgrading to writers deadlock into SQLITE_BUSY (a 500);
+//! a writer first takes the lock at once and the other waits (busy_timeout).
 
 use chrono::Utc;
-use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::{Expr, SimpleExpr};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
     TransactionTrait,
 };
 use tracing::instrument;
@@ -22,28 +26,31 @@ pub const PRESENTATION_ORDER_CONFLICT: &str =
 
 const NOT_FOUND: &str = "bible presentation not found";
 
-/// The position that puts a presentation at the top of the active list: one
-/// above the smallest active position (0 when the list is empty).
-pub(super) async fn top_position<C: ConnectionTrait>(conn: &C) -> anyhow::Result<i32> {
-    let smallest: Option<Option<i32>> = bible_presentation::Entity::find()
-        .select_only()
-        .column_as(bible_presentation::Column::Position.min(), "smallest")
-        .filter(bible_presentation::Column::ArchivedAt.is_null())
-        .into_tuple()
-        .one(conn)
-        .await?;
-    Ok(smallest.flatten().map_or(0, |p| p.saturating_sub(1)))
+/// One above the smallest position of the OTHER active presentations (0 when
+/// there is none), computed by SQLite inside the UPDATE itself.
+fn top_of_others(id: &str) -> SimpleExpr {
+    Expr::cust_with_values(
+        r#"(SELECT COALESCE(MIN(b."position"), 1) - 1 FROM "bible_presentations" AS b WHERE b."archived_at" IS NULL AND b."id" <> ?)"#,
+        [id.to_string()],
+    )
 }
 
-/// True when `ids` is exactly `active` (same ids, each once), in any order.
-fn same_set(active: &[String], ids: &[String]) -> bool {
-    let mut a = active.to_vec();
-    let mut b = ids.to_vec();
-    a.sort();
-    b.sort();
-    let before = b.len();
-    b.dedup();
-    before == b.len() && a == b
+/// Move the presentation `id` to the top of the active list: one statement,
+/// so no read precedes the write.
+pub(super) async fn move_to_top<C: ConnectionTrait>(conn: &C, id: &str) -> anyhow::Result<()> {
+    bible_presentation::Entity::update_many()
+        .col_expr(bible_presentation::Column::Position, top_of_others(id))
+        .filter(bible_presentation::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// True when the ids are pairwise distinct.
+fn distinct(ids: &[String]) -> bool {
+    let mut sorted = ids.to_vec();
+    sorted.sort();
+    sorted.windows(2).all(|pair| pair[0] != pair[1])
 }
 
 impl Repository {
@@ -63,31 +70,39 @@ impl Repository {
 
     /// Put the active list into the order of `ids`, which must name every
     /// active presentation exactly once — anything else is a stale view
-    /// (`Conflict` → 409), never a partial reorder.
+    /// (`Conflict` → 409) and the transaction rolls back: never a partial
+    /// reorder. The positions are written FIRST and the set checked after.
     #[instrument(skip_all)]
     pub async fn reorder_bible_presentations(
         &self,
         ids: &[BiblePresentationId],
     ) -> anyhow::Result<()> {
         let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
-        let txn = self.db.begin().await?;
-        let active: Vec<String> = bible_presentation::Entity::find()
-            .select_only()
-            .column(bible_presentation::Column::Id)
-            .filter(bible_presentation::Column::ArchivedAt.is_null())
-            .into_tuple()
-            .all(&txn)
-            .await?;
-        if !same_set(&active, &ids) {
-            return Err(RepositoryError::Conflict(PRESENTATION_ORDER_CONFLICT).into());
+        let conflict =
+            || anyhow::Error::from(RepositoryError::Conflict(PRESENTATION_ORDER_CONFLICT));
+        if !distinct(&ids) {
+            return Err(conflict());
         }
+        let txn = self.db.begin().await?;
         for (index, id) in ids.iter().enumerate() {
             let position = i32::try_from(index).unwrap_or(i32::MAX);
-            bible_presentation::Entity::update_many()
+            let result = bible_presentation::Entity::update_many()
                 .col_expr(bible_presentation::Column::Position, Expr::value(position))
                 .filter(bible_presentation::Column::Id.eq(id.as_str()))
+                .filter(bible_presentation::Column::ArchivedAt.is_null())
                 .exec(&txn)
                 .await?;
+            if result.rows_affected != 1 {
+                // Unknown or archived: dropping `txn` rolls the writes back.
+                return Err(conflict());
+            }
+        }
+        let active = bible_presentation::Entity::find()
+            .filter(bible_presentation::Column::ArchivedAt.is_null())
+            .count(&txn)
+            .await?;
+        if active != ids.len() as u64 {
+            return Err(conflict());
         }
         txn.commit().await?;
         Ok(())
@@ -97,67 +112,66 @@ impl Repository {
     /// archive time stays).
     #[instrument(skip_all)]
     pub async fn archive_bible_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {
-        let txn = self.db.begin().await?;
-        let model = bible_presentation::Entity::find_by_id(id.to_string())
-            .one(&txn)
-            .await?
-            .ok_or(RepositoryError::NotFound(NOT_FOUND))?;
-        if model.archived_at.is_none() {
-            bible_presentation::Entity::update_many()
-                .col_expr(
-                    bible_presentation::Column::ArchivedAt,
-                    Expr::value(Utc::now().to_rfc3339()),
-                )
-                .filter(bible_presentation::Column::Id.eq(model.id))
-                .exec(&txn)
-                .await?;
+        let result = bible_presentation::Entity::update_many()
+            .col_expr(
+                bible_presentation::Column::ArchivedAt,
+                Expr::value(Utc::now().to_rfc3339()),
+            )
+            .filter(bible_presentation::Column::Id.eq(id.to_string()))
+            .filter(bible_presentation::Column::ArchivedAt.is_null())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            self.require_presentation(id).await?;
         }
-        txn.commit().await?;
         Ok(())
     }
 
     /// Bring a presentation back from the archive, to the top of the active
-    /// list. Restoring an active one changes nothing.
+    /// list (one statement). Restoring an active one changes nothing.
     #[instrument(skip_all)]
     pub async fn restore_bible_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {
-        let txn = self.db.begin().await?;
-        let model = bible_presentation::Entity::find_by_id(id.to_string())
-            .one(&txn)
+        let id_str = id.to_string();
+        let result = bible_presentation::Entity::update_many()
+            .col_expr(
+                bible_presentation::Column::ArchivedAt,
+                Expr::value(Option::<String>::None),
+            )
+            .col_expr(bible_presentation::Column::Position, top_of_others(&id_str))
+            .filter(bible_presentation::Column::Id.eq(id_str.as_str()))
+            .filter(bible_presentation::Column::ArchivedAt.is_not_null())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            self.require_presentation(id).await?;
+        }
+        Ok(())
+    }
+
+    /// `NotFound` unless the presentation exists.
+    async fn require_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {
+        bible_presentation::Entity::find_by_id(id.to_string())
+            .one(&self.db)
             .await?
             .ok_or(RepositoryError::NotFound(NOT_FOUND))?;
-        if model.archived_at.is_some() {
-            let position = top_position(&txn).await?;
-            bible_presentation::Entity::update_many()
-                .col_expr(
-                    bible_presentation::Column::ArchivedAt,
-                    Expr::value(Option::<String>::None),
-                )
-                .col_expr(bible_presentation::Column::Position, Expr::value(position))
-                .filter(bible_presentation::Column::Id.eq(model.id))
-                .exec(&txn)
-                .await?;
-        }
-        txn.commit().await?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::same_set;
+    use super::distinct;
 
     fn v(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|s| (*s).to_string()).collect()
     }
 
     #[test]
-    fn a_reorder_needs_exactly_the_active_set() {
-        assert!(same_set(&v(&["a", "b", "c"]), &v(&["c", "a", "b"])));
-        assert!(same_set(&v(&[]), &v(&[])));
-        assert!(!same_set(&v(&["a", "b"]), &v(&["a"])));
-        assert!(!same_set(&v(&["a", "b"]), &v(&["a", "b", "x"])));
-        assert!(!same_set(&v(&["a", "b"]), &v(&["a", "a"])));
-        assert!(!same_set(&v(&["a", "b", "c"]), &v(&["a", "b", "b", "c"])));
+    fn a_reorder_names_each_id_once() {
+        assert!(distinct(&v(&["a", "b", "c"])));
+        assert!(distinct(&v(&[])));
+        assert!(!distinct(&v(&["a", "a"])));
+        assert!(!distinct(&v(&["a", "b", "b", "c"])));
     }
 }
 
@@ -276,6 +290,73 @@ mod repository_tests {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         repo.archive_bible_presentation(a.id).await.unwrap();
         assert_eq!(archived_names(&repo).await, vec!["B", "A"]);
+    }
+
+    /// A file database with a real connection pool: concurrent writers on
+    /// separate connections, as on SNV (the in-memory one shares one cache).
+    async fn file_repo() -> (Repository, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "presenter-874-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let url = format!("sqlite://{}?mode=rwc", dir.join("order.db").display());
+        let repo = Repository::connect(&crate::repository::DatabaseSettings::new(url))
+            .await
+            .unwrap();
+        (repo, dir)
+    }
+
+    #[tokio::test]
+    async fn concurrent_writes_wait_for_each_other_instead_of_failing() {
+        let (repo, dir) = file_repo().await;
+        let seed = repo.create_bible_presentation("Seed").await.unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        for i in 0..8 {
+            let repo = repo.clone();
+            tasks.spawn(async move {
+                repo.create_bible_presentation(&format!("P{i}"))
+                    .await
+                    .map(|_| ())
+            });
+        }
+        let r = repo.clone();
+        tasks.spawn(async move { r.archive_bible_presentation(seed.id).await });
+        let r = repo.clone();
+        tasks.spawn(async move { r.restore_bible_presentation(seed.id).await });
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+        let list = repo.list_bible_presentation_summaries().await.unwrap();
+        assert_eq!(list.len(), 9);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_creates_get_distinct_places() {
+        let (repo, dir) = file_repo().await;
+        let mut tasks = tokio::task::JoinSet::new();
+        for i in 0..6 {
+            let repo = repo.clone();
+            tasks.spawn(async move { repo.create_bible_presentation(&format!("P{i}")).await });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+        use crate::entities::bible_presentation;
+        use sea_orm::EntityTrait;
+        let mut positions: Vec<i32> = bible_presentation::Entity::find()
+            .all(&repo.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.position)
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        assert_eq!(positions.len(), 6, "{positions:?}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

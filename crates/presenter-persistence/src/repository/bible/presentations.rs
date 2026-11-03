@@ -14,7 +14,7 @@ use presenter_core::{
     BiblePresentationSlide, BiblePresentationSummary, BibleSlideId, SlideText,
 };
 
-use super::presentation_order::top_position;
+use super::presentation_order::move_to_top;
 use crate::repository::util::RepositoryError;
 use crate::repository::Repository;
 
@@ -123,12 +123,14 @@ impl Repository {
             id: Set(id.to_string()),
             name: Set(trimmed.to_string()),
             created_at: Set(now.into()),
-            position: Set(top_position(&txn).await?),
+            position: Set(0),
             archived_at: Set(None),
         };
+        // The INSERT is the transaction's first statement (write lock at once).
         bible_presentation::Entity::insert(active)
             .exec(&txn)
             .await?;
+        move_to_top(&txn, &id.to_string()).await?;
         txn.commit().await?;
 
         Ok(BiblePresentation {

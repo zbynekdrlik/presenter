@@ -23,12 +23,25 @@ use crate::state::AppContext;
 /// `MouseEvent.button` of the primary button (left mouse, a finger, a pen).
 const PRIMARY_BUTTON: i16 = 0;
 
-/// Re-read both lists: the active one in its order and the archive.
+/// Re-read both lists: the active one in its order and the archive. An
+/// answer applies only while it is the newest request and no reorder is on
+/// its way (an older answer must not undo an order the page just showed).
 pub(crate) async fn reload_presentation_lists(bs: BibleState) {
-    if let Ok(list) = bible::list_presentations().await {
+    let gen = bs.presentation_list_gen.get_untracked() + 1;
+    bs.presentation_list_gen.set(gen);
+    let (active, archived) = (
+        bible::list_presentations().await,
+        bible::list_archived_presentations().await,
+    );
+    if bs.presentation_list_gen.get_untracked() != gen
+        || bs.presentation_order_sending.get_untracked()
+    {
+        return;
+    }
+    if let Ok(list) = active {
         bs.presentations.set(list);
     }
-    if let Ok(list) = bible::list_archived_presentations().await {
+    if let Ok(list) = archived {
         bs.archived_presentations.set(list);
     }
 }
@@ -38,16 +51,56 @@ fn toast(ctx: &AppContext, variant: &str, message: String) {
     ctx.toast_message.set(Some(message));
 }
 
-/// Show `ids` as the new order at once and store it. A refusal (another
-/// device changed the list) shows the server's list again.
-fn save_order(bs: BibleState, ctx: AppContext, ids: Vec<String>) {
+/// Show `ids` as the new order at once, keep the moved card's handle focused,
+/// and store the order. PUTs go one at a time; an order chosen while one is
+/// on its way waits, and only the newest waiting one goes next.
+fn save_order(bs: BibleState, ctx: AppContext, moved: String, ids: Vec<String>) {
+    bs.presentation_list_gen.update(|gen| *gen += 1);
     bs.presentations.update(|list| {
         list.sort_by_key(|p| ids.iter().position(|id| *id == p.id).unwrap_or(usize::MAX));
     });
+    refocus_handle(moved);
+    bs.presentation_order_waiting.set(Some(ids));
+    if bs.presentation_order_sending.get_untracked() {
+        return;
+    }
+    bs.presentation_order_sending.set(true);
     leptos::task::spawn_local(async move {
-        if let Err(e) = bible::reorder_presentations(&ids).await {
-            toast(&ctx, "error", format!("Poradie sa neuložilo: {e}"));
-            reload_presentation_lists(bs).await;
+        while let Some(ids) = bs
+            .presentation_order_waiting
+            .try_update(Option::take)
+            .flatten()
+        {
+            if let Err(e) = bible::reorder_presentations(&ids).await {
+                toast(&ctx, "error", format!("Poradie sa neuložilo: {e}"));
+                bs.presentation_order_waiting.set(None);
+                break;
+            }
+        }
+        bs.presentation_order_sending.set(false);
+        // The server's list decides (after a refusal, or a change elsewhere).
+        reload_presentation_lists(bs).await;
+    });
+}
+
+/// The keyed list moves a card with `insertBefore`, which drops the focus to
+/// `<body>`: give it back to the moved card's handle, so ↑ / ↓ keep working.
+/// Queued behind the list's render; only while nothing else took the focus.
+fn refocus_handle(id: String) {
+    leptos::task::spawn_local(async move {
+        if !crate::utils::window::focus_is_free() {
+            return;
+        }
+        let selector = format!(
+            "[data-role=\"presentation-card\"][data-presentation-id=\"{id}\"] [data-role=\"presentation-drag\"]"
+        );
+        let handle = crate::utils::window::document()
+            .query_selector(&selector)
+            .ok()
+            .flatten()
+            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+        if let Some(handle) = handle {
+            let _ = handle.focus();
         }
     });
 }
@@ -86,27 +139,54 @@ fn slot_under_pointer(ev: &PointerEvent) -> Option<usize> {
     Some(drop_slot(&middles, f64::from(ev.client_y())))
 }
 
-/// The active list: one draggable card per presentation.
+/// A card's `<For>` key: the id plus every field the card shows, so a rename
+/// or a new slide count redraws it while a move only moves it.
+fn card_key(p: &BiblePresentationSummary) -> (String, String, usize, Option<chrono::NaiveDate>) {
+    (p.id.clone(), p.name.clone(), p.slide_count, p.sermon_date)
+}
+
+/// The active list: one draggable card per presentation (keyed, so a move
+/// keeps the card's DOM and its focus).
 #[component]
 pub(crate) fn PresentationList() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let presentations = bs.presentations;
+    let drag = bs.presentation_drag;
+    // A release or cancel that never reaches the handle (its card was
+    // redrawn mid-drag, the pointer left the window) still ends the drag.
+    let end_drag = move |_| {
+        if drag.with_untracked(Option::is_some) {
+            drag.set(None);
+        }
+    };
+    let released = window_event_listener_untyped("pointerup", end_drag);
+    let cancelled = window_event_listener_untyped("pointercancel", end_drag);
+    on_cleanup(move || {
+        released.remove();
+        cancelled.remove();
+    });
+    // A card archived or deleted elsewhere while dragged ends its drag.
+    Effect::new(move || {
+        let gone = presentations.with(|list| {
+            drag.with_untracked(|d| {
+                d.as_ref()
+                    .is_some_and(|d| list.iter().all(|p| p.id != d.id))
+            })
+        });
+        if gone {
+            drag.set(None);
+        }
+    });
     view! {
         <div class="bible__prepared-list" data-role="presentations-list">
-            {move || {
-                let list = presentations.get();
-                if list.is_empty() {
-                    view! {
-                        <p class="operator__slides-empty">"Zatiaľ žiadne prezentácie."</p>
-                    }
-                    .into_any()
-                } else {
-                    list.into_iter()
-                        .map(|p| view! { <PresentationCard presentation=p /> })
-                        .collect_view()
-                        .into_any()
-                }
-            }}
+            <Show when=move || presentations.with(Vec::is_empty)>
+                <p class="operator__slides-empty">"Zatiaľ žiadne prezentácie."</p>
+            </Show>
+            <For
+                each=move || presentations.get()
+                key=card_key
+                children=|p| view! { <PresentationCard presentation=p /> }
+            />
         </div>
     }
 }
@@ -230,7 +310,7 @@ fn PresentationCard(presentation: BiblePresentationSummary) -> impl IntoView {
             drag.set(None);
             let slot = slot_under_pointer(&ev).unwrap_or(current.slot);
             if let Some(ids) = reorder_to_slot(&current_ids(bs), &id, slot) {
-                save_order(bs, ctx.clone(), ids);
+                save_order(bs, ctx.clone(), id.clone(), ids);
             }
         }
     };
@@ -252,7 +332,7 @@ fn PresentationCard(presentation: BiblePresentationSummary) -> impl IntoView {
             };
             ev.prevent_default();
             if let Some(ids) = reorder_one_step(&current_ids(bs), &id, up) {
-                save_order(bs, ctx.clone(), ids);
+                save_order(bs, ctx.clone(), id.clone(), ids);
             }
         }
     };
