@@ -4,6 +4,7 @@
 
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
+use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::JsCast;
 
 use super::{strongs_view, Chapter, Search, Study};
@@ -104,8 +105,32 @@ pub(super) fn remember_offset(s: Study) {
     });
 }
 
+/// `use:save_on_scroll=(s, ticket)` on the reader's scroller. Not `on:scroll`:
+/// that leaves its listener on the element when the reader goes, and a scroll
+/// the browser still delivers there (the landing on a verse, then Back within
+/// the same frame) calls a dropped closure — the "closure invoked recursively
+/// or after being dropped" page error. This listener leaves with the reader.
+pub(super) fn save_on_scroll(el: web_sys::Element, (s, ticket): (Study, StoredValue<u32>)) {
+    let handler = Closure::<dyn Fn()>::new(move || save_after_scroll(s, ticket));
+    if el
+        .add_event_listener_with_callback("scroll", handler.as_ref().unchecked_ref())
+        .is_err()
+    {
+        leptos::logging::log!("study: the reader's scroll listener could not be added");
+        return;
+    }
+    let held = StoredValue::new_local(Some((el, handler)));
+    // Cleanups run before the owner's stored values go, so the pair is here.
+    on_cleanup(move || {
+        if let Some((el, handler)) = held.try_update_value(Option::take).flatten() {
+            let _ = el
+                .remove_event_listener_with_callback("scroll", handler.as_ref().unchecked_ref());
+        }
+    });
+}
+
 /// Save the verse in view when the scrolling stops (`study.lastVerse`).
-pub(super) fn save_after_scroll(s: Study, ticket: StoredValue<u32>) {
+fn save_after_scroll(s: Study, ticket: StoredValue<u32>) {
     ticket.update_value(|held| *held = held.wrapping_add(1));
     let mine = ticket.get_value();
     Timeout::new(SAVE_AFTER_MS, move || {
