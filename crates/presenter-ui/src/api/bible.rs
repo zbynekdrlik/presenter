@@ -99,15 +99,21 @@ pub async fn search(
     query: &str,
     translation: &str,
     limit: Option<u32>,
+    scope: Option<&str>,
 ) -> Result<Vec<BibleSearchHit>, ApiError> {
+    get_json(&search_path(query, translation, limit, scope)).await
+}
+
+fn search_path(query: &str, translation: &str, limit: Option<u32>, scope: Option<&str>) -> String {
     let limit_param = limit.map(|l| format!("&limit={l}")).unwrap_or_default();
-    get_json(&format!(
-        "/bible/search?query={}&translation={}{}",
+    let scope_param = scope
+        .map(|s| format!("&scope={}", urlencoding::encode(s)))
+        .unwrap_or_default();
+    format!(
+        "/bible/search?query={}&translation={}{limit_param}{scope_param}",
         urlencoding::encode(query),
         urlencoding::encode(translation),
-        limit_param,
-    ))
-    .await
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -454,4 +460,21 @@ pub async fn reorder_presentation_slides(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_path;
+
+    #[test]
+    fn a_search_names_its_scope_only_when_it_has_one() {
+        assert_eq!(
+            search_path("viera", "slk-seb", Some(100), Some("HEB")),
+            "/bible/search?query=viera&translation=slk-seb&limit=100&scope=HEB"
+        );
+        assert_eq!(
+            search_path("viera", "slk-seb", Some(20), None),
+            "/bible/search?query=viera&translation=slk-seb&limit=20"
+        );
+    }
 }

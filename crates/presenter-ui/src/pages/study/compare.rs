@@ -217,6 +217,12 @@ fn open(s: Study, verse: u16) {
     nav::go(s, route, ScrollPlan::Top);
 }
 
+/// From a search hit: the favourites, led by the hit's translation.
+pub(super) fn open_at(s: Study, translation: &str, place: (&str, u16, u16)) {
+    let route = StudyRoute::compare(Some(translation.to_string()), place, Vec::new());
+    nav::go(s, route, ScrollPlan::Top);
+}
+
 /// From the bottom bar: the selected verse, else the one in view.
 pub(super) fn open_from_reader(s: Study) {
     let selected = s.route.with_untracked(|route| route.verses.map(|v| v.0));

@@ -225,6 +225,18 @@ pub struct ScopeChip {
     pub count: u64,
 }
 
+/// The scopes a text search offers (spec §6.4): the book being read, and one
+/// a URL names even when it is another. Searches have no counts to hide by.
+pub fn search_scopes(book: Option<&str>, current: &str) -> Vec<String> {
+    let mut scopes: Vec<String> = [SCOPE_ALL, "ot", "nt"].map(String::from).into();
+    for scope in book.into_iter().chain([current]) {
+        if !scopes.iter().any(|held| held == scope) {
+            scopes.push(scope.to_string());
+        }
+    }
+    scopes
+}
+
 /// `(book code, verses)` of a number, whole Bible (`perBook`): Celá Biblia, SZ,
 /// NZ and each book, with their counts. A chip with nothing behind it would be
 /// a dead button, so it stays only as the scope the URL already names.
@@ -469,6 +481,17 @@ mod tests {
         assert_eq!(normalize_scope("heb"), "HEB");
         assert_eq!(normalize_scope(""), "all");
         assert_eq!(normalize_scope("nonsense"), "all");
+    }
+
+    #[test]
+    fn a_search_offers_the_book_being_read_and_the_one_its_url_names() {
+        assert_eq!(search_scopes(None, "all"), ["all", "ot", "nt"]);
+        assert_eq!(search_scopes(Some("HEB"), "nt"), ["all", "ot", "nt", "HEB"]);
+        assert_eq!(
+            search_scopes(Some("HEB"), "ROM"),
+            ["all", "ot", "nt", "HEB", "ROM"]
+        );
+        assert_eq!(search_scopes(Some("HEB"), "HEB").len(), 4);
     }
 
     #[test]

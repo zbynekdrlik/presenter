@@ -1,15 +1,18 @@
 //! The text search view (spec §6.4): `/bible/search` in the reader's
-//! translation. A hit opens the reader at its verse. The server has no scope
-//! filter and no exact phrase yet (D4), so neither is offered here.
+//! translation, within the scope on the route. A fully quoted query is an
+//! exact phrase. A hit opens the reader at its verse.
 
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
 
 use super::scroll::ScrollPlan;
-use super::{add_to_sermon, nav, Search, Study, REMOTE_TRANSLATION, SEARCH_LIMIT};
+use super::{
+    add_to_sermon, compare, nav, Chapter, Search, Study, REMOTE_TRANSLATION, SEARCH_LIMIT,
+};
 use crate::api::bible::BibleSearchHit;
 use crate::api::sermons::SermonPassage;
 use crate::state::study::{mark_matches, StudyRoute, StudyView};
+use crate::state::study_word::{search_scopes, SCOPE_ALL};
 
 fn count_text(count: usize) -> String {
     if count >= SEARCH_LIMIT as usize {
@@ -19,11 +22,81 @@ fn count_text(count: usize) -> String {
     }
 }
 
+fn current_scope(s: Study) -> String {
+    s.route.with(|route| match &route.view {
+        StudyView::Search { scope, .. } => scope.clone(),
+        _ => SCOPE_ALL.to_string(),
+    })
+}
+
+fn set_scope(s: Study, wanted: &str) {
+    let mut route = s.route.get_untracked();
+    if let StudyView::Search { scope, .. } = &mut route.view {
+        if scope == wanted {
+            return;
+        }
+        *scope = wanted.to_string();
+    }
+    s.scroll_plan.set_value(ScrollPlan::Top);
+    nav::replace(s, route);
+}
+
+fn scope_label(s: Study, scope: &str) -> String {
+    match scope {
+        SCOPE_ALL => "Celá Biblia".to_string(),
+        "ot" => "SZ".to_string(),
+        "nt" => "NZ".to_string(),
+        book => s
+            .with_structure(|found| Some(found?.book(book)?.name.clone()))
+            .flatten()
+            .unwrap_or_else(|| book.to_string()),
+    }
+}
+
+/// The book the reader last showed, kept behind the search.
+fn book_read(s: Study) -> Option<String> {
+    s.chapter.with(|shown| match shown {
+        Chapter::Ready(place, _) | Chapter::Missing(place) | Chapter::Failed(place, _) => {
+            Some(place.book.clone())
+        }
+        Chapter::None => None,
+    })
+}
+
+fn scope_row(s: Study) -> impl IntoView {
+    view! {
+        <nav class="study-scopes" data-role="search-scopes" aria-label="Rozsah">
+            <For
+                each=move || search_scopes(book_read(s).as_deref(), &current_scope(s))
+                key=|scope| scope.clone()
+                children=move |scope| {
+                    let mine = scope.clone();
+                    let target = scope.clone();
+                    let label_for = scope.clone();
+                    let pressed = Memo::new(move |_| current_scope(s) == mine);
+                    view! {
+                        <button
+                            type="button"
+                            class="study-chip"
+                            data-role="search-scope"
+                            data-scope=scope
+                            aria-pressed=move || if pressed.get() { "true" } else { "false" }
+                            on:click=move |_| set_scope(s, &target)
+                        >
+                            {move || scope_label(s, &label_for)}
+                        </button>
+                    }
+                }
+            />
+        </nav>
+    }
+}
+
 #[component]
 pub(super) fn SearchResults(s: Study) -> impl IntoView {
     let query = move || {
         s.route.with(|route| match &route.view {
-            StudyView::Search { query } => query.clone(),
+            StudyView::Search { query, .. } => query.clone(),
             _ => String::new(),
         })
     };
@@ -68,6 +141,7 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
                 data-loaded-for=loaded_for
                 data-state=state
             >
+                {move || (!remote()).then(|| scope_row(s))}
                 {move || {
                     match count() {
                         Some(0) if remote() => {
@@ -154,6 +228,21 @@ fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
             );
         }
     };
+    let has_book = reference.book_code.is_some();
+    let on_compare = {
+        let reference = reference.clone();
+        let translation = translation.clone();
+        move |_| {
+            let Some(book) = reference.book_code.as_deref() else {
+                return;
+            };
+            compare::open_at(
+                s,
+                &translation,
+                (book, reference.chapter, reference.verse_start),
+            );
+        }
+    };
     let on_open = {
         let reference = reference.clone();
         move |_| {
@@ -191,6 +280,17 @@ fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
                 <span class="study-hit__label">{label}</span>
                 <span class="study-hit__text">{snippet}</span>
             </button>
+            {has_book.then(|| view! {
+                <button
+                    type="button"
+                    class="study-icon"
+                    data-role="search-hit-compare"
+                    aria-label="Porovnať"
+                    on:click=on_compare
+                >
+                    "\u{2261}"
+                </button>
+            })}
             <button
                 type="button"
                 class="study-icon"
