@@ -277,6 +277,36 @@ test("Back into the columns returns to where the reader had scrolled", async ({ 
   await finish(opened);
 });
 
+// The browser delivers a scroll queued while the reader was up (its landing
+// on the verse, then Back within the same frame) to the reader's element even
+// after the view went: no handler of the gone reader may still be listening.
+test("a scroll still queued for the reader after Back reaches no dropped handler", async ({
+  browser,
+}) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    TABLET_1180,
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.5&tt=slk-seb,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  await row(page, "slk-seb", 30).scrollIntoViewIfNeeded();
+  await row(page, "slk-seb", 30).locator('[data-role="compare-open"]').click();
+  await expectChapter(page, "slk-seb:HEB.11");
+  const reader = await page.locator('main[data-role="study-scroll"]').elementHandle();
+  expect(reader, "the reader's scroller").not.toBeNull();
+  await page.goBack();
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.5");
+  const connected = await reader!.evaluate((el) => {
+    el.dispatchEvent(new Event("scroll"));
+    return el.isConnected;
+  });
+  expect(connected, "the reader's scroller left the page").toBe(false);
+  await finish(opened);
+});
+
 test("a chapter the reader's translation lacks does not trap ◀ ▶", async ({ browser }) => {
   const opened = await openStudy(
     browser,
