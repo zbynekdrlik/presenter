@@ -123,8 +123,8 @@ pub(super) fn save_on_scroll(el: web_sys::Element, (s, ticket): (Study, StoredVa
     // Cleanups run before the owner's stored values go, so the pair is here.
     on_cleanup(move || {
         if let Some((el, handler)) = held.try_update_value(Option::take).flatten() {
-            let _ = el
-                .remove_event_listener_with_callback("scroll", handler.as_ref().unchecked_ref());
+            let _ =
+                el.remove_event_listener_with_callback("scroll", handler.as_ref().unchecked_ref());
         }
     });
 }
