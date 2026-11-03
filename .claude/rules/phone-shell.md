@@ -51,3 +51,7 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
   `(pointer: coarse)` needs `hasTouch` (ui skill #569); tap with `.tap()`.
 
 - **Toasts (#875):** the `Toast` component owns the lifetime (one restarting 3.5 s timer), callers only set the message. On the phone's Bible Live tab the toast sits above `.console-bar` (`bible_console.css`), never over its buttons.
+
+## Desktop header (#875)
+
+`body.operator:not([data-shell="phone"]) .operator__header` is a grid: brand + links on top, search + tabs under them, stage controls on the right; under 1440 px the tabs take their own row. Nothing in the header goes out of flow: its height changes per view, the absolute links row was covered by the tabs. `operator-header-layout.spec.ts` measures overlaps at six widths.

@@ -289,7 +289,7 @@ pub fn Header() -> impl IntoView {
                     ></span>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
                     // #573: surface-nav pills + Resolume connection chips are
-                    // one absolutely-positioned group (`.operator__brand-nav`)
+                    // one group (`.operator__brand-nav`)
                     // in the top brand row — connection/status indicators
                     // belong next to Stage/Camera/Tablet/Timer, never next to
                     // the Stage Output select (see `operator__header-right`

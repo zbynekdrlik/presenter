@@ -93,6 +93,61 @@ body.operator {
   z-index: 10;
 }
 
+/* Desktop header: brand + links on top, search + tabs under them, stage
+   controls on the right over both rows. The phone shell has its own (#875). */
+body.operator:not([data-shell="phone"]) .operator__header {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.75rem;
+  row-gap: 0.25rem;
+}
+body.operator:not([data-shell="phone"]) .operator__header-left {
+  display: contents;
+}
+body.operator:not([data-shell="phone"]) .operator__header-brand {
+  grid-column: 1 / 3;
+  grid-row: 1;
+  align-items: center;
+  min-width: 0;
+}
+body.operator:not([data-shell="phone"]) .operator__search {
+  grid-column: 1;
+  grid-row: 2;
+  max-width: none;
+  min-width: 0;
+  align-self: center;
+}
+body.operator:not([data-shell="phone"]) .operator__view-nav {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+}
+body.operator:not([data-shell="phone"]) .operator__header-right {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  margin-left: 0;
+}
+
+/* Beside the stage controls the tabs need the full width of both columns. */
+@media (max-width: 1439px) {
+  body.operator:not([data-shell="phone"]) .operator__header {
+    grid-template-rows: auto auto auto;
+  }
+  body.operator:not([data-shell="phone"]) .operator__view-nav {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+  body.operator:not([data-shell="phone"]) .operator__search {
+    grid-column: 1 / 3;
+    grid-row: 3;
+    max-width: 280px;
+  }
+  body.operator:not([data-shell="phone"]) .operator__header-right {
+    grid-row: 1 / 4;
+  }
+}
+
 .operator__header h1 {
   margin: 0;
   font-size: 1rem;
@@ -3125,20 +3180,19 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
 }
 
 /* --- Brand-nav group: surface-nav pills + Resolume chips (#326, #573) -- */
-/* Absolute-positioned AS A GROUP to avoid widening                         */
-/* `.operator__header-left`'s intrinsic width — otherwise the view-nav      */
-/* tabs wrap to 2 rows. The surface-nav pills (Stage/Camera/Tablet/Timer)   */
+/* In the header's top row (`body.operator` grid below); wraps inside it.   */
+/* Never out of flow: the view tabs rose into it on a short header (#875).  */
+/* The surface-nav pills (Stage/Camera/Tablet/Timer)                        */
 /* and the Resolume connection chips both live in this top brand row —     */
 /* connection/status indicators are never placed next to the Stage Output  */
 /* controls (#573 design rule).                                            */
 
 .operator__brand-nav {
-    position: absolute;
-    left: calc(100% + 0.75rem);
-    top: 0;
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.3rem 0.6rem;
+    min-width: 0;
 }
 
 .operator__surface-nav {
