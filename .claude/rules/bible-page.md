@@ -6,6 +6,10 @@ paths:
   - "crates/presenter-ui/src/state/bible_range.rs"
   - "tests/e2e/wasm-bible.spec.ts"
   - "tests/e2e/bible-range-hint.spec.ts"
+  - "crates/presenter-ui/src/pages/bible_prepared.rs"
+  - "crates/presenter-ui/src/pages/bible_prepared_list.rs"
+  - "crates/presenter-persistence/src/repository/bible/presentation_order.rs"
+  - "tests/e2e/bible-prepared-order.spec.ts"
 ---
 
 # Bible page (`/ui/operator/bible`) — DOM contract & E2E determinism
@@ -63,3 +67,20 @@ them — and the book filter's autofocus, which `wasm-bible-keyboard-nav.spec.ts
 removes them. When no stored name contains the filter text, `BibleState::filtered_books` falls
 back to `resolver::resolve_book_name` (`zid` → Hebrejom, #850 U1). `bible.rs` sits at 809
 production lines: every new console piece goes into `pages/bible_console/`.
+
+## Prepared tab: order + archive (#874)
+
+- `GET /bible/presentations` = ACTIVE only, by `position` (tablet, verse console, AI tools never see
+  the archive); `?archived=true` = the archive. A new consumer that should see archived ones asks for
+  them explicitly. `sermon_ids_on` (today's hand-off) leaves archived sermons out; `/ui/study` lists all.
+- New, sermon-created and restored presentations go to the TOP (`move_to_top`). E2E that picked "the
+  last card = the new one" broke; pick a card by name. The collapsed archive also carries
+  `data-presentation-id`: scope selectors to `[data-role="presentation-card"]`.
+- Every write transaction starts with its WRITE (sermon-prep rule): create = INSERT then one UPDATE
+  with a subquery; reorder = position UPDATEs, THEN the active-set check (rollback = drop the txn);
+  archive / restore = one conditional UPDATE. Concurrency test uses a FILE DB (`file_repo`), the
+  in-memory one shares a cache and never shows SQLITE_BUSY.
+- UI (`bible_prepared_list.rs`): keyed `<For>` (key = id + every shown field), the moved card's
+  handle refocused after a move, drag ended by window `pointerup`/`pointercancel`, reorder PUTs
+  serialized (newest waiting order only), list answers gated by `presentation_list_gen` and
+  `presentation_order_sending`; a 409 just reloads (no toast). `BibleState` is `Copy`.
