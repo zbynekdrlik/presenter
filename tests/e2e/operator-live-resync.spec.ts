@@ -149,7 +149,7 @@ test("a failed first load of the lists recovers with the first frame", async ({ 
   attachConsoleErrorCollector(page, errors);
   try {
     let failed = 0;
-    await page.route(/\/libraries$/, async (route) => {
+    await page.route(/\/libraries\/summary$/, async (route) => {
       if (failed === 0 && route.request().method() === "GET") {
         failed += 1;
         await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
