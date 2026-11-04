@@ -375,6 +375,33 @@ test("an open sheet leaves with the phone width; a closed one keeps no half-answ
     expect(new URL(page.url()).pathname).toBe("/ui/operator");
     await expect(page.locator("body")).toHaveAttribute("data-wasm-ready", "true");
 
+    // The second tap of a double tap meets the shield, never the page under it;
+    // a moment later the page takes taps again.
+    await toggle.tap();
+    const close = page.locator('[data-role="more-sheet-close"]');
+    const underSecondTap = await close.evaluate(
+      (el) =>
+        new Promise<string | null>((resolve) => {
+          const box = el.getBoundingClientRect();
+          (el as HTMLElement).click();
+          requestAnimationFrame(() => {
+            const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+            resolve(hit?.getAttribute("data-role") ?? null);
+          });
+        }),
+    );
+    expect(underSecondTap).toBe("more-sheet-shield");
+    await expect(page.locator('[data-role="more-sheet-shield"]')).toBeHidden();
+
+    // A reload with the sheet open leaves no entry that makes Back seem dead.
+    await toggle.tap();
+    await page.reload();
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(sheet).toHaveAttribute("data-open", "false");
+    await expect
+      .poll(() => page.evaluate(() => Boolean((history.state as { sheet?: boolean } | null)?.sheet)))
+      .toBe(false);
+
     await toggle.tap();
     await expect(select).toBeVisible();
     await expect(page.locator('[data-role="stage-layout-confirm"]')).toHaveCount(0);

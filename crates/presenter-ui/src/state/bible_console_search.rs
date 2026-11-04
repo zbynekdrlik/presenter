@@ -14,8 +14,9 @@ use crate::api::bible::BibleSearchHit;
 const MIN_LETTERS: usize = 3;
 
 /// Whether `input` should search the text: words alone (no book, no numbers),
-/// or at least two words with no book name that matches exactly or as a
-/// prefix (`jan krstitel`, but never `1 kor 13`).
+/// or at least two words or no digit at all, with no book name that matches
+/// exactly or as a prefix (`jan krstitel`, `mária`, which only LOOKS like Marek;
+/// never `1 kor 13` or a mistyped `zidd 11 1`).
 pub fn wants_text_search(input: &str, resolution: &Resolution) -> bool {
     if input.chars().filter(|c| c.is_alphabetic()).count() < MIN_LETTERS {
         return false;
@@ -27,7 +28,7 @@ pub fn wants_text_search(input: &str, resolution: &Resolution) -> bool {
         .split_whitespace()
         .filter(|word| word.chars().any(char::is_alphabetic))
         .count();
-    words >= 2
+    (words >= 2 || !input.chars().any(char::is_numeric))
         && !parse(input)
             .candidates
             .first()
@@ -72,7 +73,10 @@ mod tests {
     fn words_search_and_references_never_do() {
         assert!(wants("viera je zárukou"));
         assert!(wants("jan krstitel"));
+        assert!(wants("mária"));
+        assert!(wants("judáš"));
         assert!(!wants("zid 11 1"));
+        assert!(!wants("zidd 11 1"));
         assert!(!wants("1 kor 13"));
         assert!(!wants("jan"));
         assert!(!wants("11:1"));

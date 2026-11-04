@@ -18,10 +18,11 @@ use crate::repository::Repository;
 /// every character that is not alphanumeric (so `11:1` is `11` and `1`, never
 /// `111*`, and no FTS5 syntax character survives; a combining accent stays with
 /// its word), drops tokens of fewer than 2 CHARACTERS (`Ž` is 2 bytes, 1
-/// character) and tokens that are all digits (a reference's numbers are not
-/// words of the text), appends `*` for prefix matching and joins with spaces
-/// (implicit AND in FTS5). Returns `None` if no usable tokens remain (#850 spec
-/// §5.11).
+/// character), appends `*` for prefix matching and joins with spaces (implicit
+/// AND in FTS5). Numbers stay as tokens: `Ján 3:16` must find almost nothing
+/// here, not every verse with "Ján" in it (the AND does that, the verse text
+/// holds almost no digits). Returns `None` if no usable tokens remain (#850
+/// spec §5.11).
 fn build_fts_query(input: &str) -> Option<String> {
     if let Some(phrase) = quoted_phrase(input) {
         let words: Vec<&str> = phrase.split_whitespace().collect();
@@ -34,7 +35,6 @@ fn build_fts_query(input: &str) -> Option<String> {
     let tokens: Vec<String> = folded
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| word.chars().count() >= 2)
-        .filter(|word| !word.chars().all(char::is_numeric))
         .map(|word| format!("{word}*"))
         .collect();
     (!tokens.is_empty()).then(|| tokens.join(" "))
@@ -397,9 +397,11 @@ mod fts_query_tests {
 
     #[test]
     fn a_reference_keeps_only_its_word_and_never_glues_its_numbers() {
-        assert_eq!(build_fts_query("zid 11:1").as_deref(), Some("zid*"));
-        assert_eq!(build_fts_query("11:1"), None);
-        assert_eq!(build_fts_query("Ž 23"), None);
+        // The numbers stay: header search and the AI tool must not answer a
+        // reference with every verse containing the book's name.
+        assert_eq!(build_fts_query("zid 11:1").as_deref(), Some("zid* 11*"));
+        assert_eq!(build_fts_query("11:1").as_deref(), Some("11*"));
+        assert_eq!(build_fts_query("Ž 23").as_deref(), Some("23*"));
     }
 
     #[test]

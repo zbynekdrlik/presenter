@@ -242,6 +242,14 @@ body.operator.operator--bible[data-shell="phone"] .operator__slides-column {
 .more-sheet[data-open="true"] {
   display: block;
 }
+.more-sheet-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+}
+.more-sheet-shield[hidden] {
+  display: none;
+}
 .more-sheet__backdrop {
   position: absolute;
   inset: 0;

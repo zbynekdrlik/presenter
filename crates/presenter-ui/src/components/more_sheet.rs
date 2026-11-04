@@ -33,14 +33,39 @@ pub fn open_more_sheet(op: &OperatorState) {
         .and_then(|history| history.push_state(&state, ""));
 }
 
-/// Close it and drop its history entry. Closed at once, not on the popstate:
-/// a double tap on ✕ must not go back twice and leave the page.
+/// How long a closed sheet keeps catching taps: a second tap of a double tap
+/// on ✕ or the backdrop lands within this.
+const SHIELD_MS: u32 = 350;
+
+/// Close it and drop its history entry. Closed at once, not on the popstate: a
+/// double tap on ✕ must not go back twice and leave the page. The shield takes
+/// that second tap, which would otherwise send the slide underneath to the wall.
 pub fn close_more_sheet(op: &OperatorState) {
     if op.more_sheet_open.get_untracked() {
         op.more_sheet_open.set(false);
+        let shield = op.more_sheet_shield;
+        shield.set(true);
+        gloo_timers::callback::Timeout::new(SHIELD_MS, move || shield.set(false)).forget();
         let _ = crate::utils::window::window()
             .history()
             .and_then(|history| history.back());
+    }
+}
+
+/// A reload with the sheet open comes back closed but on its history entry;
+/// drop it, or the next Back seems to do nothing.
+fn drop_reloaded_entry() {
+    let window = crate::utils::window::window();
+    let Ok(history) = window.history() else {
+        return;
+    };
+    let on_entry = history
+        .state()
+        .ok()
+        .and_then(|state| js_sys::Reflect::get(&state, &"sheet".into()).ok())
+        .is_some_and(|sheet| sheet.is_truthy());
+    if on_entry {
+        let _ = history.back();
     }
 }
 
@@ -49,6 +74,8 @@ pub fn MoreSheet() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
     let open = op.more_sheet_open;
+    let shield = op.more_sheet_shield;
+    drop_reloaded_entry();
     let phone = ctx.phone_shell;
     let close = {
         let op = op.clone();
@@ -66,6 +93,7 @@ pub fn MoreSheet() -> impl IntoView {
     }
 
     view! {
+        <div class="more-sheet-shield" data-role="more-sheet-shield" hidden=move || !shield.get()></div>
         <Show when=move || phone.get()>
             <div
                 class="more-sheet"

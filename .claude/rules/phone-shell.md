@@ -61,8 +61,9 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 `body.operator:not([data-shell="phone"]) .operator__header` is a grid: brand + links on top, search + tabs under them, stage controls on the right; under 1440 px the tabs take their own row. Nothing in the header goes out of flow: its height changes per view, the absolute links row was covered by the tabs. `operator-header-layout.spec.ts` measures overlaps at six widths.
 - **"Viac" sheet** (`components/more_sheet.rs`): mounted once in the phone shell, toggled by
   `data-open`. Opening pushes a same-URL history entry; ✕, the backdrop and Escape close at once
-  and go back once (a double tap must not leave the page); a real Back closes through
-  `operator.rs`'s popstate. Stage controls mount per open: a closed sheet keeps no half-answered
+  and go back once (a double tap must not leave the page), then a 350 ms transparent shield takes
+  the double tap's second tap (the sheet is gone by then, the slide under it would go to the wall);
+  a real Back closes through `operator.rs`'s popstate; a reload with it open drops its entry. Stage controls mount per open: a closed sheet keeps no half-answered
   confirm.
 - **The chips move** between the desktop header and the sheet when a window or an iPad crosses
   768 px, so `<Show>` disposes a mounted copy. A timer that outlives its component reads disposed

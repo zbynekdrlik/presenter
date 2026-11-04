@@ -108,5 +108,6 @@ notifies) while `console_owns_grid`: it would bump `classic_loads` and wipe what
   `wants_text_search` (words without a reference; never `zid 11 1`), 300 ms after the last
   keystroke, 10 hits labelled with the translation; a tap previews (a `Picked` from `hit_target`),
   never shows. An answer counts only for its input AND main translation. `build_fts_query` splits
-  on punctuation, counts characters, drops all-digit tokens and keeps a combining accent inside
-  its word (persistence `fts_query_tests`).
+  on punctuation, counts characters and keeps a combining accent inside its word (persistence
+  `fts_query_tests`). Numbers stay as tokens: header search and the AI tool call it too, `Ján 3:16`
+  must not answer with every verse holding "Ján".
