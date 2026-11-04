@@ -155,7 +155,10 @@ test("switching the main translation re-resolves at once: Hebrejom in SEB, Žido
   const { context, page, errors } = await openConsole(browser, PHONE_390);
   try {
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    await page.locator('[data-role="main-translation"]').selectOption("slk-roh");
+    // #850 B2a-4: on a phone the translation bar replaced the selects.
+    await page
+      .locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]')
+      .tap();
     await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
       "data-books-translation",
       "slk-roh",
@@ -888,7 +891,7 @@ test("a show that fails after its verse left says so in a toast, not on the empt
 test("phone: the first verse on the wall moves neither the field nor ZOBRAZIŤ", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_360);
   try {
-    await page.locator('[data-role="secondary-translation"]').selectOption("eng-kjv");
+    await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').tap();
     const field = page.locator('[data-role="console-field"]');
     await field.fill("1 tes 5 16-18");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
@@ -1226,12 +1229,12 @@ test("a translation switch keeps the stepped verse and the next verse after a sh
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await page.locator('[data-role="console-next"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
-    await page.locator('[data-role="main-translation"]').selectOption("slk-roh");
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:2 (ROH)");
 
     await showButton(page).tap();
     await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
-    await page.locator('[data-role="main-translation"]').selectOption("slk-seb");
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:3 (SEB)");
     await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
@@ -1345,5 +1348,96 @@ test("desktop: a load from the old inputs after the end of a book frees the butt
     expect(errors).toEqual([]);
   } finally {
     await context.close();
+  }
+});
+
+test("the translation bar: one tap switches the main and the line below, and is remembered", async ({
+  browser,
+  request,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const mainChips = page.locator('[data-role="console-translation"][data-kind="main"]');
+    await expect(mainChips).toHaveText(["SEB", "ROH", "SEVP", "KJV"]);
+    await expect(mainChips.first()).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-role="console-translation"][data-translation="eng-nlt"][data-kind="main"]')).toHaveCount(0);
+    await page.locator('[data-role="console-translation-more"]').tap();
+    await expect(mainChips.last()).toHaveText("MIL");
+    await assertMinTapTarget(page.locator('[data-role="console-translation"]'), 44);
+    await expect(page.locator('[data-role="main-translation"]')).toBeHidden();
+
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').tap();
+    await expect(page.locator('[data-role="console-preview-secondary"]')).toContainText("faith");
+    await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation=""]').tap();
+    await expect(page.locator('[data-role="console-preview-secondary"]')).toHaveCount(0);
+
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-sevp"]').tap();
+    await expect
+      .poll(async () => (await (await request.get(new URL("/bible/preferences", baseURL).toString())).json()).mainTranslation)
+      .toBe("slk-sevp");
+    expect(await page.evaluate(() => localStorage.getItem("presenter:bibleMainTranslation"))).toBe(
+      JSON.stringify("slk-sevp"),
+    );
+    await assertNoHorizontalOverflow(page);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("console requests say what was typed and from which device", async ({ browser }) => {
+  for (const [profile, device] of [
+    [PHONE_390, "touch"],
+    [{ viewport: { width: 1280, height: 800 } }, "desktop"],
+  ] as const) {
+    const { context, page, errors } = await openConsole(browser, profile);
+    try {
+      const previews = collectPosts(page, "/bible/resolve");
+      const shows = collectPosts(page, "/bible/trigger-slide");
+      await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+      expect(previews.at(-1)).toMatchObject({ query: "zid 11 1", device, bookCode: "HEB" });
+      await showButton(page).click();
+      await expect.poll(() => shows.length).toBe(1);
+      expect(shows[0]).toMatchObject({ source: "console", device });
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test("the bar always shows what is selected: a secondary outside its row, a main behind the dots", async ({
+  browser,
+  request,
+}) => {
+  const preferences = new URL("/bible/preferences", baseURL).toString();
+  const before = await (await request.get(preferences)).json();
+  await request.put(preferences, {
+    data: { mainTranslation: "slk-mil", secondaryTranslation: "slk-roh", characterLimit: 320 },
+  });
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  try {
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(
+      page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-mil"]'),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="slk-roh"]'),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+    await request.put(preferences, {
+      data: {
+        mainTranslation: before.mainTranslation,
+        secondaryTranslation: before.secondaryTranslation ?? "eng-kjv",
+        characterLimit: 320,
+      },
+    });
   }
 });

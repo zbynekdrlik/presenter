@@ -95,3 +95,12 @@ on every new target, and an old-inputs answer that started before it is dropped.
 auto-load skips too when the console took over during its wait, and when it is only the echo of a
 translation switch (`translation_echo`: `list_books` re-sets chapter and verse, `set` always
 notifies) while `console_owns_grid`: it would bump `classic_loads` and wipe what is being typed.
+
+- **Translation bar** (`translation_bar.rs`, order in `state::bible_translations`): phone only
+  until B2c (the desktop selects stay, seven specs drive them); SEB · ROH · SEVP · KJV, the rest
+  behind "…", NLT never main. It writes the same `BibleState` signals as the selects, so #701
+  holds: localStorage per browser + the server default. "žiadny" cannot clear the server default
+  (`BiblePreferencesDraft` reads None as "keep").
+- **Log fields:** `/bible/resolve` carries `query` (non-empty input) + `device`; `/bible/trigger-slide`
+  carries `source: "console"` + `device`. The server keeps `device` only for `touch` / `desktop`
+  and counts `console` only when claimed. A prepared show keeps its own route (`source=prepared`).

@@ -88,9 +88,8 @@ pub fn LibraryList() -> impl IntoView {
                     let favs = ctx.favorite_library_ids.get();
                     let active_id = ctx.selected_library_id.get();
 
-                    // Show loading state while libraries are being fetched
-                    if libs.is_empty() && ctx.ws_connected.get() {
-                        // Libraries haven't loaded yet but WS is connected (initial load)
+                    // Not read yet: never claim there are none.
+                    if libs.is_empty() && !ctx.libraries_loaded.get() {
                         return view! {
                             <li class="operator__favorites-empty">
                                 "Loading libraries..."

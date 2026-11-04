@@ -223,7 +223,7 @@ test("WS reconnect after a server restart refreshes libraries without a page rel
     expect(sql.status, sql.stderr.toString()).toBe(0);
 
     // Restart the SAME server on the SAME port + DB file — the client's
-    // own reconnect loop (2s delay, see crates/presenter-ui/src/ws/mod.rs)
+    // own reconnect loop (`ws/passive.rs`, backoff from 1 s)
     // picks it back up with NO page reload.
     server = await startTestServer(config.port, config.dbUrl);
     await page.waitForFunction(

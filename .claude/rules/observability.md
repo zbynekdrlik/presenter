@@ -88,3 +88,10 @@ paths:
   Environment line. pipeline.yml (dev) has no such step: dev2 keeps `gst-debug.conf` on purpose.
   Check S10 on SNV:
   `ssh newlevel@presenter.lan "journalctl -u presenter --since '-10 min' --no-pager | grep -m3 on_response"`.
+
+- **`presenter::bible::lookup`** (INFO, `router/bible/resolve.rs`): one line per console preview —
+  `q` (the typed text, ≤ 120 characters, quoted), `book`, `chapter`, `verses`, `translation`,
+  `device`, `ms`. Only a request that carries `query` logs; the old inputs and the AI do not.
+  The console's shows log `source="console"` and the device (`BibleShowSource::of_trigger_slide`,
+  `client_device`). Check after a release:
+  `journalctl -u presenter --since '-10 min' | grep -E 'presenter::bible::(show|lookup)'`.

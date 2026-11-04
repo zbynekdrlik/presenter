@@ -3,6 +3,8 @@
 //! the presentation CRUD handlers (`bible/presentations.rs`). Split out of
 //! `router/bible.rs` (#590) — same pattern as `router/integrations/`.
 
+use std::time::{Duration, Instant};
+
 use axum::extract::State;
 use axum::Json;
 use presenter_core::slide::SlideMetadata;
@@ -11,7 +13,11 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::super::AppError;
+use crate::state::bible_show_log::client_device;
 use crate::state::AppState;
+
+/// The typed text in a lookup line is cut here: it is client input.
+const LOOKUP_QUERY_MAX_CHARS: usize = 120;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +34,14 @@ pub(crate) struct BibleResolveRequest {
     pub(crate) verse_end: Option<u16>,
     #[serde(default)]
     pub(crate) character_limit: Option<u32>,
+    /// #850 B2a: what the operator typed. The console resolves the reference
+    /// in the browser, so this is the only way it reaches the journal
+    /// (`presenter::bible::lookup`).
+    #[serde(default)]
+    pub(crate) query: Option<String>,
+    /// `touch` / `desktop`, for the lookup line.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,6 +130,7 @@ pub(crate) async fn resolve_bible_slides(
     if payload.main_translation.trim().is_empty() {
         return Err(AppError::bad_request_message("mainTranslation is required"));
     }
+    let started = Instant::now();
     let main_translation_code = payload.main_translation.trim();
     let book = payload.book.trim();
     let book_code = payload
@@ -172,10 +187,33 @@ pub(crate) async fn resolve_bible_slides(
         .iter()
         .map(generated_slide_to_dto)
         .collect();
+    log_console_lookup(&payload, verse_end, started.elapsed());
     Ok(Json(BibleResolveResponse {
         main_translation: generated.main_translation,
         secondary_translation: generated.secondary_translation,
         slides: slide_dtos,
         warning: generated.secondary_warning,
     }))
+}
+
+/// One `presenter::bible::lookup` INFO line per console preview (#850 §8);
+/// a request without `query` (the old inputs, the AI) logs nothing.
+fn log_console_lookup(payload: &BibleResolveRequest, verse_end: u16, elapsed: Duration) {
+    let Some(query) = payload.query.as_deref() else {
+        return;
+    };
+    let query: String = query.chars().take(LOOKUP_QUERY_MAX_CHARS).collect();
+    let verses = format!("{}-{verse_end}", payload.verse_start);
+    let device = client_device(payload.device.as_deref());
+    tracing::info!(
+        target: "presenter::bible::lookup",
+        q = query.as_str(),
+        book = payload.book_code.as_deref().unwrap_or(payload.book.as_str()),
+        chapter = payload.chapter,
+        verses = verses.as_str(),
+        translation = payload.main_translation.as_str(),
+        device = device.as_deref().unwrap_or("-"),
+        ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        "bible lookup"
+    );
 }

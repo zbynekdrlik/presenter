@@ -12,6 +12,7 @@ mod prepared;
 mod preview;
 mod results;
 mod stepping;
+mod translation_bar;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,6 +38,7 @@ use on_air::OnAirStrip;
 use prepared::PreparedSection;
 use preview::ConsolePreview;
 use results::ConsoleResults;
+use translation_bar::TranslationBar;
 
 /// The wait after the last keystroke before the preview request (spec §7.2).
 const PREVIEW_DELAY_MS: u32 = 150;
@@ -137,10 +139,12 @@ struct Console {
     sermons: RwSignal<Vec<PreparedSermon>>,
     /// A prepared item is the preview: it replaces `target` until typing.
     prepared: RwSignal<Option<PreparedPick>>,
+    /// The phone shell: requests say `device: "touch"`, else `"desktop"`.
+    phone: RwSignal<bool>,
 }
 
 impl Console {
-    fn new(bs: &BibleState) -> Self {
+    fn new(bs: &BibleState, phone: RwSignal<bool>) -> Self {
         let books = bs.books;
         let books_translation = bs.books_translation;
         let secondary = bs.secondary_translation;
@@ -216,6 +220,7 @@ impl Console {
             at_end,
             sermons: RwSignal::new(Vec::new()),
             prepared,
+            phone,
         }
     }
 }
@@ -223,11 +228,12 @@ impl Console {
 #[component]
 pub fn BibleConsole() -> impl IntoView {
     let bs = use_ctx!(BibleState);
-    let console = Console::new(&bs);
+    let ctx = use_ctx!(AppContext);
+    let console = Console::new(&bs, ctx.phone_shell);
     setup_auto_preview(console, &bs);
     stepping::setup_walk(console);
     prepared::setup_prepared(console);
-    on_air::setup_on_air_sync(use_ctx!(AppContext).active_bible_slide);
+    on_air::setup_on_air_sync(ctx.active_bible_slide);
     let c = console;
 
     view! {
@@ -241,6 +247,7 @@ pub fn BibleConsole() -> impl IntoView {
             }
         >
             <OnAirStrip />
+            <TranslationBar />
             <ConsoleField console=console />
             <ConsoleResults console=console />
             <PreparedSection console=console />
@@ -310,12 +317,14 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         let (Some(target), Some(main)) = (c.target.get_untracked(), c.main.get_untracked()) else {
             return;
         };
-        let request = resolve_request(
+        let mut request = resolve_request(
             &target,
             &main,
             secondary.get_untracked().as_deref(),
             limit.get_untracked(),
         );
+        request.query = Some(c.input.get_untracked()).filter(|text| !text.trim().is_empty());
+        request.device = Some(device(c));
         c.preview.set(Preview::Loading { key: key.clone() });
         owns_grid.set(true);
         console_takes.update(|n| *n += 1);
@@ -424,7 +433,9 @@ fn show(c: Console, ctx: AppContext) {
     let sermon = c
         .prepared
         .with_untracked(|p| p.as_ref().map(|p| p.sermon.id.clone()));
-    let request = trigger_request(&slide, &c.main.get_untracked().unwrap_or_default());
+    let mut request = trigger_request(&slide, &c.main.get_untracked().unwrap_or_default());
+    request.source = Some("console".to_string());
+    request.device = Some(device(c));
     c.showing.set(true);
     leptos::task::spawn_local(async move {
         let answer = match sermon {
@@ -460,4 +471,14 @@ fn show(c: Console, ctx: AppContext) {
         }
         c.showing.set(false);
     });
+}
+
+/// The show / lookup log's device (#850 §8).
+fn device(c: Console) -> String {
+    if c.phone.get_untracked() {
+        "touch"
+    } else {
+        "desktop"
+    }
+    .to_string()
 }

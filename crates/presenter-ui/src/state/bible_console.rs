@@ -268,6 +268,7 @@ pub fn resolve_request(
         verse_start,
         verse_end,
         character_limit: Some(character_limit),
+        ..Default::default()
     }
 }
 
@@ -305,6 +306,7 @@ pub fn trigger_request(slide: &BibleSlideDto, main: &str) -> TriggerSlideRequest
         chapter: meta.and_then(|m| m.chapter),
         verse_start: meta.and_then(|m| m.effective_verse_start()),
         verse_end: meta.and_then(|m| m.effective_verse_end()),
+        ..Default::default()
     }
 }
 

@@ -108,12 +108,11 @@ pub fn StreamEditorPage() -> impl IntoView {
     ctx.plates.load();
 
     // Live reflection: apply activation events directly, refetch on config bump.
-    let (_ws_state, last_event) = crate::ws::use_live_websocket("stream");
-    Effect::new(move |_| {
-        let Some(event) = last_event.get() else {
-            return;
-        };
-        match event {
+    // #850 B1d: every event applied in arrival order (a coalescing signal
+    // could drop a config bump behind an activation).
+    let live = crate::ws::passive::use_passive_websocket(
+        "stream",
+        std::rc::Rc::new(move |event: LiveEvent| match event {
             LiveEvent::StreamState {
                 output,
                 active_scene_id,
@@ -145,6 +144,14 @@ pub fn StreamEditorPage() -> impl IntoView {
             // #779: a plate on/off air (highlight), the plate list changed
             // (refetch), the live song (the "Pieseň" row): the shared store.
             other => ctx.plates.apply_event(&other),
+        }),
+    );
+    // The hub never replays: a reconnect re-reads what the page may have missed.
+    Effect::new(move |_| {
+        if live.connects.get() > 1 {
+            ctx.refresh();
+            ctx.reload_outputs();
+            ctx.plates.load();
         }
     });
 

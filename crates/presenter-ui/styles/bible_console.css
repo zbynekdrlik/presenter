@@ -58,6 +58,49 @@
   cursor: pointer;
 }
 
+/* ── Translation bar (phone; the desktop keeps its selects until B2c) ── */
+.console-translations {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+}
+body.operator[data-shell="phone"] .console-translations {
+  display: flex;
+}
+body.operator[data-shell="phone"] .bible__translation-row {
+  display: none;
+}
+.console-translations__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.console-translations__label {
+  width: 3.6rem;
+  color: #94a3b8;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.console-translation {
+  flex: 1 0 44px;
+  min-height: 44px;
+  border: 1px solid #334155;
+  border-radius: 9px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.console-translation[aria-pressed="true"] {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
 /* ── Field ── */
 .console-field {
   position: relative;

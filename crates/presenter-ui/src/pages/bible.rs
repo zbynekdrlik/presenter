@@ -742,6 +742,7 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
         verse_start: v_start,
         verse_end: v_end,
         character_limit: Some(char_limit),
+        ..Default::default()
     };
 
     let history_signal = bs.loaded_passages_history;
@@ -810,5 +811,4 @@ fn LoadButton() -> impl IntoView {
     }
 }
 
-// SelectionControls and AddToPresentationButtons are in bible_controls.rs
-// BiblePreparedTab, PresentationCard, BiblePresentationModal, BibleSettingsTab are in bible_prepared.rs
+// SelectionControls / AddToPresentationButtons: bible_controls.rs; the Prepared tab: bible_prepared.rs

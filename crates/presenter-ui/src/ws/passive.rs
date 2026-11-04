@@ -1,8 +1,9 @@
-//! Presence-free live socket for read-only pages (#852: the interpreter
-//! tablet and the šepkár page). Unlike `use_live_websocket` it hands EVERY
-//! frame to `on_event` synchronously, in arrival order (#793: a latest-value
-//! slot coalesces a burst and loses events); unlike the stage socket it sends
-//! no presence, so these pages never count as stage displays.
+//! Presence-free live socket for every operator surface (#852: the
+//! interpreter tablet and the šepkár page; #850 B1d: the operator, the Bible
+//! tablet and the stream editor). It hands EVERY frame to `on_event`
+//! synchronously, in arrival order (#793: a latest-value slot coalesces a
+//! burst and loses events); unlike the stage socket it sends no presence, so
+//! these pages never count as stage displays.
 //!
 //! Liveness (A+B spec §6.7): the hub heartbeats every 1.5 s. A socket is
 //! "connected" from its first frame; one silent for 5 s is dropped and

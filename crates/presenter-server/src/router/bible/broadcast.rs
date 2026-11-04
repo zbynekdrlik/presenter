@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use tracing::instrument;
 
 use super::super::AppError;
-use crate::state::bible_show_log::{BibleShowOrigin, BibleShowSource};
+use crate::state::bible_show_log::{client_device, BibleShowOrigin, BibleShowSource};
 use crate::state::AppState;
 use presenter_core::{
     BiblePreferences, BiblePreferencesDraft, BiblePresentationId, BibleReference, BibleSlideId,
@@ -126,6 +126,12 @@ pub(crate) struct BibleTriggerSlideRequest {
     pub verse_start: Option<u16>,
     #[serde(default)]
     pub verse_end: Option<u16>,
+    /// `console` from the verse console (#850 B2a); only that value counts.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// `touch` / `desktop`, for the show log.
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -162,7 +168,9 @@ pub(crate) async fn trigger_bible_slide(
         verse_start: payload.verse_start,
         verse_end: payload.verse_end,
     };
-    let origin = show_origin(BibleShowSource::Api, &headers, connect_info);
+    let source = BibleShowSource::of_trigger_slide(payload.source.as_deref());
+    let mut origin = show_origin(source, &headers, connect_info);
+    origin.device = client_device(payload.device.as_deref());
     state
         .trigger_bible_slide_output(output.clone(), reference_metadata, origin)
         .await;
