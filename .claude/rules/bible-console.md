@@ -104,3 +104,9 @@ notifies) while `console_owns_grid`: it would bump `classic_loads` and wipe what
 - **Log fields:** `/bible/resolve` carries `query` (non-empty input) + `device`; `/bible/trigger-slide`
   carries `source: "console"` + `device`. The server keeps `device` only for `touch` / `desktop`
   and counts `console` only when claimed. A prepared show keeps its own route (`source=prepared`).
+- **Text search** (`text_search.rs`, `state::bible_console_search`): only when
+  `wants_text_search` (words without a reference; never `zid 11 1`), 300 ms after the last
+  keystroke, 10 hits labelled with the translation; a tap previews (a `Picked` from `hit_target`),
+  never shows. An answer counts only for its input AND main translation. `build_fts_query` splits
+  on punctuation, counts characters, drops all-digit tokens and keeps a combining accent inside
+  its word (persistence `fts_query_tests`).

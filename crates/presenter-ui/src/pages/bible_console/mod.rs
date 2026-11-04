@@ -12,6 +12,7 @@ mod prepared;
 mod preview;
 mod results;
 mod stepping;
+mod text_search;
 mod translation_bar;
 
 use std::cell::RefCell;
@@ -19,7 +20,7 @@ use std::rc::Rc;
 
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
-use presenter_core::bible::resolver::{lookup, Versification};
+use presenter_core::bible::resolver::{lookup, Resolution, Versification};
 
 use crate::api::bible::{self as api, BibleSlideDto};
 use crate::state::bible::BibleState;
@@ -38,6 +39,7 @@ use on_air::OnAirStrip;
 use prepared::PreparedSection;
 use preview::ConsolePreview;
 use results::ConsoleResults;
+use text_search::TextSearch;
 use translation_bar::TranslationBar;
 
 /// The wait after the last keystroke before the preview request (spec §7.2).
@@ -108,6 +110,8 @@ struct Console {
     input: RwSignal<String>,
     field: NodeRef<leptos::html::Input>,
     picked: RwSignal<Option<Picked>>,
+    /// The field read against the main translation's structure.
+    resolution: Memo<Resolution>,
     view: Memo<ConsoleView>,
     target: Memo<Option<PreviewTarget>>,
     /// `preview_key` of `target` in the current translations; `None` = nothing
@@ -153,9 +157,10 @@ impl Console {
         let picked = RwSignal::new(None::<Picked>);
         let structure: Memo<Versification> = Memo::new(move |_| books.with(|b| versification(b)));
         let main = Memo::new(move |_| books_translation.get());
+        let resolution = Memo::new(move |_| input.with(|text| structure.with(|s| lookup(text, s))));
         let view = Memo::new(move |_| {
             let translation = main.get().unwrap_or_default();
-            input.with(|text| structure.with(|s| console_view(&lookup(text, s), &translation)))
+            resolution.with(|r| console_view(r, &translation))
         });
         // A pick outlives a translation switch, in the new translation's words
         // (spec §7.1 1b: the preview re-resolves); a translation without that
@@ -202,6 +207,7 @@ impl Console {
             input,
             field: NodeRef::new(),
             picked,
+            resolution,
             view,
             target,
             target_key,
@@ -250,6 +256,7 @@ pub fn BibleConsole() -> impl IntoView {
             <TranslationBar />
             <ConsoleField console=console />
             <ConsoleResults console=console />
+            <TextSearch console=console />
             <PreparedSection console=console />
             <ConsolePreview console=console />
             <ConsoleActions console=console />

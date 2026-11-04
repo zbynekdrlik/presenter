@@ -1441,3 +1441,40 @@ test("the bar always shows what is selected: a secondary outside its row, a main
     });
   }
 });
+
+test("words search the text: 'viera je zárukou' offers Hebrejom 11:1 · SEB, and a tap only previews it", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, PHONE_390);
+  try {
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const searches: string[] = [];
+    page.on("request", (req) => {
+      const url = new URL(req.url());
+      if (url.pathname === "/bible/search") searches.push(url.searchParams.get("query") ?? "");
+    });
+    await page.locator('[data-role="console-field"]').fill("viera je zárukou");
+    const hit = page.locator('[data-role="console-text-search"]').first();
+    await expect(hit).toHaveAttribute("data-book-code", "HEB");
+    await expect(hit).toHaveAttribute("data-chapter", "11");
+    await expect(hit).toHaveAttribute("data-verse-start", "1");
+    await expect(hit).toContainText("Hebrejom 11:1");
+    await expect(hit).toContainText("SEB");
+    await hit.tap();
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
+    await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute(
+      "data-reference",
+      "Hebrejom 11:1 (SEB)",
+    );
+    expect(shows).toHaveLength(0);
+
+    // A reference never searches the text (the search waits 300 ms: wait past it).
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await page.waitForTimeout(400);
+    expect(searches.filter((q) => q === "zid 11 1")).toEqual([]);
+    await expect(page.locator('[data-role="console-text-search"]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
