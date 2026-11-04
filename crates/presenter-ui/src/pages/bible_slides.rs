@@ -173,6 +173,7 @@ fn build_trigger_request(
         chapter: meta.and_then(|m| m.chapter),
         verse_start: meta.and_then(|m| m.effective_verse_start()),
         verse_end: meta.and_then(|m| m.effective_verse_end()),
+        ..Default::default()
     }
 }
 

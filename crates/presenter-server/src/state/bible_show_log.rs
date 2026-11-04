@@ -4,14 +4,16 @@
 
 use presenter_core::BibleSlideOutput;
 
-/// The endpoint a Bible show came from. B2a adds the console, A2b Companion
-/// and the AI tools when the legacy trigger is rerouted here.
+/// The endpoint a Bible show came from. A2b adds Companion and the AI tools
+/// when the legacy trigger is rerouted here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BibleShowSource {
     /// `POST /bible/trigger-slide`.
     Api,
     /// `POST /bible/presentations/{id}/slides/{slide_id}/trigger`.
     Prepared,
+    /// `POST /bible/trigger-slide` from the verse console (#850 B2a).
+    Console,
 }
 
 impl BibleShowSource {
@@ -19,8 +21,27 @@ impl BibleShowSource {
         match self {
             Self::Api => "api",
             Self::Prepared => "prepared",
+            Self::Console => "console",
         }
     }
+
+    /// `/bible/trigger-slide`'s source: `console` when the client says so,
+    /// otherwise the plain API.
+    pub fn of_trigger_slide(claimed: Option<&str>) -> Self {
+        if claimed == Some("console") {
+            Self::Console
+        } else {
+            Self::Api
+        }
+    }
+}
+
+/// The device a client names, only when it is one the log knows (`touch`,
+/// `desktop`); anything else (a client-controlled string) is dropped.
+pub fn client_device(claimed: Option<&str>) -> Option<String> {
+    claimed
+        .filter(|device| matches!(*device, "touch" | "desktop"))
+        .map(str::to_string)
 }
 
 /// Who asked for a show.
@@ -104,6 +125,26 @@ mod tests {
                 secondary: "Hebrews 11:1 (NLT)",
             }
         );
+    }
+
+    #[test]
+    fn only_the_console_claims_a_source_and_only_known_devices_are_kept() {
+        assert_eq!(
+            BibleShowSource::of_trigger_slide(Some("console")),
+            BibleShowSource::Console
+        );
+        assert_eq!(
+            BibleShowSource::of_trigger_slide(Some("prepared")),
+            BibleShowSource::Api
+        );
+        assert_eq!(
+            BibleShowSource::of_trigger_slide(None),
+            BibleShowSource::Api
+        );
+        assert_eq!(client_device(Some("touch")).as_deref(), Some("touch"));
+        assert_eq!(client_device(Some("desktop")).as_deref(), Some("desktop"));
+        assert_eq!(client_device(Some("x\" injected=\"1")), None);
+        assert_eq!(client_device(None), None);
     }
 
     #[test]

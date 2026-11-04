@@ -3,6 +3,7 @@ pub mod bible_console;
 pub mod bible_console_prepared;
 pub mod bible_console_step;
 pub mod bible_range;
+pub mod bible_translations;
 pub mod interpreter;
 pub mod keyboard_inset;
 pub mod operator;

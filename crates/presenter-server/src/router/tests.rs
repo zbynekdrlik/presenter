@@ -3488,3 +3488,118 @@ async fn trigger_slide_logs_one_show_line_with_source_ip_and_reference() {
     );
     assert_eq!(line.field("secondary"), Some(quoted("-").as_str()));
 }
+
+// #850 B2a: the verse console resolves the reference in the browser, so the
+// typed text reaches the journal only through `query` on /bible/resolve, and
+// its shows carry `source: "console"` + the device into the show line.
+async fn seed_hebrews_11_1(state: &AppState) {
+    let translation = BibleTranslation::new("slk-seb", "SEB", "sk");
+    let reference = BibleReference::new_with_code("Hebrejom", "HEB", 58, 11, 1, 1).unwrap();
+    let passage = BiblePassage::new(
+        reference,
+        translation.clone(),
+        "Viera je podstatou toho, v čo dúfame".to_string(),
+    );
+    let batch =
+        presenter_core::bible::BibleIngestionBatch::new(translation, vec![passage]).unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .unwrap();
+}
+
+fn console_resolve(query: Option<&str>) -> Request<Body> {
+    let mut body = json!({
+        "mainTranslation": "slk-seb",
+        "book": "Hebrejom",
+        "bookCode": "HEB",
+        "chapter": 11,
+        "verseStart": 1,
+        "verseEnd": 1,
+        "characterLimit": 320,
+        "device": "touch"
+    });
+    if let Some(query) = query {
+        body["query"] = json!(query);
+    }
+    Request::builder()
+        .method("POST")
+        .uri("/bible/resolve")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_console_preview_logs_one_lookup_line_with_the_typed_text() {
+    let capture = Capture::install();
+    let state = AppState::in_memory().await.unwrap();
+    seed_hebrews_11_1(&state).await;
+    let response = build_router(state)
+        .oneshot(console_resolve(Some("zid 11 1")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let lines = capture.events("presenter::bible::lookup");
+    assert_eq!(lines.len(), 1, "one lookup line per preview: {lines:?}");
+    let line = &lines[0];
+    assert_eq!(line.level, tracing::Level::INFO);
+    assert_eq!(line.field("q"), Some(quoted("zid 11 1").as_str()));
+    assert_eq!(line.field("book"), Some(quoted("HEB").as_str()));
+    assert_eq!(line.field("chapter"), Some("11"));
+    assert_eq!(line.field("verses"), Some(quoted("1-1").as_str()));
+    assert_eq!(line.field("translation"), Some(quoted("slk-seb").as_str()));
+    assert_eq!(line.field("device"), Some(quoted("touch").as_str()));
+    assert!(line.field("ms").is_some());
+}
+
+#[tokio::test]
+async fn a_preview_without_typed_text_logs_no_lookup_line() {
+    let capture = Capture::install();
+    let state = AppState::in_memory().await.unwrap();
+    seed_hebrews_11_1(&state).await;
+    let response = build_router(state)
+        .oneshot(console_resolve(None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(capture.events("presenter::bible::lookup").is_empty());
+}
+
+#[tokio::test]
+async fn a_console_show_logs_source_console_and_the_device_and_nothing_else_claims_it() {
+    let capture = Capture::install();
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state);
+    for (source, device) in [("console", "touch"), ("prepared", "x\" injected=\"1")] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/bible/trigger-slide")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "mainText": "Viera je podstatou toho, v čo dúfame",
+                            "mainReference": "Hebrejom 11:1 (SEB)",
+                            "source": source,
+                            "device": device
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let lines = capture.events("presenter::bible::show");
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0].field("source"), Some(quoted("console").as_str()));
+    assert_eq!(lines[0].field("device"), Some(quoted("touch").as_str()));
+    assert_eq!(lines[1].field("source"), Some(quoted("api").as_str()));
+    assert_eq!(lines[1].field("device"), Some(quoted("-").as_str()));
+}

@@ -166,7 +166,7 @@ pub async fn trigger(req: &TriggerRequest) -> Result<BibleBroadcast, ApiError> {
 // Trigger slide (single-source-of-truth)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TriggerSlideRequest {
     pub main_text: String,
@@ -189,6 +189,12 @@ pub struct TriggerSlideRequest {
     pub verse_start: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verse_end: Option<u16>,
+    /// #850 B2a: `console` from the verse console (the show log's source).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// `touch` / `desktop`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -220,7 +226,7 @@ pub async fn trigger_presentation_slide(
 // Resolve (generate slides from reference)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveRequest {
     pub main_translation: String,
@@ -235,6 +241,12 @@ pub struct ResolveRequest {
     pub verse_end: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character_limit: Option<u32>,
+    /// #850 B2a: the console's typed text (the server's lookup line).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// `touch` / `desktop`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
