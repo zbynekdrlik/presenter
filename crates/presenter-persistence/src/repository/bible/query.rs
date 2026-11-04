@@ -394,11 +394,6 @@ mod fts_query_tests {
         assert_eq!(build_fts_query("\" - \""), None);
         assert_eq!(build_fts_query("\""), None);
     }
-}
-
-#[cfg(test)]
-mod fts_query_tests {
-    use super::build_fts_query;
 
     #[test]
     fn a_reference_keeps_only_its_word_and_never_glues_its_numbers() {
@@ -418,5 +413,7 @@ mod fts_query_tests {
             Some("Pán* je* môj*")
         );
         assert_eq!(build_fts_query("ž a"), None);
+        // A combining accent is part of its word: it never splits it.
+        assert_eq!(build_fts_query("na\u{0301}dej").as_deref(), Some("nadej*"));
     }
 }
