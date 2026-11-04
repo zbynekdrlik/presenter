@@ -395,3 +395,28 @@ mod fts_query_tests {
         assert_eq!(build_fts_query("\""), None);
     }
 }
+
+#[cfg(test)]
+mod fts_query_tests {
+    use super::build_fts_query;
+
+    #[test]
+    fn a_reference_keeps_only_its_word_and_never_glues_its_numbers() {
+        assert_eq!(build_fts_query("zid 11:1").as_deref(), Some("zid*"));
+        assert_eq!(build_fts_query("11:1"), None);
+        assert_eq!(build_fts_query("Ž 23"), None);
+    }
+
+    #[test]
+    fn words_are_split_on_punctuation_and_counted_in_characters() {
+        assert_eq!(
+            build_fts_query("viera je zárukou").as_deref(),
+            Some("viera* je* zárukou*")
+        );
+        assert_eq!(
+            build_fts_query("\"Pán\"-je(môj)").as_deref(),
+            Some("Pán* je* môj*")
+        );
+        assert_eq!(build_fts_query("ž a"), None);
+    }
+}
