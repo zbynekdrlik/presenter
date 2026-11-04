@@ -5,6 +5,10 @@ paths:
   - "crates/presenter-ui/src/components/phone_tab_bar.rs"
   - "crates/presenter-ui/src/components/header.rs"
   - "crates/presenter-ui/src/components/stage_preview.rs"
+  - "crates/presenter-ui/src/components/more_sheet.rs"
+  - "crates/presenter-ui/src/components/stage_layout_select.rs"
+  - "crates/presenter-ui/src/components/ai_status.rs"
+  - "crates/presenter-ui/src/components/resolume_status.rs"
   - "crates/presenter-ui/src/components/slide_list.rs"
   - "crates/presenter-ui/styles/phone_shell.css"
   - "crates/presenter-ui/index.html"
@@ -55,3 +59,17 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 ## Desktop header (#875)
 
 `body.operator:not([data-shell="phone"]) .operator__header` is a grid: brand + links on top, search + tabs under them, stage controls on the right; under 1440 px the tabs take their own row. Nothing in the header goes out of flow: its height changes per view, the absolute links row was covered by the tabs. `operator-header-layout.spec.ts` measures overlaps at six widths.
+- **"Viac" sheet** (`components/more_sheet.rs`): mounted once in the phone shell, toggled by
+  `data-open`. Opening pushes a same-URL history entry; ✕, the backdrop and Escape close at once
+  and go back once (a double tap must not leave the page); a real Back closes through
+  `operator.rs`'s popstate. Stage controls mount per open: a closed sheet keeps no half-answered
+  confirm.
+- **The chips move** between the desktop header and the sheet when a window or an iPad crosses
+  768 px, so `<Show>` disposes a mounted copy. A timer that outlives its component reads disposed
+  signals and PANICS (`get_untracked`), and a stacked one doubles the polls. A poller in a
+  component that can unmount holds its timer in `StoredValue::new_local(interval)` (dropped with
+  the owner = cancelled, works on the host build, `on_cleanup` does not), and reads after an
+  `await` with `try_get_untracked`. Never `interval.forget()` there.
+- **Stage Output from a phone** = `StageLayoutSelect confirm=true`: the change waits for
+  "Prepnúť"; the select keeps showing the layout on air. The desktop header switches at once. A
+  refused POST puts the select back.

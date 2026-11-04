@@ -77,6 +77,8 @@ pub struct OperatorState {
     /// default (3, or 2 on a phone).
     pub slide_columns: RwSignal<Option<u8>>,
     pub catalog_top_height: RwSignal<f64>,
+    /// #850 §6.3: the phone header's "Viac" sheet is open.
+    pub more_sheet_open: RwSignal<bool>,
     pub submitting: RwSignal<bool>,
     pub paste_text: RwSignal<String>,
     pub import_mode: RwSignal<String>,
@@ -199,6 +201,7 @@ impl OperatorState {
                 .as_deref(),
             )),
             catalog_top_height: RwSignal::new(catalog_top_height),
+            more_sheet_open: RwSignal::new(false),
             submitting: RwSignal::new(false),
             paste_text: RwSignal::new(String::new()),
             import_mode: RwSignal::new(String::new()),

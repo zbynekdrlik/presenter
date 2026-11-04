@@ -51,8 +51,7 @@ body.operator[data-shell="phone"] .operator__header-brand {
 body.operator[data-shell="phone"] .operator__version-badge,
 body.operator[data-shell="phone"] .operator__brand-nav,
 body.operator[data-shell="phone"] .operator__view-nav,
-body.operator[data-shell="phone"]:not([data-view="worship"]) .operator__stage-preview,
-body.operator[data-shell="phone"] .operator__stage-layout-label {
+body.operator[data-shell="phone"]:not([data-view="worship"]) .operator__stage-preview {
   display: none;
 }
 .operator__ws-dot {
@@ -75,10 +74,6 @@ body.operator[data-shell="phone"] .operator__header-right {
   gap: 8px;
   min-width: 0;
   max-width: 100%;
-}
-body.operator[data-shell="phone"] .operator__stage-layout select {
-  min-height: 44px;
-  max-width: 7.5rem;
 }
 /* No frame around the buttons: 44 px buttons + 6 px padding = the 56 px header. */
 body.operator[data-shell="phone"] .operator__mode-toggle {
@@ -224,4 +219,112 @@ body.operator.operator--bible[data-shell="phone"] .operator__slides-column {
   height: auto;
   max-height: none;
   overflow: visible;
+}
+
+/* ── "Viac" sheet (#850 §6.3) ── */
+.operator__more {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: transparent;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.more-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: none;
+}
+.more-sheet[data-open="true"] {
+  display: block;
+}
+.more-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.6);
+}
+.more-sheet__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  border-radius: 16px 16px 0 0;
+  background: #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.more-sheet__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.more-sheet__head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.more-sheet__close {
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1rem;
+}
+.more-sheet__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.more-sheet__group .operator__surface-nav {
+  flex-wrap: wrap;
+}
+.more-sheet__group .operator__surface-nav-link,
+.more-sheet__group .operator__stage-layout select {
+  min-height: 44px;
+}
+.more-sheet__version {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+.stage-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 12px;
+  background: #3a2a10;
+  color: #fcd9a0;
+}
+.stage-confirm p {
+  flex: 1 1 100%;
+  margin: 0;
+}
+.stage-confirm button {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+}
+.stage-confirm__yes {
+  border: none;
+  background: #3b82f6;
+  color: #ffffff;
+}
+.stage-confirm__no {
+  border: 1px solid #334155;
+  background: transparent;
+  color: #e2e8f0;
 }

@@ -109,14 +109,14 @@ pub fn ResolumeStatusChips() -> impl IntoView {
     };
     poll();
 
-    // `forget()` — the timer dies with page navigation (no client-side
-    // router), same as every other operator-header/settings poller. Not
-    // `on_cleanup`: `gloo_timers::Interval` is not `Send`, which the host
-    // (non-wasm) `cargo test --lib` build of this crate requires.
+    // The chips move between the desktop header and the phone's "Viac" sheet
+    // when a window or tablet crosses the phone width (#850 U8), so unmounting
+    // must stop the timer: a forgotten one doubles the polls and reads this
+    // component's disposed signals. Dropped with the owner, which cancels it.
     let interval = gloo_timers::callback::Interval::new(RESOLUME_STATUS_REFRESH_MS, move || {
         poll();
     });
-    interval.forget();
+    StoredValue::new_local(interval);
 
     view! {
         <div class="operator__resolume-chips" data-role="resolume-status-chips">

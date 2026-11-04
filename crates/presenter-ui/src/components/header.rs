@@ -4,7 +4,9 @@ use std::rc::Rc;
 
 use crate::api::bible as bible_api;
 use crate::components::ai_status::AiStatusChip;
+use crate::components::more_sheet::open_more_sheet;
 use crate::components::resolume_status::ResolumeStatusChips;
+use crate::components::stage_layout_select::StageLayoutSelect;
 use crate::components::stage_preview::StagePreview;
 use crate::components::stage_text_mode_picker::StageTextModePicker;
 use crate::components::surface_nav::SurfaceNav;
@@ -161,14 +163,12 @@ pub fn Header() -> impl IntoView {
         crate::state::session::set("mode", &m);
     };
 
-    // Stage layout change
-    let on_layout_change = move |ev| {
-        let code: String = event_target_value(&ev);
-        let code_clone = code.clone();
-        ctx.stage_layout_code.set(code.clone());
-        leptos::task::spawn_local(async move {
-            let _ = crate::api::stage::set_layout(&code_clone).await;
-        });
+    // #850 §6.3: on a phone the chips, surfaces and Stage Output live in the
+    // "Viac" sheet; mounting them here too would double their 5 s polls.
+    let phone = ctx.phone_shell;
+    let on_more = {
+        let op = op.clone();
+        move |_| open_more_sheet(&op)
     };
 
     // #574: version-drift detection. An operator tab left open across a
@@ -295,9 +295,11 @@ pub fn Header() -> impl IntoView {
                     // the Stage Output select (see `operator__header-right`
                     // below, which no longer mounts the chips).
                     <div class="operator__brand-nav">
-                        <SurfaceNav />
-                        <ResolumeStatusChips />
-                        <AiStatusChip />
+                        <Show when=move || !phone.get()>
+                            <SurfaceNav />
+                            <ResolumeStatusChips />
+                            <AiStatusChip />
+                        </Show>
                     </div>
                 </div>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
@@ -348,25 +350,11 @@ pub fn Header() -> impl IntoView {
                 }).collect_view()}
             </nav>
             <div class="operator__header-right">
-                <div class="operator__stage-layout" aria-label="Stage display mode">
-                    <label class="operator__stage-layout-label" for="stage-layout-select">"Stage Output"</label>
-                    <select
-                        id="stage-layout-select"
-                        data-role="stage-layout-select"
-                        on:change=on_layout_change
-                    >
-                        {move || ctx.stage_layouts.get().into_iter().map(|layout| {
-                            let code = layout.code.clone();
-                            let name = layout.name.clone();
-                            let selected = ctx.stage_layout_code.get() == code;
-                            view! {
-                                <option value=code prop:selected=selected>{name}</option>
-                            }
-                        }).collect_view()}
-                    </select>
-                </div>
-                // #799: text mode for the API layouts, only while one is selected.
-                <StageTextModePicker />
+                <Show when=move || !phone.get()>
+                    <StageLayoutSelect />
+                    // #799: text mode for the API layouts, only while one is selected.
+                    <StageTextModePicker />
+                </Show>
                 <StagePreview />
                 <div class="operator__mode-toggle">
                     {["live", "edit"].into_iter().map(|m| {
@@ -389,6 +377,17 @@ pub fn Header() -> impl IntoView {
                         }
                     }).collect_view()}
                 </div>
+                <Show when=move || phone.get()>
+                    <button
+                        type="button"
+                        class="operator__more"
+                        data-role="more-toggle"
+                        aria-haspopup="dialog"
+                        on:click=on_more.clone()
+                    >
+                        "Viac"
+                    </button>
+                </Show>
             </div>
         </header>
     }

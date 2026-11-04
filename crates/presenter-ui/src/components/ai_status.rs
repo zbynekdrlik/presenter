@@ -132,7 +132,8 @@ pub fn AiStatusChip() -> impl IntoView {
         in_flight.set(true);
         leptos::task::spawn_local(async move {
             let result = check_status().await;
-            if poll_seq.get_untracked() == seq {
+            // `try_`: the chip may have unmounted while this answer was on its way.
+            if poll_seq.try_get_untracked() == Some(seq) {
                 match result {
                     Ok(resp) => {
                         poll_failures.set(0);
@@ -167,14 +168,14 @@ pub fn AiStatusChip() -> impl IntoView {
     };
     poll();
 
-    // `forget()` — the timer dies with page navigation (no client-side
-    // router), same as every other operator-header/settings poller. Not
-    // `on_cleanup`: `gloo_timers::Interval` is not `Send`, which the host
-    // (non-wasm) `cargo test --lib` build of this crate requires.
+    // The chips move between the desktop header and the phone's "Viac" sheet
+    // when a window or tablet crosses the phone width (#850 U8), so unmounting
+    // must stop the timer: a forgotten one doubles the polls and reads this
+    // component's disposed signals. Dropped with the owner, which cancels it.
     let interval = gloo_timers::callback::Interval::new(AI_STATUS_REFRESH_MS, move || {
         poll();
     });
-    interval.forget();
+    StoredValue::new_local(interval);
 
     let state = move || status.with(|s| ai_chip_state(s.as_ref()));
     let dot_class = move || {
