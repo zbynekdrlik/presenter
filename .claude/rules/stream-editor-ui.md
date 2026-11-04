@@ -29,8 +29,8 @@ mirrors `.claude/rules/stream-graphics.md`'s server-side note. Do not refetch th
 def on every change; it defeats the lightweight `StreamState` event.
 
 ## Reuse the GENERIC ws + api layers — no bespoke client
-- WS: `crate::ws::use_live_websocket("stream")` gives
-  `(_state, last_event: ReadSignal<Option<LiveEvent>>)`. Do NOT hand-roll a
+- WS: `crate::ws::passive::use_passive_websocket("stream", handler)` calls the handler for EVERY
+  event (#850 B1d); `connects` > 1 re-reads the def, outputs and plates. Do NOT hand-roll a
   stream ws hook (`ws/stream.rs` belongs to the output-page lane).
 - REST: `crate::api::{get_json, put_json, post_json, patch_json, put_no_content,
   delete}`. No `api/stream.rs` module — the server write DTOs are `pub(super)` in

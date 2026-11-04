@@ -110,7 +110,7 @@ pub fn StreamEditorPage() -> impl IntoView {
     // Live reflection: apply activation events directly, refetch on config bump.
     // #850 B1d: every event applied in arrival order (a coalescing signal
     // could drop a config bump behind an activation).
-    let _live = crate::ws::passive::use_passive_websocket(
+    let live = crate::ws::passive::use_passive_websocket(
         "stream",
         std::rc::Rc::new(move |event: LiveEvent| match event {
             LiveEvent::StreamState {
@@ -146,6 +146,14 @@ pub fn StreamEditorPage() -> impl IntoView {
             other => ctx.plates.apply_event(&other),
         }),
     );
+    // The hub never replays: a reconnect re-reads what the page may have missed.
+    Effect::new(move |_| {
+        if live.connects.get() > 1 {
+            ctx.refresh();
+            ctx.reload_outputs();
+            ctx.plates.load();
+        }
+    });
 
     view! {
         <div class="stream-editor" data-role="stream-editor-page">

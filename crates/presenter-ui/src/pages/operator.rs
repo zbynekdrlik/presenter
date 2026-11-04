@@ -286,9 +286,11 @@ fn setup_body_attributes(ctx: &AppContext) {
 fn load_initial_data(ctx: &AppContext) {
     // Libraries
     let libraries = ctx.libraries;
+    let libraries_loaded = ctx.libraries_loaded;
     leptos::task::spawn_local(async move {
         if let Ok(libs) = crate::api::libraries::list_libraries().await {
             libraries.set(libs);
+            libraries_loaded.set(true);
         }
     });
 

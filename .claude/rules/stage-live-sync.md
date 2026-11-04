@@ -117,9 +117,14 @@ line is a reconnect, not an operator switch.
 ## 5. Operator resync (#850 B1d)
 
 `pages/operator_live.rs`: `live_event_handler` applies every event; `setup_live_sync` re-reads the
-Bible state (`/bible/active-slide` + `/bible/active`), the stage layout, the lists and the text
-mode on every reconnect after the first. `SyncGenerations` drops a resync answer when a live event
-of the same kind (any Bible event / `StageLayout`) arrived while it was in flight. The lazily
+Bible state (`/bible/active-slide` + `/bible/active`), the stage, the layout, the lists, the
+Prepared lists (`bible_presentations_version`) and the text mode on EVERY connect, the first too:
+`connects` counts sockets that delivered a frame, so a restart during the initial load would
+leave the lists empty otherwise. Only a reconnect feeds the snapshot through `on_stage_snapshot`
+(a first read is no stage change for Follow). `SyncGenerations` drops a resync answer when a live
+event of the same kind (any Bible event, `Stage`, `StageLayout`, `StageTextMode`) arrived while it
+was in flight. The tablet (`resync_tablet`) clears the card mark on a missed clear and trusts no
+cached slides; the stream editor re-reads the def, outputs and plates (`connects` > 1). The lazily
 mounted Menovky view hears events through `LiveSink` (a handler it registers once mounted, never a
 signal) and reloads when `connects` changes. E2E: `operator-live-resync.spec.ts` (a deaf
 `routeWebSocket` route, then `close({ code: 4000 })`; a route that forwards nothing is replaced

@@ -36,13 +36,17 @@ pub fn TabletPage() -> impl IntoView {
     // #850 B1d: every live event applied in arrival order (the old
     // latest-value signal could lose one), a silence watchdog, and a resync
     // of the active passage + presentations after every reconnect.
+    let bible_events = std::rc::Rc::new(std::cell::Cell::new(0_u32));
     let handler: ws::passive::LiveEventHandler = {
         let ctx = ctx.clone();
+        let bible_events = bible_events.clone();
         std::rc::Rc::new(move |event: LiveEvent| match event {
             LiveEvent::Bible { broadcast } => {
+                bible_events.set(bible_events.get().wrapping_add(1));
                 ctx.active_broadcast.set(Some(broadcast));
             }
             LiveEvent::BibleCleared => {
+                bible_events.set(bible_events.get().wrapping_add(1));
                 ctx.active_broadcast.set(None);
                 ctx.active_slide_id.set(None);
             }
@@ -76,11 +80,9 @@ pub fn TabletPage() -> impl IntoView {
         Effect::new(move |_| {
             if live.connects.get() > 1 {
                 let ctx = ctx.clone();
+                let bible_events = bible_events.clone();
                 leptos::task::spawn_local(async move {
-                    if let Ok(broadcast) = bible::get_broadcast().await {
-                        ctx.active_broadcast.set(broadcast);
-                    }
-                    refresh_presentations(&ctx).await;
+                    resync_tablet(&ctx, &bible_events).await;
                 });
             }
         });
@@ -585,6 +587,26 @@ pub(super) async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
             ctx.show_toast(&format!("Failed to trigger slide: {e}"), "error");
         }
     }
+}
+
+/// What a socket gap may have hidden (#850 B1d): the passage on the wall (a
+/// live event during the read is newer, so the answer is dropped), a missed
+/// clear's card mark, and any slide edit: no cached slides are trusted.
+async fn resync_tablet(ctx: &TabletContext, bible_events: &std::cell::Cell<u32>) {
+    let events_at = bible_events.get();
+    if let Ok(broadcast) = bible::get_broadcast().await {
+        if bible_events.get() == events_at {
+            if broadcast.is_none() {
+                ctx.active_slide_id.set(None);
+            }
+            ctx.active_broadcast.set(broadcast);
+        }
+    }
+    ctx.slides_cache.update(std::collections::HashMap::clear);
+    if let Some(id) = ctx.current_presentation_id.get_untracked() {
+        sermon_select::reload_open_slides(ctx, &id).await;
+    }
+    refresh_presentations(ctx).await;
 }
 
 async fn refresh_presentations(ctx: &TabletContext) {

@@ -26,6 +26,8 @@ pub(crate) type LiveSink = StoredValue<Option<LiveEventHandler>, LocalStorage>;
 pub(super) struct SyncGenerations {
     bible: Rc<Cell<u32>>,
     layout: Rc<Cell<u32>>,
+    stage: Rc<Cell<u32>>,
+    text_mode: Rc<Cell<u32>>,
 }
 
 fn bump(counter: &Cell<u32>) {
@@ -53,6 +55,7 @@ fn apply_event(ctx: &AppContext, gens: &SyncGenerations, event: LiveEvent) {
         LiveEvent::Stage { snapshot } => {
             // AbleSet Follow: Live mode opens the stage's song (#853: never
             // in Edit mode). The stage preview always updates.
+            bump(&gens.stage);
             on_stage_snapshot(ctx, &snapshot);
             ctx.stage_snapshot.set(Some(snapshot));
         }
@@ -70,7 +73,10 @@ fn apply_event(ctx: &AppContext, gens: &SyncGenerations, event: LiveEvent) {
             bump(&gens.layout);
             ctx.stage_layout_code.set(code);
         }
-        LiveEvent::StageTextMode { mode } => ctx.stage_text_mode.set(mode),
+        LiveEvent::StageTextMode { mode } => {
+            bump(&gens.text_mode);
+            ctx.stage_text_mode.set(mode);
+        }
         LiveEvent::Bible { broadcast } => {
             bump(&gens.bible);
             ctx.active_bible_broadcast.set(Some(broadcast));
@@ -97,9 +103,11 @@ fn apply_event(ctx: &AppContext, gens: &SyncGenerations, event: LiveEvent) {
     }
 }
 
-/// `ws_connected` follows the socket; every reconnect after the first one
-/// re-reads what changed meanwhile (#574 lists, #799 text mode, and since
-/// #850 the Bible state and the stage layout).
+/// `ws_connected` follows the socket; every connect re-reads what may have
+/// changed (#574 lists, #799 text mode, and since #850 the Bible state, the
+/// stage and the Prepared lists). The FIRST one too: `connects` counts sockets
+/// that delivered a frame, so a server restart during the initial load would
+/// otherwise leave the lists empty for good.
 pub(super) fn setup_live_sync(ctx: &AppContext, ws: PassiveWsHandle, gens: &SyncGenerations) {
     let ws_connected = ctx.ws_connected;
     Effect::new(move |_| {
@@ -108,16 +116,21 @@ pub(super) fn setup_live_sync(ctx: &AppContext, ws: PassiveWsHandle, gens: &Sync
     let ctx = ctx.clone();
     let gens = gens.clone();
     Effect::new(move |_| {
-        if ws.connects.get() > 1 {
-            resync(ctx.clone(), gens.clone());
+        let connects = ws.connects.get();
+        if connects > 0 {
+            resync(ctx.clone(), gens.clone(), connects > 1);
         }
     });
 }
 
-fn resync(ctx: AppContext, gens: SyncGenerations) {
+fn resync(ctx: AppContext, gens: SyncGenerations, reconnected: bool) {
     leptos::task::spawn_local(async move {
         let bible_at = gens.bible.get();
         let layout_at = gens.layout.get();
+        let stage_at = gens.stage.get();
+        let text_mode_at = gens.text_mode.get();
+        // Every open Prepared list and the console's section re-read theirs.
+        ctx.bible_presentations_version.update(|v| *v += 1);
         let slide = crate::api::bible::get_active_slide_output().await;
         let broadcast = crate::api::bible::get_broadcast().await;
         if gens.bible.get() == bible_at {
@@ -131,14 +144,27 @@ fn resync(ctx: AppContext, gens: SyncGenerations) {
                 ctx.stage_layout_code.set(resp.code);
             }
         }
+        if let Ok(snapshot) = crate::api::stage::get_snapshot().await {
+            if gens.stage.get() == stage_at {
+                // A missed song is a stage change for Follow; the page's first
+                // read is not (`seed_follow_stage` only remembers the song).
+                if reconnected {
+                    on_stage_snapshot(&ctx, &snapshot);
+                }
+                ctx.stage_snapshot.set(Some(snapshot));
+            }
+        }
         if let Ok(libs) = crate::api::libraries::list_libraries().await {
             ctx.libraries.set(libs);
+            ctx.libraries_loaded.set(true);
         }
         if let Ok(pls) = crate::api::playlists::list_playlists().await {
             ctx.playlists.set(pls);
         }
         if let Ok(resp) = crate::api::stage::get_text_mode().await {
-            ctx.stage_text_mode.set(resp.mode);
+            if gens.text_mode.get() == text_mode_at {
+                ctx.stage_text_mode.set(resp.mode);
+            }
         }
         if let Some(lib_id) = ctx.selected_library_id.get_untracked() {
             if let Ok(pres) = crate::api::libraries::list_presentations(&lib_id).await {

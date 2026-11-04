@@ -132,6 +132,8 @@ pub struct AppContext {
     pub search_results: RwSignal<Vec<SearchResult>>,
     pub search_loading: RwSignal<bool>,
     pub ws_connected: RwSignal<bool>,
+    /// The library list has been read at least once ("Loading…" until then).
+    pub libraries_loaded: RwSignal<bool>,
     /// #850 §6.1: the operator renders as a phone (`state::phone_shell`).
     pub phone_shell: RwSignal<bool>,
     pub ableset_status: RwSignal<Option<AbleSetStatusSnapshot>>,
@@ -196,6 +198,7 @@ impl AppContext {
             search_results: RwSignal::new(Vec::new()),
             search_loading: RwSignal::new(false),
             ws_connected: RwSignal::new(false),
+            libraries_loaded: RwSignal::new(false),
             phone_shell: RwSignal::new(false),
             ableset_status: RwSignal::new(None),
             slides_cache: RwSignal::new(HashMap::new()),

@@ -15,18 +15,21 @@ use crate::state::bible_translations::translation_chips;
 pub(super) fn TranslationBar() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let translations = bs.translations;
+    let main_signal = bs.selected_translation;
+    let secondary_signal = bs.secondary_translation;
     let chips = Memo::new(move |_| {
-        translations.with(|list| {
-            let codes: Vec<String> = list.iter().map(|t| t.code.clone()).collect();
-            translation_chips(&codes)
-        })
+        let codes: Vec<String> =
+            translations.with(|list| list.iter().map(|t| t.code.clone()).collect());
+        translation_chips(
+            &codes,
+            main_signal.read().as_deref(),
+            secondary_signal.read().as_deref(),
+        )
     });
     let show_more = RwSignal::new(false);
     let main = move || chips.with(|c| c.main.clone());
     let more = move || chips.with(|c| c.more.clone());
     let secondary = move || chips.with(|c| c.secondary.clone());
-    let main_signal = bs.selected_translation;
-    let secondary_signal = bs.secondary_translation;
 
     view! {
         <div class="console-translations" data-role="console-translations">
