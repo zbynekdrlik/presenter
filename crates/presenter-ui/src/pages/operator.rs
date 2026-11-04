@@ -1,5 +1,4 @@
 use leptos::prelude::*;
-use presenter_core::LiveEvent;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -14,7 +13,7 @@ use crate::components::presentation_list::PresentationList;
 use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
-use crate::components::stage_follow::{on_stage_snapshot, setup_follow_on_live};
+use crate::components::stage_follow::setup_follow_on_live;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;
@@ -75,63 +74,15 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         });
     }
 
-    // Connect WebSocket
-    let (ws_state, last_event) = ws::use_live_websocket("operator");
-
-    // Track ws connected state
-    {
-        let ws_connected = ctx.ws_connected;
-        Effect::new(move || {
-            ws_connected.set(ws_state.get() == ws::WsState::Connected);
-        });
-    }
-
-    // #574: on a WS RECONNECT (not the very first connect — that's already
-    // covered by load_initial_data below), re-fetch libraries/playlists/
-    // presentations. A server restart (a deploy) always drops this socket;
-    // whatever changed on the other clients while it was down never
-    // reaches this tab as a broadcast, so a plain reconnect alone would
-    // leave stale/blank lists forever (the 2026-07-24 SNV incident).
-    {
-        let libraries = ctx.libraries;
-        let playlists = ctx.playlists;
-        let presentations = ctx.presentations;
-        let selected_library_id = ctx.selected_library_id;
-        let stage_text_mode = ctx.stage_text_mode;
-        let active_bible_slide = ctx.active_bible_slide;
-        let connected_before = std::cell::Cell::new(false);
-        Effect::new(move || {
-            let state = ws_state.get();
-            if state == ws::WsState::Connected {
-                if connected_before.get() {
-                    crate::pages::bible_console::refresh_on_air(active_bible_slide);
-                    leptos::task::spawn_local(async move {
-                        if let Ok(libs) = crate::api::libraries::list_libraries().await {
-                            libraries.set(libs);
-                        }
-                        if let Ok(pls) = crate::api::playlists::list_playlists().await {
-                            playlists.set(pls);
-                        }
-                        // #799: a StageTextMode event missed during the gap.
-                        if let Ok(resp) = crate::api::stage::get_text_mode().await {
-                            stage_text_mode.set(resp.mode);
-                        }
-                        if let Some(lib_id) = selected_library_id.get_untracked() {
-                            if let Ok(pres) =
-                                crate::api::libraries::list_presentations(&lib_id).await
-                            {
-                                presentations.set(pres);
-                            }
-                        }
-                    });
-                }
-                connected_before.set(true);
-            }
-        });
-    }
-
-    // Dispatch WS events
-    setup_ws_dispatch(last_event, &ctx);
+    // #850 B1d: every live event applied in arrival order, a silence watchdog,
+    // and a resync after every reconnect (`operator_live.rs`).
+    let gens = super::operator_live::SyncGenerations::default();
+    let live_sink: super::operator_live::LiveSink = StoredValue::new_local(None);
+    let live = ws::passive::use_passive_websocket(
+        "operator",
+        super::operator_live::live_event_handler(&ctx, &gens, live_sink),
+    );
+    super::operator_live::setup_live_sync(&ctx, live, &gens);
     setup_follow_on_live(&ctx);
 
     // Load initial data (libraries, playlists, etc.)
@@ -237,7 +188,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
             </section>
             // #871: the `stream` plates in Stream Deck grid order.
             <section class="operator__panel operator__panel--menovky" data-view-panel="menovky">
-                <OperatorNameplates last_event=last_event ws_state=ws_state />
+                <OperatorNameplates live_sink=live_sink connects=live.connects />
             </section>
             <section class="operator__panel operator__panel--settings" data-view-panel="settings">
                 <SettingsPage embedded=true />
@@ -330,66 +281,6 @@ fn setup_body_attributes(ctx: &AppContext) {
         let _ = body.set_attribute("data-view", &ctx.view.get_untracked());
         let _ = body.set_attribute("data-mode", &ctx.mode.get_untracked());
     }
-}
-
-fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext) {
-    let stage_snapshot = ctx.stage_snapshot;
-    let timers = ctx.timers;
-    let stage_connections = ctx.stage_connections;
-    let broadcast_live = ctx.broadcast_live;
-    let stage_layout_code = ctx.stage_layout_code;
-    let stage_text_mode = ctx.stage_text_mode;
-    let active_bible_broadcast = ctx.active_bible_broadcast;
-    let active_bible_slide = ctx.active_bible_slide;
-    let bible_presentations_version = ctx.bible_presentations_version;
-    let follow_ctx = ctx.clone();
-
-    Effect::new(move || {
-        if let Some(event) = last_event.get() {
-            match event {
-                LiveEvent::Stage { snapshot } => {
-                    // AbleSet Follow: Live mode opens the stage's song (#853: never
-                    // in Edit mode). The stage preview always updates.
-                    on_stage_snapshot(&follow_ctx, &snapshot);
-                    stage_snapshot.set(Some(snapshot));
-                }
-                LiveEvent::Timers { overview } => timers.set(Some(overview)),
-                LiveEvent::StageConnection { snapshot } => {
-                    stage_connections.update(|conns| {
-                        if let Some(existing) = conns.iter_mut().find(|c| c.id == snapshot.id) {
-                            *existing = snapshot.clone();
-                        } else {
-                            conns.push(snapshot.clone());
-                        }
-                    });
-                }
-                LiveEvent::BroadcastLive { enabled } => broadcast_live.set(enabled),
-                LiveEvent::StageLayout { code } => stage_layout_code.set(code),
-                LiveEvent::StageTextMode { mode } => stage_text_mode.set(mode),
-                LiveEvent::Bible { broadcast } => active_bible_broadcast.set(Some(broadcast)),
-                // #850 B2a: published right AFTER `Bible`, so it is the event a
-                // coalesced burst keeps (B1d makes every event arrive).
-                LiveEvent::BibleSlide { output } => active_bible_slide.set(Some(output)),
-                LiveEvent::BibleCleared => {
-                    active_bible_broadcast.set(None);
-                    active_bible_slide.set(None);
-                }
-                LiveEvent::BibleSlidesChanged { .. } => {
-                    bible_presentations_version.update(|v| *v += 1);
-                }
-                LiveEvent::BiblePreferencesChanged { character_limit } => {
-                    // Update character limit in real-time when changed by another client
-                    // BibleState context may not be available here (only exists when bible view is mounted)
-                    // Store on AppContext for any bible page to pick up
-                    if let Some(body) = crate::utils::window::document_body() {
-                        let _ = body
-                            .set_attribute("data-bible-char-limit", &character_limit.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
 }
 
 fn load_initial_data(ctx: &AppContext) {

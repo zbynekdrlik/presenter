@@ -10,6 +10,7 @@ pub mod bible_slides;
 pub mod camera;
 pub mod interpreter;
 pub mod operator;
+pub(crate) mod operator_live;
 pub mod sepkar;
 pub mod settings;
 pub mod stage;

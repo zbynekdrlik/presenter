@@ -891,7 +891,7 @@ test("a show that fails after its verse left says so in a toast, not on the empt
 test("phone: the first verse on the wall moves neither the field nor ZOBRAZIŤ", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_360);
   try {
-    await page.locator('[data-role="secondary-translation"]').selectOption("eng-kjv");
+    await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').tap();
     const field = page.locator('[data-role="console-field"]');
     await field.fill("1 tes 5 16-18");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
@@ -1229,12 +1229,12 @@ test("a translation switch keeps the stepped verse and the next verse after a sh
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await page.locator('[data-role="console-next"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
-    await page.locator('[data-role="main-translation"]').selectOption("slk-roh");
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:2 (ROH)");
 
     await showButton(page).tap();
     await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
-    await page.locator('[data-role="main-translation"]').selectOption("slk-seb");
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:3 (SEB)");
     await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");

@@ -8,7 +8,7 @@
 //!
 //! Talks to the `/stream/api/*` REST surface (#707) via the generic
 //! `crate::api::*_json` helpers and reflects live state through the generic
-//! `/live/ws` client (`crate::ws::use_live_websocket`, wired in the page). The
+//! `/live/ws` client (`crate::ws::passive`, wired in the page). The
 //! request DTOs below are the write-side payloads (camelCase, matching the
 //! server's `router/stream.rs`); the response types come from `presenter-core`.
 

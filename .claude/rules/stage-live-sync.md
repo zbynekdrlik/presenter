@@ -1,5 +1,8 @@
 ---
 paths:
+  - "crates/presenter-ui/src/pages/operator_live.rs"
+  - "crates/presenter-ui/src/ws/passive.rs"
+  - "tests/e2e/operator-live-resync.spec.ts"
   - "crates/presenter-ui/src/ws/stage.rs"
   - "crates/presenter-ui/src/pages/stage.rs"
   - "crates/presenter-ui/src/pages/stage_events.rs"
@@ -45,8 +48,12 @@ again, check `systemctl list-timers` for a second adb client first.
 `use_stage_websocket(client_id, layout_code, on_event)` calls the `StageEventHandler` synchronously
 for every event in arrival order. A `ReadSignal<Option<LiveEvent>>` "last event" slot COALESCES a
 burst (`StageLayout` immediately followed by the `Stage` snapshot the switch publishes) and the
-earlier event is lost before the page effect runs. The operator/tablet `use_live_websocket` still
-uses that pattern — do not copy it into any display that must not miss an event.
+earlier event is lost before the page effect runs.
+Since #850 B1d no surface keeps a latest-value event slot: the operator, the Bible tablet, the
+stream editor, the interpreter tablet and the šepkár page all use
+`ws::passive::use_passive_websocket` (a handler per frame, a 5 s silence watchdog, an immediate
+reconnect after > 30 s hidden, `connects` → resync). `use_live_websocket` is deleted; never bring
+back a `ReadSignal<Option<LiveEvent>>`.
 
 Layout reconciliation (`pages/stage_events.rs::stage_snapshot_action`): the server publishes ONLY
 the selected layout's snapshot plus the always-on `camera-crew` one (api snapshot only while an
@@ -106,3 +113,14 @@ switch between NDI layouts logs `presenter::stage::diag` on the first diag frame
 The heartbeat path logs one `stage display layout reported (#797)` from/to line per real change —
 including `worship-snv → X` right after every (re)connect, since register seeds the default; that
 line is a reconnect, not an operator switch.
+
+## 5. Operator resync (#850 B1d)
+
+`pages/operator_live.rs`: `live_event_handler` applies every event; `setup_live_sync` re-reads the
+Bible state (`/bible/active-slide` + `/bible/active`), the stage layout, the lists and the text
+mode on every reconnect after the first. `SyncGenerations` drops a resync answer when a live event
+of the same kind (any Bible event / `StageLayout`) arrived while it was in flight. The lazily
+mounted Menovky view hears events through `LiveSink` (a handler it registers once mounted, never a
+signal) and reloads when `connects` changes. E2E: `operator-live-resync.spec.ts` (a deaf
+`routeWebSocket` route, then `close({ code: 4000 })`; a route that forwards nothing is replaced
+within ~6 s).

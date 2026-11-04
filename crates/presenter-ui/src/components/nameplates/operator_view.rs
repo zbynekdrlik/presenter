@@ -18,12 +18,13 @@
 
 use leptos::prelude::*;
 use presenter_core::LiveEvent;
+use std::rc::Rc;
 
 use super::numbering::any_beyond_grid;
 use super::plate_list::{NameplateAddForm, NameplateRows, NameplateSongRow, RowOptions};
 use super::{def_has_lower_third, NameplateStore};
+use crate::pages::operator_live::LiveSink;
 use crate::state::AppContext;
-use crate::ws::WsState;
 
 /// The operator view id: `/ui/operator/menovky`, `body[data-view]`, the tab.
 pub const MENOVKY_VIEW: &str = "menovky";
@@ -41,10 +42,7 @@ const OPTIONS: RowOptions = RowOptions {
 
 /// The Menovky panel body, mounted by `pages/operator.rs`.
 #[component]
-pub fn OperatorNameplates(
-    last_event: ReadSignal<Option<LiveEvent>>,
-    ws_state: ReadSignal<WsState>,
-) -> impl IntoView {
+pub fn OperatorNameplates(live_sink: LiveSink, connects: ReadSignal<u32>) -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let current_view = ctx.view;
     let (toast_message, toast_variant) = (ctx.toast_message, ctx.toast_variant);
@@ -55,8 +53,8 @@ pub fn OperatorNameplates(
     view! {
         <Show when=move || opened.get()>
             <NameplateList
-                last_event=last_event
-                ws_state=ws_state
+                live_sink=live_sink
+                connects=connects
                 toast_message=toast_message
                 toast_variant=toast_variant
             />
@@ -87,8 +85,8 @@ fn load_layer(has_layer: RwSignal<Option<bool>>, revision: StoredValue<u64>) {
 
 #[component]
 fn NameplateList(
-    last_event: ReadSignal<Option<LiveEvent>>,
-    ws_state: ReadSignal<WsState>,
+    live_sink: LiveSink,
+    connects: ReadSignal<u32>,
     toast_message: RwSignal<Option<String>>,
     toast_variant: RwSignal<String>,
 ) -> impl IntoView {
@@ -104,10 +102,7 @@ fn NameplateList(
 
     // Live: plate list / plate on air / song through the store; a newer
     // `stream` config can add or remove the lower-third layer.
-    Effect::new(move |_| {
-        let Some(event) = last_event.get() else {
-            return;
-        };
+    live_sink.set_value(Some(Rc::new(move |event: LiveEvent| {
         if let LiveEvent::StreamConfigChanged {
             output,
             config_revision,
@@ -118,17 +113,19 @@ fn NameplateList(
             }
         }
         store.apply_event(&event);
-    });
+    })));
+    on_cleanup(move || live_sink.set_value(None));
 
-    // A reconnect may have missed events: read everything again.
-    let was_connected = std::cell::Cell::new(ws_state.get_untracked() == WsState::Connected);
+    // A reconnect may have missed events: read everything again. A connect
+    // from before this view mounted is already covered by the load above.
+    let seen = std::cell::Cell::new(connects.get_untracked());
     Effect::new(move |_| {
-        let connected = ws_state.get() == WsState::Connected;
-        if connected && !was_connected.get() {
+        let now = connects.get();
+        if now != seen.get() {
+            seen.set(now);
             store.load();
             load_layer(has_layer, layer_revision);
         }
-        was_connected.set(connected);
     });
 
     let beyond_grid = move || store.plates.with(|list| any_beyond_grid(list.len()));

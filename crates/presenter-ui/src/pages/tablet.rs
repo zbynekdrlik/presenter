@@ -7,7 +7,7 @@ use crate::api::sermons;
 use crate::components::info_popover::InfoPopover;
 use crate::components::version_label::VersionLabel;
 use crate::state::tablet::TabletContext;
-use crate::ws::{self, WsState};
+use crate::ws;
 
 mod sermon_select;
 mod slide_list;
@@ -33,49 +33,55 @@ pub fn TabletPage() -> impl IntoView {
     // Register service worker
     register_service_worker();
 
-    // Connect WebSocket
-    let (ws_state, last_event) = ws::use_live_websocket("tablet");
-
-    // Track WS connected state
+    // #850 B1d: every live event applied in arrival order (the old
+    // latest-value signal could lose one), a silence watchdog, and a resync
+    // of the active passage + presentations after every reconnect.
+    let handler: ws::passive::LiveEventHandler = {
+        let ctx = ctx.clone();
+        std::rc::Rc::new(move |event: LiveEvent| match event {
+            LiveEvent::Bible { broadcast } => {
+                ctx.active_broadcast.set(Some(broadcast));
+            }
+            LiveEvent::BibleCleared => {
+                ctx.active_broadcast.set(None);
+                ctx.active_slide_id.set(None);
+            }
+            LiveEvent::BibleSlidesChanged { presentation_id } => {
+                ctx.slides_cache.update(|cache| {
+                    cache.remove(&presentation_id);
+                });
+                if ctx.current_presentation_id.get_untracked().as_deref() == Some(&presentation_id)
+                {
+                    let ctx = ctx.clone();
+                    leptos::task::spawn_local(async move {
+                        sermon_select::reload_open_slides(&ctx, &presentation_id).await;
+                    });
+                }
+            }
+            LiveEvent::Timers { overview } => {
+                ctx.timers.set(Some(overview));
+            }
+            _ => {}
+        })
+    };
+    let live = ws::passive::use_passive_websocket("tablet", handler);
     {
         let ws_connected = ctx.ws_connected;
         Effect::new(move |_| {
-            ws_connected.set(ws_state.get() == WsState::Connected);
+            ws_connected.set(live.state.get() == ws::passive::PassiveWsState::Connected);
         });
     }
-
-    // Handle WebSocket events
     {
         let ctx = ctx.clone();
         Effect::new(move |_| {
-            let Some(event) = last_event.get() else {
-                return;
-            };
-            match event {
-                LiveEvent::Bible { broadcast } => {
-                    ctx.active_broadcast.set(Some(broadcast));
-                }
-                LiveEvent::BibleCleared => {
-                    ctx.active_broadcast.set(None);
-                    ctx.active_slide_id.set(None);
-                }
-                LiveEvent::BibleSlidesChanged { presentation_id } => {
-                    ctx.slides_cache.update(|cache| {
-                        cache.remove(&presentation_id);
-                    });
-                    if ctx.current_presentation_id.get_untracked().as_deref()
-                        == Some(&presentation_id)
-                    {
-                        let ctx = ctx.clone();
-                        leptos::task::spawn_local(async move {
-                            sermon_select::reload_open_slides(&ctx, &presentation_id).await;
-                        });
+            if live.connects.get() > 1 {
+                let ctx = ctx.clone();
+                leptos::task::spawn_local(async move {
+                    if let Ok(broadcast) = bible::get_broadcast().await {
+                        ctx.active_broadcast.set(broadcast);
                     }
-                }
-                LiveEvent::Timers { overview } => {
-                    ctx.timers.set(Some(overview));
-                }
-                _ => {}
+                    refresh_presentations(&ctx).await;
+                });
             }
         });
     }
