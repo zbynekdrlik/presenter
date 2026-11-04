@@ -14,30 +14,30 @@ use crate::repository::Repository;
 
 /// Build an FTS5 MATCH query from free-text input.
 ///
-/// Splits into words, drops tokens shorter than 2 chars, appends `*` for
-/// prefix matching, and joins with spaces (implicit AND in FTS5).
-/// Returns `None` if no usable tokens remain. A fully quoted input is an exact
-/// phrase (#851 spec §6.4).
+/// A fully quoted input is an exact phrase (#851 spec §6.4). Otherwise splits on
+/// every character that is not alphanumeric (so `11:1` is `11` and `1`, never
+/// `111*`, and no FTS5 syntax character survives; a combining accent stays with
+/// its word), drops tokens of fewer than 2 CHARACTERS (`Ž` is 2 bytes, 1
+/// character) and tokens that are all digits (a reference's numbers are not
+/// words of the text), appends `*` for prefix matching and joins with spaces
+/// (implicit AND in FTS5). Returns `None` if no usable tokens remain (#850 spec
+/// §5.11).
 fn build_fts_query(input: &str) -> Option<String> {
     if let Some(phrase) = quoted_phrase(input) {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         return (!words.is_empty()).then(|| format!("content : \"{}\"", words.join(" ")));
     }
-    let tokens: Vec<String> = input
-        .split_whitespace()
-        .filter(|w| w.len() >= 2)
-        .map(|w| {
-            // Strip FTS5 special characters to prevent query syntax errors
-            let cleaned: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
-            format!("{cleaned}*")
-        })
-        .filter(|t| t.len() > 1) // skip bare "*"
+    let folded: String = input
+        .chars()
+        .filter(|c| !matches!(c, '\u{0300}'..='\u{036F}'))
         .collect();
-    if tokens.is_empty() {
-        None
-    } else {
-        Some(tokens.join(" "))
-    }
+    let tokens: Vec<String> = folded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().count() >= 2)
+        .filter(|word| !word.chars().all(char::is_numeric))
+        .map(|word| format!("{word}*"))
+        .collect();
+    (!tokens.is_empty()).then(|| tokens.join(" "))
 }
 
 /// A phone's keyboard types `„viera“` as readily as `"viera"`.
