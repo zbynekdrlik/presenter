@@ -1406,3 +1406,38 @@ test("console requests say what was typed and from which device", async ({ brows
     }
   }
 });
+
+test("the bar always shows what is selected: a secondary outside its row, a main behind the dots", async ({
+  browser,
+  request,
+}) => {
+  const preferences = new URL("/bible/preferences", baseURL).toString();
+  const before = await (await request.get(preferences)).json();
+  await request.put(preferences, {
+    data: { mainTranslation: "slk-mil", secondaryTranslation: "slk-roh", characterLimit: 320 },
+  });
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  try {
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(
+      page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-mil"]'),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="slk-roh"]'),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+    await request.put(preferences, {
+      data: {
+        mainTranslation: before.mainTranslation,
+        secondaryTranslation: before.secondaryTranslation ?? "eng-kjv",
+        characterLimit: 320,
+      },
+    });
+  }
+});
