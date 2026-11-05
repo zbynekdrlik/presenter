@@ -11,7 +11,7 @@ use tracing::instrument;
 
 use super::super::AppError;
 use crate::state::AppState;
-use presenter_core::{BiblePassage, BibleReference};
+use presenter_core::{BiblePassage, BiblePreferences, BibleReference};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct BibleBooksQuery {
@@ -39,7 +39,53 @@ pub(crate) async fn list_bible_books(
     State(state): State<AppState>,
     Query(params): Query<BibleBooksQuery>,
 ) -> Result<Json<Vec<BibleBookDto>>, AppError> {
-    let summaries = state.list_bible_books(&params.translation).await?;
+    Ok(Json(book_dtos(&state, &params.translation).await?))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct BibleConsoleStartQuery {
+    /// This browser's own main translation (#701), when it has one.
+    translation: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BibleConsoleStart {
+    preferences: BiblePreferences,
+    books_translation: Option<String>,
+    books: Option<Vec<BibleBookDto>>,
+}
+
+/// Preferences and books in one answer (#850 S8): one after the other they
+/// cost a cold phone two turns in the browser's connection queue. Books are
+/// `null` when no translation is known or their read failed; the browser then
+/// reads `/bible/books` itself and shows that failure the usual way.
+#[instrument(skip_all)]
+pub(crate) async fn bible_console_start(
+    State(state): State<AppState>,
+    Query(params): Query<BibleConsoleStartQuery>,
+) -> Result<Json<BibleConsoleStart>, AppError> {
+    let preferences = state.get_bible_preferences().await?;
+    let asked = params.translation.filter(|code| !code.is_empty());
+    let translation = asked.or_else(|| preferences.main_translation.clone());
+    let books = match &translation {
+        Some(code) => book_dtos(&state, code)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(translation = %code, %error, "console start: books not read");
+            })
+            .ok(),
+        None => None,
+    };
+    Ok(Json(BibleConsoleStart {
+        preferences,
+        books_translation: translation.filter(|_| books.is_some()),
+        books,
+    }))
+}
+
+async fn book_dtos(state: &AppState, translation: &str) -> anyhow::Result<Vec<BibleBookDto>> {
+    let summaries = state.list_bible_books(translation).await?;
 
     // Aggregate flat chapter summaries into books with chapter arrays
     let mut books_map: HashMap<String, BibleBookDto> = HashMap::new();
@@ -76,7 +122,7 @@ pub(crate) async fn list_bible_books(
         .filter_map(|key| books_map.remove(&key))
         .collect();
 
-    Ok(Json(books))
+    Ok(books)
 }
 
 #[derive(Debug, Deserialize)]

@@ -8,6 +8,7 @@ import {
   attachConsoleErrorCollector,
   deriveTestConfig,
   PHONE_390,
+  refreshDevData,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -21,12 +22,49 @@ let baseURL = "";
 test.beforeAll(async ({}, testInfo) => {
   const cfg = deriveTestConfig(testInfo);
   baseURL = cfg.baseURL;
+  // A retry runs in a new worker, whose database does not exist yet.
+  await refreshDevData(cfg.dbUrl);
   serverHandle = await startTestServer(cfg.port, cfg.dbUrl, cfg.oscPort);
 });
 
 test.afterAll(async () => {
   await stopServer(serverHandle);
   serverHandle = undefined;
+});
+
+// #850 S8: on LAN http (HTTP/1.1, six connections per host) fifteen stylesheets
+// took three rounds before the wasm could start. One file, in the source order:
+// a later file's rule must still beat an earlier one's.
+test("a cold load fetches one stylesheet, with every source file in order", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const css: string[] = [];
+  page.on("request", (req) => {
+    const path = new URL(req.url()).pathname;
+    if (path.startsWith("/ui-pkg/") && path.endsWith(".css")) css.push(path);
+  });
+  try {
+    await page.goto("/ui/operator/bible");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    expect(css).toHaveLength(1);
+
+    const order = await page.evaluate(() => {
+      const sheet = [...document.styleSheets].find((s) => s.href?.includes("/ui-pkg/"));
+      const selectors = [...(sheet?.cssRules ?? [])].map((r) => (r as CSSStyleRule).selectorText ?? "");
+      const at = (needle: string) => selectors.findIndex((s) => s.includes(needle));
+      // operator.css is the first source file, bible_console.css a late one.
+      return { operator: at(".operator__main"), later: at(".console-translations") };
+    });
+    expect(order.operator).toBeGreaterThanOrEqual(0);
+    expect(order.later).toBeGreaterThan(order.operator);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
 });
 
 test("a phone's cold load fetches exactly one wasm, as brotli, and no second app", async ({

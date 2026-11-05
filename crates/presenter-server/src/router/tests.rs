@@ -1068,6 +1068,47 @@ async fn update_playlist_endpoint_updates_metadata() {
     assert!(found.show_in_dashboard);
 }
 
+// #850 S8: one answer for the two reads a cold console needs first.
+#[tokio::test]
+async fn console_start_answers_the_preferences_with_the_books_of_the_asked_translation() {
+    let state = AppState::in_memory().await.unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&sample_ingestion_batch())
+        .await
+        .unwrap();
+    let app = build_router(state.clone());
+
+    // No preference and nothing asked: nothing to prepare, the browser decides.
+    let empty: serde_json::Value = get_json(&app, "/bible/console-start").await;
+    assert_eq!(empty["books"], serde_json::Value::Null);
+    assert_eq!(empty["booksTranslation"], serde_json::Value::Null);
+    assert!(empty["preferences"]["characterLimit"].is_u64());
+
+    // This browser's own translation works without a server preference.
+    let asked: serde_json::Value = get_json(&app, "/bible/console-start?translation=test").await;
+    assert_eq!(asked["booksTranslation"], "test");
+    assert_eq!(asked["books"][0]["book"], "John");
+
+    // The same shape as `/bible/books`: the browser reads both with one type.
+    let plain: serde_json::Value = get_json(&app, "/bible/books?translation=test").await;
+    assert_eq!(asked["books"], plain);
+
+    // The server's main translation is the default.
+    state
+        .set_bible_preferences(presenter_core::BiblePreferences {
+            main_translation: Some("test".to_string()),
+            secondary_translation: None,
+            character_limit: 320,
+        })
+        .await
+        .unwrap();
+    let preferred: serde_json::Value = get_json(&app, "/bible/console-start").await;
+    assert_eq!(preferred["preferences"]["mainTranslation"], "test");
+    assert_eq!(preferred["booksTranslation"], "test");
+    assert_eq!(preferred["books"], plain);
+}
+
 #[tokio::test]
 async fn bible_translations_endpoint_returns_list() {
     let state = AppState::in_memory().await.unwrap();

@@ -56,6 +56,28 @@ pub async fn list_books(translation: &str) -> Result<Vec<BibleBookDto>, ApiError
     .await
 }
 
+/// Preferences and, when the server could read them, the books of
+/// `books_translation` (#850 S8).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleStart {
+    pub preferences: BiblePreferences,
+    pub books_translation: Option<String>,
+    pub books: Option<Vec<BibleBookDto>>,
+}
+
+/// The first read of a console: `translation` is this browser's own choice.
+pub async fn console_start(translation: Option<&str>) -> Result<ConsoleStart, ApiError> {
+    let url = match translation {
+        Some(code) => format!(
+            "/bible/console-start?translation={}",
+            urlencoding::encode(code)
+        ),
+        None => "/bible/console-start".to_string(),
+    };
+    get_json(&url).await
+}
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------

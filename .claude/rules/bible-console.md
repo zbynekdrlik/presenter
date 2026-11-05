@@ -13,6 +13,10 @@ paths:
 - **The reference is resolved in the browser**: `presenter_core::bible::resolver::lookup` against
   `state::bible_console::versification(bs.books)` — the MAIN translation's `/bible/books`, verse
   counts placed by chapter NUMBER. Never a server round trip per keystroke.
+- **First read = one answer (#850 S8):** `GET /bible/console-start?translation=<this browser's main>`
+  brings preferences + books (same shape as `/bible/books`, `null` when unknown or unread). The books
+  effect takes them only when the code matches; anything else reads `/bible/books`, so a switch and a
+  failure behave as before. Two requests in a row cost a cold phone ~760 ms in the connection queue.
 - **Pure half / thin half.** Everything decidable without a DOM lives in `state/bible_console*.rs`
   with host tests over the core's structure fixtures (`include_str!` of
   `presenter-core/src/bible/resolver/testdata/structure-*.json` — they are `/bible/books`
