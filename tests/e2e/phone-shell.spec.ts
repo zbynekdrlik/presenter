@@ -125,7 +125,7 @@ for (const [name, profile] of [
         await assertMinFontSize(page.locator("input:visible, select:visible, textarea:visible"), 16);
         await assertMinTapTarget(page.locator('[data-role="phone-tab"]'), 44);
         await assertMinTapTarget(page.locator('[data-role="mode-toggle"]'), 44);
-        await assertMinTapTarget(page.locator('[data-role="stage-layout-select"]'), 44);
+        await assertMinTapTarget(page.locator('[data-role="more-toggle"]'), 44);
         if (section.view === "worship") {
           await assertMinTapTarget(page.locator('[data-role="clear-slide"]'), 44);
           await assertMinTapTarget(page.locator('[data-role="ableset-follow"]'), 44);
@@ -275,6 +275,178 @@ test("desktop: the old Find-book filter reads 'zid' as Hebrejom (resolver fallba
       "HEB",
     );
     await assertNoHorizontalOverflow(page);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("Viac opens and closes via ✕, the backdrop, Escape and Back", async ({ browser }) => {
+  const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator/bible");
+  try {
+    const sheet = page.locator('[data-role="more-sheet"]');
+    const toggle = page.locator('[data-role="more-toggle"]');
+    await expect(sheet).toHaveAttribute("data-open", "false");
+    await expect(page.locator('[data-role="stage-layout-select"]')).toBeHidden();
+
+    await toggle.tap();
+    await expect(sheet).toHaveAttribute("data-open", "true");
+    await expect(sheet.locator('[data-role="surface-nav-link"]')).toHaveCount(5);
+    await expect(sheet.locator('[data-role="ai-status-chip"]')).toHaveCount(1);
+    await expect(sheet.locator('[data-role="stage-layout-select"]')).toBeVisible();
+    await page.locator('[data-role="more-sheet-close"]').tap();
+    await expect(sheet).toHaveAttribute("data-open", "false");
+
+    await toggle.tap();
+    await page.locator('[data-role="more-sheet-backdrop"]').click({ position: { x: 10, y: 10 } });
+    await expect(sheet).toHaveAttribute("data-open", "false");
+
+    await toggle.tap();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveAttribute("data-open", "false");
+
+    await toggle.tap();
+    await page.goBack();
+    await expect(sheet).toHaveAttribute("data-open", "false");
+    await expect(page.locator("body")).toHaveAttribute("data-view", "bible");
+    expect(new URL(page.url()).pathname).toBe("/ui/operator/bible");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("crossing the phone width moves the chips without doubling their polls", async ({ browser }) => {
+  // An iPad at 768 px is a phone, turned to 1024 px it is a desktop.
+  const context = await browser.newContext({ baseURL, viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  try {
+    await page.goto("/ui/operator");
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    const body = page.locator("body");
+    for (const [width, shell] of [
+      [390, "phone"],
+      [1280, "desktop"],
+      [390, "phone"],
+      [1280, "desktop"],
+    ] as const) {
+      await page.setViewportSize({ width, height: 800 });
+      await expect(body).toHaveAttribute("data-shell", shell);
+    }
+    await expect(page.locator('[data-role="ai-status-chip"]:visible')).toHaveCount(1);
+    await expect(page.locator('[data-role="stage-layout-select"]:visible')).toHaveCount(1);
+
+    let polls = 0;
+    page.on("request", (req) => {
+      if (new URL(req.url()).pathname === "/integrations/resolume/status") polls += 1;
+    });
+    // One copy polls every 5 s (three in 12 s, one more if a tick runs late);
+    // the three mounts of a phone-desktop-phone-desktop trip would make six.
+    await page.waitForTimeout(12_000);
+    expect(polls).toBeGreaterThanOrEqual(2);
+    expect(polls).toBeLessThanOrEqual(4);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("an open sheet leaves with the phone width; a closed one keeps no half-answered confirm", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator");
+  try {
+    const sheet = page.locator('[data-role="more-sheet"]');
+    const select = sheet.locator('[data-role="stage-layout-select"]');
+    const toggle = page.locator('[data-role="more-toggle"]');
+
+    await toggle.tap();
+    const other = await select.evaluate((el) => {
+      const s = el as HTMLSelectElement;
+      return [...s.options].map((o) => o.value).find((v) => v !== s.value) ?? "";
+    });
+    await select.selectOption(other);
+    await expect(page.locator('[data-role="stage-layout-confirm"]')).toBeVisible();
+    await page.locator('[data-role="more-sheet-close"]').dblclick();
+    await expect(sheet).toHaveAttribute("data-open", "false");
+    // Still on the page: the double tap went back once.
+    expect(new URL(page.url()).pathname).toBe("/ui/operator");
+    await expect(page.locator("body")).toHaveAttribute("data-wasm-ready", "true");
+
+    // The second tap of a double tap meets the shield, never the page under it;
+    // a moment later the page takes taps again.
+    await toggle.tap();
+    const close = page.locator('[data-role="more-sheet-close"]');
+    const underSecondTap = await close.evaluate(
+      (el) =>
+        new Promise<string | null>((resolve) => {
+          const box = el.getBoundingClientRect();
+          (el as HTMLElement).click();
+          requestAnimationFrame(() => {
+            const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+            resolve(hit?.getAttribute("data-role") ?? null);
+          });
+        }),
+    );
+    expect(underSecondTap).toBe("more-sheet-shield");
+    await expect(page.locator('[data-role="more-sheet-shield"]')).toBeHidden();
+
+    // A reload with the sheet open leaves no entry that makes Back seem dead.
+    await toggle.tap();
+    await page.reload();
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await expect(sheet).toHaveAttribute("data-open", "false");
+    await expect
+      .poll(() => page.evaluate(() => Boolean((history.state as { sheet?: boolean } | null)?.sheet)))
+      .toBe(false);
+
+    await toggle.tap();
+    await expect(select).toBeVisible();
+    await expect(page.locator('[data-role="stage-layout-confirm"]')).toHaveCount(0);
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
+    await expect(sheet).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(sheet).toHaveAttribute("data-open", "false");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a stage layout change from a phone needs a confirm (S5)", async ({ browser, request }) => {
+  const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator");
+  const layoutPosts: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "POST" && new URL(req.url()).pathname === "/stage/layout") {
+      layoutPosts.push((req.postDataJSON() as { code: string }).code);
+    }
+  });
+  try {
+    const before = (await (await request.get(new URL("/stage/layout", baseURL).toString())).json()).code;
+    const target = before === "preach" ? "worship-snv" : "preach";
+    await page.locator('[data-role="more-toggle"]').tap();
+    const select = page.locator('[data-role="more-sheet"] [data-role="stage-layout-select"]');
+    const confirm = page.locator('[data-role="stage-layout-confirm"]');
+
+    await select.selectOption(target);
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText("Prepnúť stage na");
+    await expect(select).toHaveValue(before);
+    await page.locator('[data-role="stage-layout-confirm-no"]').tap();
+    await expect(confirm).toHaveCount(0);
+    expect(layoutPosts).toEqual([]);
+
+    await select.selectOption(target);
+    await page.locator('[data-role="stage-layout-confirm-yes"]').tap();
+    await expect.poll(() => layoutPosts).toEqual([target]);
+    await expect(select).toHaveValue(target);
+    const after = (await (await request.get(new URL("/stage/layout", baseURL).toString())).json()).code;
+    expect(after).toBe(target);
+    await request.post(new URL("/stage/layout", baseURL).toString(), { data: { code: before } });
     expect(errors).toEqual([]);
   } finally {
     await context.close();

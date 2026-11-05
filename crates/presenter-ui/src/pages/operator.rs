@@ -5,6 +5,7 @@ use wasm_bindgen::JsCast;
 use crate::components::header::Header;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
+use crate::components::more_sheet::{close_more_sheet, MoreSheet};
 use crate::components::nameplates::operator_view::OperatorNameplates;
 use crate::components::phone_tab_bar::PhoneTabBar;
 use crate::components::playlist_list::PlaylistList;
@@ -99,7 +100,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     setup_keyboard_shortcuts(ctx.clone(), op.clone());
 
     // Popstate listener for browser back/forward (GAP 7)
-    setup_popstate_listener(ctx.clone());
+    setup_popstate_listener(ctx.clone(), op.clone());
 
     // Build presentation index when libraries load (GAP 5)
     {
@@ -195,6 +196,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
             </section>
         </main>
         <PhoneTabBar />
+        <MoreSheet />
         <Toast />
         <LibraryModals />
         <PlaylistModals />
@@ -486,8 +488,13 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
         Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
             let key = ev.key();
 
-            // Escape: close modals first, then search
+            // Escape: close the "Viac" sheet, then modals, then search
             if key == crate::utils::keyboard::KEY_ESCAPE {
+                if op.more_sheet_open.get_untracked() {
+                    close_more_sheet(&op);
+                    ev.prevent_default();
+                    return;
+                }
                 if op.open_modal.get_untracked().is_some() {
                     crate::components::modal::close_modal(&op);
                     ev.prevent_default();
@@ -546,8 +553,9 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
     handler.forget();
 }
 
-fn setup_popstate_listener(ctx: AppContext) {
+fn setup_popstate_listener(ctx: AppContext, op: OperatorState) {
     let view = ctx.view;
+    let more_sheet_open = op.more_sheet_open;
     let handler =
         Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |_ev: web_sys::PopStateEvent| {
             // Derive view from the current URL pathname
@@ -555,6 +563,8 @@ fn setup_popstate_listener(ctx: AppContext) {
                 crate::state::view_nav::view_from_path(&crate::utils::window::current_pathname());
             view.set(v.clone());
             crate::state::session::set("view", &v);
+            // Back closes the "Viac" sheet (#850 §6.3).
+            more_sheet_open.set(false);
         });
     let window = crate::utils::window::window();
     let _ = window.add_event_listener_with_callback("popstate", handler.as_ref().unchecked_ref());

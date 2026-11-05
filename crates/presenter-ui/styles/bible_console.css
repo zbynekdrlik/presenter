@@ -206,6 +206,20 @@ body.operator[data-shell="phone"] .bible__translation-row {
   font-size: 0.85rem;
 }
 
+/* ── Text-search rows ── */
+.console-text-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.console-row--text {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.console-row__detail--snippet {
+  white-space: normal;
+}
+
 /* ── Preview card ── */
 .console-preview {
   display: flex;

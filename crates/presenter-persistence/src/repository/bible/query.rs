@@ -14,30 +14,30 @@ use crate::repository::Repository;
 
 /// Build an FTS5 MATCH query from free-text input.
 ///
-/// Splits into words, drops tokens shorter than 2 chars, appends `*` for
-/// prefix matching, and joins with spaces (implicit AND in FTS5).
-/// Returns `None` if no usable tokens remain. A fully quoted input is an exact
-/// phrase (#851 spec §6.4).
+/// A fully quoted input is an exact phrase (#851 spec §6.4). Otherwise splits on
+/// every character that is not alphanumeric (so `11:1` is `11` and `1`, never
+/// `111*`, and no FTS5 syntax character survives; a combining accent stays with
+/// its word), drops tokens of fewer than 2 CHARACTERS (`Ž` is 2 bytes, 1
+/// character), appends `*` for prefix matching and joins with spaces (implicit
+/// AND in FTS5). Numbers stay as tokens: `Ján 3:16` must find almost nothing
+/// here, not every verse with "Ján" in it (the AND does that, the verse text
+/// holds almost no digits). Returns `None` if no usable tokens remain (#850
+/// spec §5.11).
 fn build_fts_query(input: &str) -> Option<String> {
     if let Some(phrase) = quoted_phrase(input) {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         return (!words.is_empty()).then(|| format!("content : \"{}\"", words.join(" ")));
     }
-    let tokens: Vec<String> = input
-        .split_whitespace()
-        .filter(|w| w.len() >= 2)
-        .map(|w| {
-            // Strip FTS5 special characters to prevent query syntax errors
-            let cleaned: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
-            format!("{cleaned}*")
-        })
-        .filter(|t| t.len() > 1) // skip bare "*"
+    let folded: String = input
+        .chars()
+        .filter(|c| !matches!(c, '\u{0300}'..='\u{036F}'))
         .collect();
-    if tokens.is_empty() {
-        None
-    } else {
-        Some(tokens.join(" "))
-    }
+    let tokens: Vec<String> = folded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().count() >= 2)
+        .map(|word| format!("{word}*"))
+        .collect();
+    (!tokens.is_empty()).then(|| tokens.join(" "))
 }
 
 /// A phone's keyboard types `„viera“` as readily as `"viera"`.
@@ -393,5 +393,29 @@ mod fts_query_tests {
         );
         assert_eq!(build_fts_query("\" - \""), None);
         assert_eq!(build_fts_query("\""), None);
+    }
+
+    #[test]
+    fn a_reference_keeps_only_its_word_and_never_glues_its_numbers() {
+        // The numbers stay: header search and the AI tool must not answer a
+        // reference with every verse containing the book's name.
+        assert_eq!(build_fts_query("zid 11:1").as_deref(), Some("zid* 11*"));
+        assert_eq!(build_fts_query("11:1").as_deref(), Some("11*"));
+        assert_eq!(build_fts_query("Ž 23").as_deref(), Some("23*"));
+    }
+
+    #[test]
+    fn words_are_split_on_punctuation_and_counted_in_characters() {
+        assert_eq!(
+            build_fts_query("viera je zárukou").as_deref(),
+            Some("viera* je* zárukou*")
+        );
+        assert_eq!(
+            build_fts_query("\"Pán\"-je(môj)").as_deref(),
+            Some("Pán* je* môj*")
+        );
+        assert_eq!(build_fts_query("ž a"), None);
+        // A combining accent is part of its word: it never splits it.
+        assert_eq!(build_fts_query("na\u{0301}dej").as_deref(), Some("nadej*"));
     }
 }
