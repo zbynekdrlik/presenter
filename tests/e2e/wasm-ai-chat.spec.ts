@@ -109,6 +109,41 @@ test.describe("AI Tab Navigation", () => {
   });
 });
 
+// #850 S8: on LAN http (six connections per host) the Bible console's book list
+// waited behind the requests of an AI panel nobody had opened.
+test("the AI panel costs no request until it opens, then stays mounted", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === "/ai/settings" || path === "/ai/conversation") asked.push(path);
+  });
+
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForLoadState("networkidle");
+  await expect(page.locator('[data-view-panel="ai"] > *')).toHaveCount(0);
+  expect(asked).toEqual([]);
+
+  const aiTab = page.locator('[data-role="view-toggle"][data-view="ai"]');
+  const conversationAsked = page.waitForRequest(
+    (r) => new URL(r.url()).pathname === "/ai/conversation",
+  );
+  await aiTab.click();
+  await conversationAsked;
+  const content = page.locator('[data-view-panel="ai"] > *').first();
+  await expect(content).toBeVisible();
+
+  // Leaving keeps the panel (a half-typed question survives a view switch).
+  await content.evaluate((el) => el.setAttribute("data-same-node", "1"));
+  await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+  await expect(page.locator("body")).toHaveAttribute("data-view", "bible");
+  await aiTab.click();
+  await expect(content).toHaveAttribute("data-same-node", "1");
+  expect(errors).toEqual([]);
+});
+
 test.describe("AI Chat Empty State", () => {
   test("shows empty state message when no messages", async ({ page }) => {
     await navigateToAi(page);
