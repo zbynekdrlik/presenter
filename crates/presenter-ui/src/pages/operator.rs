@@ -159,6 +159,15 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     // Catalog resizer
     let catalog_top_style = move || format!("height: {}px", op.catalog_top_height.get());
 
+    // #850 S8: Settings mounts the first time its view opens and then stays
+    // mounted (the Menovky latch, #871). Its cards are a third of the requests
+    // a cold load fires, and on LAN http (HTTP/1.1, six connections per host)
+    // the Bible console's book list waits behind them.
+    let settings_view = ctx.view;
+    let settings_opened = Memo::new(move |was: Option<&bool>| {
+        was.copied().unwrap_or(false) || settings_view.get() == "settings"
+    });
+
     view! {
         <Header />
         <SearchResults />
@@ -192,7 +201,9 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                 <OperatorNameplates live_sink=live_sink connects=live.connects />
             </section>
             <section class="operator__panel operator__panel--settings" data-view-panel="settings">
-                <SettingsPage embedded=true />
+                <Show when=move || settings_opened.get()>
+                    <SettingsPage embedded=true />
+                </Show>
             </section>
         </main>
         <PhoneTabBar />

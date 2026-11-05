@@ -138,8 +138,8 @@ Health, socket and recorder (#852 C1b-7):
 - One `GET /listen/status` poll every 2 s (`start_status_poll`), numbered by
   `ResponseOrder`. `tick(visible, holds_status)` decides each tick (pure, unit-tested):
   the card is on screen (`offsetParent`) → fetch; hidden → fetch NOTHING and drop the
-  status it held (the operator keeps the Settings panel mounted under `display: none`,
-  so an hours-old "prijíma" or a checked switch would greet whoever opens Settings;
+  status it held (the operator mounts Settings at its first opening, #850 S8, and then keeps
+  it under `display: none`, so an hours-old "prijíma" or a checked switch would greet whoever reopens Settings;
   the badges read "—" until the first visible tick). Dropping also numbers a request
   nobody sends, so an answer still in flight is discarded. After 2 failed polls in a
   row the status is `None` too (`video_sources::is_stale`, one console warn when it
