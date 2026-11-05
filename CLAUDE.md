@@ -111,6 +111,7 @@ The project uses **Semantic Versioning** with a single `X.Y.Z` format on both br
 2. Release: create PR dev->main, no version change needed, all checks green
 3. Merge: Claude merges autonomously once every gate is green (user directive 2026-07-24), main deploys, production shows `vX.Y.Z`
 4. Post-release: bump to next version on dev, continue
+5. **PP (`companion-pp.lan`) is NOT upgraded with every release** (owner directive 2026-11-05: „nevydávať hneď do PP, až keď sa overia v SNV … kontrolovaný proces“). A merge to main deploys SNV only. A GitHub Release (→ `release.yml` → PP) is created only when the owner asks for it or PP needs a specific fix, and only for a version that has already run on SNV. Never run `gh release create` as a routine release step.
 
 See `docs/architecture.md` for full versioning and release strategy.
 
