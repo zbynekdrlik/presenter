@@ -8,6 +8,7 @@ import {
   attachConsoleErrorCollector,
   deriveTestConfig,
   PHONE_390,
+  refreshDevData,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -21,6 +22,8 @@ let baseURL = "";
 test.beforeAll(async ({}, testInfo) => {
   const cfg = deriveTestConfig(testInfo);
   baseURL = cfg.baseURL;
+  // A retry runs in a new worker, whose database does not exist yet.
+  await refreshDevData(cfg.dbUrl);
   serverHandle = await startTestServer(cfg.port, cfg.dbUrl, cfg.oscPort);
 });
 
@@ -53,11 +56,11 @@ test("a cold load fetches one stylesheet, with every source file in order", asyn
       const sheet = [...document.styleSheets].find((s) => s.href?.includes("/ui-pkg/"));
       const selectors = [...(sheet?.cssRules ?? [])].map((r) => (r as CSSStyleRule).selectorText ?? "");
       const at = (needle: string) => selectors.findIndex((s) => s.includes(needle));
-      // operator.css is the first source file; the data-shell rules come from later ones.
-      return { operator: at(".operator__main"), phone: at("data-shell") };
+      // operator.css is the first source file, bible_console.css a late one.
+      return { operator: at(".operator__main"), later: at(".console-translations") };
     });
     expect(order.operator).toBeGreaterThanOrEqual(0);
-    expect(order.phone).toBeGreaterThan(order.operator);
+    expect(order.later).toBeGreaterThan(order.operator);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
