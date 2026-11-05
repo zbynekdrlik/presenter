@@ -1,6 +1,7 @@
 ---
 paths:
   - "scripts/build-ui.sh"
+  - "scripts/ci/bundle_ui_css.py"
   - "crates/presenter-server/src/router/wasm_ui.rs"
   - "crates/presenter-ui/Cargo.toml"
   - "crates/presenter-ui/.cargo/config.toml"
@@ -17,9 +18,14 @@ paths:
 - **`scripts/build-ui.sh` shrinks and precompresses.** `wasm-opt -Oz --mvp-features
   --enable-mutable-globals` (binaryen from apt): its feature validation is the Safari 12 gate,
   so never add a feature flag to it, and never move it into Trunk (`data-wasm-opt` stays `0`).
-  Then `brotli -q 11` + `gzip -9 -n` siblings for every `.wasm` / `.js` / `.css`. `binaryen` and
-  `brotli` are in the "Install system dependencies" step of the build job in pipeline, deploy and
-  release (no second `apt-get update`, a stalled mirror has hung that step several times).
+  Then `brotli -q 11` + `pigz -11 -n` (zopfli, 5 % under `gzip -9`) siblings for every `.wasm` /
+  `.js` / `.css`. `binaryen`, `brotli` and `pigz` are in the "Install system dependencies" step of
+  the build job in pipeline, deploy and release (no second `apt-get update`, a stalled mirror has hung that step several times).
+- **One stylesheet in the dist (#850 S8).** `scripts/ci/bundle_ui_css.py` joins the files
+  `index.html` links, in that order, after Trunk and before the precompression, so the sources stay
+  separate and a new file is only a new `<link>`. An unclosed rule or comment in a source fails the
+  build (it would swallow the next file). The wasm is fetched after the JS (no preload: Safari 12),
+  so every stylesheet round delays it on LAN http.
 - **The size profile is in `crates/presenter-ui/.cargo/config.toml`, not the crate's `Cargo.toml`.**
   A config `[profile]` beats a manifest `[profile]`, and the root `.cargo/config.toml` merges into
   this build by directory ancestry, so `opt-level = "z"` in the manifest is silently ignored

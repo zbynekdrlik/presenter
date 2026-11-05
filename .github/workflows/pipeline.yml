@@ -488,6 +488,12 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s scripts/ci -p 'test_check_ui_size_budget.py' -v
 
+      # #850 S8: the stylesheet bundler (the UI build runs it on the dist).
+      - name: Test UI stylesheet bundler (#850)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_bundle_ui_css.py' -v
+
       # #850 O1: the Cloudflare Access reconcile planner (pure functions, no network).
       - name: Test Cloudflare Access reconcile script (#850)
         run: |
@@ -612,7 +618,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         timeout-minutes: 10
-        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq protobuf-compiler cmake nasm binaryen brotli gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
+        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq protobuf-compiler cmake nasm binaryen brotli pigz gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

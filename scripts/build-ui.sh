@@ -56,6 +56,11 @@ if ! grep -q 'import\.meta\.url' dist/presenter-ui-*.js; then
   exit 1
 fi
 
+# Step 3b (#850 S8): one stylesheet, in the index.html order. On LAN http six
+# connections per host made fifteen of them three rounds before the wasm started.
+echo "==> Bundling stylesheets..."
+python3 "$PROJECT_ROOT/scripts/ci/bundle_ui_css.py" dist
+
 # Step 4 (#850 B1c): shrink the WASM. -Oz with ONLY the MVP features plus
 # mutable globals (the Safari 12 target of .cargo/config.toml); wasm-opt
 # validates the module against that feature set, so a post-MVP instruction
@@ -70,11 +75,13 @@ done
 
 # Step 5 (#850 B1c): precompressed siblings; the server sends the one the
 # client accepts (router/wasm_ui.rs) instead of compressing per request.
-echo "==> Precompressing assets (brotli -q 11, gzip -9)..."
+# pigz -11 = zopfli: gzip-compatible, the LAN phone's wasm is 5 % smaller (#850 S8).
+echo "==> Precompressing assets (brotli -q 11, pigz -11)..."
 command -v brotli >/dev/null || { echo "ERROR: brotli is not installed" >&2; exit 1; }
+command -v pigz >/dev/null || { echo "ERROR: pigz is not installed" >&2; exit 1; }
 for asset in dist/*.wasm dist/*.js dist/*.css; do
   brotli -q 11 -f -k "$asset"
-  gzip -9 -n -f -k "$asset"
+  pigz -11 -n -f -k "$asset"
 done
 
 echo "==> UI build complete."
