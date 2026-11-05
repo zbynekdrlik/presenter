@@ -17,6 +17,16 @@ rustflags = ["-Ctarget-cpu=mvp", "-Ctarget-feature=+mutable-globals"]
 [build]
 incremental = false
 
+# #850 B1c: a phone downloads this, so size beats speed. HERE and not in this
+# crate's Cargo.toml: a config [profile] beats a manifest [profile], so the
+# root .cargo/config.toml (opt-level 3, thin LTO), which merges into this build
+# by directory ancestry, would silently win over the manifest. panic = "abort"
+# and strip = "symbols" still come from the root config.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+
 [env]
 # #594: like the root .cargo/config.toml, this [env] entry is INERT for
 # Cargo's own incremental decision — Cargo's [env] table only sets variables

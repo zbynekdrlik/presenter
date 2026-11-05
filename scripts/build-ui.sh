@@ -56,4 +56,25 @@ if ! grep -q 'import\.meta\.url' dist/presenter-ui-*.js; then
   exit 1
 fi
 
+# Step 4 (#850 B1c): shrink the WASM. -Oz with ONLY the MVP features plus
+# mutable globals (the Safari 12 target of .cargo/config.toml); wasm-opt
+# validates the module against that feature set, so a post-MVP instruction
+# fails the build here instead of breaking iOS 12 at runtime.
+echo "==> Optimizing WASM (wasm-opt -Oz, MVP features)..."
+command -v wasm-opt >/dev/null || { echo "ERROR: wasm-opt (binaryen) is not installed" >&2; exit 1; }
+wasm-opt --version
+for wasm in dist/*.wasm; do
+  wasm-opt -Oz --mvp-features --enable-mutable-globals "$wasm" -o "$wasm.opt"
+  mv "$wasm.opt" "$wasm"
+done
+
+# Step 5 (#850 B1c): precompressed siblings; the server sends the one the
+# client accepts (router/wasm_ui.rs) instead of compressing per request.
+echo "==> Precompressing assets (brotli -q 11, gzip -9)..."
+command -v brotli >/dev/null || { echo "ERROR: brotli is not installed" >&2; exit 1; }
+for asset in dist/*.wasm dist/*.js dist/*.css; do
+  brotli -q 11 -f -k "$asset"
+  gzip -9 -n -f -k "$asset"
+done
+
 echo "==> UI build complete."
