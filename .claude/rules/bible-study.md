@@ -23,8 +23,8 @@ preparation (the sermon views are in `sermon-prep.md`).
   specs ends with `finish()` (`study-support.ts`), which asserts that and the clean console. The test
   that passes through the operator empties `wallRequests` once it is back: the operator polls the
   stage.
-- **No pill in the operator's surface nav.** That row is absolutely positioned at the header's limit:
-  a seventh pill slid the AI chip under the stage preview at 1280 px. The page is entered from `/`.
+- **Entry from the operator = the Stránky menu item "Štúdium"** (#875 H1, same tab), never a link in the
+  Obrazovky surface list (those open a new tab). The page is also entered from `/`.
 - **A chapter comes from `GET /bible/study/chapter`, in ONE function** (`api/study.rs::load_chapter`).
   An empty `verses` = this translation lacks it; specs gate it with a URL regex, it has no body.
 - **The URL is the state.** `state::study::StudyRoute::{parse,to_url}`; every view AND sheet has a

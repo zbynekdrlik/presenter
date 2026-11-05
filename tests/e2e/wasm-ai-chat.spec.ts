@@ -19,6 +19,7 @@ import {
   startTestServer,
   stopServer,
   type ServerHandle,
+  openView,
 } from "./support";
 
 let serverHandle: ServerHandle | undefined;
@@ -44,8 +45,7 @@ async function initPage(page: import("@playwright/test").Page) {
 
 async function navigateToAi(page: import("@playwright/test").Page) {
   await initPage(page);
-  const aiButton = page.locator('[data-role="view-toggle"][data-view="ai"]');
-  await aiButton.click();
+  await openView(page, "ai");
   await page.waitForFunction(
     () => document.body.getAttribute("data-view") === "ai",
     { timeout: 5_000 },
@@ -56,6 +56,8 @@ test.describe("AI Tab Navigation", () => {
   test("AI tab button exists in header navigation", async ({ page }) => {
     await initPage(page);
 
+    // #875 H1: the AI section sits in the header's Stránky menu.
+    await page.locator('[data-role="header-menu-toggle"][data-menu="pages"]').click();
     const aiButton = page.locator('[data-role="view-toggle"][data-view="ai"]');
     await expect(aiButton).toBeVisible();
     await expect(aiButton).toHaveText("AI");
@@ -126,11 +128,10 @@ test("the AI panel costs no request until it opens, then stays mounted", async (
   await expect(page.locator('[data-view-panel="ai"] > *')).toHaveCount(0);
   expect(asked).toEqual([]);
 
-  const aiTab = page.locator('[data-role="view-toggle"][data-view="ai"]');
   const conversationAsked = page.waitForRequest(
     (r) => new URL(r.url()).pathname === "/ai/conversation",
   );
-  await aiTab.click();
+  await openView(page, "ai");
   await conversationAsked;
   const content = page.locator('[data-view-panel="ai"] > *').first();
   await expect(content).toBeVisible();
@@ -139,7 +140,7 @@ test("the AI panel costs no request until it opens, then stays mounted", async (
   await content.evaluate((el) => el.setAttribute("data-same-node", "1"));
   await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
   await expect(page.locator("body")).toHaveAttribute("data-view", "bible");
-  await aiTab.click();
+  await openView(page, "ai");
   await expect(content).toHaveAttribute("data-same-node", "1");
   expect(errors).toEqual([]);
 });

@@ -3,13 +3,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::api::bible as bible_api;
-use crate::components::ai_status::AiStatusChip;
+use crate::components::header_menus::{HeaderMenus, DIRECT_VIEWS, SETTINGS_VIEW};
 use crate::components::more_sheet::open_more_sheet;
-use crate::components::resolume_status::ResolumeStatusChips;
 use crate::components::stage_layout_select::StageLayoutSelect;
 use crate::components::stage_preview::StagePreview;
 use crate::components::stage_text_mode_picker::StageTextModePicker;
-use crate::components::surface_nav::SurfaceNav;
 use crate::state::operator::OperatorState;
 use crate::state::view_nav::{set_view, VIEWS};
 use crate::state::AppContext;
@@ -166,6 +164,10 @@ pub fn Header() -> impl IntoView {
     // #850 §6.3: on a phone the chips, surfaces and Stage Output live in the
     // "Viac" sheet; mounting them here too would double their 5 s polls.
     let phone = ctx.phone_shell;
+    let settings_label = VIEWS
+        .into_iter()
+        .find(|(id, _)| *id == SETTINGS_VIEW)
+        .map_or("Nastavenia", |(_, label)| label);
     let on_more = {
         let op = op.clone();
         move |_| open_more_sheet(&op)
@@ -288,19 +290,6 @@ pub fn Header() -> impl IntoView {
                         title=move || if ctx.ws_connected.get() { "Pripojené" } else { "Nepripojené" }
                     ></span>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
-                    // #573: surface-nav pills + Resolume connection chips are
-                    // one group (`.operator__brand-nav`)
-                    // in the top brand row — connection/status indicators
-                    // belong next to Stage/Camera/Tablet/Timer, never next to
-                    // the Stage Output select (see `operator__header-right`
-                    // below, which no longer mounts the chips).
-                    <div class="operator__brand-nav">
-                        <Show when=move || !phone.get()>
-                            <SurfaceNav />
-                            <ResolumeStatusChips />
-                            <AiStatusChip />
-                        </Show>
-                    </div>
                 </div>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                     on:submit=on_search_submit
@@ -334,8 +323,10 @@ pub fn Header() -> impl IntoView {
                     </button>
                 </form>
             </div>
+            // #875 H1: Piesne and Biblia keep their own buttons; the other
+            // sections are in the Stránky menu, Nastavenia behind ⚙.
             <nav class="operator__view-nav">
-                {VIEWS.into_iter().map(|(id, label)| {
+                {VIEWS.into_iter().filter(|(id, _)| DIRECT_VIEWS.contains(id)).map(|(id, label)| {
                     view! {
                         <button
                             type="button"
@@ -349,6 +340,11 @@ pub fn Header() -> impl IntoView {
                     }
                 }).collect_view()}
             </nav>
+            // On a phone the surfaces and chips live in the "Viac" sheet;
+            // mounting them here too would double their 5 s polls (#850 §6.3).
+            <Show when=move || !phone.get()>
+                <HeaderMenus version=version_text />
+            </Show>
             <div class="operator__header-right">
                 <Show when=move || !phone.get()>
                     <StageLayoutSelect />
@@ -377,6 +373,21 @@ pub fn Header() -> impl IntoView {
                         }
                     }).collect_view()}
                 </div>
+                <Show when=move || !phone.get()>
+                    <button
+                        type="button"
+                        class="operator__settings-button"
+                        data-role="view-toggle"
+                        data-view=SETTINGS_VIEW
+                        data-active=move || if ctx.view.get() == SETTINGS_VIEW { "true" } else { "false" }
+                        aria-label=settings_label
+                        title=settings_label
+                        on:click=move |_| set_view(ctx.view, SETTINGS_VIEW)
+                    >
+                        // The gear is drawn by CSS: the text stays the label.
+                        <span class="sr-only">{settings_label}</span>
+                    </button>
+                </Show>
                 <Show when=move || phone.get()>
                     <button
                         type="button"

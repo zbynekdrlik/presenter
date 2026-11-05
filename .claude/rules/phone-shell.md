@@ -4,6 +4,10 @@ paths:
   - "crates/presenter-ui/src/state/view_nav.rs"
   - "crates/presenter-ui/src/components/phone_tab_bar.rs"
   - "crates/presenter-ui/src/components/header.rs"
+  - "crates/presenter-ui/src/components/header_menus.rs"
+  - "crates/presenter-ui/src/components/surface_nav.rs"
+  - "crates/presenter-ui/styles/header.css"
+  - "tests/e2e/operator-header-layout.spec.ts"
   - "crates/presenter-ui/src/components/stage_preview.rs"
   - "crates/presenter-ui/src/components/more_sheet.rs"
   - "crates/presenter-ui/src/components/stage_layout_select.rs"
@@ -58,7 +62,11 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 
 ## Desktop header (#875)
 
-`body.operator:not([data-shell="phone"]) .operator__header` is a grid: brand + links on top, search + tabs under them, stage controls on the right; under 1440 px the tabs take their own row. Nothing in the header goes out of flow: its height changes per view, the absolute links row was covered by the tabs. `operator-header-layout.spec.ts` measures overlaps at six widths.
+`body.operator:not([data-shell="phone"]) .operator__header` is ONE 40 px flex row (H1, mockup v3, `styles/header.css`): Piesne, Biblia (`DIRECT_VIEWS`), the Stránky / Obrazovky / Pripojenia menus (`components/header_menus.rs`), the search (`order: 3`, `flex: 1`, ≥ 150 px), Stage Output + Stage Text (selects only, 32 px, label kept for screen readers), Live/Edit, ⚙ (= `settings`). The brand row is the phone's, hidden on a desktop; the version stays in the corner footer and at the bottom of the Pripojenia list (`operator__version-badge` still in the DOM).
+- **Menus** are mounted only on a desktop (`<Show when=!phone>`), panels hidden with `hidden`, never unmounted, so the chips poll once and the Pripojenia button reads them through the chips' optional `report` signals (`summarize`: a host in `error` or AI `unavailable` = "Odpojené: <names>", orange; a first poll or a failed last call is not an outage). One open at a time (`RwSignal<Option<&str>>`); Escape (focus back on the button), a `pointerdown` outside every `[data-role="header-menu"]` and a click on any link or button in a panel close it. Panels are absolute under the button: the header never grows.
+- **Every section button keeps `data-role="view-toggle"` + `data-view`**, also the Stránky items and ⚙ (its text is the label in an `sr-only` span, the gear is CSS), so the DOM order stays `VIEWS`' order. Specs open a section with `openView(page, id)` from `support.ts` (opens Stránky when needed), never by clicking a menu item directly; `headerMenu(page, id)` gives a menu's toggle and panel.
+- **Stage preview (interim until H2):** still mounted in `header-right`, but on a desktop it is `position: fixed` at the bottom-left corner with `pointer-events: none` except its buttons, so it is out of the row. H2 gives it its own place under the lists.
+- `operator-header-layout.spec.ts`: header ≤ 44 px, no overlap, nothing past the right edge at 1024–2560 px on Piesne and Biblia; menu open/close/keyboard; a dead Resolume host (port 1) turns the closed Pripojenia button orange with its name.
 - **"Viac" sheet** (`components/more_sheet.rs`): mounted once in the phone shell, toggled by
   `data-open`. Opening pushes a same-URL history entry; ✕, the backdrop and Escape close at once
   and go back once (a double tap must not leave the page), then a 350 ms transparent shield takes

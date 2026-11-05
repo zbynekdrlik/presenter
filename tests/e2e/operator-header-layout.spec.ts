@@ -1,9 +1,13 @@
 /**
- * Operator header layout E2E (#875).
+ * Operator header layout E2E (#875 H1, mockup v3).
  *
- * No control in the header may lie over another one, at any desktop width and
- * on any operator view. The surface links used to be positioned out of flow,
- * so on a view with a short header the view tabs rose into them.
+ * The desktop header is ONE row, at most 44 px high, at every desktop width:
+ * Piesne, Biblia, the Stránky / Obrazovky / Pripojenia menus, the search,
+ * Stage Output, Live/Edit and ⚙. No control lies over another, nothing runs
+ * off the right edge. The menus overlay the page (the header never grows),
+ * only one is open at a time, and Escape, a press outside and picking an item
+ * close them. A Resolume host that is down turns the closed Pripojenia button
+ * orange with its name.
  *
  * Also asserts zero browser console errors/warnings per
  * ci/browser-console-zero-errors.md.
@@ -13,6 +17,8 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
+  headerMenu,
+  openView,
   refreshDevData,
   startTestServer,
   stopServer,
@@ -35,18 +41,22 @@ test.afterAll(async () => {
   await stopServer(serverHandle);
 });
 
-const WIDTHS = [1024, 1280, 1366, 1440, 1600, 1920];
+const WIDTHS = [1024, 1280, 1366, 1440, 1600, 1920, 2560];
+
+/* The controls of the header ROW: visible, outside the stage preview (which
+   leaves the row, see header.css) and outside the closed menu panels. Each
+   evaluate below carries its own copy of this filter (no eval in the page). */
+const ROW_SELECTOR =
+  ".operator__header a, .operator__header button, .operator__header select, .operator__header input";
 
 /** Pairs of header controls that overlap by more than a pixel each way. */
 async function overlappingControls(page: Page): Promise<string[]> {
-  return page.evaluate(() => {
-    const controls = [
-      ...document.querySelectorAll<HTMLElement>(
-        ".operator__header a, .operator__header button, .operator__header select, .operator__header input",
-      ),
-    ].filter((el) => el.getClientRects().length > 0);
+  return page.evaluate((selector) => {
+    const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter(
+      (el) => el.getClientRects().length > 0 && !el.closest(".operator__stage-preview"),
+    );
     const name = (el: HTMLElement) =>
-      (el.innerText || el.getAttribute("placeholder") || el.tagName).trim();
+      (el.innerText || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.tagName).trim();
     const pairs: string[] = [];
     controls.forEach((a, i) => {
       controls.slice(i + 1).forEach((b) => {
@@ -59,39 +69,184 @@ async function overlappingControls(page: Page): Promise<string[]> {
       });
     });
     return pairs;
-  });
+  }, ROW_SELECTOR);
 }
 
-/** How many rows the view tabs take. */
-async function tabRows(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const tops = [
-      ...document.querySelectorAll<HTMLElement>('[data-role="view-toggle"]'),
-    ].map((tab) => Math.round(tab.getBoundingClientRect().top));
-    return new Set(tops).size;
-  });
+/** The header's height, the row controls lying outside it or the window, the
+ *  number of row controls and the page width. */
+async function rowFacts(page: Page) {
+  return page.evaluate((selector) => {
+    const header = document.querySelector(".operator__header")!.getBoundingClientRect();
+    const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter(
+      (el) => el.getClientRects().length > 0 && !el.closest(".operator__stage-preview"),
+    );
+    const outside = controls
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top < header.top - 1 || r.bottom > header.bottom + 1 || r.right > window.innerWidth;
+      })
+      .map((el) => (el.innerText || el.getAttribute("aria-label") || el.tagName).trim());
+    return {
+      height: header.height,
+      outside,
+      controls: controls.length,
+      pageWidth: document.documentElement.scrollWidth,
+    };
+  }, ROW_SELECTOR);
+}
+
+async function openOperator(page: Page, path: string) {
+  await page.goto(`${baseURL}${path}`);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
 }
 
 for (const path of ["/ui/operator", "/ui/bible"]) {
-  test(`no header control covers another on ${path}`, async ({ page }) => {
+  test(`one 40 px header row, nothing covered or cut off, on ${path}`, async ({ page }) => {
     const errors: string[] = [];
     attachConsoleErrorCollector(page, errors);
-    await page.goto(`${baseURL}${path}`);
-    await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
-    await expect(page.locator(".operator__surface-nav")).toBeVisible();
+    await openOperator(page, path);
+    await expect(headerMenu(page, "connections").toggle).toBeVisible();
 
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: 900 });
-      await expect
-        .poll(() => overlappingControls(page), { message: `${path} at ${width} px` })
-        .toEqual([]);
-      const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-      expect(pageWidth, `${path} at ${width} px`).toBeLessThanOrEqual(width);
-      // 1024 px may take two rows, a stack of six single tabs is never fine.
-      const rows = await tabRows(page);
-      expect(rows, `${path} at ${width} px`).toBeLessThanOrEqual(width >= 1280 ? 1 : 2);
+      const where = `${path} at ${width} px`;
+      await expect.poll(() => overlappingControls(page), { message: where }).toEqual([]);
+      const facts = await rowFacts(page);
+      expect(facts.height, where).toBeLessThanOrEqual(44);
+      expect(facts.outside, where).toEqual([]);
+      // Piesne, Biblia, three menus, the search, a select, Live, Edit, ⚙.
+      expect(facts.controls, where).toBeGreaterThanOrEqual(10);
+      expect(facts.pageWidth, where).toBeLessThanOrEqual(width);
     }
 
     expect(errors).toEqual([]);
   });
 }
+
+test("menus open one at a time, overlay the page and close on Escape, outside press and pick", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openOperator(page, "/ui/operator");
+  const header = page.locator(".operator__header");
+  const pages = headerMenu(page, "pages");
+  const screens = headerMenu(page, "screens");
+  const connections = headerMenu(page, "connections");
+  const menus = [pages, screens, connections];
+
+  for (const menu of menus) {
+    await expect(menu.panel).toBeHidden();
+    await expect(menu.toggle).toHaveAttribute("aria-expanded", "false");
+  }
+
+  // Each opens over the page, under the header, which keeps its height.
+  for (const menu of menus) {
+    await menu.toggle.click();
+    await expect(menu.panel).toBeVisible();
+    await expect(menu.toggle).toHaveAttribute("aria-expanded", "true");
+    for (const other of menus.filter((m) => m !== menu)) {
+      await expect(other.panel).toBeHidden();
+    }
+    const headerBox = (await header.boundingBox())!;
+    const panelBox = (await menu.panel.boundingBox())!;
+    expect(headerBox.height).toBeLessThanOrEqual(44);
+    expect(panelBox.y).toBeGreaterThanOrEqual(headerBox.y + headerBox.height);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(1280);
+  }
+  // The same button again closes its menu.
+  await connections.toggle.click();
+  await expect(connections.panel).toBeHidden();
+
+  // Escape closes and gives the focus back to the button.
+  await pages.toggle.click();
+  await expect(pages.panel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(pages.panel).toBeHidden();
+  await expect(pages.toggle).toBeFocused();
+
+  // Keyboard: Enter opens, Tab reaches the first item.
+  await page.keyboard.press("Enter");
+  await expect(pages.panel).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(pages.panel.locator('[data-role="header-menu-study"]')).toBeFocused();
+  await expect(pages.panel.locator('[data-role="header-menu-study"]')).toHaveAttribute(
+    "href",
+    "/ui/study",
+  );
+
+  // A press outside every menu (here: the search field) closes it.
+  await page.locator('[data-role="global-search-query"]').click();
+  await expect(pages.panel).toBeHidden();
+
+  // The Stránky items, in mockup order; picking one opens it and closes the menu.
+  await pages.toggle.click();
+  await expect(pages.panel.locator(".header-menu__item")).toHaveText([
+    "Štúdium",
+    "Časovače",
+    "AI",
+    "Menovky",
+  ]);
+  await pages.panel.locator('[data-role="view-toggle"][data-view="timers"]').click();
+  await expect(page.locator("body")).toHaveAttribute("data-view", "timers");
+  await expect(pages.panel).toBeHidden();
+  await expect(pages.toggle).toHaveAttribute("data-active", "true");
+
+  // The helper the other specs use, through the menu and through ⚙.
+  await openView(page, "menovky");
+  await expect(page.locator("body")).toHaveAttribute("data-view", "menovky");
+  await openView(page, "settings");
+  await expect(page.locator("body")).toHaveAttribute("data-view", "settings");
+  await expect(page.locator('.operator__settings-button')).toHaveAttribute("data-active", "true");
+  await expect(pages.toggle).toHaveAttribute("data-active", "false");
+  expect(new URL(page.url()).pathname).toBe("/ui/operator/settings");
+  await openView(page, "worship");
+  await expect(page.locator("body")).toHaveAttribute("data-view", "worship");
+
+  expect(errors).toEqual([]);
+});
+
+test("a Resolume host that is down turns the closed Pripojenia button orange with its name", async ({
+  page,
+  request,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  // AI up: the button then speaks only about the Resolume host.
+  await page.route("**/ai/status", (route) =>
+    route.fulfill({ json: { connected: true, error: null, modelValid: true } }),
+  );
+  const label = "E2E wall down";
+  // Nothing listens on port 1: the host goes to `error` on its first attempt.
+  const created = await request.post(new URL("/integrations/resolume/hosts", baseURL).toString(), {
+    data: { label, host: "127.0.0.1", port: 1, isEnabled: true },
+  });
+  expect(created.ok()).toBeTruthy();
+  const { id } = (await created.json()) as { id: string };
+  try {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openOperator(page, "/ui/operator");
+    const connections = headerMenu(page, "connections");
+
+    await expect(connections.toggle).toHaveAttribute("data-state", "down", { timeout: 30_000 });
+    await expect(connections.panel).toBeHidden();
+    await expect(connections.toggle).toContainText(`Odpojené: ${label}`);
+    const border = await connections.toggle.evaluate((el) => getComputedStyle(el).borderTopColor);
+    expect(border).toBe("rgb(245, 158, 11)");
+    // Still one row, nothing covered, with the longer label.
+    expect((await rowFacts(page)).height).toBeLessThanOrEqual(44);
+    await expect.poll(() => overlappingControls(page)).toEqual([]);
+
+    // The list names the same host.
+    await connections.toggle.click();
+    await expect(
+      connections.panel.locator(`[data-role="resolume-status-chip"][data-host-label="${label}"]`),
+    ).toBeVisible();
+  } finally {
+    await request.delete(new URL(`/integrations/resolume/hosts/${id}`, baseURL).toString());
+  }
+
+  expect(errors).toEqual([]);
+});

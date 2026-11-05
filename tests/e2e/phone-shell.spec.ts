@@ -335,7 +335,12 @@ test("crossing the phone width moves the chips without doubling their polls", as
       await page.setViewportSize({ width, height: 800 });
       await expect(body).toHaveAttribute("data-shell", shell);
     }
-    await expect(page.locator('[data-role="ai-status-chip"]:visible')).toHaveCount(1);
+    // On a desktop the chips are the list of the (closed) Pripojenia menu
+    // (#875 H1): exactly one copy mounted, and it is the menu's.
+    await expect(page.locator('[data-role="ai-status-chip"]')).toHaveCount(1);
+    await expect(
+      page.locator('[data-role="header-menu-panel"][data-menu="connections"] [data-role="ai-status-chip"]'),
+    ).toHaveCount(1);
     await expect(page.locator('[data-role="stage-layout-select"]:visible')).toHaveCount(1);
 
     let polls = 0;

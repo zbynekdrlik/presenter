@@ -76,6 +76,7 @@ import {
   assertMinFontSize,
   assertMinTapTarget,
   deriveTestConfig,
+  openView,
   PHONE_390,
   refreshDevData,
   startTestServer,
@@ -365,7 +366,7 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
   const consoleErrors = collectConsole(page);
   await openOperator(page);
 
-  // The tab sits after AI, before Settings, and opens the view.
+  // The tab sits after AI, before Settings (in the Stránky menu, #875 H1), and opens the view.
   const tab = page.locator('[data-role="view-toggle"][data-view="menovky"]');
   await expect(tab).toHaveText("Menovky");
   expect(
@@ -373,7 +374,7 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
       .locator('[data-role="view-toggle"]')
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-view"))),
   ).toEqual(["worship", "bible", "timers", "ai", "menovky", "settings"]);
-  await tab.click();
+  await openView(page, "menovky");
   await expect(page.locator("body")).toHaveAttribute("data-view", "menovky");
   await expect(tab).toHaveAttribute("data-active", "true");
   expect(new URL(page.url()).pathname).toBe("/ui/operator/menovky");

@@ -11,6 +11,7 @@ import {
   startTestServer,
   stopServer,
   type ServerHandle,
+  openView,
 } from "./support";
 
 let serverHandle: ServerHandle | undefined;
@@ -33,19 +34,8 @@ async function navigateToTimers(page: import("@playwright/test").Page) {
   await page.goto(`${baseURL}/ui/operator`);
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
 
-  // Navigate to timers view
-  const timersButton = page.locator(
-    '[data-role="view-toggle"][data-view="timers"]',
-  );
-  if ((await timersButton.count()) > 0) {
-    await timersButton.click();
-  } else {
-    // Fallback: click timers tab by text
-    const timersTab = page.locator('button:has-text("Timers")').first();
-    if ((await timersTab.count()) > 0) {
-      await timersTab.click();
-    }
-  }
+  // Navigate to timers view (#875 H1: through the header's Stránky menu)
+  await openView(page, "timers");
 
   // Wait for timer panel to be visible
   await page.waitForFunction(

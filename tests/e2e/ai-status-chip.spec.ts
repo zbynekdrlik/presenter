@@ -20,6 +20,7 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
+  headerMenu,
   refreshDevData,
   startTestServer,
   stopServer,
@@ -59,7 +60,9 @@ async function mockAiStatus(
   });
 }
 
-test("mounted in the top brand row, never next to Stage Output", async ({ page }) => {
+test("mounted once in the Pripojenia menu, never next to Stage Output; AI up = green", async ({
+  page,
+}) => {
   const consoleMessages: string[] = [];
   attachConsoleErrorCollector(page, consoleMessages);
   await mockAiStatus(page, { connected: true });
@@ -67,13 +70,22 @@ test("mounted in the top brand row, never next to Stage Output", async ({ page }
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
 
+  // #875 H1: the chips are the Pripojenia menu's list (one copy, one poll).
+  const menu = headerMenu(page, "connections");
   await expect(page.locator('[data-role="ai-status-chip"]')).toHaveCount(1);
-  await expect(
-    page.locator('.operator__header-brand [data-role="ai-status-chip"]'),
-  ).toHaveCount(1);
+  await expect(menu.panel.locator('[data-role="ai-status-chip"]')).toHaveCount(1);
   await expect(
     page.locator('.operator__header-right [data-role="ai-status-chip"]'),
   ).toHaveCount(0);
+
+  // No Resolume host here, AI connected: everything answered, green, closed.
+  await expect(menu.toggle).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
+  await expect(menu.toggle).toContainText("Pripojenia");
+  await expect(menu.panel).toBeHidden();
+  await menu.toggle.click();
+  await expect(menu.panel.locator('[data-role="ai-status-chip"]')).toBeVisible();
+  // The version is reachable at the bottom of the list.
+  await expect(menu.panel.locator('[data-role="header-version"]')).toHaveText(/^v\d+\.\d+\.\d+/);
 
   expect(consoleMessages).toEqual([]);
 });
@@ -132,6 +144,11 @@ test("clicking the chip navigates straight to the AI panel", async ({ page }) =>
 
   const chip = page.locator('[data-role="ai-status-chip"]');
   await expect(chip).toHaveAttribute("data-state", "unavailable", { timeout: 30_000 });
+  // #875 H1: an outage shows on the closed Pripojenia button, by name.
+  const menu = headerMenu(page, "connections");
+  await expect(menu.toggle).toHaveAttribute("data-state", "down");
+  await expect(menu.toggle).toContainText("Odpojené: AI");
+  await menu.toggle.click();
   await chip.click();
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
 
