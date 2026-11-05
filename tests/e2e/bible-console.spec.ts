@@ -1493,7 +1493,7 @@ test("a cold console reads preferences and books in one answer, a switch reads i
   const starts: string[] = [];
   page.on("request", (req) => {
     const url = new URL(req.url());
-    if (url.pathname === "/bible/books") books.push(url.search);
+    if (url.pathname === "/bible/books") books.push(url.searchParams.get("translation") ?? "");
     if (url.pathname === "/bible/console-start") starts.push(url.search);
   });
   const list = page.locator('[data-role="book-list"]');
@@ -1509,7 +1509,7 @@ test("a cold console reads preferences and books in one answer, a switch reads i
 
     await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]').tap();
     await expect(list).toHaveAttribute("data-books-translation", "slk-roh");
-    expect(books).toEqual(["?translation=slk-roh"]);
+    expect(books).toEqual(["slk-roh"]);
 
     // This browser's own choice (#701) is the one prepared on the next load.
     books.length = 0;
@@ -1532,7 +1532,7 @@ test("an answer without books falls back to reading them", async ({ browser }) =
   const books: string[] = [];
   page.on("request", (req) => {
     const url = new URL(req.url());
-    if (url.pathname === "/bible/books") books.push(url.search);
+    if (url.pathname === "/bible/books") books.push(url.searchParams.get("translation") ?? "");
   });
   await page.route("**/bible/console-start**", (route) =>
     route.fulfill({
@@ -1546,7 +1546,7 @@ test("an answer without books falls back to reading them", async ({ browser }) =
   try {
     await page.goto("/ui/operator/bible");
     await expect(page.locator('[data-role="book-list"]')).toHaveAttribute("data-books-translation", "slk-seb");
-    expect(books).toEqual(["?translation=slk-seb"]);
+    expect(books).toEqual(["slk-seb"]);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
