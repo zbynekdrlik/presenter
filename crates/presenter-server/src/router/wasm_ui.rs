@@ -27,7 +27,8 @@ pub(super) async fn wasm_ui_shell_with_path(Path(_path): Path<String>) -> Respon
 /// Handles paths like `/pkg/presenter_ui_bg.wasm`, `/pkg/presenter_ui.js`, CSS files, etc.
 /// #850 B1c: `scripts/build-ui.sh` writes `.br` and `.gz` siblings of every
 /// `.wasm` / `.js` / `.css`; the one the client accepts is sent as it is (a
-/// 6 MB wasm is ~1.6 MB as brotli), never compressed per request on the N100.
+/// 5.4 MB wasm is 1.3 MB as brotli, 1.9 MB as gzip), never compressed per
+/// request on the N100.
 pub(super) async fn wasm_ui_asset(Path(path): Path<String>, headers: HeaderMap) -> Response {
     let accept = headers
         .get(header::ACCEPT_ENCODING)
