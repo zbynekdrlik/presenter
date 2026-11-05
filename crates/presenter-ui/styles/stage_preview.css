@@ -10,8 +10,14 @@
    The phone keeps its own row in the header (phone_shell.css). Heights are
    explicit, not `aspect-ratio`: an iPad Air 2 (Safari 12) gets this shell. */
 
-/* The lists column fills the panel now that the header is one 40 px row. */
-body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog {
+/* The left columns fill their panel. The old `max-height: 100vh - 5.5rem` +
+   `position: sticky; top: 4.75rem` (operator.css) were sized for the 173 px
+   header: under the 40 px row the cap left room in the grid area and sticky
+   pushed the Biblia column 41 px below the slides (#875 H2). */
+body.operator:not([data-shell="phone"]) .operator__catalog {
+  /* Still a positioned box for anything absolute inside, without the offset. */
+  position: relative;
+  top: auto;
   max-height: none;
 }
 
@@ -74,8 +80,8 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__c
 }
 
 .operator__stage-preview--worship .operator__stage-toggle {
-  padding: 0.25rem 0.55rem;
-  font-size: 0.72rem;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.68rem;
   background: rgba(15, 23, 42, 0.82);
 }
 
@@ -119,8 +125,18 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__c
   max-height: 6.8em;
 }
 
-/* The Biblia column holds the preview at its bottom; its tabs scroll above. */
+/* The Biblia column holds the preview at its bottom; its tabs scroll above.
+   One row exactly the panel's height: an auto row grew with the tabs'
+   content once the column lost its max-height, and pushed the preview below
+   the window. */
+body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible {
+  /* Stretched to the row (bible.css's `height: 100%` is content-box: + its
+     padding it ran 33 px past the panel). */
+  height: auto;
   overflow: hidden;
 }
 
@@ -132,6 +148,9 @@ body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bibl
 /* ── Other sections: the counter and the broom in the header row ── */
 
 .operator__stage-preview--header {
+  /* Never shrinks below its two controls: a shrunk box let the broom spill
+     over Live/Edit at 1024 px. */
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;

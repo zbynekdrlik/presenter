@@ -65,13 +65,21 @@ body.operator:not([data-shell="phone"]) .header-menus {
 
 body.operator:not([data-shell="phone"]) .operator__search {
   order: 3;
-  flex: 1 1 auto;
+  /* Basis 0: the search gives way first, down to 150 px, before any menu or
+     the right group has to shrink. */
+  flex: 1 1 0;
   min-width: 150px;
   max-width: none;
   height: 32px;
   padding: 0 10px;
   border-radius: 8px;
   box-sizing: border-box;
+}
+
+/* The field shrinks with the form: its intrinsic ~180 px ran past a 150 px
+   form into Stage Output at 1024 px. */
+body.operator:not([data-shell="phone"]) .operator__search input {
+  min-width: 0;
 }
 
 body.operator:not([data-shell="phone"]) .operator__header-right {
@@ -167,6 +175,8 @@ body.operator:not([data-shell="phone"]) .operator__settings-button[data-active="
   align-items: center;
   gap: 6px;
   max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   height: 32px;
   padding: 0 10px;
   border: 1px solid #334155;

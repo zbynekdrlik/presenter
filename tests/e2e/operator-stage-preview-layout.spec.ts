@@ -62,7 +62,11 @@ async function boxes(page: Page, panel: string, parts: string[]) {
         column: box(column),
         preview: box(column?.querySelector('[data-role="stage-status"]') ?? null),
         parts: Object.fromEntries(
-          parts.map((role) => [role, box(column?.querySelector(`[data-role="${role}"]`) ?? null)]),
+          // A part is a data-role, or a class selector (the Biblia tabs area has no role).
+          parts.map((part) => {
+            const selector = part.startsWith(".") ? part : `[data-role="${part}"]`;
+            return [part, box(column?.querySelector(selector) ?? null)];
+          }),
         ) as Record<string, Box | null>,
       };
     },
@@ -176,10 +180,10 @@ for (const viewport of VIEWPORTS) {
     await expect(page.locator('[data-role="stage-preview-frame"]')).toHaveCount(0);
     await expect(page.locator('[data-role="worship-preview"]')).toBeHidden();
 
-    const b = await boxes(page, "bible", ["catalog-top", "bible-preview", "clear-slide", "stage-monitor"]);
+    const b = await boxes(page, "bible", [".operator__catalog-top", "bible-preview", "clear-slide", "stage-monitor"]);
     const preview = b.preview!;
     expectPinned(b.column!, preview, size);
-    expect(b.parts["catalog-top"]!.bottom, "Bible tabs").toBeLessThanOrEqual(preview.top + 1);
+    expect(b.parts[".operator__catalog-top"]!.bottom, "Bible tabs").toBeLessThanOrEqual(preview.top + 1);
     for (const role of ["bible-preview", "clear-slide", "stage-monitor"]) {
       expectInside(b.parts[role]!, preview, role);
     }
