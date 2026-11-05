@@ -6,7 +6,7 @@ use crate::api::bible as bible_api;
 use crate::components::header_menus::{HeaderMenus, DIRECT_VIEWS, SETTINGS_VIEW};
 use crate::components::more_sheet::open_more_sheet;
 use crate::components::stage_layout_select::StageLayoutSelect;
-use crate::components::stage_preview::StagePreview;
+use crate::components::stage_preview::{desktop_place, PreviewPlace, StagePreview};
 use crate::components::stage_text_mode_picker::StageTextModePicker;
 use crate::state::operator::OperatorState;
 use crate::state::view_nav::{set_view, VIEWS};
@@ -351,7 +351,18 @@ pub fn Header() -> impl IntoView {
                     // #799: text mode for the API layouts, only while one is selected.
                     <StageTextModePicker />
                 </Show>
-                <StagePreview />
+                // #875 H2: one stage preview at a time. A phone keeps it here
+                // (no mirror); a desktop shows it under the Piesne / Biblia
+                // left column and here only on the other sections (counter +
+                // broom).
+                <Show when=move || phone.get()>
+                    <StagePreview place=PreviewPlace::Phone />
+                </Show>
+                <Show when=move || {
+                    !phone.get() && ctx.view.with(|v| desktop_place(v) == PreviewPlace::Header)
+                }>
+                    <StagePreview place=PreviewPlace::Header />
+                </Show>
                 <div class="operator__mode-toggle">
                     {["live", "edit"].into_iter().map(|m| {
                         let mode_name = m.to_string();

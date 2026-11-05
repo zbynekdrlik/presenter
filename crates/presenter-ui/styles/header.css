@@ -154,24 +154,6 @@ body.operator:not([data-shell="phone"]) .operator__settings-button[data-active="
   border-color: #3b82f6;
 }
 
-/* Interim until H2 (#875) gives the stage preview its own place under the
-   lists: out of the header row, over the bottom-left corner of the page. Only
-   its buttons take clicks; the mirror and the verse text let them through. */
-body.operator:not([data-shell="phone"]) .operator__header .operator__stage-preview {
-  position: fixed;
-  left: 8px;
-  bottom: 8px;
-  z-index: 15;
-  pointer-events: none;
-  padding: 0.4rem 0.6rem;
-  gap: 0.6rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-}
-
-body.operator:not([data-shell="phone"]) .operator__header .operator__stage-preview button {
-  pointer-events: auto;
-}
-
 /* ── The three menus (mounted on a desktop only) ── */
 
 .header-menu {

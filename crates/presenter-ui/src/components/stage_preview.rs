@@ -1,18 +1,70 @@
 use crate::state::{save_baseline_to_storage, AppContext};
 use leptos::prelude::*;
 
-/// Stage preview panel rendered inside the header.
+/// Where a copy of the stage preview is mounted (#875 H2). Exactly one copy is
+/// mounted at a time: on a phone the header row (`Phone`); on a desktop the
+/// bottom of the Piesne lists (`Worship`), the bottom of the Biblia left
+/// column (`Bible`), or the header row on every other section (`Header`, the
+/// counter and the broom only). The mount points switch with `<Show>`, so a
+/// view change or the 768 px crossing never leaves two copies (or two
+/// iframes, each its own stage socket).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewPlace {
+    Phone,
+    Header,
+    Worship,
+    Bible,
+}
+
+impl PreviewPlace {
+    fn class(self) -> &'static str {
+        match self {
+            Self::Phone => "operator__stage-preview operator__stage-preview--phone",
+            Self::Header => "operator__stage-preview operator__stage-preview--header",
+            Self::Worship => "operator__stage-preview operator__stage-preview--worship",
+            Self::Bible => "operator__stage-preview operator__stage-preview--bible",
+        }
+    }
+}
+
+/// The desktop place for a section.
+pub fn desktop_place(view: &str) -> PreviewPlace {
+    match view {
+        "worship" => PreviewPlace::Worship,
+        "bible" => PreviewPlace::Bible,
+        _ => PreviewPlace::Header,
+    }
+}
+
+/// The live stage mirror (an iframe, its own stage socket): only under the
+/// Piesne lists, never on a phone (#850 §6.6).
+pub fn shows_mirror(place: PreviewPlace) -> bool {
+    place == PreviewPlace::Worship
+}
+
+/// Ableton + Follow: worship only, as before.
+pub fn shows_ableset(place: PreviewPlace, view: &str) -> bool {
+    place == PreviewPlace::Worship || (place == PreviewPlace::Phone && view == "worship")
+}
+
+/// The verse on the wall (#700): the Biblia tab only.
+pub fn shows_verse(place: PreviewPlace, view: &str) -> bool {
+    place == PreviewPlace::Bible || (place == PreviewPlace::Phone && view == "bible")
+}
+
+/// Stage preview panel: the counter of stage displays and the broom on every
+/// section, plus the live mirror (Piesne) or the verse on the wall (Biblia).
 ///
-/// The top-right preview is a small LIVE mirror of the real `/stage` output —
+/// Under the Piesne lists it is a small LIVE mirror of the real `/stage` output —
 /// an `<iframe src="/stage?preview=1">` rendered at full stage resolution and
-/// CSS-scaled down into the header slot (#460). It shows EXACTLY what stage
+/// CSS-scaled down into the column's width (#460, #875 H2). It shows EXACTLY what stage
 /// displays show: lyrics, Bible, timers AND the NDI/WHEP video — not a
 /// text-only reconstruction. The iframe is its own stage WS client, so it
 /// auto-updates live; `?preview=1` tags it so the server excludes it from the
 /// stage-monitor connection count (see live.rs), and `pointer-events:none`
 /// keeps operator clicks from driving the embedded stage.
 #[component]
-pub fn StagePreview() -> impl IntoView {
+pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
     let ctx = use_ctx!(AppContext);
 
     // Compute alert state: connected < baseline connected
@@ -115,11 +167,11 @@ pub fn StagePreview() -> impl IntoView {
     // shows the pre-#460 verse preview instead.
     // #850 §6.6: never on a phone — CSS hid it, but the mounted iframe still
     // loaded the whole app (and its stage WS) a second time.
-    let is_worship = move || ctx.view.get() == "worship" && !ctx.phone_shell.get();
+    let is_worship = move || shows_mirror(place) && ctx.view.get() == "worship";
 
     view! {
         <div
-            class="operator__stage-preview"
+            class=place.class()
             data-role="stage-status"
             data-active=move || {
                 let snap = ctx.stage_snapshot.get();
@@ -155,7 +207,7 @@ pub fn StagePreview() -> impl IntoView {
                 class="operator__bible-preview"
                 data-role="bible-preview"
                 style=move || {
-                    if ctx.view.get() == "bible" { "" } else { "display:none" }
+                    if ctx.view.with(|v| shows_verse(place, v)) { "" } else { "display:none" }
                 }
                 data-active=move || {
                     if ctx.active_bible_broadcast.get().is_some() { "true" } else { "false" }
@@ -201,7 +253,7 @@ pub fn StagePreview() -> impl IntoView {
                 class="operator__stage-preview-actions"
                 data-role="worship-preview"
                 style=move || {
-                    if ctx.view.get() == "worship" { "" } else { "display:none" }
+                    if ctx.view.with(|v| shows_ableset(place, v)) { "" } else { "display:none" }
                 }
             >
                 <button
@@ -289,5 +341,45 @@ pub fn StagePreview() -> impl IntoView {
                 "\u{1f9f9}"
             </button>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_desktop_section_has_one_place() {
+        assert_eq!(desktop_place("worship"), PreviewPlace::Worship);
+        assert_eq!(desktop_place("bible"), PreviewPlace::Bible);
+        for view in ["timers", "ai", "menovky", "settings"] {
+            assert_eq!(desktop_place(view), PreviewPlace::Header, "{view}");
+        }
+    }
+
+    #[test]
+    fn only_the_piesne_column_mounts_the_mirror() {
+        assert!(shows_mirror(PreviewPlace::Worship));
+        for place in [
+            PreviewPlace::Phone,
+            PreviewPlace::Header,
+            PreviewPlace::Bible,
+        ] {
+            assert!(!shows_mirror(place), "{place:?}");
+        }
+    }
+
+    #[test]
+    fn ableset_follows_worship_and_the_verse_follows_bible() {
+        assert!(shows_ableset(PreviewPlace::Worship, "worship"));
+        assert!(shows_ableset(PreviewPlace::Phone, "worship"));
+        assert!(!shows_ableset(PreviewPlace::Phone, "bible"));
+        assert!(!shows_ableset(PreviewPlace::Header, "timers"));
+        assert!(!shows_ableset(PreviewPlace::Bible, "bible"));
+        assert!(shows_verse(PreviewPlace::Bible, "bible"));
+        assert!(shows_verse(PreviewPlace::Phone, "bible"));
+        assert!(!shows_verse(PreviewPlace::Phone, "worship"));
+        assert!(!shows_verse(PreviewPlace::Worship, "worship"));
+        assert!(!shows_verse(PreviewPlace::Header, "settings"));
     }
 }

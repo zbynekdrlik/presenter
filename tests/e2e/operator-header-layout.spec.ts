@@ -43,8 +43,8 @@ test.afterAll(async () => {
 
 const WIDTHS = [1024, 1280, 1366, 1440, 1600, 1920, 2560];
 
-/* The controls of the header ROW: visible, outside the stage preview (which
-   leaves the row, see header.css) and outside the closed menu panels. Each
+/* The controls of the header ROW: visible ones (a closed menu panel has no
+   box). On Timers & co. the stage counter and broom are row controls too. Each
    evaluate below carries its own copy of this filter (no eval in the page). */
 const ROW_SELECTOR =
   ".operator__header a, .operator__header button, .operator__header select, .operator__header input";
@@ -53,7 +53,7 @@ const ROW_SELECTOR =
 async function overlappingControls(page: Page): Promise<string[]> {
   return page.evaluate((selector) => {
     const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter(
-      (el) => el.getClientRects().length > 0 && !el.closest(".operator__stage-preview"),
+      (el) => el.getClientRects().length > 0,
     );
     const name = (el: HTMLElement) =>
       (el.innerText || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.tagName).trim();
@@ -78,7 +78,7 @@ async function rowFacts(page: Page) {
   return page.evaluate((selector) => {
     const header = document.querySelector(".operator__header")!.getBoundingClientRect();
     const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter(
-      (el) => el.getClientRects().length > 0 && !el.closest(".operator__stage-preview"),
+      (el) => el.getClientRects().length > 0,
     );
     const outside = controls
       .filter((el) => {
@@ -101,7 +101,7 @@ async function openOperator(page: Page, path: string) {
   await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
 }
 
-for (const path of ["/ui/operator", "/ui/bible"]) {
+for (const path of ["/ui/operator", "/ui/bible", "/ui/operator/timers"]) {
   test(`one 40 px header row, nothing covered or cut off, on ${path}`, async ({ page }) => {
     const errors: string[] = [];
     attachConsoleErrorCollector(page, errors);

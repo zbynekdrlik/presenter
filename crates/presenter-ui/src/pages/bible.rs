@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible;
+use crate::components::stage_preview::{PreviewPlace, StagePreview};
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
@@ -316,6 +317,12 @@ pub fn BiblePage() -> impl IntoView {
                 <BiblePreparedTab />
                 <BibleSettingsTab />
             </div>
+            // #875 H2: the verse on the wall, the counter and the broom at the
+            // bottom of the left column (desktop; a phone keeps them in the
+            // header). Mounted only while Biblia is shown: one copy at a time.
+            <Show when=move || !ctx.phone_shell.get() && ctx.view.get() == "bible">
+                <StagePreview place=PreviewPlace::Bible />
+            </Show>
         </aside>
         <BibleSlidesColumn />
         <BiblePresentationModal />

@@ -2412,15 +2412,7 @@ body[data-slide-columns-dense="true"] .operator__slide-text {
 
 /* ── Responsive: tablet ── */
 @media (max-width: 1024px) {
-  /* Shrink the live stage mirror so it doesn't dominate the header on smaller
-     screens — same 1920x1080 iframe, scaled by 1/10 into a 192x108 slot. */
-  .operator__stage-iframe-wrap {
-    width: 192px;
-    height: 108px;
-  }
-  .operator__stage-iframe {
-    transform: scale(0.1);
-  }
+  /* The stage mirror follows this width (stage_preview.css, #875 H2). */
   .operator__catalog {
     flex: 0 0 260px;
   }
