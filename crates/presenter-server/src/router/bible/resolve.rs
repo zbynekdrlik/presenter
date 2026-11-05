@@ -17,7 +17,7 @@ use crate::state::bible_show_log::client_device;
 use crate::state::AppState;
 
 /// The typed text in a lookup line is cut here: it is client input.
-const LOOKUP_QUERY_MAX_CHARS: usize = 120;
+pub(super) const LOOKUP_QUERY_MAX_CHARS: usize = 120;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

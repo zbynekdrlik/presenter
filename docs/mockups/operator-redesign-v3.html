@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nový vzhľad Presentera v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,500;7..72,650&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Reading column for the text; desktop mockups drawn in the app's own dark palette at a fixed 1200 px design width, scaled down to fit. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --ink: #17202e; --muted: #5a6577; --line: #dde1e8;
+  --accent: #2f5d8a; --accent-soft: #e4ecf5; --code-bg: #eef1f5; --bad: #b42318; --bad-soft: #fdecea; --good: #1f7a3a; --good-soft: #e6f4ea;
+  --app-bg: #0f172a; --app-panel: #1e293b; --app-panel2: #273449; --app-line: #334155;
+  --app-ink: #e2e8f0; --app-muted: #94a3b8; --app-blue: #3b82f6; --app-live: #dc2626; --app-live-soft: #3b1418; --app-ok: #22c55e; --app-warn: #f59e0b;
+  --display: "Literata", Georgia, serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #11161f; --surface: #182030; --ink: #e6eaf1; --muted: #9aa5b6; --line: #2a3446; --accent: #8fb5dc; --accent-soft: #1f2d42; --code-bg: #1e2738; --bad: #f19a90; --bad-soft: #3a1d1b; --good: #8fd3a3; --good-soft: #17301f; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #11161f; --surface: #182030; --ink: #e6eaf1; --muted: #9aa5b6; --line: #2a3446; --accent: #8fb5dc; --accent-soft: #1f2d42; --code-bg: #1e2738; --bad: #f19a90; --bad-soft: #3a1d1b; --good: #8fd3a3; --good-soft: #17301f; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; padding-inline: 16px; padding-block: 0 64px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+.col { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+header.top { padding-block: 40px 0; display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-family: var(--display); font-weight: 650; font-size: clamp(30px, 6vw, 44px); line-height: 1.12; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 650; font-size: 26px; line-height: 1.2; margin: 0; text-wrap: balance; }
+h3 { font-size: 17px; font-weight: 600; margin: 0; }
+p { margin: 0; max-width: 70ch; }
+.lede { font-size: 18px; }
+.meta { font-size: 14px; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 18px; }
+code { font-family: var(--mono); font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+ul.plain, ol.plain { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; max-width: 70ch; }
+.status { display: inline-flex; gap: 8px; font-size: 13px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 4px 12px; width: fit-content; }
+
+/* problem / fix pairs */
+.pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; border-radius: 999px; padding: 2px 9px; width: fit-content; }
+.tag.bad { color: var(--bad); background: var(--bad-soft); }
+.tag.good { color: var(--good); background: var(--good-soft); }
+.card p { font-size: 15px; }
+
+/* desktop mockup frame: fixed design width, scaled to the column */
+.shot { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.shot figcaption { font-size: 14px; color: var(--muted); max-width: 80ch; }
+.scaler { width: 100%; overflow: hidden; border-radius: 12px; border: 1px solid var(--line); background: var(--app-bg); }
+.app { width: 1200px; height: 700px; transform-origin: top left; background: var(--app-bg); color: var(--app-ink); font-family: var(--body); font-size: 14px; line-height: 1.35; display: grid; grid-template-rows: 56px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); }
+.app.short { height: 120px; grid-template-rows: auto; }
+
+/* NEW top bar */
+.bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 0 14px; border-bottom: 1px solid var(--app-line); background: #0b1222; }
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand b { font-size: 16px; }
+.brand small { color: var(--app-muted); font-size: 11px; }
+.tabs { display: flex; gap: 4px; justify-self: center; }
+.tab { height: 40px; padding: 0 16px; border-radius: 10px; display: inline-flex; align-items: center; color: var(--app-muted); font-weight: 500; font-size: 15px; }
+.tab.on { background: var(--app-panel2); color: #fff; box-shadow: inset 0 -2px 0 var(--app-blue); }
+.tab.new { color: #cfe2ff; }
+.right { display: flex; align-items: center; gap: 8px; }
+.health { height: 36px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--app-line); color: var(--app-ink); font-size: 13px; }
+.health i { width: 9px; height: 9px; border-radius: 50%; background: var(--app-ok); display: inline-block; }
+.health.warn i { background: var(--app-warn); }
+.seg { display: inline-flex; background: var(--app-panel); border: 1px solid var(--app-line); border-radius: 10px; padding: 3px; }
+.seg span { height: 32px; padding: 0 14px; border-radius: 7px; display: inline-flex; align-items: center; font-size: 14px; color: var(--app-muted); font-weight: 500; }
+.seg span.live { background: var(--app-live); color: #fff; }
+.seg span.edit { background: var(--app-blue); color: #fff; }
+.icon-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--app-line); display: inline-flex; align-items: center; justify-content: center; color: var(--app-ink); font-size: 17px; }
+
+/* body: list | work area | wall panel */
+.body3 { display: grid; grid-template-columns: 280px minmax(0, 1fr) 300px; min-height: 0; }
+.pane { border-right: 1px solid var(--app-line); padding: 14px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: hidden; }
+.pane:last-child { border-right: 0; border-left: 1px solid var(--app-line); background: #111b30; }
+.search { height: 42px; border-radius: 10px; background: var(--app-panel); border: 1px solid var(--app-line); display: flex; align-items: center; padding: 0 12px; color: var(--app-muted); font-size: 14px; gap: 8px; }
+.h { font-size: 13px; color: var(--app-muted); font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.h .add { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--app-line); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; color: var(--app-ink); text-transform: none; }
+.row { height: 40px; border-radius: 9px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; background: var(--app-panel); font-size: 14px; }
+.row.sel { background: #1d3a5f; box-shadow: inset 3px 0 0 var(--app-blue); }
+.row em { font-style: normal; color: var(--app-muted); font-size: 12px; }
+.slides { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px; align-content: start; }
+.slide { aspect-ratio: 16 / 9; border-radius: 10px; background: var(--app-panel); border: 1px solid var(--app-line); padding: 10px; display: flex; flex-direction: column; justify-content: space-between; font-size: 13px; }
+.slide.live { border: 2px solid var(--app-live); background: var(--app-live-soft); }
+.slide small { color: var(--app-muted); font-size: 11px; }
+.worktop { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 0; }
+.worktop b { font-size: 17px; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; color: var(--app-muted); font-size: 13px; }
+.stepper span { width: 32px; height: 32px; border: 1px solid var(--app-line); border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--app-ink); }
+
+/* wall panel */
+.preview { aspect-ratio: 16 / 9; border-radius: 10px; background: #000; border: 1px solid var(--app-line); display: flex; align-items: flex-end; padding: 10px; font-size: 13px; color: #fff; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 12px; color: var(--app-muted); }
+.select { height: 40px; border-radius: 9px; background: var(--app-panel); border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 14px; }
+.toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tog { height: 40px; border-radius: 9px; border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; }
+.tog.on { border-color: var(--app-ok); color: #bbf7d0; }
+.clear { height: 48px; border-radius: 10px; background: #3a1d1b; border: 1px solid #7f1d1d; color: #fecaca; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 15px; }
+.nowall { font-size: 13px; color: var(--app-muted); }
+.nowall b { color: #fff; }
+
+/* bible */
+.ref { height: 52px; border-radius: 12px; background: var(--app-panel); border: 2px solid var(--app-blue); display: flex; align-items: center; padding: 0 14px; font-size: 18px; color: #fff; }
+.show { height: 48px; border-radius: 10px; background: var(--app-blue); color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.nav2 { display: grid; grid-template-columns: 48px 1fr 48px; gap: 8px; }
+.nav2 .arr { height: 48px; border-radius: 10px; border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.subtabs { display: flex; gap: 4px; background: var(--app-panel); border-radius: 10px; padding: 3px; }
+.subtabs span { flex: 1; height: 34px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--app-muted); }
+.subtabs span.on { background: var(--app-panel2); color: #fff; }
+.trs { display: flex; gap: 6px; }
+.trs span { flex: 1; height: 36px; border-radius: 8px; border: 1px solid var(--app-line); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+.trs span.on { background: var(--app-blue); border-color: var(--app-blue); color: #fff; }
+.trs span.on2 { background: #1e3a5f; border-color: var(--app-blue); color: #cfe2ff; }
+.verse { padding: 10px 14px; border-radius: 10px; background: var(--app-panel); font-size: 14px; line-height: 1.5; }
+.verse sup { color: var(--app-blue); font-weight: 600; margin-right: 4px; }
+
+/* OLD header (current state) */
+.old { padding: 8px 14px; display: grid; grid-template-columns: 170px 1fr 330px 90px; gap: 8px; align-items: start; background: var(--app-bg); }
+.old .links, .old .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.old .l { font-size: 12px; border: 1px solid var(--app-line); border-radius: 999px; padding: 2px 9px; }
+.old .c { font-size: 11px; border: 1px solid var(--app-line); border-radius: 999px; padding: 2px 9px; color: var(--app-muted); }
+.old .c::before { content: "● "; color: var(--app-ok); }
+.old .t { font-size: 13px; padding: 4px 10px; color: var(--app-muted); }
+.old .t.on { background: #e2e8f0; color: #0f172a; border-radius: 999px; }
+.old .lab { font-size: 10px; letter-spacing: .06em; color: var(--app-muted); }
+.old .sel { font-size: 12px; border: 1px solid var(--app-line); border-radius: 6px; padding: 4px 8px; }
+.ring { outline: 2px dashed #f87171; outline-offset: 3px; border-radius: 6px; }
+
+/* table */
+table { border-collapse: collapse; width: 100%; max-width: 760px; font-size: 15px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.qs { display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+.q { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 12px 16px; }
+.q b { display: block; margin-bottom: 4px; }
+
+/* v2: thin bar, wall under the lists on the left, drawer */
+.app { grid-template-rows: 40px minmax(0, 1fr); height: 720px; width: 1280px; }
+.thin { display: flex; align-items: center; gap: 8px; padding: 0 8px; border-bottom: 1px solid var(--app-line); background: #0b1222; }
+.burger { width: 40px; height: 32px; border-radius: 8px; border: 1px solid var(--app-line); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; color: var(--app-ink); }
+.burger.on { background: var(--app-blue); border-color: var(--app-blue); color: #fff; }
+.mini { height: 32px; padding: 0 14px; border-radius: 8px; display: inline-flex; align-items: center; color: var(--app-muted); font-size: 14px; font-weight: 500; }
+.mini.on { background: var(--app-panel2); color: #fff; box-shadow: inset 0 -2px 0 var(--app-blue); }
+.grow { flex: 1; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--app-ok); display: inline-block; }
+.alarm { height: 32px; display: inline-flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 8px; background: #3a2a0a; color: #fde68a; font-size: 13px; }
+.alarm i { width: 10px; height: 10px; border-radius: 50%; background: var(--app-warn); display: inline-block; }
+.thin .seg { padding: 2px; }
+.thin .seg span { height: 28px; padding: 0 10px; font-size: 13px; }
+.body2 { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; position: relative; }
+.left { border-right: 1px solid var(--app-line); display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+.lists { padding: 10px; display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: hidden; }
+.lists .search { height: 36px; }
+.lists .row { height: 34px; flex: none; }
+.lists .h { margin-top: 2px; }
+.lists .h .add { width: 32px; height: 32px; }
+.wall { border-top: 2px solid var(--app-line); background: #111b30; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.wall .preview { padding: 8px; font-size: 12px; }
+.wall .nowall { font-size: 12px; }
+.wall2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.wall2 .select, .wall2 .tog { height: 36px; font-size: 12px; padding: 0 8px; border-radius: 8px; }
+.wall .clear { height: 40px; font-size: 14px; }
+.work { display: flex; flex-direction: column; min-height: 0; }
+.work .worktop { padding: 8px 12px 0; }
+.work .slides { grid-template-columns: repeat(3, 1fr); padding: 10px 12px; gap: 10px; }
+.work .slide { font-size: 16px; padding: 12px; }
+.drawer { position: absolute; left: 0; top: 0; bottom: 0; width: 300px; background: #0b1222; border-right: 1px solid var(--app-blue); padding: 12px; display: flex; flex-direction: column; gap: 4px; box-shadow: 8px 0 30px rgba(0,0,0,.5); overflow: hidden; }
+.dim { position: absolute; left: 300px; right: 0; top: 0; bottom: 0; background: rgba(5,10,20,.55); }
+.dh { font-size: 12px; color: var(--app-muted); font-weight: 600; margin-top: 10px; }
+.dh:first-child { margin-top: 0; }
+.di { min-height: 36px; border-radius: 8px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
+.di.on { background: var(--app-panel2); box-shadow: inset 3px 0 0 var(--app-blue); }
+.di em { font-style: normal; color: var(--app-muted); font-size: 12px; }
+.di .dot { width: 8px; height: 8px; }
+.vs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.num { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.num b { display: block; font-family: var(--display); font-size: 26px; line-height: 1.2; }
+.num span { font-size: 14px; color: var(--muted); }
+
+/* v3: only the preview under the lists; everything else in one header row, several short menus */
+.body2 { grid-template-columns: 360px minmax(0, 1fr); }
+.thin { gap: 6px; }
+.menu { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--app-line); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--app-ink); white-space: nowrap; }
+.menu.open { background: var(--app-panel2); border-color: var(--app-blue); }
+.menu small { color: var(--app-muted); font-size: 10px; }
+.menu .dot { width: 8px; height: 8px; }
+.find { flex: 1; min-width: 150px; height: 32px; border-radius: 8px; background: var(--app-panel); border: 1px solid var(--app-line); display: flex; align-items: center; padding: 0 10px; color: var(--app-muted); font-size: 13px; white-space: nowrap; overflow: hidden; }
+.gap { width: 6px; flex: none; }
+.left { grid-template-rows: minmax(0, 1fr) 203px; }
+.lists { padding: 8px; gap: 4px; }
+.lists .row { height: 30px; flex: none; font-size: 13px; }
+.lists .h { margin-top: 4px; }
+.lists .h .add { width: 26px; height: 26px; font-size: 14px; }
+.stagepv { position: relative; width: 360px; height: 203px; background: #000; color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 20px; line-height: 1.3; }
+.ov { position: absolute; display: flex; gap: 4px; }
+.ov.tl { top: 6px; left: 6px; }
+.ov.tr { top: 6px; right: 6px; }
+.ov.br { bottom: 6px; right: 8px; font-size: 12px; color: #86efac; }
+.pill { height: 26px; padding: 0 8px; border-radius: 7px; background: rgba(15,23,42,.8); border: 1px solid var(--app-line); display: inline-flex; align-items: center; font-size: 11px; color: var(--app-ink); }
+.pill.on { border-color: var(--app-ok); color: #bbf7d0; }
+.broom { width: 32px; height: 32px; border-radius: 50%; background: rgba(15,23,42,.85); border: 1px solid var(--app-line); display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+.drops { position: relative; height: 330px; background: var(--app-bg); }
+.drop { position: absolute; top: 44px; width: 210px; background: #0b1222; border: 1px solid var(--app-line); border-radius: 10px; padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+.drop .di { min-height: 34px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <span class="eyebrow">Presenter · návrh #875 (kvalita UI) · v3 podľa tvojej pripomienky</span>
+  <h1>Vľavo dole iba náhľad, všetko ostatné v jednom riadku hore</h1>
+  <p class="lede">Pod náhľadom už nie je nič. Rozloženie, text na pódiu a vyhľadávanie sú v jednom riadku hlavičky. Zvyšok je rozdelený do troch krátkych menu vedľa seba, nie do jedného dlhého.</p>
+  <span class="status">Na schválenie — nič z toho ešte nie je naprogramované</span>
+</header>
+
+<section class="col">
+  <h2>Koľko miesta čo dostane</h2>
+  <p>Zmerané na v0.4.351. Ľavý stĺpec ostáva široký ako dnes (360 px), náhľad má jeho celú šírku v pomere 16:9, teda 203 px na výšku.</p>
+</section>
+<div class="vs">
+  <div class="num"><b>173 → 40 px</b><span>výška hlavičky</span></div>
+  <div class="num"><b>547 → 680 px</b><span>výška slajdov na obrazovke 1280 × 720</span></div>
+  <div class="num"><b>907 → 1040 px</b><span>výška slajdov na obrazovke 1920 × 1080</span></div>
+  <div class="num"><b>547 → 477 px</b><span>výška zoznamov vľavo na 1280 × 720: pod náhľadom ich je o 70 px menej</span></div>
+  <div class="num"><b>907 → 837 px</b><span>výška zoznamov vľavo na 1920 × 1080</span></div>
+</div>
+
+<section class="col">
+  <h2>1 · Piesne</h2>
+  <p>Na náhľade ostávajú len veci, ktoré k nemu patria už dnes: metla na vymazanie, počítadlo pódiových obrazoviek, Ableton a Sledovať. Ležia priamo na obraze, takže nezaberajú ďalšiu výšku.</p>
+</section>
+<figure class="shot">
+  <div class="scaler"><div class="app">
+    <div class="thin">
+      <span class="mini on">Piesne</span><span class="mini">Biblia</span>
+      <span class="menu">Stránky <small>▾</small></span>
+      <span class="menu">Obrazovky <small>▾</small></span>
+      <span class="menu"><span class="dot"></span>Pripojenia <small>▾</small></span>
+      <span class="find">🔍 Hľadať pieseň alebo text</span>
+      <span class="menu">API + CG video <small>▾</small></span>
+      <span class="menu">Preklad <small>▾</small></span>
+      <span class="seg"><span class="live">Naživo</span><span>Úprava</span></span>
+      <span class="burger" style="width:32px" title="Nastavenia">⚙</span>
+    </div>
+    <div class="body2">
+      <div class="left">
+        <div class="lists">
+          <div class="h">Knižnice <span class="add">+</span></div>
+          <div class="row">Bohatý Music <em>20</em></div>
+          <div class="row">James Evans <em>23</em></div>
+          <div class="row sel">New Level <em>166</em></div>
+          <div class="h">Playlisty <span class="add">+</span></div>
+          <div class="row">Nedeľa 8. 11. <em>7</em></div>
+          <div class="row">Mládež <em>5</em></div>
+          <div class="h">Piesne v knižnici <span class="add">+</span></div>
+          <div class="row sel">Veľký Boh <em>8</em></div>
+          <div class="row">Milosť <em>6</em></div>
+          <div class="row">Ty si dobrý <em>9</em></div>
+        </div>
+        <div class="stagepv">
+          <span>Sláva, sláva<br>Tvojmu menu</span>
+          <span class="ov tl"><span class="pill on">Ableton</span><span class="pill">Sledovať</span></span>
+          <span class="ov tr"><span class="broom" title="Vymazať stenu">🧹</span></span>
+          <span class="ov br">12 / 0</span>
+        </div>
+      </div>
+      <div class="work">
+        <div class="worktop"><b>Veľký Boh</b><span class="stepper">Snímok v riadku <span>−</span> 3 <span>+</span></span></div>
+        <div class="slides">
+          <div class="slide"><span>Veľký Boh, Ty si Pán<br>nad nebom aj zemou</span><small>1 · Sloha 1</small></div>
+          <div class="slide live"><span>Sláva, sláva<br>Tvojmu menu</span><small>2 · Refrén · NA STENE</small></div>
+          <div class="slide"><span>Ty si verný<br>každý deň</span><small>3 · Sloha 2</small></div>
+          <div class="slide"><span>Sláva, sláva<br>Tvojmu menu</span><small>4 · Refrén</small></div>
+          <div class="slide"><span>Nik nie je ako Ty</span><small>5 · Most</small></div>
+          <div class="slide"><span>Sláva, sláva<br>Tvojmu menu</span><small>6 · Refrén</small></div>
+          <div class="slide"><span>Ty si dobrý<br>navždy</span><small>7 · Sloha 3</small></div>
+          <div class="slide"><span>Sláva, sláva<br>Tvojmu menu</span><small>8 · Refrén</small></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <figcaption>Obrazovka 1280 × 720, kde je najmenej miesta. Na väčšom monitore sa roztiahne vyhľadávanie v hlavičke. Verzia ostáva malým nápisom v rohu, ako dnes.</figcaption>
+</figure>
+
+<section class="col">
+  <h2>2 · Tri krátke menu</h2>
+  <p>Každé menu má len svoje veci a položky môžu pribúdať tam, kam patria. Nastavenia majú vlastné koliesko ⚙. Na obrázku sú otvorené všetky tri naraz, naozaj sa otvára vždy jedno.</p>
+</section>
+<figure class="shot">
+  <div class="scaler"><div class="app" style="height:330px;grid-template-rows:40px minmax(0,1fr)">
+    <div class="thin">
+      <span class="mini on">Piesne</span><span class="mini">Biblia</span>
+      <span class="menu open">Stránky <small>▾</small></span>
+      <span class="menu open">Obrazovky <small>▾</small></span>
+      <span class="menu open"><span class="dot"></span>Pripojenia <small>▾</small></span>
+      <span class="find">🔍 Hľadať pieseň alebo text</span>
+      <span class="menu">API + CG video <small>▾</small></span>
+      <span class="menu">Preklad <small>▾</small></span>
+      <span class="seg"><span class="live">Naživo</span><span>Úprava</span></span>
+      <span class="burger" style="width:32px" title="Nastavenia">⚙</span>
+    </div>
+    <div style="position:relative">
+      <div class="drop" style="top:4px;left:136px;width:170px">
+        <div class="di">Štúdium</div><div class="di">Časovače</div><div class="di">AI</div><div class="di">Menovky</div>
+      </div>
+      <div class="drop" style="top:4px;left:316px;width:170px">
+        <div class="di">Pódium <em>↗</em></div><div class="di">Kamera <em>↗</em></div><div class="di">Tablet <em>↗</em></div><div class="di">Časovač <em>↗</em></div><div class="di">Stream <em>↗</em></div>
+      </div>
+      <div class="drop" style="top:4px;left:496px;width:210px">
+        <div class="di">Bridge SNV <span class="dot"></span></div><div class="di">CG Resolume <span class="dot"></span></div><div class="di">Resolume PP <span class="dot"></span></div><div class="di">AI <span class="dot"></span></div>
+      </div>
+    </div>
+  </div></div>
+  <figcaption>Keď niečo vypadne, menu Pripojenia zoranžovie a ukáže, čo je odpojené, takže výpadok sa neschová.</figcaption>
+</figure>
+<figure class="shot">
+  <div class="scaler"><div class="app short" style="height:40px;grid-template-rows:40px">
+    <div class="thin">
+      <span class="mini on">Piesne</span><span class="mini">Biblia</span>
+      <span class="menu">Stránky <small>▾</small></span>
+      <span class="menu">Obrazovky <small>▾</small></span>
+      <span class="alarm"><i></i>Odpojené: CG Resolume <small>▾</small></span>
+      <span class="find">🔍 Hľadať pieseň alebo text</span>
+      <span class="menu">API + CG video <small>▾</small></span>
+      <span class="menu">Preklad <small>▾</small></span>
+      <span class="seg"><span class="live">Naživo</span><span>Úprava</span></span>
+      <span class="burger" style="width:32px" title="Nastavenia">⚙</span>
+    </div>
+  </div></div>
+</figure>
+
+<section class="col">
+  <h2>3 · Biblia v rovnakom rámci</h2>
+  <p>Hlavička je rovnaká a náhľad na tom istom mieste. Ableton a Sledovať tu nie sú, lebo patria k piesňam, rovnako ako dnes.</p>
+</section>
+<figure class="shot">
+  <div class="scaler"><div class="app">
+    <div class="thin">
+      <span class="mini">Piesne</span><span class="mini on">Biblia</span>
+      <span class="menu">Stránky <small>▾</small></span>
+      <span class="menu">Obrazovky <small>▾</small></span>
+      <span class="menu"><span class="dot"></span>Pripojenia <small>▾</small></span>
+      <span class="find">🔍 Hľadať pieseň alebo text</span>
+      <span class="menu">API + CG video <small>▾</small></span>
+      <span class="menu">Preklad <small>▾</small></span>
+      <span class="seg"><span class="live">Naživo</span><span>Úprava</span></span>
+      <span class="burger" style="width:32px" title="Nastavenia">⚙</span>
+    </div>
+    <div class="body2">
+      <div class="left">
+        <div class="lists">
+          <div class="subtabs"><span class="on">Naživo</span><span>Pripravené</span><span>Nastavenie</span></div>
+          <div class="ref" style="height:44px;flex:none">Ján 3:16-18</div>
+          <div class="h">Hlavný preklad</div>
+          <div class="trs"><span class="on">SEB</span><span>ROH</span><span>SEVP</span><span>KJV</span></div>
+          <div class="h">Druhý preklad</div>
+          <div class="trs"><span>žiadny</span><span class="on2">NLT</span><span>KJV</span></div>
+          <div class="nav2" style="margin-top:6px"><span class="arr">◀</span><span class="show">Zobraziť</span><span class="arr">▶</span></div>
+        </div>
+        <div class="stagepv"><span style="font-size:16px;padding:0 24px">Veď Boh tak miloval svet…<br><small>Ján 3:16 (SEB)</small></span><span class="ov tr"><span class="broom">🧹</span></span></div>
+      </div>
+      <div class="work">
+        <div class="worktop"><b>Ján 3:16-18 · SEB + NLT</b><span class="stepper">Snímok v riadku <span>−</span> 3 <span>+</span></span></div>
+        <div class="slides">
+          <div class="slide live"><span>Veď Boh tak miloval svet, že dal svojho jednorodeného Syna…</span><small>1 · Ján 3:16 · NA STENE</small></div>
+          <div class="slide"><span>Boh neposlal svojho Syna na svet, aby svet odsúdil…</span><small>2 · Ján 3:17</small></div>
+          <div class="slide"><span>Kto verí v neho, nie je odsúdený…</span><small>3 · Ján 3:18</small></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</figure>
+
+<section class="col">
+  <h2>Čo ostáva z prvého návrhu</h2>
+  <ul class="plain">
+    <li>Všetko po slovensky, bez nadpisov CELÝMI VEĽKÝMI písmenami.</li>
+    <li>Rovnaké tlačidlá, výbery a riadky na každej stránke, aj v Nastaveniach a Streame.</li>
+    <li>Telefón sa nemení, má vlastné ovládanie z #850.</li>
+  </ul>
+</section>
+
+</div>
+<script>
+(function () {
+  function fit() {
+    document.querySelectorAll('.scaler').forEach(function (s) {
+      var app = s.querySelector('.app');
+      if (!app) return;
+      var k = s.clientWidth / 1280;
+      app.style.transform = 'scale(' + k + ')';
+      s.style.height = (app.offsetHeight * k) + 'px';
+    });
+  }
+  window.addEventListener('resize', fit);
+  if (document.fonts && document.fonts.ready) { document.fonts.ready.then(fit); }
+  fit();
+})();
+</script>
+</body>
+</html>

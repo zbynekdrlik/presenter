@@ -1072,3 +1072,35 @@ fn interpreter_tips_event_leaves_companion_variables_unchanged() {
         .collect();
     assert_eq!(before, after);
 }
+
+/// #850 S2: Companion's button sends a short code and the name people use;
+/// `KJV` matched no installed code and `Židom` no SEB book before.
+#[tokio::test]
+async fn bible_trigger_reads_a_short_code_and_any_form_of_the_book() {
+    let state = AppState::in_memory().await.unwrap();
+    let translation = BibleTranslation::new("slk-seb", "SEB", "sk");
+    let reference =
+        presenter_core::BibleReference::new_with_code("Hebrejom", "HEB", 58, 11, 1, 1).unwrap();
+    let passage = BiblePassage::new(reference, translation.clone(), "Viera".to_string());
+    let batch = BibleIngestionBatch::new(translation, vec![passage]).unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .unwrap();
+    let mut variables = CompanionVariableState::default();
+    let payload = json!({ "translation": "SEB", "book": "Židom", "chapter": 11, "verseStart": 1 });
+
+    let response = handle_command(&state, &mut variables, "bible.trigger", payload)
+        .await
+        .unwrap();
+
+    match response.reply {
+        Some(OutgoingMessage::Ack { ref command }) => assert_eq!(command, "bible.trigger"),
+        other => panic!("unexpected response: {other:?}"),
+    }
+    let active = state.active_bible_broadcast().await.unwrap();
+    assert_eq!(active.passage.reference.book, "Hebrejom");
+    let shown = state.active_bible_slide_output().await.unwrap();
+    assert!(shown.main_reference.starts_with("Hebrejom 11:1"));
+}

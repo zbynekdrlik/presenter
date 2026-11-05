@@ -2,6 +2,17 @@ use serde_json::{json, Value};
 
 /// Return OpenAI function-calling tool definitions.
 pub fn tool_definitions() -> Vec<Value> {
+    [
+        library_tools(),
+        slide_tools(),
+        bible_tools(),
+        stage_tools(),
+        bible_presentation_tools(),
+    ]
+    .concat()
+}
+
+fn library_tools() -> Vec<Value> {
     vec![
         tool_def(
             "list_libraries",
@@ -90,6 +101,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "required": ["presentation_id"]
             }),
         ),
+    ]
+}
+
+fn slide_tools() -> Vec<Value> {
+    vec![
         tool_def(
             "add_slide",
             "[WORSHIP only] Add a slide to an existing worship presentation. For Bible content use add_bible_slide instead.",
@@ -146,6 +162,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "required": ["presentation_id", "slide_ids"]
             }),
         ),
+    ]
+}
+
+fn bible_tools() -> Vec<Value> {
+    vec![
         tool_def(
             "search_bible",
             "Search Bible passages by text query",
@@ -165,7 +186,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string", "description": "Translation code (e.g. slk-seb)"},
-                    "book": {"type": "string", "description": "Full book name (e.g. Židom)"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"}
@@ -190,7 +211,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string", "description": "Translation code (e.g. slk-seb)"},
-                    "book": {"type": "string", "description": "Full book name (e.g. Ján)"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"}
@@ -205,7 +226,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string", "description": "Translation code"},
-                    "book": {"type": "string", "description": "Full book name"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"},
@@ -214,6 +235,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "required": ["translation", "book", "chapter", "verse_start", "verse_end"]
             }),
         ),
+    ]
+}
+
+fn stage_tools() -> Vec<Value> {
+    vec![
         tool_def(
             "trigger_slide",
             "Display a specific slide on the stage",
@@ -238,7 +264,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string"},
-                    "book": {"type": "string"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"}
@@ -246,6 +272,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "required": ["translation", "book", "chapter", "verse_start"]
             }),
         ),
+    ]
+}
+
+fn bible_presentation_tools() -> Vec<Value> {
+    vec![
         tool_def(
             "list_bible_presentations",
             "[BIBLE only] List all Bible presentations (user-curated collections of Bible slides). Use this when the user asks about Bible passages, verses, or collections.",

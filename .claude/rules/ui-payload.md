@@ -43,3 +43,9 @@ paths:
   project exists only with `PERF_BASE_URL` set. `--retries=0`, a retry could pass a missed budget.
   `ui-perf.yml` measures a running instance on demand: after a payload or console release, SNV
   LAN at 3500 ms and the public host at 3000 ms (spec S8).
+- **A timing spec never reads through `expect(...)`:** its retries wait 100, 250, 500, 1000 ms, so
+  the number can land up to 500 ms after the page was ready (S8: 3040 to 3502 ms on one build).
+  `page.waitForSelector` with a selector that holds the whole condition has no such gap.
+- **What delays the console, measured by holding a request 3 s:** `/libraries/summary`, `/playlists`
+  and `/libraries/favorites` change nothing, so deferring them saves nothing. Hold a request before
+  designing a saving (`perf-hold` idea: `page.route`, 5 runs, median).

@@ -10,10 +10,10 @@
 //! unreachable, invalid model, exhausted budget/credit/key, #764), and
 //! `checking` (no confirmed answer yet, or polling failed twice in a row).
 //!
-//! Placement (#573): mounted in the operator header's TOP brand row, inside
-//! `.operator__brand-nav`, immediately after `<ResolumeStatusChips />` —
-//! connection/status indicators belong next to the surface-nav pills, never
-//! next to the Stage Output select in `operator__header-right`.
+//! Placement (#875 H1): on a desktop inside the header's Pripojenia menu, right
+//! after `<ResolumeStatusChips />`, reporting its state through the optional
+//! `report` signal; on a phone in the "Viac" sheet. Never next to the Stage
+//! Output select.
 
 use leptos::prelude::*;
 
@@ -111,8 +111,10 @@ pub(crate) fn ai_chip_tooltip(state: &str) -> &'static str {
     }
 }
 
+/// `report`: when given, kept equal to this chip's state (`ai_chip_state`), so
+/// the header's Pripojenia button needs no poll of its own.
 #[component]
-pub fn AiStatusChip() -> impl IntoView {
+pub fn AiStatusChip(#[prop(optional)] report: Option<RwSignal<&'static str>>) -> impl IntoView {
     let status = RwSignal::new(None::<AiStatusResponse>);
     let poll_failures = RwSignal::new(0u32);
     // #622 post-merge review finding 3(c): an in-flight guard (never start a
@@ -178,6 +180,9 @@ pub fn AiStatusChip() -> impl IntoView {
     StoredValue::new_local(interval);
 
     let state = move || status.with(|s| ai_chip_state(s.as_ref()));
+    if let Some(report) = report {
+        Effect::new(move |_| report.set(state()));
+    }
     let dot_class = move || {
         format!(
             "operator__ai-dot operator__ai-dot--{}",

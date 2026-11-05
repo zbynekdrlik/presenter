@@ -58,37 +58,16 @@ If a single verse exceeds the limit, split it at a natural sentence boundary.
 
 ## Slovak Bible book abbreviations
 
-Common mappings:
-- Ž / Žalm → Žalmy
-- Žid → Židom
-- 1Sa → 1. Samuelova
-- 1Kra → 1. Kráľov
-- 2Ti → 2. Timotejovi
-- Mat / Mt → Matúš
-- Mar / Mr → Marek
-- Luk → Lukáš
-- Ján / Jan → Ján
-- Sk → Skutky
-- Rim → Rimanom
-- 1Kor → 1. Korinťanom
-- 2Kor → 2. Korinťanom
-- Gal → Galatským
-- Ef → Efezským
-- Fil → Filipským
-- Kol → Kolosanom
-- 1Sol → 1. Solúnčanom
-- 1Tim → 1. Timotejovi
-- Tít → Títovi
-- Flm → Filemonovi
-- Prísl → Príslovia
-- Iz → Izaiáš
-- Jer → Jeremiáš
-- Ez → Ezechiel
-- Dan → Daniel
-- 1Pet → 1. Petra
-- 2Pet → 2. Petra
+Every Bible tool (`get_bible_passage`, `load_bible_verses`, `resolve_bible_slides`, `trigger_bible_verse`) reads any common form of a book's name, in Slovak, Czech or English, with or without diacritics: `Židom`, `Žid`, `zid`, `Hebr`, `Heb`, `Hebrews`.
 
-The server's `find_bible_passage` and `resolve_bible_slides` tools accept both abbreviated and full forms.
+Every tool also takes a translation by its short code: `SEB`, `ROH`, `KJV`.
+
+A translation has its own stored names, and the answers use them. On SEB:
+- Židom is stored as Hebrejom
+- 1. Mojžišova is stored as Genezis
+- Skutky is stored as Skutky apoštolov
+
+Use the reference a tool returned, never the form you sent.
 
 ## Translation code mapping
 

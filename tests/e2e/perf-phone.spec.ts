@@ -30,7 +30,12 @@ test("@perf-phone a cold console is usable within the budget and a keystroke sho
     const started = Date.now();
     await page.goto("/ui/operator/bible");
     await page.locator('[data-role="console-field"]').waitFor({ state: "visible", timeout: 30_000 });
-    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute("data-books-translation", /.+/);
+    // Not `expect(...)`: its retries wait 100, 250, 500, 1000 ms, so the number
+    // could land up to 500 ms after the list was ready (S8, 3040 to 3502 ms here).
+    await page.waitForSelector('[data-role="book-list"][data-books-translation]:not([data-books-translation=""])', {
+      state: "attached",
+      timeout: 30_000,
+    });
     const usableMs = Date.now() - started;
     console.log(`[perf-phone] ${BASE_URL}: console usable after ${usableMs} ms (budget ${BUDGET_MS})`);
     expect(usableMs).toBeLessThanOrEqual(BUDGET_MS);

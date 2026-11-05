@@ -292,3 +292,10 @@ a seeded self-test `scripts/dev/test_no_panic_check.py` run by the CI Quality jo
 - **Changing a fn that returns `Response` to `Result<Response, AppError>`** (as `ndi_whep.rs`
   `into_response` did) means every caller's `Ok(f(..))` tail becomes `f(..)`.
 
+
+## Run `quality-check.sh` with `< /dev/null` from a non-terminal shell
+
+Section "playwright show-report" runs `rg` with only `-g` globs and no path. With no terminal on
+stdin, `rg` searches stdin instead of the tree and waits forever (a background agent shell hung
+10+ minutes on it, 2026-11-05). CI has a closed stdin, so it never hangs there:
+`./scripts/dev/quality-check.sh --strict --against origin/main < /dev/null`.

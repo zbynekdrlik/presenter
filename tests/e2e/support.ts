@@ -8,6 +8,29 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { resolvePrebuiltCommand } from "./prebuilt-binary";
 
 /**
+ * Open an operator section from the DESKTOP header (#875 H1): Piesne, Biblia
+ * and ⚙ (settings) are direct buttons, Časovače / AI / Menovky sit in the
+ * Stránky menu, which is opened first unless it already is. Every section
+ * button keeps `data-role="view-toggle"` + `data-view`, wherever it lives.
+ * A phone context uses the tab bar (`[data-role="phone-tab"]`) instead.
+ */
+export async function openView(page: Page, view: string): Promise<void> {
+  const toggle = page.locator(`.operator__header [data-role="view-toggle"][data-view="${view}"]`);
+  if (!(await toggle.isVisible())) {
+    await page.locator('[data-role="header-menu-toggle"][data-menu="pages"]').click();
+  }
+  await toggle.click();
+}
+
+/** The desktop header menus (#875 H1): `pages` (Stránky), `screens` (Obrazovky), `connections` (Pripojenia). */
+export function headerMenu(page: Page, id: "pages" | "screens" | "connections") {
+  return {
+    toggle: page.locator(`[data-role="header-menu-toggle"][data-menu="${id}"]`),
+    panel: page.locator(`[data-role="header-menu-panel"][data-menu="${id}"]`),
+  };
+}
+
+/**
  * Subscribe to console events on `page` and append error/warning messages to
  * `errors`. Pass the array to `expect(errors).toEqual([])` at the end of the
  * test to assert a clean browser console.

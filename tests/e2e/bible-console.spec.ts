@@ -1524,6 +1524,34 @@ test("a cold console reads preferences and books in one answer, a switch reads i
   }
 });
 
+// #701: this browser's main translation beats the server default, and the one
+// answer already carries that translation's books.
+test("a browser with its own main translation gets those books in the one answer", async ({ browser }) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  await context.addInitScript(() => {
+    localStorage.setItem("presenter:bibleMainTranslation", JSON.stringify("slk-roh"));
+  });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const books: string[] = [];
+  const starts: string[] = [];
+  page.on("request", (req) => {
+    const url = new URL(req.url());
+    if (url.pathname === "/bible/books") books.push(url.searchParams.get("translation") ?? "");
+    if (url.pathname === "/bible/console-start") starts.push(url.searchParams.get("translation") ?? "");
+  });
+  try {
+    await page.goto("/ui/operator/bible");
+    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute("data-books-translation", "slk-roh");
+    expect(starts).toEqual(["slk-roh"]);
+    expect(books).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
 test("an answer without books falls back to reading them", async ({ browser }) => {
   const context = await browser.newContext({ ...PHONE_390, baseURL });
   const page = await context.newPage();

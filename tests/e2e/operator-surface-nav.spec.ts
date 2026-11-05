@@ -1,9 +1,10 @@
 /**
- * Operator Surface-Nav Strip E2E (#326).
+ * Operator surface links E2E (#326, #875 H1).
  *
- * Asserts the 4-pill jump-link row appears on operator chrome
- * (including the bible internal view), is absent on tablet and camera,
- * and links open in a new tab (target=_blank rel=noopener).
+ * Asserts the links to the other surfaces are the items of the desktop
+ * header's Obrazovky menu (including on the bible internal view), with Slovak
+ * labels, are absent on tablet and camera, and open in a new tab
+ * (target=_blank rel=noopener).
  *
  * Also asserts zero browser console errors/warnings per
  * ci/browser-console-zero-errors.md.
@@ -12,6 +13,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
   deriveTestConfig,
+  headerMenu,
   refreshDevData,
   startTestServer,
   stopServer,
@@ -69,45 +71,72 @@ function collectConsole(page: Page): string[] {
   return messages;
 }
 
-const EXPECTED_TARGETS: ReadonlyArray<{ name: string; href: string }> = [
-  { name: "Stage", href: "/stage" },
-  { name: "Camera", href: "/ui/camera" },
-  { name: "Tablet", href: "/ui/tablet" },
-  { name: "Timer", href: "/stream/timer" },
+const EXPECTED_TARGETS: ReadonlyArray<{ name: string; label: string; href: string }> = [
+  { name: "Stage", label: "Pódium", href: "/stage" },
+  { name: "Camera", label: "Kamera", href: "/ui/camera" },
+  { name: "Tablet", label: "Tablet", href: "/ui/tablet" },
+  { name: "Timer", label: "Časovač", href: "/stream/timer" },
+  { name: "Stream", label: "Stream", href: "/ui/stream" },
 ];
+
+/** Open the Obrazovky menu; its panel holds the surface links. */
+async function openScreensMenu(page: Page) {
+  const menu = headerMenu(page, "screens");
+  await expect(menu.panel).toBeHidden();
+  await menu.toggle.click();
+  await expect(menu.toggle).toHaveAttribute("aria-expanded", "true");
+  return menu.panel;
+}
 
 async function waitForOperatorReady(page: Page): Promise<void> {
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
 }
 
-test("surface-nav strip is visible on /ui/operator with 4 correct anchors", async ({ page }) => {
+test("the Obrazovky menu on /ui/operator lists the 5 surfaces with Slovak labels", async ({ page }) => {
   const consoleMessages = collectConsole(page);
 
   await page.goto(`${baseURL}/ui/operator`);
   await waitForOperatorReady(page);
 
-  const nav = page.locator('[data-role="surface-nav"]');
+  const panel = await openScreensMenu(page);
+  const nav = panel.locator('[data-role="surface-nav"]');
   await expect(nav).toBeVisible();
+  await expect(nav.locator('[data-role="surface-nav-link"]')).toHaveCount(EXPECTED_TARGETS.length);
 
   for (const target of EXPECTED_TARGETS) {
     const link = nav.locator(`[data-role="surface-nav-link"][data-target="${target.name}"]`);
     await expect(link, `link for ${target.name} should exist`).toHaveCount(1);
+    await expect(link).toBeVisible();
+    await expect(link).toContainText(target.label);
     await expect(link).toHaveAttribute("href", target.href);
     await expect(link).toHaveAttribute("target", "_blank");
     const rel = await link.getAttribute("rel");
     expect(rel ?? "", `rel for ${target.name} should contain noopener`).toContain("noopener");
   }
 
+  // Picking a surface opens it in a new tab and closes the menu.
+  const [tab] = await Promise.all([
+    page.context().waitForEvent("page"),
+    nav.locator('[data-role="surface-nav-link"][data-target="Tablet"]').click(),
+  ]);
+  await tab.waitForLoadState("domcontentloaded");
+  expect(new URL(tab.url()).pathname).toBe("/ui/tablet");
+  await tab.close();
+  await expect(panel).toBeHidden();
+  await expect(headerMenu(page, "screens").toggle).toHaveAttribute("aria-expanded", "false");
+  expect(new URL(page.url()).pathname).toBe("/ui/operator");
+
   expect(consoleMessages, "browser console must be clean").toEqual([]);
 });
 
-test("surface-nav strip is visible on the bible internal view", async ({ page }) => {
+test("the Obrazovky menu works on the bible internal view", async ({ page }) => {
   const consoleMessages = collectConsole(page);
 
   await page.goto(`${baseURL}/ui/operator/bible`);
   await waitForOperatorReady(page);
 
-  const nav = page.locator('[data-role="surface-nav"]');
+  const panel = await openScreensMenu(page);
+  const nav = panel.locator('[data-role="surface-nav"]');
   await expect(nav).toBeVisible();
 
   for (const target of EXPECTED_TARGETS) {

@@ -178,8 +178,7 @@ pub(crate) async fn get_bible_passage(
     let verse_end = query.verse_end.unwrap_or(query.verse_start);
     let reference = BibleReference::new(query.book, query.chapter, query.verse_start, verse_end)
         .context("failed to parse Bible reference")?;
-    let passage = state
-        .find_bible_passage(&query.translation, &reference)
-        .await?;
+    let translation = state.resolve_translation(&query.translation).await?;
+    let passage = state.find_bible_passage(&translation, &reference).await?;
     Ok(Json(passage))
 }

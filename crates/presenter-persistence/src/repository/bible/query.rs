@@ -342,7 +342,7 @@ impl Repository {
             .group_by(bible_passage::Column::BookCode)
             .group_by(bible_passage::Column::BookNumber)
             .group_by(bible_passage::Column::Chapter)
-            .order_by_asc(bible_passage::Column::Book)
+            .order_by_asc(bible_passage::Column::BookNumber)
             .order_by_asc(bible_passage::Column::Chapter)
             .into_model::<ChapterRow>()
             .all(&self.db)
@@ -417,5 +417,48 @@ mod fts_query_tests {
         assert_eq!(build_fts_query("ž a"), None);
         // A combining accent is part of its word: it never splits it.
         assert_eq!(build_fts_query("na\u{0301}dej").as_deref(), Some("nadej*"));
+    }
+}
+
+#[cfg(test)]
+mod chapter_summary_order_tests {
+    use crate::repository::Repository;
+    use presenter_core::bible::BibleIngestionBatch;
+    use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+    /// Canonical order, never alphabetical: Genezis before Ámos before Rimanom
+    /// (#850 §5.9); a name-ordered list hides the book you look for.
+    #[tokio::test]
+    async fn chapter_summaries_come_in_canonical_book_order() {
+        let repository = Repository::connect_in_memory().await.unwrap();
+        let translation = BibleTranslation::new("slk-seb", "SEB", "sk");
+        let rows = [
+            ("Rimanom", "ROM", 45),
+            ("Ámos", "AMO", 30),
+            ("Genezis", "GEN", 1),
+        ];
+        let passages = rows
+            .iter()
+            .map(|(name, code, number)| {
+                let reference =
+                    BibleReference::new_with_code(*name, *code, *number, 1, 1, 1).unwrap();
+                BiblePassage::new(reference, translation.clone(), "text".to_string())
+            })
+            .collect();
+        let batch = BibleIngestionBatch::new(translation, passages).unwrap();
+        repository
+            .replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
+
+        let summaries = repository
+            .bible_book_chapter_summaries("slk-seb")
+            .await
+            .unwrap();
+        let codes: Vec<_> = summaries
+            .iter()
+            .filter_map(|s| s.book_code.clone())
+            .collect();
+        assert_eq!(codes, ["GEN", "AMO", "ROM"]);
     }
 }

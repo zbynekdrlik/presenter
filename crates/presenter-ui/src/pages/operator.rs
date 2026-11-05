@@ -15,6 +15,7 @@ use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
 use crate::components::stage_follow::setup_follow_on_live;
+use crate::components::stage_preview::{PreviewPlace, StagePreview};
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;
@@ -187,6 +188,13 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                     </div>
                     <CatalogResizer />
                     <PresentationList />
+                    // #875 H2: the live stage mirror at the bottom of the
+                    // lists, the column's full width (desktop; a phone keeps
+                    // its controls in the header). Mounted only while Piesne
+                    // is shown: one copy, one mirror socket at a time.
+                    <Show when=move || !ctx.phone_shell.get() && ctx.view.get() == "worship">
+                        <StagePreview place=PreviewPlace::Worship />
+                    </Show>
                 </section>
                 <SlideList />
             </section>

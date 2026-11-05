@@ -7,6 +7,9 @@
 
 pub(super) mod broadcast;
 pub(super) mod browse;
+pub(super) mod lookup;
+#[cfg(test)]
+mod lookup_tests;
 #[cfg(test)]
 mod presentation_order_tests;
 pub(super) mod presentations;
