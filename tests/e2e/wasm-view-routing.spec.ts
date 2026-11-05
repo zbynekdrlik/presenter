@@ -11,6 +11,7 @@ import {
   startTestServer,
   stopServer,
   type ServerHandle,
+  openView,
 } from "./support";
 
 let serverHandle: ServerHandle | undefined;
@@ -77,11 +78,8 @@ test.describe("WASM Operator View Routing Tests", () => {
   test("clicking timers view changes data-view attribute", async ({ page }) => {
     await initPage(page);
 
-    const timersButton = page.locator(
-      '[data-role="view-toggle"][data-view="timers"]',
-    );
-    if ((await timersButton.count()) > 0) {
-      await timersButton.click();
+    {
+      await openView(page, "timers");
 
       await page.waitForFunction(
         () => document.body.getAttribute("data-view") === "timers",
@@ -99,11 +97,8 @@ test.describe("WASM Operator View Routing Tests", () => {
   }) => {
     await initPage(page);
 
-    const settingsButton = page.locator(
-      '[data-role="view-toggle"][data-view="settings"]',
-    );
-    if ((await settingsButton.count()) > 0) {
-      await settingsButton.click();
+    {
+      await openView(page, "settings");
 
       await page.waitForFunction(
         () => document.body.getAttribute("data-view") === "settings",
@@ -120,11 +115,8 @@ test.describe("WASM Operator View Routing Tests", () => {
     await initPage(page);
 
     // Navigate to timers view
-    const timersButton = page.locator(
-      '[data-role="view-toggle"][data-view="timers"]',
-    );
-    if ((await timersButton.count()) > 0) {
-      await timersButton.click();
+    {
+      await openView(page, "timers");
 
       await page.waitForFunction(
         () => document.body.getAttribute("data-view") === "timers",
@@ -202,11 +194,8 @@ test.describe("WASM Operator View Routing Tests", () => {
     await initPage(page);
 
     // Go to timers
-    const timersButton = page.locator(
-      '[data-role="view-toggle"][data-view="timers"]',
-    );
-    if ((await timersButton.count()) > 0) {
-      await timersButton.click();
+    {
+      await openView(page, "timers");
       await page.waitForFunction(
         () => document.body.getAttribute("data-view") === "timers",
         { timeout: 5_000 },
@@ -303,11 +292,8 @@ test.describe("WASM Operator View Routing Tests", () => {
     await initPage(page);
 
     // Navigate to timers
-    const timersButton = page.locator(
-      '[data-role="view-toggle"][data-view="timers"]',
-    );
-    if ((await timersButton.count()) > 0) {
-      await timersButton.click();
+    {
+      await openView(page, "timers");
       await page.waitForFunction(
         () => document.body.getAttribute("data-view") === "timers",
         { timeout: 5_000 },

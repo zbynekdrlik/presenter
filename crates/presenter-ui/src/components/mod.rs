@@ -1,5 +1,6 @@
 pub mod ai_status;
 pub mod header;
+pub mod header_menus;
 pub mod info_popover;
 pub mod interpreter;
 pub mod library_list;

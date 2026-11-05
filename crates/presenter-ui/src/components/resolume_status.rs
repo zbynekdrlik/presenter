@@ -5,10 +5,10 @@
 //! configured (e.g. the dev box) shows a clean absent state, never an empty
 //! placeholder or a console error.
 //!
-//! Placement (#573): mounted in the operator header's TOP brand row, inside
-//! `.operator__brand-nav`, immediately after `<SurfaceNav />` — connection
-//! status belongs next to the Stage/Camera/Tablet/Timer surface-nav pills,
-//! never next to the Stage Output select in `operator__header-right`.
+//! Placement (#875 H1): on a desktop inside the header's Pripojenia menu
+//! (`components/header_menus.rs`), which also reads every host's state through
+//! the optional `report` signal; on a phone in the "Viac" sheet. Never next to
+//! the Stage Output select.
 
 use leptos::prelude::*;
 
@@ -93,9 +93,34 @@ pub(crate) fn chip_tooltip(dto: &ResolumeConnectionStatusDto) -> String {
     lines.join("\n")
 }
 
+/// One enabled host as the Pripojenia button sees it: its label and the
+/// server's connection state (`connected` / `connecting` / `error`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostLink {
+    pub label: String,
+    pub state: String,
+}
+
+/// `report`: when given, kept equal to the hosts this copy polls (the header
+/// menu's summary), so nothing polls twice.
 #[component]
-pub fn ResolumeStatusChips() -> impl IntoView {
+pub fn ResolumeStatusChips(
+    #[prop(optional)] report: Option<RwSignal<Vec<HostLink>>>,
+) -> impl IntoView {
     let hosts = RwSignal::new(Vec::<ResolumeConnectionStatusDto>::new());
+    if let Some(report) = report {
+        Effect::new(move |_| {
+            let links = hosts.with(|list| {
+                list.iter()
+                    .map(|h| HostLink {
+                        label: h.label.clone(),
+                        state: h.state.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            });
+            report.set(links);
+        });
+    }
 
     let poll = move || {
         leptos::task::spawn_local(async move {

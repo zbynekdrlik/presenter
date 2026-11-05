@@ -12,6 +12,7 @@ import {
   startTestServer,
   stopServer,
   type ServerHandle,
+  openView,
 } from "./support";
 
 // #852 C1b — Settings → "Počúvanie": the listening microphones card.
@@ -498,7 +499,7 @@ test("the operator's hidden Settings panel fetches nothing and shows no old stat
     await held;
     await route.continue();
   });
-  await page.locator('[data-role="view-toggle"][data-view="settings"]').click();
+  await openView(page, "settings");
   await expect(card).toBeVisible();
   await expect.poll(() => statusRequests).toBeGreaterThan(whenHidden);
   await expect(state).toHaveAttribute("data-state", "unknown");

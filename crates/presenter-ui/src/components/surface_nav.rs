@@ -1,38 +1,36 @@
 use leptos::prelude::*;
 
-/// Surface-nav pills: 4 inline links that open external surfaces in a new
-/// browser tab. Lives inside the operator header's brand row (rendered in
-/// `components/header.rs`'s `operator__header-brand`, immediately after the
-/// version badge). Header uses `align-items: flex-start` so brand+pills sit
-/// flush at the top border; the existing Worship/Bible/Timers/AI/Settings
-/// tabs and stage-output controls keep their original positions. See spec
-/// `docs/superpowers/specs/2026-05-18-operator-surface-nav-design.md`.
-#[component]
-pub fn SurfaceNav() -> impl IntoView {
-    let targets = [
-        ("Stage", "/stage"),
-        ("Camera", "/ui/camera"),
-        ("Tablet", "/ui/tablet"),
-        ("Timer", "/stream/timer"),
-        ("Stream", "/ui/stream"),
-    ];
+/// (data-target, English label, Slovak label, href) of every other surface.
+const TARGETS: [(&str, &str, &str, &str); 5] = [
+    ("Stage", "Stage", "Pódium", "/stage"),
+    ("Camera", "Camera", "Kamera", "/ui/camera"),
+    ("Tablet", "Tablet", "Tablet", "/ui/tablet"),
+    ("Timer", "Timer", "Časovač", "/stream/timer"),
+    ("Stream", "Stream", "Stream", "/ui/stream"),
+];
 
+/// Links that open the other surfaces in a new browser tab. On a desktop they
+/// are the items of the header's Obrazovky menu (`slovak`, #875 H1); on a phone
+/// they sit in the "Viac" sheet with their English labels (the phone shell is
+/// unchanged by #875). `data-target` stays the English name in both.
+#[component]
+pub fn SurfaceNav(#[prop(optional)] slovak: bool) -> impl IntoView {
     view! {
         <nav
             class="operator__surface-nav"
             data-role="surface-nav"
             aria-label="Open other surfaces in a new tab"
         >
-            {targets.into_iter().map(|(label, href)| view! {
+            {TARGETS.into_iter().map(|(target, en, sk, href)| view! {
                 <a
                     class="operator__surface-nav-link"
                     data-role="surface-nav-link"
-                    data-target=label
+                    data-target=target
                     href=href
                     target="_blank"
                     rel="noopener"
                 >
-                    {label}
+                    {if slovak { sk } else { en }}
                     <span class="operator__surface-nav-icon" aria-hidden="true">"\u{2197}"</span>
                 </a>
             }).collect_view()}

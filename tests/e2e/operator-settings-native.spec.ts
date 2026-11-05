@@ -6,6 +6,7 @@ import {
   startTestServer,
   stopServer,
   type ServerHandle,
+  openView,
 } from "./support";
 
 // #462: the operator embedded its Settings view via `<iframe src="/ui/settings">`.
@@ -185,11 +186,10 @@ test("operator Settings costs no request until it opens, then stays mounted", as
   expect(asked).toEqual([]);
 
   // Opening it mounts the cards, and their lists load.
-  const settingsTab = page.locator('[data-role="view-toggle"][data-view="settings"]');
   const hostsAsked = page.waitForRequest((r) =>
     new URL(r.url()).pathname.endsWith("/integrations/resolume/hosts"),
   );
-  await settingsTab.click();
+  await openView(page, "settings");
   await hostsAsked;
   const firstCard = page.locator('[data-view-panel="settings"] .settings__card').first();
   await expect(firstCard).toBeVisible();
@@ -198,7 +198,7 @@ test("operator Settings costs no request until it opens, then stays mounted", as
   await firstCard.evaluate((el) => el.setAttribute("data-same-node", "1"));
   await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
   await expect(page.locator("body")).toHaveAttribute("data-view", "bible");
-  await settingsTab.click();
+  await openView(page, "settings");
   await expect(firstCard).toHaveAttribute("data-same-node", "1");
 
   expect(errors).toEqual([]);

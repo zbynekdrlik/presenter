@@ -4,6 +4,8 @@
  * - With no enabled host, the chip area must render absent — zero chips,
  *   zero console noise. This is the ONLY scenario exercised on the real dev
  *   instance (no Resolume is configured there).
+ * - #875 H1: the chips live in the desktop header's Pripojenia menu; a host
+ *   that goes down turns the CLOSED menu button orange with its name.
  * - With an enabled host reachable through the embedded Node mock
  *   (`startMockResolume`, an arbitrary free port — never the fixed
  *   127.0.0.1:8091 the Rust mock-integrations listener owns), the chip must
@@ -18,6 +20,7 @@ import { test, expect } from "@playwright/test";
 import {
   attachConsoleErrorCollector,
   deriveTestConfig,
+  headerMenu,
   refreshDevData,
   startMockResolume,
   startTestServer,
@@ -64,10 +67,10 @@ test("no resolume host configured — the chip area renders absent, console clea
   await expect(page.locator('[data-role="resolume-status-chips"]')).toBeAttached();
   await expect(page.locator('[data-role="resolume-status-chip"]')).toHaveCount(0);
 
-  // #573: the chips live in the TOP brand/surface-nav row — never next to
-  // the Stage Output select in `operator__header-right`.
+  // #875 H1: the chips are the list of the header's Pripojenia menu — never
+  // next to the Stage Output select in `operator__header-right`.
   await expect(
-    page.locator('.operator__header-brand [data-role="resolume-status-chips"]'),
+    headerMenu(page, "connections").panel.locator('[data-role="resolume-status-chips"]'),
   ).toHaveCount(1);
   await expect(
     page.locator('.operator__header-right [data-role="resolume-status-chips"]'),
@@ -100,6 +103,10 @@ test("an enabled host tracks the mock's connection state: green while up, yellow
   );
   expect(createRes.ok()).toBeTruthy();
   const created = (await createRes.json()) as { id: string };
+  // AI up, so the Pripojenia button below speaks only about this host.
+  await page.route("**/ai/status", (route) =>
+    route.fulfill({ json: { connected: true, error: null, modelValid: true } }),
+  );
 
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForLoadState("networkidle");
@@ -113,6 +120,9 @@ test("an enabled host tracks the mock's connection state: green while up, yellow
   // Connection state lives in the dot color + tooltip.
   await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(label);
   await expect(chip).toHaveAttribute("title", /Connected/);
+  const menu = headerMenu(page, "connections");
+  await expect(menu.toggle).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
+  await expect(menu.toggle).toContainText("Pripojenia");
 
   // Simulate the mock going offline (Arena crashing / unreachable) — the
   // chip must flip to yellow while KEEPING the host's name as its text,
@@ -121,10 +131,17 @@ test("an enabled host tracks the mock's connection state: green while up, yellow
   await expect(chip).toHaveAttribute("data-state", "yellow", { timeout: 30_000 });
   await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(label);
   await expect(chip).toHaveAttribute("title", /Not reachable/);
+  // #875 H1: the closed Pripojenia button turns orange and names the host.
+  await expect(menu.panel).toBeHidden();
+  await expect(menu.toggle).toHaveAttribute("data-state", "down");
+  await expect(menu.toggle).toContainText(`Odpojené: ${label}`);
+  const color = await menu.toggle.evaluate((el) => getComputedStyle(el).borderTopColor);
+  expect(color).toBe("rgb(245, 158, 11)");
 
   // Recovery: back online, the chip must return to green on its own.
   mockResolume.setOnline(true);
   await expect(chip).toHaveAttribute("data-state", "green", { timeout: 30_000 });
+  await expect(menu.toggle).toHaveAttribute("data-state", "ok");
 
   await request.delete(
     new URL(`/integrations/resolume/hosts/${created.id}`, baseURL).toString(),

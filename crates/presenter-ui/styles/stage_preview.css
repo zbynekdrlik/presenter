@@ -1,0 +1,164 @@
+/* Where the stage preview sits on a desktop (#875 H2, mockup v3). One copy at
+   a time (components/stage_preview.rs `PreviewPlace`):
+   - Piesne: the last child of the lists column, its full width at 16:9, the
+     column's bottom edge; Ableton + Follow top-left, the broom top-right and
+     the stage counter bottom-right lie on the picture. The lists above
+     shrink and scroll.
+   - Biblia: the same block at the bottom of the left column, with the verse
+     on the wall instead of the mirror.
+   - Every other section: the counter and the broom in the header row.
+   The phone keeps its own row in the header (phone_shell.css). Heights are
+   explicit, not `aspect-ratio`: an iPad Air 2 (Safari 12) gets this shell. */
+
+/* The lists column fills the panel now that the header is one 40 px row. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog {
+  max-height: none;
+}
+
+/* Under a tall preview the lists share what is left; neither goes to zero. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-top {
+  flex-shrink: 1;
+  min-height: 120px;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-bottom {
+  min-height: 140px;
+}
+
+/* ── The block at the bottom of a left column ── */
+
+.operator__catalog > .operator__stage-preview--worship,
+.operator__catalog > .operator__stage-preview--bible {
+  position: relative;
+  display: block;
+  flex: none;
+  width: auto;
+  /* Over the column's side and bottom padding: its full inner width. */
+  margin: 0.85rem -1.25rem -1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0 0 var(--operator-radius) var(--operator-radius);
+  background: #000;
+  box-shadow: none;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* 320 px column content + 2 × 1.25rem padding = 360 px wide → 16:9. */
+.operator__catalog > .operator__stage-preview--worship {
+  height: 202.5px;
+}
+
+.operator__stage-preview--worship .operator__stage-iframe-wrap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+/* 1920 × 1080 stage scaled to the 360 px width. */
+.operator__stage-preview--worship .operator__stage-iframe {
+  transform: scale(0.1875);
+}
+
+.operator__stage-preview--worship .operator__stage-preview-actions {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  flex-direction: row;
+  gap: 4px;
+}
+
+.operator__stage-preview--worship .operator__stage-toggle {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.72rem;
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.operator__stage-preview--worship .operator__stage-toggle[data-state="off"] {
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.operator__stage-preview--worship .operator__clear-button,
+.operator__stage-preview--bible .operator__clear-button {
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+}
+
+.operator__stage-preview--worship .operator__stage-monitor,
+.operator__stage-preview--bible .operator__stage-monitor {
+  right: 8px;
+  bottom: 6px;
+  z-index: 1;
+}
+
+/* The Biblia column is a 320 px grid track (border-box): 318 px inside its
+   border → 16:9. */
+.operator__catalog > .operator__stage-preview--bible {
+  height: 179px;
+  background: #101828;
+}
+
+.operator__stage-preview--bible .operator__bible-preview {
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 0.75rem 3rem 1.75rem 0.85rem;
+  justify-content: center;
+}
+
+.operator__stage-preview--bible .operator__bible-preview-text {
+  max-height: 6.8em;
+}
+
+/* The Biblia column holds the preview at its bottom; its tabs scroll above. */
+body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible {
+  overflow: hidden;
+}
+
+body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible .operator__catalog-top {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ── Other sections: the counter and the broom in the header row ── */
+
+.operator__stage-preview--header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.operator__stage-preview--header .operator__stage-monitor,
+.operator__stage-preview--header .operator__clear-button {
+  position: static;
+}
+
+.operator__stage-preview--header .operator__clear-button {
+  width: 32px;
+  height: 32px;
+}
+
+/* A narrower lists column (operator.css: 260 px under 1025 px) = 300 px. */
+@media (max-width: 1024px) {
+  .operator__catalog > .operator__stage-preview--worship {
+    height: 168.75px;
+  }
+  .operator__stage-preview--worship .operator__stage-iframe {
+    transform: scale(0.15625);
+  }
+}
