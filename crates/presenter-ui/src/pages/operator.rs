@@ -25,6 +25,11 @@ use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::ws;
 
+/// True from the first time `view` is `name`, for the rest of the page's life.
+fn opened_once(view: RwSignal<String>, name: &'static str) -> Memo<bool> {
+    Memo::new(move |was: Option<&bool>| was.copied().unwrap_or(false) || view.get() == name)
+}
+
 #[component]
 pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> impl IntoView {
     let ctx = AppContext::new();
@@ -159,14 +164,12 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     // Catalog resizer
     let catalog_top_style = move || format!("height: {}px", op.catalog_top_height.get());
 
-    // #850 S8: Settings mounts the first time its view opens and then stays
-    // mounted (the Menovky latch, #871). Its cards are a third of the requests
-    // a cold load fires, and on LAN http (HTTP/1.1, six connections per host)
-    // the Bible console's book list waits behind them.
-    let settings_view = ctx.view;
-    let settings_opened = Memo::new(move |was: Option<&bool>| {
-        was.copied().unwrap_or(false) || settings_view.get() == "settings"
-    });
+    // #850 S8: Settings and AI mount the first time their view opens and then
+    // stay mounted (the Menovky latch, #871). Settings' cards are a third of the
+    // requests a cold load fires, and on LAN http (HTTP/1.1, six connections per
+    // host) the Bible console's book list waits behind them.
+    let settings_opened = opened_once(ctx.view, "settings");
+    let ai_opened = opened_once(ctx.view, "ai");
 
     view! {
         <Header />
@@ -194,7 +197,9 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                 <TimerPanel />
             </section>
             <section class="operator__panel operator__panel--ai" data-view-panel="ai">
-                <AiPage />
+                <Show when=move || ai_opened.get()>
+                    <AiPage />
+                </Show>
             </section>
             // #871: the `stream` plates in Stream Deck grid order.
             <section class="operator__panel operator__panel--menovky" data-view-panel="menovky">
