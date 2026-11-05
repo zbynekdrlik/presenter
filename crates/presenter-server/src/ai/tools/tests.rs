@@ -745,3 +745,33 @@ async fn bible_tools_read_any_form_of_the_book_and_the_short_translation_code() 
     let active = state.active_bible_broadcast().await.unwrap();
     assert_eq!(active.passage.reference.book, "Hebrejom");
 }
+
+/// #904 review: a translation's own stored book name wins over the fuzzy
+/// resolver in `load_bible_verses`, like on every other server path. `Ab` is
+/// Habakkuk to the resolver; a translation that stores Obadiah as `Ab` must
+/// still get Obadiah's verses.
+#[tokio::test]
+async fn load_bible_verses_reads_the_translations_own_book_name_first() {
+    use presenter_core::bible::BibleIngestionBatch;
+    use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+    let state = AppState::in_memory().await.unwrap();
+    let translation = BibleTranslation::new("slk-seb", "SEB", "sk");
+    let reference = BibleReference::new_with_code("Ab", "OBA", 31, 1, 1, 1).unwrap();
+    let passage = BiblePassage::new(reference, translation.clone(), "Videnie".to_string());
+    let batch = BibleIngestionBatch::new(translation, vec![passage]).unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .unwrap();
+    let args = json!({
+        "translation": "SEB", "book": "Ab", "chapter": 1, "verse_start": 1, "verse_end": 1,
+    })
+    .to_string();
+
+    let (body, _) = execute_tool("load_bible_verses", &args, &state, 320)
+        .await
+        .unwrap();
+    assert!(body.contains("Videnie"), "load_bible_verses: {body}");
+}
