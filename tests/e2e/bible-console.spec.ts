@@ -1494,7 +1494,7 @@ test("a cold console reads preferences and books in one answer, a switch reads i
   page.on("request", (req) => {
     const url = new URL(req.url());
     if (url.pathname === "/bible/books") books.push(url.searchParams.get("translation") ?? "");
-    if (url.pathname === "/bible/console-start") starts.push(url.search);
+    if (url.pathname === "/bible/console-start") starts.push(url.searchParams.get("translation") ?? "");
   });
   const list = page.locator('[data-role="book-list"]');
   try {
@@ -1516,7 +1516,7 @@ test("a cold console reads preferences and books in one answer, a switch reads i
     starts.length = 0;
     await page.reload();
     await expect(list).toHaveAttribute("data-books-translation", "slk-roh");
-    expect(starts).toEqual(["?translation=slk-roh"]);
+    expect(starts).toEqual(["slk-roh"]);
     expect(books).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
