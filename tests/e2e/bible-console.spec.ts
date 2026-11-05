@@ -1478,3 +1478,77 @@ test("words search the text: 'viera je zárukou' offers Hebrejom 11:1 · SEB, an
     await context.close();
   }
 });
+
+// #850 S8: preferences then books was two requests in a row, 760 ms of a cold
+// phone load. One answer carries both; a switch, or an answer without books,
+// still reads `/bible/books`.
+test("a cold console reads preferences and books in one answer, a switch reads its books", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const books: string[] = [];
+  const starts: string[] = [];
+  page.on("request", (req) => {
+    const url = new URL(req.url());
+    if (url.pathname === "/bible/books") books.push(url.search);
+    if (url.pathname === "/bible/console-start") starts.push(url.search);
+  });
+  const list = page.locator('[data-role="book-list"]');
+  try {
+    await page.goto("/ui/operator/bible");
+    await expect(list).toHaveAttribute("data-books-translation", "slk-seb");
+    expect(starts).toEqual([""]);
+    expect(books).toEqual([]);
+
+    // The prepared list is the console's structure: a reference resolves.
+    await page.locator('[data-role="console-field"]').fill("zid 11 1");
+    await expect(page.locator('[data-role="console-row"]').first()).toContainText("Hebrejom 11:1");
+
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]').tap();
+    await expect(list).toHaveAttribute("data-books-translation", "slk-roh");
+    expect(books).toEqual(["?translation=slk-roh"]);
+
+    // This browser's own choice (#701) is the one prepared on the next load.
+    books.length = 0;
+    starts.length = 0;
+    await page.reload();
+    await expect(list).toHaveAttribute("data-books-translation", "slk-roh");
+    expect(starts).toEqual(["?translation=slk-roh"]);
+    expect(books).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("an answer without books falls back to reading them", async ({ browser }) => {
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const books: string[] = [];
+  page.on("request", (req) => {
+    const url = new URL(req.url());
+    if (url.pathname === "/bible/books") books.push(url.search);
+  });
+  await page.route("**/bible/console-start**", (route) =>
+    route.fulfill({
+      json: {
+        preferences: { mainTranslation: "slk-seb", characterLimit: 320 },
+        booksTranslation: null,
+        books: null,
+      },
+    }),
+  );
+  try {
+    await page.goto("/ui/operator/bible");
+    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute("data-books-translation", "slk-seb");
+    expect(books).toEqual(["?translation=slk-seb"]);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
