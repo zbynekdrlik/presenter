@@ -88,6 +88,10 @@ pub fn build_router(state: AppState) -> Router {
             patch(bible::translations::update_bible_translation),
         )
         .route("/bible/books", get(bible::browse::list_bible_books))
+        .route(
+            "/bible/console-start",
+            get(bible::browse::bible_console_start),
+        )
         .route("/bible/search", get(bible::browse::search_bible_passages))
         .route("/bible/passage", get(bible::browse::get_bible_passage))
         .route("/bible/resolve", post(bible::resolve::resolve_bible_slides))

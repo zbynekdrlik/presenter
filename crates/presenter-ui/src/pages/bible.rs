@@ -33,6 +33,8 @@ pub fn BiblePage() -> impl IntoView {
     // Flag: set to true after initial preferences + translations are loaded.
     // Prevents the auto-save effect from firing during initial hydration.
     let translations_loaded = RwSignal::new(false);
+    // The books that came with the console start, until the effect takes them.
+    let prepared_books = StoredValue::new(None::<(String, Vec<bible::BibleBookDto>)>);
 
     // Load translations + preferences on mount
     {
@@ -41,8 +43,16 @@ pub fn BiblePage() -> impl IntoView {
         let secondary_translation = bs.secondary_translation;
         let character_limit = bs.character_limit;
         leptos::task::spawn_local(async move {
-            // Load preferences first to set saved translation choices
-            if let Ok(prefs) = bible::get_preferences().await {
+            let own_main = crate::state::session::get_persistent("bibleMainTranslation")
+                .filter(|main| !main.is_empty());
+            // Load preferences first to set saved translation choices. The
+            // same answer brings the books (#850 S8), kept before the
+            // translation is set so the books effect below finds them.
+            if let Ok(start) = bible::console_start(own_main.as_deref()).await {
+                if let (Some(code), Some(list)) = (start.books_translation, start.books) {
+                    prepared_books.set_value(Some((code, list)));
+                }
+                let prefs = start.preferences;
                 if let Some(ref main) = prefs.main_translation {
                     selected_translation.set(Some(main.clone()));
                 }
@@ -56,10 +66,8 @@ pub fn BiblePage() -> impl IntoView {
             // explicitly-cleared secondary survives a refresh. Applied AFTER the
             // server-pref load (so it takes precedence) and BEFORE the
             // "default main to first translation" step below.
-            if let Some(main) = crate::state::session::get_persistent("bibleMainTranslation") {
-                if !main.is_empty() {
-                    selected_translation.set(Some(main));
-                }
+            if let Some(main) = own_main {
+                selected_translation.set(Some(main));
             }
             match crate::state::session::get_persistent("bibleSecondaryTranslation") {
                 // Empty "" sentinel = the user explicitly cleared the secondary.
@@ -161,8 +169,16 @@ pub fn BiblePage() -> impl IntoView {
             let trans = selected_translation.get();
             if let Some(code) = trans {
                 leptos::task::spawn_local(async move {
-                    let Ok(book_list) = bible::list_books(&code).await else {
-                        return;
+                    let prepared = prepared_books
+                        .try_update_value(|prepared| prepared.take())
+                        .flatten()
+                        .filter(|(prepared_for, _)| *prepared_for == code);
+                    let book_list = match prepared {
+                        Some((_, list)) => list,
+                        None => match bible::list_books(&code).await {
+                            Ok(list) => list,
+                            Err(_) => return,
+                        },
                     };
                     // A newer translation switch may have started while this
                     // request was in flight. Discard a stale result so the
