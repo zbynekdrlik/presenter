@@ -3,7 +3,7 @@
 use super::{slide_to_json, str_field, u64_field};
 use crate::state::bible::BibleTriggerOverrides;
 use crate::state::AppState;
-use presenter_core::bible::resolver::{resolve_book_name, resolve_translation_code};
+use presenter_core::bible::resolver::resolve_translation_code;
 use presenter_core::bible::BookScope;
 use presenter_core::BibleReference;
 use serde_json::{json, Value};
@@ -128,13 +128,10 @@ pub(super) async fn load_bible_verses(
         .unwrap_or(&main_trans.code)
         .to_uppercase();
 
-    // Resolve the input book name to its canonical code so the
-    // query matches regardless of which Slovak naming tradition the
-    // AI used. Without this step the Roháček "1. Mojžišova" would
-    // miss SEB rows stored as "Genezis" and return 0 verses (#310).
-    // Falls back to raw book-name filter when the resolver has no
-    // answer.
-    let resolved_code = resolve_book_name(&book).map(|candidate| candidate.code);
+    // No code from us: `bible_passage_range` reads the translation's own
+    // stored name first and only on a miss asks the resolver, so
+    // "1. Mojžišova" still finds SEB's "Genezis" (#310) and a stored name
+    // the resolver would read as another book keeps working.
     // Single range query instead of per-verse round trips. The
     // repository returns only the verses that exist, so we walk
     // the requested range and fill gaps with explicit not-found
@@ -145,7 +142,7 @@ pub(super) async fn load_bible_verses(
         .bible_passage_range(
             &main_trans.code,
             &book,
-            resolved_code.as_deref(),
+            None,
             chapter,
             verse_start,
             verse_end,
