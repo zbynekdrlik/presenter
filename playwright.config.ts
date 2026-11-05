@@ -36,7 +36,7 @@ export default defineConfig({
       // Exclude tests tagged @video-codec — those need real Chrome (next
       // project below). Tagging is done in the test title:
       //   test("foo @video-codec", ...)
-      grepInvert: /@video-codec/,
+      grepInvert: /@video-codec|@perf-phone/,
     },
     {
       // Real-Chrome project for tests that depend on proprietary codecs
@@ -73,5 +73,11 @@ export default defineConfig({
       // chromium project for speed + console-clean assertions.
       grep: /@video-codec/,
     },
+    // #850 S8: the phone timing check, only when an instance is named
+    // (ui-perf.yml sets PERF_BASE_URL). It measures a running instance and is
+    // load-sensitive, so no ordinary run ever picks it up (the #386 pattern).
+    ...(process.env.PERF_BASE_URL
+      ? [{ name: "perf-phone", use: { ...devices["Desktop Chrome"] }, grep: /@perf-phone/ }]
+      : []),
   ],
 });

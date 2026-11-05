@@ -33,6 +33,7 @@ paths:
 - **Size budget:** `check_ui_size_budget.py` in the build job counts raw, brotli and gzip;
   `ui_size_budget.json` is the first measurement + 5 %. Raising it is a reviewed edit with the
   measured numbers in the commit body.
-- **Timing:** `@perf-phone` never runs per PR (`--grep-invert "@synthetic-ndi|@perf-phone"`);
+- **Timing:** `@perf-phone` never runs per PR: `chromium` excludes it and its own `perf-phone`
+  project exists only with `PERF_BASE_URL` set. `--retries=0`, a retry could pass a missed budget.
   `ui-perf.yml` measures a running instance on demand: after a payload or console release, SNV
   LAN at 3500 ms and the public host at 3000 ms (spec S8).

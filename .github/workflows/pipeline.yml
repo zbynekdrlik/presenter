@@ -821,7 +821,7 @@ jobs:
         # and run on the self-hosted `e2e-ndi` lane instead (this runner has
         # no NDI SDK). Without this, the required real-frame NDI test would
         # fail here for lack of a source.
-        run: npx playwright test --shard=${{ matrix.shard }} --grep-invert "@synthetic-ndi|@perf-phone" --reporter=blob
+        run: npx playwright test --shard=${{ matrix.shard }} --grep-invert "@synthetic-ndi" --reporter=blob
         env:
           CI: true
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries

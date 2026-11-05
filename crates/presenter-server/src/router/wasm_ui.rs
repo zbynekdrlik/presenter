@@ -116,9 +116,10 @@ fn accepts(accept: &str, coding: &str) -> bool {
 }
 
 fn is_zero_quality(parameter: &str) -> bool {
+    let parameter = parameter.trim();
     parameter
-        .trim()
         .strip_prefix("q=")
+        .or_else(|| parameter.strip_prefix("Q="))
         .and_then(|q| q.trim().parse::<f32>().ok())
         .is_some_and(|q| q <= 0.0)
 }
@@ -238,6 +239,10 @@ mod tests {
             Some("br")
         );
         assert_eq!(pick(&files, "a.js", "identity").unwrap().encoding, None);
+        assert_eq!(
+            pick(&files, "a.js", "br;Q=0, gzip").unwrap().encoding,
+            Some("gzip")
+        );
     }
 
     #[test]
