@@ -160,6 +160,50 @@ test("operator Settings is a native panel, not an iframe, with a single header",
   expect(errors).toEqual([]);
 });
 
+// #850 S8: on LAN http (six connections per host) the Bible console's book list
+// waited behind the requests of a Settings panel nobody had opened.
+test("operator Settings costs no request until it opens, then stays mounted", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  const settingsOnly = /\/integrations\/resolume\/hosts|\/integrations\/android-stage\/displays|\/listen\/mics|\/libraries\/trash/;
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (settingsOnly.test(path)) asked.push(path);
+  });
+
+  await page.goto(new URL("/ui/operator/bible", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+    "data-books-translation",
+    /.+/,
+  );
+  await page.waitForLoadState("networkidle");
+  await expect(page.locator('[data-view-panel="settings"] .settings__card')).toHaveCount(0);
+  expect(asked).toEqual([]);
+
+  // Opening it mounts the cards, and their lists load.
+  const settingsTab = page.locator('[data-role="view-toggle"][data-view="settings"]');
+  const hostsAsked = page.waitForRequest((r) =>
+    new URL(r.url()).pathname.endsWith("/integrations/resolume/hosts"),
+  );
+  await settingsTab.click();
+  await hostsAsked;
+  const firstCard = page.locator('[data-view-panel="settings"] .settings__card').first();
+  await expect(firstCard).toBeVisible();
+
+  // Leaving keeps the panel (a half-typed editor survives a view switch).
+  await firstCard.evaluate((el) => el.setAttribute("data-same-node", "1"));
+  await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+  await expect(page.locator("body")).toHaveAttribute("data-view", "bible");
+  await settingsTab.click();
+  await expect(firstCard).toHaveAttribute("data-same-node", "1");
+
+  expect(errors).toEqual([]);
+});
+
 test("operator Settings content scrolls to the last card within the panel", async ({
   page,
 }) => {
