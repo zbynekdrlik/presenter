@@ -1,0 +1,51 @@
+name: UI phone performance (on-demand)
+
+# #850 S8: a cold console on a throttled phone (9 / 1.5 Mbps, 150 ms RTT,
+# CPU x4) must be usable within the budget (3.5 s on the LAN, 3.0 s through
+# the public host). Timing is load-sensitive on the shared runner, so this is
+# workflow_dispatch ONLY (the #386 ndi-latency pattern) and measures a RUNNING
+# instance: dev after a push, SNV / PP / the public host after a release.
+# The test only reads (no show, no write).
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Instance to measure (e.g. http://10.77.9.205 or http://10.77.8.134:8080)"
+        required: true
+      budget_ms:
+        description: "Budget in ms (3500 LAN, 3000 public host)"
+        required: true
+        default: "3500"
+
+concurrency:
+  group: ui-perf
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  perf-phone:
+    name: Phone cold load + keystroke latency
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Measure
+        run: npx playwright test tests/e2e/perf-phone.spec.ts --grep "@perf-phone" --project chromium --reporter=line
+        env:
+          PERF_BASE_URL: ${{ inputs.base_url }}
+          PERF_BUDGET_MS: ${{ inputs.budget_ms }}
