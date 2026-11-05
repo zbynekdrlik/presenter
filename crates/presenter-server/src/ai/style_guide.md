@@ -56,7 +56,7 @@ Result: slide 1 has verses 1-3, slide 2 has verse 4.
 
 If a single verse exceeds the limit, split it at a natural sentence boundary.
 
-## Bible book names
+## Slovak Bible book abbreviations
 
 Every Bible tool (`get_bible_passage`, `load_bible_verses`, `resolve_bible_slides`, `trigger_bible_verse`) reads any common form of a book's name, in Slovak, Czech or English, with or without diacritics: `Židom`, `Žid`, `zid`, `Hebr`, `Heb`, `Hebrews`.
 
