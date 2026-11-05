@@ -502,8 +502,9 @@ impl AppState {
         reference: &BibleReference,
         overrides: BibleTriggerOverrides,
     ) -> anyhow::Result<BibleBroadcast> {
+        let translation_code = self.resolve_translation(translation_code).await?;
         let passage = self
-            .trigger_main_passage(translation_code, reference, overrides.main_text)
+            .trigger_main_passage(&translation_code, reference, overrides.main_text)
             .await?;
         let secondary = self
             .trigger_secondary_text(reference, overrides.translation_text)
@@ -555,8 +556,8 @@ impl AppState {
                 reference.verse_end,
             )
             .await?;
-        let translation = match range.first() {
-            Some(first) => first.translation.clone(),
+        let found = match range.first() {
+            Some(first) => first.clone(),
             // Fall back to exact match for single-verse passages
             None => {
                 let exact = self
@@ -566,15 +567,20 @@ impl AppState {
                 if main_text.is_none() {
                     return Ok(exact);
                 }
-                exact.translation
+                exact
             }
         };
         // The edited text from the client wins; otherwise combine the verses.
-        // The original reference already carries the correct range.
+        // The range is the request's; the book is what the translation calls it,
+        // never what was typed (`zid` shows as "Hebrejom").
         let text = main_text.unwrap_or_else(|| numbered_verse_text(&range));
+        let shown = BibleReference {
+            book: found.reference.book,
+            ..reference.clone()
+        };
         Ok(presenter_core::BiblePassage::new(
-            reference.clone(),
-            translation,
+            shown,
+            found.translation,
             text,
         ))
     }

@@ -3,6 +3,7 @@
 use super::{slide_to_json, str_field, u64_field};
 use crate::state::bible::BibleTriggerOverrides;
 use crate::state::AppState;
+use presenter_core::bible::resolver::{resolve_book_name, resolve_translation_code};
 use presenter_core::bible::BookScope;
 use presenter_core::BibleReference;
 use serde_json::{json, Value};
@@ -12,9 +13,12 @@ pub(super) async fn search_bible(
     state: &AppState,
 ) -> anyhow::Result<(String, String)> {
     let query = str_field(args, "query")?;
-    let translation = args["translation"].as_str();
+    let translation = match args["translation"].as_str() {
+        Some(named) => Some(state.resolve_translation(named).await?),
+        None => None,
+    };
     let passages = state
-        .search_bible_passages_cross(translation, &query, BookScope::All, 10)
+        .search_bible_passages_cross(translation.as_deref(), &query, BookScope::All, 10)
         .await?;
     let results: Vec<Value> = passages
         .iter()
@@ -34,7 +38,9 @@ pub(super) async fn get_bible_passage(
     args: &Value,
     state: &AppState,
 ) -> anyhow::Result<(String, String)> {
-    let translation = str_field(args, "translation")?;
+    let translation = state
+        .resolve_translation(&str_field(args, "translation")?)
+        .await?;
     let book = str_field(args, "book")?;
     let chapter = u64_field(args, "chapter")? as u16;
     let verse_start = u64_field(args, "verse_start")? as u16;
@@ -101,9 +107,11 @@ pub(super) async fn load_bible_verses(
 
     // Resolve the translation to get its short code for reference labels.
     let translations = state.list_bible_translations().await?;
+    let listed: Vec<&str> = translations.iter().map(|t| t.code.as_str()).collect();
+    let named = resolve_translation_code(&translation, &listed);
     let main_trans = match translations
         .iter()
-        .find(|t| t.code.eq_ignore_ascii_case(&translation))
+        .find(|t| named.as_deref() == Some(t.code.as_str()))
     {
         Some(t) => t.clone(),
         None => {
@@ -124,10 +132,9 @@ pub(super) async fn load_bible_verses(
     // query matches regardless of which Slovak naming tradition the
     // AI used. Without this step the Roháček "1. Mojžišova" would
     // miss SEB rows stored as "Genezis" and return 0 verses (#310).
-    // Falls back to raw book-name filter when the alias map has no
-    // entry — preserves behavior for languages without canonical
-    // coverage.
-    let resolved_code = presenter_core::bible::canonical_book_by_name(&book).map(|m| m.code);
+    // Falls back to raw book-name filter when the resolver has no
+    // answer.
+    let resolved_code = resolve_book_name(&book).map(|candidate| candidate.code);
     // Single range query instead of per-verse round trips. The
     // repository returns only the verses that exist, so we walk
     // the requested range and fill gaps with explicit not-found
@@ -138,7 +145,7 @@ pub(super) async fn load_bible_verses(
         .bible_passage_range(
             &main_trans.code,
             &book,
-            resolved_code,
+            resolved_code.as_deref(),
             chapter,
             verse_start,
             verse_end,
@@ -198,7 +205,9 @@ pub(super) async fn resolve_bible_slides(
     state: &AppState,
     default_char_limit: u32,
 ) -> anyhow::Result<(String, String)> {
-    let translation = str_field(args, "translation")?;
+    let translation = state
+        .resolve_translation(&str_field(args, "translation")?)
+        .await?;
     let book = str_field(args, "book")?;
     let chapter = u64_field(args, "chapter")? as u16;
     let verse_start = u64_field(args, "verse_start")? as u16;

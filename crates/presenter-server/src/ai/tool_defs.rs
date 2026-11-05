@@ -165,7 +165,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string", "description": "Translation code (e.g. slk-seb)"},
-                    "book": {"type": "string", "description": "Full book name (e.g. Židom)"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"}
@@ -190,7 +190,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string", "description": "Translation code (e.g. slk-seb)"},
-                    "book": {"type": "string", "description": "Full book name (e.g. Ján)"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"}
@@ -205,7 +205,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string", "description": "Translation code"},
-                    "book": {"type": "string", "description": "Full book name"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"},
@@ -238,7 +238,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "translation": {"type": "string"},
-                    "book": {"type": "string"},
+                    "book": {"type": "string", "description": "Any book form (Židom, Hebr, Heb, Hebrews)"},
                     "chapter": {"type": "integer"},
                     "verse_start": {"type": "integer"},
                     "verse_end": {"type": "integer"}

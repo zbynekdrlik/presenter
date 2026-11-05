@@ -94,6 +94,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/bible/search", get(bible::browse::search_bible_passages))
         .route("/bible/passage", get(bible::browse::get_bible_passage))
+        .route("/bible/lookup", get(bible::lookup::bible_lookup))
         .route("/bible/resolve", post(bible::resolve::resolve_bible_slides))
         .route(
             "/bible/translations/refresh",

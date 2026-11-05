@@ -10,13 +10,16 @@
 
 use super::AppState;
 use crate::bible_remote;
+use presenter_core::bible::resolver::{resolve_book_name, BookCandidate};
 use presenter_core::bible::{
-    canonical_book_by_code, canonical_book_by_name, BibleBookCanonical, BibleBookChapterSummary,
-    BookScope,
+    canonical_book_by_code, BibleBookCanonical, BibleBookChapterSummary, BookScope,
 };
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 
 pub(crate) mod study;
+
+/// A typed name in a log line is cut here: it is client input.
+const TYPED_NAME_MAX_CHARS: usize = 120;
 
 impl AppState {
     /// The installed translations, then the remote ones. `eng-nlt` is listed
@@ -68,10 +71,7 @@ impl AppState {
         reference: &BibleReference,
     ) -> anyhow::Result<Option<BiblePassage>> {
         if !bible_remote::is_remote_translation(translation_code) {
-            return self
-                .repository
-                .find_bible_passage(translation_code, reference)
-                .await;
+            return self.find_local_passage(translation_code, reference).await;
         }
         if reference.verse_start != reference.verse_end {
             return Ok(None);
@@ -106,16 +106,77 @@ impl AppState {
                 .remote_passage_range(book, book_code, chapter, verse_start, verse_end)
                 .await;
         }
-        self.repository
+        // A code, else the translation's own name first (#850 §5.8), so whatever
+        // worked keeps working.
+        let given = given_code(book_code);
+        let rows = self
+            .repository
             .bible_passage_range(
                 translation_code,
                 book,
-                book_code,
+                given,
                 chapter,
                 verse_start,
                 verse_end,
             )
-            .await
+            .await?;
+        if given.is_some() || !rows.is_empty() {
+            return Ok(rows);
+        }
+        let Some(candidate) = resolve_book_name(book) else {
+            return Ok(rows);
+        };
+        let rows = self
+            .repository
+            .bible_passage_range(
+                translation_code,
+                book,
+                Some(candidate.code.as_str()),
+                chapter,
+                verse_start,
+                verse_end,
+            )
+            .await?;
+        if !rows.is_empty() {
+            log_typed_book(book, &candidate);
+        }
+        Ok(rows)
+    }
+
+    /// One row of the repository: under the translation's own name, else
+    /// under the book the typed name means (#850 §5.8).
+    async fn find_local_passage(
+        &self,
+        translation_code: &str,
+        reference: &BibleReference,
+    ) -> anyhow::Result<Option<BiblePassage>> {
+        if given_code(reference.book_code.as_deref()).is_some() {
+            return self
+                .repository
+                .find_bible_passage(translation_code, reference)
+                .await;
+        }
+        let mut wanted = reference.clone();
+        wanted.book_code = None;
+        let stored = self
+            .repository
+            .find_bible_passage(translation_code, &wanted)
+            .await?;
+        if stored.is_some() {
+            return Ok(stored);
+        }
+        let Some(candidate) = resolve_book_name(&reference.book) else {
+            return Ok(None);
+        };
+        wanted.book_code = Some(candidate.code.clone());
+        let found = self
+            .repository
+            .find_bible_passage(translation_code, &wanted)
+            .await?;
+        if found.is_some() {
+            log_typed_book(&reference.book, &candidate);
+        }
+        Ok(found)
     }
 
     /// Books + chapter verse counts of a translation (the book picker).
@@ -205,12 +266,29 @@ impl AppState {
     }
 }
 
-/// The canonical book of a code (`"1JN"`) or, without a code, of a name in
-/// any supported language (`"1 John"`, `"1 Ján"`).
+/// A book code that says something; a blank one counts as none.
+fn given_code(book_code: Option<&str>) -> Option<&str> {
+    book_code.map(str::trim).filter(|code| !code.is_empty())
+}
+
+/// One line when a typed name was not the translation's own (`zid` → HEB).
+fn log_typed_book(name: &str, candidate: &BookCandidate) {
+    let name: String = name.chars().take(TYPED_NAME_MAX_CHARS).collect();
+    tracing::info!(
+        target: "presenter::bible::name",
+        name = name.as_str(),
+        code = candidate.code.as_str(),
+        r#match = ?candidate.kind,
+        "bible book name resolved"
+    );
+}
+
+/// The canonical book of a code (`"1JN"`) or, without a code, of whatever a
+/// person calls it (`"1 John"`, `"1 Ján"`, `"zid"`).
 pub(super) fn canonical_book(book: &str, book_code: Option<&str>) -> Option<BibleBookCanonical> {
-    match book_code.map(str::trim).filter(|code| !code.is_empty()) {
+    match given_code(book_code) {
         Some(code) => canonical_book_by_code(code),
-        None => canonical_book_by_name(book),
+        None => canonical_book_by_code(&resolve_book_name(book)?.code),
     }
 }
 

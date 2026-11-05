@@ -20,8 +20,8 @@ paths:
   ordinal, then index. They are unique per **(key, ordinal, book)**; the same (key, book) repeats
   across ordinals on purpose (`kings` → 1KI with and without `1`; `kralov` → 1KI as `1 Kráľov`
   and as Roháček's `Tretia kniha Kráľov`).
-- `canonical_book_by_name` (the importer `repository/bible/import.rs`, the AI `load_bible_verses`
-  tool, `state/bible_source.rs`) stays exact. The fuzzy resolver must never assign codes at ingest.
+- `canonical_book_by_name` (the importer `repository/bible/import.rs`) stays exact. The fuzzy
+  resolver must never assign codes at ingest.
 
 ## Two folds, one behaviour
 
@@ -83,3 +83,18 @@ Jonah, Job …) are skipped by the generator.
 - `counted()` lives here (`hint.rs`); presenter-ui's `state/bible_range.rs` imports it, so the
   Bible page hint and the resolver hints share one wording.
 - The structure fixtures are `GET /bible/books` snapshots of dev (= prod = PP).
+
+## On the server (A2a, spec §5.8)
+
+- **One choke point:** `AppState::bible_passage_range` and `find_bible_passage`
+  (`state/bible_source.rs`). A code wins; else the translation's own stored name; only a miss asks
+  `resolve_book_name`. So a stored name keeps working even if the resolver would read it otherwise.
+- `presenter::bible::name` logs only when the resolver found the verses. It has no `caller` field
+  from the spec: the #850 O1 request span already prefixes the line with the path.
+- `AppState::resolve_translation` (`state/bible_lookup.rs`): `KJV`, `seb`, `slk-seb`; none → 404.
+  `trigger_bible_passage` calls it, so `/bible/trigger`, Companion and the AI trigger all get it.
+- **A legacy broadcast shows the stored book name, never the typed one.** The request's code and
+  number stay as sent (a request without a code has none), so `zid` shows as `Hebrejom` on the wall.
+- `GET /bible/passage` for an unknown translation is now 404; an unknown book is still 200 `null`.
+- `bible_book_chapter_summaries` = canonical order (`book_number`): `/bible/books`, the console and
+  the old book list. Never rely on the first book being alphabetical.

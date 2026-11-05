@@ -700,3 +700,48 @@ fn make_slide_keeps_normal_text_and_blanks_missing_or_oversized_fields() {
     assert_eq!(slide.content.stage.value(), "", "a missing field is empty");
     assert_eq!(slide.order, 3);
 }
+
+/// #850 S2: the four verse tools read `Hebr` and a translation's short code.
+#[tokio::test]
+async fn bible_tools_read_any_form_of_the_book_and_the_short_translation_code() {
+    use presenter_core::bible::BibleIngestionBatch;
+    use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+    let state = AppState::in_memory().await.unwrap();
+    let translation = BibleTranslation::new("slk-seb", "SEB", "sk");
+    let reference = BibleReference::new_with_code("Hebrejom", "HEB", 58, 11, 1, 1).unwrap();
+    let passage = BiblePassage::new(reference, translation.clone(), "Viera".to_string());
+    let batch = BibleIngestionBatch::new(translation, vec![passage]).unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .unwrap();
+    let args = json!({
+        "translation": "SEB", "book": "Hebr", "chapter": 11, "verse_start": 1, "verse_end": 1,
+    })
+    .to_string();
+
+    let (body, _) = execute_tool("get_bible_passage", &args, &state, 320)
+        .await
+        .unwrap();
+    assert!(body.contains("Hebrejom 11:1"), "get_bible_passage: {body}");
+    let (body, _) = execute_tool("load_bible_verses", &args, &state, 320)
+        .await
+        .unwrap();
+    assert!(
+        body.contains("Hebrejom 11:1 (SEB)"),
+        "load_bible_verses: {body}"
+    );
+    assert!(body.contains("Viera"), "load_bible_verses: {body}");
+    let (body, _) = execute_tool("resolve_bible_slides", &args, &state, 320)
+        .await
+        .unwrap();
+    assert!(body.contains("Viera"), "resolve_bible_slides: {body}");
+    let (body, _) = execute_tool("trigger_bible_verse", &args, &state, 320)
+        .await
+        .unwrap();
+    assert!(body.contains("true"), "trigger_bible_verse: {body}");
+    let active = state.active_bible_broadcast().await.unwrap();
+    assert_eq!(active.passage.reference.book, "Hebrejom");
+}
