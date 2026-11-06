@@ -71,6 +71,32 @@ fn on_verse_tap(s: Study, verse: u16) {
     }
 }
 
+/// A tap on a verse's text highlights it, so the eye knows where it is (owner,
+/// 2026-11-06); a second tap lets go. No history entry: it is the same place.
+/// With the verse sheet open the tap grows the selection like the number; a
+/// word's own sheet keeps the highlight under it.
+fn on_text_tap(s: Study, verse: u16, on_word: bool) {
+    if !chapter_settled_untracked(s) {
+        return;
+    }
+    let route = s.route.get_untracked();
+    match route.sheet {
+        Some(StudySheet::Actions) => {
+            if !on_word {
+                on_verse_tap(s, verse);
+            }
+        }
+        None | Some(StudySheet::Word) => {
+            let again = route.verses == Some((verse, verse)) && !on_word;
+            let verses = (!again).then_some((verse, verse));
+            if route.verses != verses {
+                nav::replace(s, route.with_verses(verses));
+            }
+        }
+        Some(_) => {}
+    }
+}
+
 pub(super) fn chapter_settled_untracked(s: Study) -> bool {
     leptos::prelude::untrack(|| chapter_settled(s))
 }
@@ -210,7 +236,12 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
                                 >
                                     {number}
                                 </button>
-                                <VerseBody s=s verse=verse class="study-verse__text" />
+                                <VerseBody
+                                    s=s
+                                    verse=verse
+                                    class="study-verse__text"
+                                    on_tap=Callback::new(move |on_word| on_text_tap(s, number, on_word))
+                                />
                             </div>
                         }
                     }

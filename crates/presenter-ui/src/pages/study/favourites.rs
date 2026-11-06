@@ -20,12 +20,24 @@ fn switch(s: Study, code: &str) {
     }
     route.translation = Some(code.to_string());
     let plan = match route.view {
-        StudyView::Reader { .. } => {
-            scroll::verse_in_view(s).map_or(ScrollPlan::Keep, ScrollPlan::Verse)
-        }
+        StudyView::Reader { .. } => keep_in_place(s, route.verses.map(|(first, _)| first)),
         _ => ScrollPlan::Top,
     };
     nav::go(s, route, plan);
+}
+
+/// The verse the eye is on stays where it is on screen: the highlighted one
+/// while it shows, else the first verse at the top (owner, 2026-11-06).
+fn keep_in_place(s: Study, highlighted: Option<u16>) -> ScrollPlan {
+    let held = highlighted
+        .and_then(|verse| Some((verse, scroll::verse_offset(s, verse)?)))
+        .or_else(|| {
+            let verse = scroll::verse_in_view(s)?;
+            Some((verse, scroll::verse_offset(s, verse)?))
+        });
+    held.map_or(ScrollPlan::Keep, |(verse, offset)| {
+        ScrollPlan::VerseAt(verse, offset)
+    })
 }
 
 #[component]

@@ -128,13 +128,16 @@ fn inline_view(
     }
 }
 
-/// `class` = the reader's or compare's; `kind` = compare's `data-kind`.
+/// `class` = the reader's or compare's; `kind` = compare's `data-kind`;
+/// `on_tap` = the reader's: a tap on the text, told whether it hit a word
+/// (that word's sheet opens after it).
 #[component]
 pub(super) fn VerseBody(
     s: Study,
     verse: StudyVerse,
     class: &'static str,
     #[prop(optional)] kind: Option<&'static str>,
+    #[prop(optional)] on_tap: Option<Callback<bool>>,
 ) -> impl IntoView {
     let number = verse.verse;
     let active = Memo::new(move |_| {
@@ -171,7 +174,11 @@ pub(super) fn VerseBody(
         if text_selected() {
             return;
         }
-        if let Some(word) = tapped_word(&ev) {
+        let word = tapped_word(&ev);
+        if let Some(on_tap) = on_tap {
+            on_tap.run(word.is_some());
+        }
+        if let Some(word) = word {
             ev.stop_propagation();
             word_sheet::open(s, word);
         }

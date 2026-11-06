@@ -49,6 +49,18 @@ preparation (the sermon views are in `sermon-prep.md`).
   in a `requestAnimationFrame` once that chapter (or that search) is on screen. `study.lastVerse` holds
   `<chapter key>|<verse>`, written for the chapter ON SCREEN and read only for that chapter: a saved
   verse is ignored anywhere else, and a link's `v=` wins over it (a reload keeps the place).
+- **A tap on a verse's text highlights it** (`reader::on_text_tap`, `v=<n>` by `nav::replace`, no
+  history entry; a second tap lets go; with the verse sheet open it grows the selection like the
+  number; a KJV word tap highlights AND opens the word sheet, `VerseBody`'s `on_tap` runs first).
+  Owner 2026-11-06: "aby bolo jasné, na ktorý sa fokusujem".
+- **A translation switch keeps the eye's verse at its screen offset** (`ScrollPlan::VerseAt`): the
+  highlighted verse while it shows, else `verse_in_view`. `verse_in_view` reads 2 px below the
+  landing gap (`SLACK_PX`): a landed verse sits at the gap and the verse before ends there plus a
+  fraction of a pixel, so without the slack every switch stepped one verse back (20 → 16 in seven).
+- **Its own app:** manifest + icons under `/ui/study/` (open book, `study_icons/`, not the tablet's
+  "B"), `<link rel=manifest crossorigin="use-credentials">`: a cookie-less manifest fetch behind
+  Cloudflare Access (`prsnv.newlevel.media`) gets the login page and Android offers no install. Dev2
+  and the church sit on the Access bypass IP, so only a phone off-site shows that case.
 - **A verse number works only on the route's chapter** (`reader::chapter_settled`): during a load
   the URL has moved on and the old text is on screen, so numbers are disabled and the sheet reads
   nothing from a chapter the route does not name.
