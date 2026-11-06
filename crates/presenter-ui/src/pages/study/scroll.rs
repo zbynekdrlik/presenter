@@ -229,7 +229,7 @@ mod tests {
         // CI: the highlighted verse went 171.8 -> 174.8 px in three switches.
         // Each switch reads the offset, the new text moves the verse, the
         // landing puts it back; the fraction is the new layout's.
-        for start in [171.796875, 8.4, 0.5, -12.6] {
+        for start in [171.796875, 8.4, 0.5, -0.25, -12.6] {
             let kept = screen_offset(start);
             let mut top: f64 = start;
             for layout_shift in [1234.796875, -310.5, 88.25, 2000.75, -77.125] {
@@ -239,6 +239,15 @@ mod tests {
                 assert_eq!(screen_offset(top), kept, "from {start} via {layout_shift}");
             }
         }
+    }
+
+    #[test]
+    fn a_verse_a_fraction_above_the_top_is_kept_at_the_top() {
+        // CI: a verse scrolled to the top sat at -0.22 px; read as -1 it landed
+        // above the reader's top after every switch.
+        assert_eq!(screen_offset(-0.21875), 0);
+        assert_eq!(screen_offset(-0.734375), 0);
+        assert_eq!(screen_offset(-1.0), -1);
     }
 
     #[test]

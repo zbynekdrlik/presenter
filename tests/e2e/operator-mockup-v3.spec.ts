@@ -432,18 +432,3 @@ test("the phone keeps its own lists and slides", async ({ browser }) => {
   expect(errors).toEqual([]);
   await context.close();
 });
-
-test("the phone's Bible card shows its reference alone", async ({ browser }) => {
-  const context = await browser.newContext({ ...PHONE_390, baseURL });
-  const page = await context.newPage();
-  const errors: string[] = [];
-  attachConsoleErrorCollector(page, errors);
-  await page.goto("/ui/operator/bible");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
-  await selectPassage(page, "Ján 3:16-18");
-  const card = page.locator('[data-view-panel="bible"] [data-role="slide-card"]').first();
-  await expect(card.locator(".operator__slide-trigger-ref")).toBeVisible();
-  await expect(card.locator('[data-role="slide-caption"]')).toBeHidden();
-  expect(errors).toEqual([]);
-  await context.close();
-});

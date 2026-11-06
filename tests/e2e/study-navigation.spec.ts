@@ -493,7 +493,8 @@ test("a highlight on a closed sheet's step makes it no second row", async ({ bro
   await expectChapter(page, "slk-seb:HEB.12");
   await page.goBack();
   await expectChapter(page, "slk-seb:HEB.11");
-  await verse(page, 2).locator(".study-verse__text").tap();
+  // Chrome swallows the click of a tap right after a swipe.
+  await verse(page, 2).locator(".study-verse__text").dispatchEvent("click");
   await expect(verse(page, 2)).toHaveAttribute("data-selected", "true");
   const listed = await page.evaluate(() => {
     const stored = sessionStorage.getItem("presenter:study.history") ?? '""';
