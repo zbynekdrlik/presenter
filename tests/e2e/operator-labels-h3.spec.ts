@@ -146,12 +146,12 @@ function englishIn(texts: string[]): string[] {
  *  and ⋮ menus, and the work area's top row (32 px: the song title row with
  *  "+ Snímka" and the "Snímok v riadku" stepper, the same stepper on Biblia).
  *  operator-mockup-v3.spec.ts pins those sizes. */
-const MOCKUP_DENSE = [
-  '[data-view-panel="worship"] .operator__group',
-  '[data-view-panel="worship"] .operator__catalog-bottom',
-  ".operator__worktop",
-  ".operator__slide-columns",
-].join(", ");
+const MOCKUP_DENSE: { selector: string; min: number }[] = [
+  { selector: 'body:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group', min: 26 },
+  { selector: 'body:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-bottom', min: 26 },
+  { selector: 'body:not([data-shell="phone"]) .operator__worktop', min: 32 },
+  { selector: 'body:not([data-shell="phone"]) .operator__slide-columns', min: 32 },
+];
 
 /** Visible buttons / selects / fields below `min` px, outside the header row,
  *  the preview picture and the mockup's dense rows. */
@@ -162,8 +162,13 @@ function smallControls(page: Page, min: number) {
       .filter((el) => el.getClientRects().length > 0)
       .filter((el) => !(el instanceof HTMLInputElement && skip.includes(el.type)))
       .filter((el) => !el.closest(".operator__stage-preview"))
-      .filter((el) => !el.closest(dense))
-      .filter((el) => el.getBoundingClientRect().height < minHeight - 0.5)
+      .filter((el) => {
+        // A dense mockup area lowers the floor to ITS approved size only,
+        // so a control shrinking below that still fails.
+        const area = dense.find((d) => el.closest(d.selector));
+        const floor = area ? area.min : minHeight;
+        return el.getBoundingClientRect().height < floor - 0.5;
+      })
       .map(
         (el) =>
           `${el.tagName.toLowerCase()}[${el.dataset.role ?? ""}] "${(el.innerText || el.getAttribute("aria-label") || "").trim().slice(0, 30)}" ${el.getBoundingClientRect().height.toFixed(1)} px`,

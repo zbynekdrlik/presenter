@@ -132,9 +132,22 @@ fn step_for_wheel(container: &web_sys::HtmlElement) -> f64 {
     if card_height <= 0.0 {
         return DEFAULT_WHEEL_STEP_PX;
     }
-    // Grid row gap from operator.css `.operator__slides`: `gap: 0.9rem`.
-    // 0.9rem at 16px base = 14.4px. Hardcoded — if CSS changes, update here.
-    card_height + 14.4
+    card_height + row_gap(container)
+}
+
+/// The grid's computed row gap in px (desktop 10 px since mockup v3, phone
+/// differs) — read from the layout, never a copy of the CSS value.
+fn row_gap(container: &web_sys::HtmlElement) -> f64 {
+    web_sys::window()
+        .and_then(|window| window.get_computed_style(container).ok().flatten())
+        .and_then(|style| style.get_property_value("row-gap").ok())
+        .and_then(|gap| parse_px(&gap))
+        .unwrap_or(0.0)
+}
+
+/// "10px" → 10.0; "normal" or anything unparsable → None.
+fn parse_px(value: &str) -> Option<f64> {
+    value.trim().strip_suffix("px")?.trim().parse::<f64>().ok()
 }
 
 /// Cap a wheel event's vertical delta to one row of cards (`step`) per event,
@@ -216,7 +229,7 @@ pub(super) fn setup_scroll_on_song_shown(ctx: &AppContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::cap_wheel_delta;
+    use super::{cap_wheel_delta, parse_px};
 
     #[test]
     fn zero_delta_returns_zero() {
@@ -251,5 +264,13 @@ mod tests {
     #[test]
     fn large_negative_delta_is_capped_at_negative_step() {
         assert_eq!(cap_wheel_delta(-500.0, 90.0), -90.0);
+    }
+
+    #[test]
+    fn computed_px_values_parse_and_keywords_do_not() {
+        assert_eq!(parse_px("10px"), Some(10.0));
+        assert_eq!(parse_px(" 14.4px "), Some(14.4));
+        assert_eq!(parse_px("normal"), None);
+        assert_eq!(parse_px(""), None);
     }
 }
