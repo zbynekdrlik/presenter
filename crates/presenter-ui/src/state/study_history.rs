@@ -104,10 +104,12 @@ impl StudyHistory {
         }
     }
 
-    /// The URL of the entry behind the current one.
-    pub fn previous_url(&self) -> Option<&str> {
-        let behind = self.offset().checked_sub(1)?;
-        self.entries.get(behind).map(|entry| entry.url.as_str())
+    /// Whether the run of entries right behind the current one, all of this
+    /// label, holds a row for it.
+    pub fn has_row_behind(&self, label: &str) -> bool {
+        self.entries[..self.offset()]
+            .last()
+            .is_some_and(|entry| entry.label == label && entry.listed)
     }
 
     /// Whether the current entry is a row of the long-press list.
@@ -345,12 +347,37 @@ mod tests {
         assert_eq!(history.back_list().len(), 1);
     }
 
+    fn labelled(label: &str, listed: bool) -> HistoryEntry {
+        HistoryEntry {
+            listed,
+            ..place(label)
+        }
+    }
+
     #[test]
-    fn previous_url_is_the_entry_behind() {
+    fn a_row_behind_is_found_past_the_sheets_over_the_same_place() {
         let mut history = walked(&["a"]);
-        assert_eq!(history.previous_url(), None);
-        history.push(place("b"));
-        assert_eq!(history.previous_url(), Some("/ui/study?p=a"));
+        assert!(!history.has_row_behind("a"));
+        history.push(labelled("a", false));
+        assert!(history.has_row_behind("a"));
+        // A second sheet stacked on the first (wide screen, sheet not modal).
+        history.push(labelled("a", false));
+        assert!(history.has_row_behind("a"));
+    }
+
+    #[test]
+    fn a_row_of_the_same_place_past_another_place_does_not_count() {
+        let mut history = walked(&["a", "b"]);
+        history.push(labelled("a", false));
+        assert!(!history.has_row_behind("a"));
+    }
+
+    #[test]
+    fn a_list_started_on_sheets_has_no_row_behind() {
+        let mut history = StudyHistory::default();
+        history.push(labelled("a", false));
+        history.push(labelled("a", false));
+        assert!(!history.has_row_behind("a"));
     }
 
     #[test]
