@@ -73,6 +73,10 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **Verse numbers are a 44 px gutter, not superscripts:** a number is a control (T3).
 - **A translation lacking a place** answers no slides: `Chapter::Missing`, and `step_chapter` walks to
   its nearest chapter by the canonical book number, so the reader never gets stuck.
+- **The field keeps an opened reference** (`Field::opened`): while that chapter is read, in any
+  translation, the typed text stays so "2kor 5" is fixed to "1kor 5" in place (owner, 2026-11-06);
+  another chapter, view or Back empties it (not while the field has focus). One `FieldPlace` effect
+  owns the field's text for both this and the search query.
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.

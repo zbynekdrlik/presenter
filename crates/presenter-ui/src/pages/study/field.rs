@@ -21,6 +21,18 @@ struct Field {
     input: RwSignal<String>,
     focused: RwSignal<bool>,
     element: NodeRef<Input>,
+    /// The chapter the field's reference opened: while it is read (in any
+    /// translation) the text stays, so a slip is fixed in place (owner,
+    /// 2026-11-06: "2kor" could not be corrected to "1kor").
+    opened: StoredValue<Option<(String, u16)>>,
+}
+
+/// What the field shows depends on where the page is.
+#[derive(Clone, PartialEq)]
+enum FieldPlace {
+    Search(String),
+    Reader(String, u16),
+    Other,
 }
 
 impl Field {
@@ -43,7 +55,8 @@ impl Field {
         let plan = target
             .verses
             .map_or(ScrollPlan::Top, |(start, _)| ScrollPlan::Verse(start));
-        self.input.set(String::new());
+        self.opened
+            .set_value(Some((target.book.clone(), target.chapter)));
         self.leave();
         nav::go(self.s, route, plan);
     }
@@ -86,6 +99,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         input: RwSignal::new(String::new()),
         focused: RwSignal::new(false),
         element: NodeRef::new(),
+        opened: StoredValue::new(None),
     };
     let suggestions = Memo::new(move |_| {
         let input = f.input.get();
@@ -98,20 +112,39 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
             None => suggest_unresolved(&input),
         }
     });
-    // The search view's words stay in the field; leaving them empties it.
-    let shown_query = Memo::new(move |_| {
+    // The search view's words stay in the field, and so does the reference
+    // while its chapter is read; leaving either empties it.
+    let place = Memo::new(move |_| {
         s.route.with(|route| match &route.view {
-            StudyView::Search { query, .. } => Some(query.clone()),
-            _ => None,
+            StudyView::Search { query, .. } => FieldPlace::Search(query.clone()),
+            StudyView::Reader { book, chapter } => FieldPlace::Reader(book.clone(), *chapter),
+            _ => FieldPlace::Other,
         })
     });
-    Effect::new(move |previous: Option<bool>| {
-        let query = shown_query.get();
-        let searching = query.is_some();
-        if searching || previous == Some(true) {
-            f.input.set(query.unwrap_or_default());
+    Effect::new(move |previous: Option<FieldPlace>| {
+        let now = place.get();
+        let kept = match &now {
+            FieldPlace::Search(query) => {
+                f.input.set(query.clone());
+                f.opened.set_value(None);
+                return now;
+            }
+            FieldPlace::Reader(book, chapter) => f.opened.with_value(|opened| {
+                opened
+                    .as_ref()
+                    .is_some_and(|(b, c)| b == book && c == chapter)
+            }),
+            FieldPlace::Other => false,
+        };
+        let held =
+            matches!(previous, Some(FieldPlace::Search(_))) || f.opened.with_value(Option::is_some);
+        if !kept && held {
+            f.opened.set_value(None);
+            if !f.focused.get_untracked() {
+                f.input.set(String::new());
+            }
         }
-        searching
+        now
     });
     // iOS autocorrect turns "zid" into "kid" (console rule).
     Effect::new(move |_| {
