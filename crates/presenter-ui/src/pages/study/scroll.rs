@@ -134,7 +134,12 @@ pub(super) fn verse_offset(s: Study, verse: u16) -> Option<i32> {
     let frame = scroller.get_bounding_client_rect();
     let found = verse_element(&scroller, verse)?.get_bounding_client_rect();
     let shows = found.bottom() > frame.top() && found.top() < frame.bottom();
-    shows.then(|| (found.top() - frame.top()).round() as i32)
+    shows.then(|| screen_offset(found.top() - frame.top()))
+}
+
+/// The whole-pixel offset kept for a verse's fractional top.
+fn screen_offset(top: f64) -> i32 {
+    top.round() as i32
 }
 
 /// The history entry being left keeps its scroll offset for Back.
@@ -206,7 +211,7 @@ pub(super) fn saved_verse(route: &StudyRoute) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{first_below, scroll_step, SLACK_PX, TOP_GAP_PX};
+    use super::{first_below, screen_offset, scroll_step, SLACK_PX, TOP_GAP_PX};
 
     #[test]
     fn a_landing_step_never_leaves_the_verse_above_its_line() {
@@ -215,6 +220,23 @@ mod tests {
         assert_eq!(scroll_step(412.53), 412);
         assert_eq!(scroll_step(412.0), 412);
         assert_eq!(scroll_step(-0.25), -1);
+    }
+
+    #[test]
+    fn switching_translations_never_walks_the_verse_down_the_screen() {
+        // CI: the highlighted verse went 171.8 -> 174.8 px in three switches.
+        // Each switch reads the offset, the new text moves the verse, the
+        // landing puts it back; the fraction is the new layout's.
+        for start in [171.796875, 8.4, 0.5, -12.6] {
+            let kept = screen_offset(start);
+            let mut top: f64 = start;
+            for layout_shift in [1234.796875, -310.5, 88.25, 2000.75, -77.125] {
+                let offset = screen_offset(top);
+                let moved = top + layout_shift;
+                top = moved - f64::from(scroll_step(moved - f64::from(offset)));
+                assert_eq!(screen_offset(top), kept, "from {start} via {layout_shift}");
+            }
+        }
     }
 
     #[test]
