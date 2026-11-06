@@ -63,8 +63,42 @@ test("zid 11 1 + Enter opens the reader at the verse, highlighted", async ({ bro
   await expect(page).toHaveURL(/t=slk-seb&p=HEB\.11&v=1$/);
   await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
   await expect(verse(page, 2)).toHaveAttribute("data-selected", "false");
-  await expect(field(page)).toHaveValue("");
+  // The reference stays, so a slip is fixed in place (owner, 2026-11-06).
+  await expect(field(page)).toHaveValue("zid 11 1");
   await expect(suggest(page)).toHaveCount(0);
+  await finish(opened);
+});
+
+test("a wrong book is fixed in the field; another chapter empties it (owner, 2026-11-06)", async ({
+  browser,
+}) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=GEN.1", "slk-seb:GEN.1");
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("2 kor 5");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:2CO.5");
+  await expect(field(page)).toHaveValue("2 kor 5");
+  // "2kor" -> "1kor": one character, Enter again.
+  await field(page).tap();
+  await field(page).press("Home");
+  await field(page).press("Delete");
+  await field(page).type("1");
+  await expect(field(page)).toHaveValue("1 kor 5");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:1CO.5");
+  await expect(field(page)).toHaveValue("1 kor 5");
+  // A translation switch is the same place: the reference stays.
+  await page.locator('[data-role="study-fav"][data-translation="slk-roh"]').tap();
+  await expectChapter(page, "slk-roh:1CO.5");
+  await expect(field(page)).toHaveValue("1 kor 5");
+  // Turning the chapter leaves that reference behind.
+  await page.locator('[data-role="study-next-chapter"]').tap();
+  await expectChapter(page, "slk-roh:1CO.6");
+  await expect(field(page)).toHaveValue("");
+  await page.goBack();
+  await expectChapter(page, "slk-roh:1CO.5");
+  await expect(field(page)).toHaveValue("");
   await finish(opened);
 });
 
