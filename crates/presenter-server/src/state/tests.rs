@@ -650,7 +650,14 @@ async fn trigger_bible_passage_publishes_event_and_state() {
 
     let mut rx = state.live_hub().subscribe();
     let broadcast = state
-        .trigger_bible_passage("test", &reference, Default::default())
+        .trigger_bible_passage(
+            "test",
+            &reference,
+            Default::default(),
+            crate::state::bible_show_log::BibleShowOrigin::internal(
+                crate::state::bible_show_log::BibleShowSource::Trigger,
+            ),
+        )
         .await
         .unwrap();
     assert_eq!(broadcast.passage.reference, reference);
@@ -710,7 +717,14 @@ async fn trigger_bible_passage_without_secondary_text_has_no_secondary_reference
         translation_text: Some(String::new()),
     };
     state
-        .trigger_bible_passage("test", &reference, overrides)
+        .trigger_bible_passage(
+            "test",
+            &reference,
+            overrides,
+            crate::state::bible_show_log::BibleShowOrigin::internal(
+                crate::state::bible_show_log::BibleShowSource::Trigger,
+            ),
+        )
         .await
         .unwrap();
 

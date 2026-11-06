@@ -1,6 +1,7 @@
 // extracted protocol types and parsing
 use super::variables::*;
 use super::*;
+use crate::state::bible_show_log::{BibleShowOrigin, BibleShowSource};
 
 #[derive(Debug, Clone)]
 pub(super) struct HelloAccepted {
@@ -467,7 +468,12 @@ pub(super) async fn handle_command(
             translation,
             reference,
         } => match state
-            .trigger_bible_passage(&translation, &reference, Default::default())
+            .trigger_bible_passage(
+                &translation,
+                &reference,
+                Default::default(),
+                BibleShowOrigin::internal(BibleShowSource::Companion),
+            )
             .await
         {
             Ok(broadcast) => {

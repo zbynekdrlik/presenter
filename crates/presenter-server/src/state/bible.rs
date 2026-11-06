@@ -1,14 +1,14 @@
 //! Bible search, broadcast, and ingestion methods for [`AppState`].
 
+use super::bible_labels::{legacy_slide_output, TriggerSecondary};
 use super::bible_show_log::{log_bible_show, BibleShowOrigin};
 use super::sermons::SermonOrigin;
 use super::AppState;
 use crate::bible_remote::RemoteBibleError;
 use crate::live::LiveEvent;
-use crate::resolume::{legacy_translation_reference, BibleUpdate};
+use crate::resolume::BibleUpdate;
 use chrono::Utc;
 use presenter_bible::BibleImportSummary;
-use presenter_core::bible::sermon::translation_short_code;
 use presenter_core::{
     slide::BibleSlideMetadata, BibleBroadcast, BiblePreferences, BiblePresentation,
     BiblePresentationId, BiblePresentationSlide, BiblePresentationSummary, BibleReference,
@@ -23,42 +23,6 @@ use std::collections::HashMap;
 pub struct BibleTriggerOverrides {
     pub main_text: Option<String>,
     pub translation_text: Option<String>,
-}
-
-/// The secondary side of a legacy trigger (#824): its text, its translation
-/// code and the book name that translation uses (for the translate reference).
-#[derive(Debug, Default)]
-struct TriggerSecondary {
-    text: Option<String>,
-    translation_code: Option<String>,
-    book: Option<String>,
-}
-
-/// What a legacy trigger put on the wall, so `/bible/active-slide` and every
-/// `BibleSlide` reader (the console's on-air strip) see it too.
-fn legacy_slide_output(
-    broadcast: &BibleBroadcast,
-    secondary: &TriggerSecondary,
-) -> BibleSlideOutput {
-    let passage = &broadcast.passage;
-    BibleSlideOutput::new(
-        passage.text.clone(),
-        format!(
-            "{} ({})",
-            passage.reference.to_human_readable(),
-            translation_short_code(&passage.translation.code)
-        ),
-        secondary.text.clone().unwrap_or_default(),
-        legacy_translation_reference(
-            &passage.reference,
-            secondary.book.as_deref(),
-            secondary
-                .text
-                .as_ref()
-                .and(secondary.translation_code.as_deref()),
-        ),
-        broadcast.triggered_at,
-    )
 }
 
 /// What [`AppState::generate_bible_slides`] produced. `secondary_warning`
@@ -496,11 +460,16 @@ impl AppState {
         self.bible.broadcast.read().await.clone()
     }
 
+    /// The legacy reference trigger (`/bible/trigger`, Companion, the AI
+    /// `trigger_bible_verse` tool): reads the passage and the secondary text,
+    /// then shows them through the one wall path (#850 A2b) and returns the
+    /// passage broadcast (the `/bible/trigger` + Companion contract).
     pub async fn trigger_bible_passage(
         &self,
         translation_code: &str,
         reference: &BibleReference,
         overrides: BibleTriggerOverrides,
+        origin: BibleShowOrigin,
     ) -> anyhow::Result<BibleBroadcast> {
         let translation_code = self.resolve_translation(translation_code).await?;
         let passage = self
@@ -512,26 +481,7 @@ impl AppState {
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
         let output = legacy_slide_output(&broadcast, &secondary);
-        {
-            let mut guard = self.bible.broadcast.write().await;
-            *guard = Some(broadcast.clone());
-        }
-        {
-            let mut guard = self.bible.slide_output.write().await;
-            *guard = Some(output.clone());
-        }
-        self.live_hub.publish(LiveEvent::Bible {
-            broadcast: broadcast.clone(),
-        });
-        self.live_hub.publish(LiveEvent::BibleSlide { output });
-        self.resolume_registry
-            .bible_update(BibleUpdate {
-                passage: Some(broadcast.clone()),
-                secondary_text: secondary.text,
-                secondary_translation_code: secondary.translation_code,
-                secondary_book: secondary.book,
-                slide_output: None, // Legacy path - no slide output
-            })
+        self.show_bible_on_wall(output, broadcast.clone(), &origin)
             .await;
         Ok(broadcast)
     }
@@ -693,66 +643,33 @@ impl AppState {
         reference_metadata: BibleSlideReferenceMetadata,
         origin: BibleShowOrigin,
     ) {
-        log_bible_show(&origin, &output);
-        // Store as the new active output
+        let broadcast = slide_broadcast(&output, reference_metadata);
+        self.show_bible_on_wall(output, broadcast, &origin).await;
+    }
+
+    /// The one wall path of every Bible show (#850 A2b): logs the show,
+    /// stores the output (`/bible/active-slide`) and the broadcast
+    /// (`/bible/active`), publishes `Bible` + `BibleSlide` and sends the
+    /// output to Resolume.
+    async fn show_bible_on_wall(
+        &self,
+        output: BibleSlideOutput,
+        broadcast: BibleBroadcast,
+        origin: &BibleShowOrigin,
+    ) {
+        log_bible_show(origin, &output);
         {
             let mut guard = self.bible.slide_output.write().await;
             *guard = Some(output.clone());
         }
-        // Also update legacy bible_broadcast for backwards compatibility with /bible/active endpoint
-        // Use reference metadata if available, otherwise use placeholder
-        let reference = if let (Some(book), Some(chapter), Some(verse_start)) = (
-            reference_metadata.book.as_deref(),
-            reference_metadata.chapter,
-            reference_metadata.verse_start,
-        ) {
-            let verse_end = reference_metadata.verse_end.unwrap_or(verse_start);
-            if let (Some(book_code), Some(book_number)) = (
-                reference_metadata.book_code.as_deref(),
-                reference_metadata.book_number,
-            ) {
-                // Try with book code first, fall back to without, then to placeholder
-                BibleReference::new_with_code(
-                    book,
-                    book_code,
-                    book_number,
-                    chapter,
-                    verse_start,
-                    verse_end,
-                )
-                .or_else(|_| BibleReference::new(book, chapter, verse_start, verse_end))
-                .unwrap_or_else(|_| placeholder_bible_reference())
-            } else {
-                BibleReference::new(book, chapter, verse_start, verse_end)
-                    .unwrap_or_else(|_| placeholder_bible_reference())
-            }
-        } else {
-            placeholder_bible_reference()
-        };
-
-        let translation = if let Some(code) = reference_metadata.translation_code {
-            presenter_core::BibleTranslation::new(code, "", "")
-        } else {
-            presenter_core::BibleTranslation::new("", "", "")
-        };
-
-        let legacy_broadcast = BibleBroadcast::new(
-            presenter_core::BiblePassage::new(reference, translation, output.main_text.clone()),
-            output.triggered_at,
-        )
-        .with_reference_label(output.main_reference.clone());
         {
             let mut guard = self.bible.broadcast.write().await;
-            *guard = Some(legacy_broadcast.clone());
+            *guard = Some(broadcast.clone());
         }
-        // Publish to WebSocket subscribers (both old and new formats)
-        self.live_hub.publish(LiveEvent::Bible {
-            broadcast: legacy_broadcast,
-        });
+        self.live_hub.publish(LiveEvent::Bible { broadcast });
         self.live_hub.publish(LiveEvent::BibleSlide {
             output: output.clone(),
         });
-        // Send to Resolume
         self.resolume_registry
             .bible_update(BibleUpdate::from_slide_output(Some(output)))
             .await;
@@ -799,6 +716,53 @@ impl AppState {
     ) {
         self.bible.ingestion_override = Some(ingestion);
     }
+}
+
+/// The `/bible/active` broadcast of a slide show, for backwards
+/// compatibility: the reference from the metadata (a placeholder without
+/// one), the translation code only, and the slide's main reference as label.
+fn slide_broadcast(
+    output: &BibleSlideOutput,
+    reference_metadata: BibleSlideReferenceMetadata,
+) -> BibleBroadcast {
+    let reference = if let (Some(book), Some(chapter), Some(verse_start)) = (
+        reference_metadata.book.as_deref(),
+        reference_metadata.chapter,
+        reference_metadata.verse_start,
+    ) {
+        let verse_end = reference_metadata.verse_end.unwrap_or(verse_start);
+        if let (Some(book_code), Some(book_number)) = (
+            reference_metadata.book_code.as_deref(),
+            reference_metadata.book_number,
+        ) {
+            // Try with book code first, fall back to without, then to placeholder
+            BibleReference::new_with_code(
+                book,
+                book_code,
+                book_number,
+                chapter,
+                verse_start,
+                verse_end,
+            )
+            .or_else(|_| BibleReference::new(book, chapter, verse_start, verse_end))
+            .unwrap_or_else(|_| placeholder_bible_reference())
+        } else {
+            BibleReference::new(book, chapter, verse_start, verse_end)
+                .unwrap_or_else(|_| placeholder_bible_reference())
+        }
+    } else {
+        placeholder_bible_reference()
+    };
+    let translation = presenter_core::BibleTranslation::new(
+        reference_metadata.translation_code.unwrap_or_default(),
+        "",
+        "",
+    );
+    BibleBroadcast::new(
+        presenter_core::BiblePassage::new(reference, translation, output.main_text.clone()),
+        output.triggered_at,
+    )
+    .with_reference_label(output.main_reference.clone())
 }
 
 /// The canonical book code to look a SECONDARY translation up by: the

@@ -84,7 +84,14 @@ async fn legacy_and_slide_walls(
     let legacy_state = seb_main_kjv_secondary().await;
     let legacy_wall = wall_for(&legacy_state).await;
     legacy_state
-        .trigger_bible_passage("slk-seb", reference, overrides)
+        .trigger_bible_passage(
+            "slk-seb",
+            reference,
+            overrides,
+            crate::state::bible_show_log::BibleShowOrigin::internal(
+                crate::state::bible_show_log::BibleShowSource::Trigger,
+            ),
+        )
         .await
         .expect("legacy trigger");
     let output = legacy_state

@@ -392,8 +392,10 @@ the smaller file or a new sibling:
   earlier session answers 404. Sample `GET /parameter/by-id/{id}` every ~250 ms from the
   presenter box (same LAN as Arena). A cover that is not playing (`Disconnected`) still fades
   its parameter, invisibly on the wall.
-- `POST /bible/trigger` `{translation, book, chapter, verseStart}` takes the translation's own
-  book name (`Ján` for `slk-roh`, from `GET /bible/books?translation=…`); `John` answers 404.
+- `POST /bible/trigger` `{translation, book, chapter, verseStart}` (Companion's path) takes any
+  book form since A2a (the stored name first, then the resolver) and, since #850 A2b, pushes the
+  same `BibleSlideOutput` as `/bible/trigger-slide` — one wall path, so either endpoint drives
+  the same clip cycle.
 - End with a clear, so the wall is left empty.
 
 ## `clip_map.rs`: keep `parse_clip_destinations` small

@@ -420,6 +420,15 @@ Candidates compare lexicographically by (tier, kind), then by `FREQUENCY_RANK`.
   `secondary_book`
 - `resolume/legacy_reference.rs`
 
+**As built (A2b):** steps 1–3 share `AppState::show_bible_on_wall` with
+`trigger_bible_slide_output` instead of calling it, so the legacy trigger keeps storing and
+publishing its passage broadcast (translation name, code, number) and the HTTP / Companion
+contract stays byte-identical; only the slide path builds the metadata broadcast. The labels live
+in `state/bible_labels.rs`; the show log gets the sources `trigger`, `companion`, `ai`. The two
+[unverified] points are settled: `state/bible/legacy_wall_tests.rs` pins push-for-push equality
+with the slide path (incl. the empty-`translationText` case), and Companion variables see the same
+`Bible` + `BibleSlide` pair as before.
+
 **Test literals to update** (grep every `BibleUpdate {`):
 
 - `resolume/tests.rs:748,805,854`

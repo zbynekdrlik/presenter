@@ -1,5 +1,5 @@
 //! #824 phase 2: the secondary side of a legacy `/bible/trigger` carries the
-//! book name the SECONDARY translation uses, so `handle_bible_legacy` can name
+//! book name the SECONDARY translation uses, so the wall output can name
 //! it in `#bible-translate-reference` ("1 John …", not the main "1 Ján …").
 
 use super::*;
