@@ -242,7 +242,7 @@ pub fn Header() -> impl IntoView {
                         <span class="operator__search-icon" aria-hidden="true"></span>
                         <input
                             type="search"
-                            placeholder="Hľadať knižnice, piesne, slajdy"
+                            placeholder="Hľadať pieseň alebo text"
                             data-role="global-search-query"
                             aria-label="Hľadať v Presenteri"
                             autocomplete="off"
@@ -253,6 +253,7 @@ pub fn Header() -> impl IntoView {
                             type="button"
                             data-role="global-search-clear"
                             aria-label="Vymazať hľadanie"
+                            hidden=move || op.search_query.with(String::is_empty)
                             on:click=on_search_clear
                         >
                             <span aria-hidden="true">{"\u{00d7}"}</span>

@@ -221,7 +221,7 @@ for (const viewport of VIEWPORTS) {
     await expect(worship.locator('[data-role="slides"] .empty')).toHaveText("Vyber pieseň vľavo.");
     await expect(page.locator('[data-role="global-search-query"]')).toHaveAttribute(
       "placeholder",
-      "Hľadať knižnice, piesne, slajdy",
+      "Hľadať pieseň alebo text",
     );
     await expect(page.locator('[data-role="mode-toggle"][data-mode="live"]')).toHaveText("Naživo");
     await expect(page.locator('[data-role="mode-toggle"][data-mode="edit"]')).toHaveText("Úprava");
@@ -230,7 +230,7 @@ for (const viewport of VIEWPORTS) {
       "Rozloženie na pódiových obrazovkách",
     );
     await expect(page.locator('[data-role="ableset-enable"]')).toHaveText("Ableton");
-    await expect(page.locator('[data-role="ableset-follow"]')).toHaveText("Sledovať pódium");
+    await expect(page.locator('[data-role="ableset-follow"]')).toHaveText("Sledovať");
 
     // Pick a library and a song so the lists and the slide grid are full.
     await page.locator('[data-role="library-item"]').first().click();

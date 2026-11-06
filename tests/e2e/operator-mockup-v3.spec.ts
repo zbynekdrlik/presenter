@@ -455,3 +455,25 @@ test("the phone's prepared Bible card names itself, with no desktop caption", as
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("the header search matches the mockup: a small lens, ✕ only over text", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  const query = page.locator('[data-role="global-search-query"]');
+  const clear = page.locator('[data-role="global-search-clear"]');
+  await expect(query).toHaveAttribute("placeholder", "Hľadať pieseň alebo text");
+  await expect(clear).toBeHidden();
+  const lens = await page.locator(".operator__search-icon").boundingBox();
+  expect(lens!.width).toBeLessThanOrEqual(13);
+  await query.fill("slava");
+  await expect(clear).toBeVisible();
+  await clear.click();
+  await expect(query).toHaveValue("");
+  await expect(clear).toBeHidden();
+  expect(errors).toEqual([]);
+  await context.close();
+});

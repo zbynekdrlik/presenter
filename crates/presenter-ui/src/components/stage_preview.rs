@@ -284,7 +284,7 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                     title="Sledovať pódium: zapnuté, keď je tlačidlo zvýraznené"
                     on:click=on_ableset_follow
                 >
-                    "Sledovať pódium"
+                    "Sledovať"
                 </button>
             </div>
             <button
