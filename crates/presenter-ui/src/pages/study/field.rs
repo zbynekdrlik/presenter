@@ -6,31 +6,63 @@
 use leptos::html::Input;
 use leptos::prelude::*;
 
+use super::field_recent::{load_recent, RecentButton, RecentList};
 use super::scroll::ScrollPlan;
 use super::{nav, Study};
 use crate::state::bible_console::{ConsoleRow, RowTarget};
+use crate::state::session;
 use crate::state::study::{
     chapter_grid, preview_target, suggest, suggest_unresolved, ChapterGrid, FieldEnter, StudyRoute,
     StudySuggest, StudyTarget, StudyView,
 };
+use crate::state::study_recent::{remember, serialize, RECENT_KEY};
 use crate::state::study_word::{StrongsOffer, SCOPE_ALL};
 
 #[derive(Clone, Copy)]
-struct Field {
+pub(super) struct Field {
     s: Study,
     input: RwSignal<String>,
     focused: RwSignal<bool>,
-    element: NodeRef<Input>,
+    pub(super) element: NodeRef<Input>,
+    /// The chapter the field's reference opened: while it is read (in any
+    /// translation) the text stays, so a slip is fixed in place (owner,
+    /// 2026-11-06: "2kor" could not be corrected to "1kor").
+    opened: StoredValue<Option<(String, u16)>>,
+    /// The place moved on under the focus (system Back): the old reference
+    /// goes when the field is left, unless it was typed over.
+    left_behind: StoredValue<bool>,
+    /// The earlier searches, newest first, and whether the ▾ list shows them
+    /// (owner, 2026-11-06).
+    pub(super) recent: RwSignal<Vec<String>>,
+    pub(super) recent_open: RwSignal<bool>,
+}
+
+/// What the field shows depends on where the page is.
+#[derive(Clone, PartialEq)]
+enum FieldPlace {
+    Search(String),
+    Reader(String, u16),
+    Other,
 }
 
 impl Field {
     fn leave(self) {
+        // What opens next says what the field holds.
+        self.left_behind.set_value(false);
         if let Some(element) = self.element.get_untracked() {
             let _ = element.blur();
         }
     }
 
-    fn open(self, target: StudyTarget) {
+    /// `text` goes to the top of the earlier searches.
+    fn remember(self, text: &str) {
+        let next = self.recent.with_untracked(|list| remember(list, text));
+        session::set_persistent(RECENT_KEY, &serialize(&next));
+        self.recent.set(next);
+    }
+
+    /// Open a passage; `text` is how it is kept among the earlier searches.
+    fn open(self, target: StudyTarget, text: &str) {
         let Some(code) = self
             .s
             .route
@@ -43,7 +75,10 @@ impl Field {
         let plan = target
             .verses
             .map_or(ScrollPlan::Top, |(start, _)| ScrollPlan::Verse(start));
-        self.input.set(String::new());
+        self.opened
+            .set_value(Some((target.book.clone(), target.chapter)));
+        self.remember(text);
+        self.input.set(text.to_string());
         self.leave();
         nav::go(self.s, route, plan);
     }
@@ -56,6 +91,7 @@ impl Field {
         else {
             return;
         };
+        self.remember(text);
         self.leave();
         nav::go(self.s, StudyRoute::search(&code, text), ScrollPlan::Top);
     }
@@ -65,13 +101,15 @@ impl Field {
             .s
             .route
             .with_untracked(|route| route.translation.clone());
+        self.remember(number);
         self.input.set(String::new());
         self.leave();
         let route = StudyRoute::strongs(translation, number, SCOPE_ALL);
         nav::go(self.s, route, ScrollPlan::Top);
     }
 
-    fn complete(self, text: &str) {
+    pub(super) fn complete(self, text: &str) {
+        self.left_behind.set_value(false);
         self.input.set(text.to_string());
         if let Some(element) = self.element.get_untracked() {
             let _ = element.focus();
@@ -86,6 +124,10 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         input: RwSignal::new(String::new()),
         focused: RwSignal::new(false),
         element: NodeRef::new(),
+        opened: StoredValue::new(None),
+        left_behind: StoredValue::new(false),
+        recent: RwSignal::new(load_recent()),
+        recent_open: RwSignal::new(false),
     };
     let suggestions = Memo::new(move |_| {
         let input = f.input.get();
@@ -98,20 +140,42 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
             None => suggest_unresolved(&input),
         }
     });
-    // The search view's words stay in the field; leaving them empties it.
-    let shown_query = Memo::new(move |_| {
+    // The search view's words stay in the field, and so does the reference
+    // while its chapter is read; leaving either empties it.
+    let place = Memo::new(move |_| {
         s.route.with(|route| match &route.view {
-            StudyView::Search { query, .. } => Some(query.clone()),
-            _ => None,
+            StudyView::Search { query, .. } => FieldPlace::Search(query.clone()),
+            StudyView::Reader { book, chapter } => FieldPlace::Reader(book.clone(), *chapter),
+            _ => FieldPlace::Other,
         })
     });
-    Effect::new(move |previous: Option<bool>| {
-        let query = shown_query.get();
-        let searching = query.is_some();
-        if searching || previous == Some(true) {
-            f.input.set(query.unwrap_or_default());
+    Effect::new(move |previous: Option<FieldPlace>| {
+        let now = place.get();
+        let kept = match &now {
+            FieldPlace::Search(query) => {
+                f.input.set(query.clone());
+                f.opened.set_value(None);
+                f.left_behind.set_value(false);
+                return now;
+            }
+            FieldPlace::Reader(book, chapter) => f.opened.with_value(|opened| {
+                opened
+                    .as_ref()
+                    .is_some_and(|(b, c)| b == book && c == chapter)
+            }),
+            FieldPlace::Other => false,
+        };
+        let held =
+            matches!(previous, Some(FieldPlace::Search(_))) || f.opened.with_value(Option::is_some);
+        if !kept && held {
+            f.opened.set_value(None);
+            if f.focused.get_untracked() {
+                f.left_behind.set_value(true);
+            } else {
+                f.input.set(String::new());
+            }
         }
-        searching
+        now
     });
     // iOS autocorrect turns "zid" into "kid" (console rule).
     Effect::new(move |_| {
@@ -123,8 +187,9 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
         "Enter" => {
             ev.prevent_default();
+            f.recent_open.set(false);
             match suggestions.get_untracked().enter() {
-                Some(FieldEnter::Open(target)) => f.open(target),
+                Some(FieldEnter::Open(target)) => f.open(target, &f.input.get_untracked()),
                 Some(FieldEnter::Strongs(number)) => f.open_number(&number),
                 Some(FieldEnter::Search(text)) => f.search(&text),
                 None => {}
@@ -132,7 +197,9 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         }
         "Escape" => {
             ev.prevent_default();
-            if f.input.with_untracked(String::is_empty) {
+            if f.recent_open.get_untracked() {
+                f.recent_open.set(false);
+            } else if f.input.with_untracked(String::is_empty) {
                 f.leave();
             } else {
                 f.input.set(String::new());
@@ -142,7 +209,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     };
 
     view! {
-        <div class="study-field">
+        <div class="study-field" data-recent-open=move || f.recent_open.get().to_string()>
             <input
                 type="text"
                 class="study-field__input"
@@ -155,10 +222,21 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                 autocomplete="off"
                 spellcheck="false"
                 prop:value=move || f.input.get()
-                on:input=move |ev| f.input.set(event_target_value(&ev))
+                on:input=move |ev| {
+                    f.recent_open.set(false);
+                    f.left_behind.set_value(false);
+                    f.input.set(event_target_value(&ev));
+                }
                 on:keydown=on_keydown
                 on:focus=move |_| f.focused.set(true)
-                on:blur=move |_| f.focused.set(false)
+                on:blur=move |_| {
+                    f.focused.set(false);
+                    f.recent_open.set(false);
+                    if f.left_behind.get_value() {
+                        f.left_behind.set_value(false);
+                        f.input.set(String::new());
+                    }
+                }
             />
             <Show when=move || f.input.with(|text| !text.is_empty())>
                 <button
@@ -172,7 +250,11 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                     "\u{2715}"
                 </button>
             </Show>
-            <Show when=move || f.focused.get()>
+            <RecentButton f=f />
+            <Show when=move || f.focused.get() && f.recent_open.get()>
+                <RecentList f=f />
+            </Show>
+            <Show when=move || f.focused.get() && !f.recent_open.get()>
                 <Suggestions f=f suggestions=suggestions />
             </Show>
         </div>
@@ -339,9 +421,10 @@ fn NumberChip(f: Field, offer: StrongsOffer) -> impl IntoView {
     }
 }
 
+/// The target's own label names the whole reference; a chip shows only its book.
 fn tap(f: Field, target: &RowTarget) {
     match target {
-        RowTarget::Preview(preview) => f.open(preview_target(preview)),
+        RowTarget::Preview(preview) => f.open(preview_target(preview), &preview.label),
         RowTarget::Complete(text) => f.complete(text),
     }
 }
@@ -383,6 +466,7 @@ fn Chip(f: Field, row: ConsoleRow) -> impl IntoView {
 #[component]
 fn Chapters(f: Field, grid: ChapterGrid) -> impl IntoView {
     let code = grid.code.clone();
+    let name = grid.name.clone();
     view! {
         <p class="study-suggest__label" data-role="study-grid-title">{grid.name.clone()}</p>
         <div class="study-grid" data-role="study-chapter-grid" data-book-code=grid.code.clone()>
@@ -392,6 +476,7 @@ fn Chapters(f: Field, grid: ChapterGrid) -> impl IntoView {
                 .map(|chapter| {
                     let chapter = *chapter;
                     let book = code.clone();
+                    let text = format!("{name} {chapter}");
                     view! {
                         <button
                             type="button"
@@ -399,11 +484,14 @@ fn Chapters(f: Field, grid: ChapterGrid) -> impl IntoView {
                             data-role="study-chapter-cell"
                             data-chapter=chapter
                             on:click=move |_| {
-                                f.open(StudyTarget {
-                                    book: book.clone(),
-                                    chapter,
-                                    verses: None,
-                                })
+                                f.open(
+                                    StudyTarget {
+                                        book: book.clone(),
+                                        chapter,
+                                        verses: None,
+                                    },
+                                    &text,
+                                )
                             }
                         >
                             {chapter}

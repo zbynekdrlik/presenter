@@ -1,8 +1,5 @@
 use leptos::prelude::*;
-use std::cell::RefCell;
-use std::rc::Rc;
 
-use crate::api::bible as bible_api;
 use crate::components::header_menus::{HeaderMenus, DIRECT_VIEWS, SETTINGS_VIEW};
 use crate::components::more_sheet::open_more_sheet;
 use crate::components::stage_layout_select::StageLayoutSelect;
@@ -80,78 +77,22 @@ pub fn Header() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    // Debounce timer for bible search
-    let bible_timer: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
-        Rc::new(RefCell::new(None));
-
-    // Search form handlers
+    // Search form handlers (songs and libraries; Biblia has no header
+    // search since #850 B2c, the verse console searches the text).
     let on_search_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
     };
 
-    let on_search_input = {
-        let bible_timer = Rc::clone(&bible_timer);
-        move |ev| {
-            let val: String = event_target_value(&ev);
-            let is_bible = ctx.view.get_untracked() == "bible";
-
-            if is_bible {
-                ctx.bible_search_query.set(val.clone());
-                op.search_open.set(!val.is_empty());
-
-                // Cancel pending bible timer
-                bible_timer.borrow_mut().take();
-
-                if val.len() < 3 {
-                    ctx.bible_search_results.set(Vec::new());
-                    ctx.bible_has_searched.set(false);
-                    ctx.bible_searching.set(false);
-                    return;
-                }
-
-                ctx.bible_searching.set(true);
-
-                let search_results = ctx.bible_search_results;
-                let searching = ctx.bible_searching;
-                let has_searched = ctx.bible_has_searched;
-
-                // Get the bible translation from context if BibleState is available
-                let translation = leptos::prelude::use_context::<crate::state::bible::BibleState>()
-                    .and_then(|bs| bs.selected_translation.get_untracked())
-                    .unwrap_or_default();
-
-                let timer = gloo_timers::callback::Timeout::new(300, move || {
-                    leptos::task::spawn_local(async move {
-                        match bible_api::search(&val, &translation, Some(20), None).await {
-                            Ok(hits) => {
-                                search_results.set(hits);
-                                has_searched.set(true);
-                            }
-                            Err(_) => {
-                                search_results.set(Vec::new());
-                                has_searched.set(true);
-                            }
-                        }
-                        searching.set(false);
-                    });
-                });
-                *bible_timer.borrow_mut() = Some(timer);
-            } else {
-                op.search_query.set(val.clone());
-                op.search_open.set(!val.is_empty());
-            }
-        }
+    let on_search_input = move |ev| {
+        let val: String = event_target_value(&ev);
+        op.search_query.set(val.clone());
+        op.search_open.set(!val.is_empty());
     };
 
     let on_search_clear = move |_| {
         op.search_query.set(String::new());
         op.search_open.set(false);
         ctx.search_results.set(Vec::new());
-        // Also clear bible search
-        ctx.bible_search_query.set(String::new());
-        ctx.bible_search_results.set(Vec::new());
-        ctx.bible_has_searched.set(false);
-        ctx.bible_searching.set(false);
     };
 
     // Mode toggle
@@ -291,37 +232,34 @@ pub fn Header() -> impl IntoView {
                     ></span>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
                 </div>
-                <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
-                    on:submit=on_search_submit
-                >
-                    <span class="operator__search-icon" aria-hidden="true"></span>
-                    <input
-                        type="search"
-                        placeholder=move || {
-                            if ctx.view.get() == "bible" { "Hľadať verše v Biblii" } else { "Hľadať knižnice, piesne, slajdy" }
-                        }
-                        data-role="global-search-query"
-                        aria-label="Hľadať v Presenteri"
-                        autocomplete="off"
-                        prop:value=move || {
-                            if ctx.view.get() == "bible" {
-                                ctx.bible_search_query.get()
-                            } else {
-                                op.search_query.get()
-                            }
-                        }
-                        on:input=on_search_input
-                    />
-                    <button
-                        type="button"
-                        data-role="global-search-clear"
-                        aria-label="Vymazať hľadanie"
-                        on:click=on_search_clear
+                // #850 B2c: on a phone Biblia has no header search (the verse
+                // console's field searches the text). The desktop keeps the
+                // song search on every section, Biblia too (mockup v3, #875).
+                <Show when=move || !phone.get() || ctx.view.get() != "bible">
+                    <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
+                        on:submit=on_search_submit
                     >
-                        <span aria-hidden="true">{"\u{00d7}"}</span>
-                        <span class="sr-only">"Vymazať hľadanie"</span>
-                    </button>
-                </form>
+                        <span class="operator__search-icon" aria-hidden="true"></span>
+                        <input
+                            type="search"
+                            placeholder="Hľadať knižnice, piesne, slajdy"
+                            data-role="global-search-query"
+                            aria-label="Hľadať v Presenteri"
+                            autocomplete="off"
+                            prop:value=move || op.search_query.get()
+                            on:input=on_search_input
+                        />
+                        <button
+                            type="button"
+                            data-role="global-search-clear"
+                            aria-label="Vymazať hľadanie"
+                            on:click=on_search_clear
+                        >
+                            <span aria-hidden="true">{"\u{00d7}"}</span>
+                            <span class="sr-only">"Vymazať hľadanie"</span>
+                        </button>
+                    </form>
+                </Show>
             </div>
             // #875 H1: Piesne and Biblia keep their own buttons; the other
             // sections are in the Stránky menu, Nastavenia behind ⚙.

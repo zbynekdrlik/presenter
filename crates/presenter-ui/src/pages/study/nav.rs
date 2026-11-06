@@ -90,7 +90,11 @@ fn push_entry(s: Study, route: StudyRoute) {
 /// Change the current entry: a selection that grew, a translation found for a
 /// URL without one.
 pub(super) fn replace(s: Study, route: StudyRoute) {
-    let entry = entry(s, &route);
+    let mut entry = entry(s, &route);
+    // A closed sheet's step stays a step: a highlight on it is no second row.
+    if route.sheet.is_none() && s.route.with_untracked(|shown| shown.sheet.is_none()) {
+        entry.listed = s.history.with_untracked(StudyHistory::current_listed);
+    }
     replace_entry(s, route, entry);
 }
 
@@ -118,9 +122,12 @@ pub(super) fn go(s: Study, route: StudyRoute, plan: ScrollPlan) {
     scroll::remember_offset(s);
     if current.sheet.is_some() {
         // It stays a step for Back, but it is no second row of the same place.
+        // A list that started on the sheet has no other row for it.
         let closed = current.without_sheet();
         let mut step = entry(s, &closed);
-        step.listed = false;
+        step.listed = !s
+            .history
+            .with_untracked(|history| history.has_row_behind(&step.label));
         replace_entry(s, closed, step);
     }
     s.scroll_plan.set_value(plan);

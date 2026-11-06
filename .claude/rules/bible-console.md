@@ -33,8 +33,10 @@ paths:
   `/bible/resolve` answer is applied only while it still equals the target's key (slow Wi-Fi).
 - **Settle markers, never timing:** `[data-role=bible-console]` `data-preview-state` /
   `data-preview-ready` / `data-preview-reference`.
-- **On a phone the console replaces `.bible__classic`** (the old inputs, removed in B2c); the
-  desktop keeps them and their autofocus until then.
+- **The console is the whole Live tab** on a phone and a desktop (B2c removed the old inputs,
+  the selects and the header verse search). On a desktop the field takes the focus whenever
+  Biblia's Live tab becomes the shown page (`field.rs`, deferred like #819); never on a phone.
+  Desktop layout and order: `bible-page.md` (mockup v3).
 - **iOS autocorrect** is set with `set_attribute` (tachys 0.1.9 has no typed `autocorrect`).
 - **E2E idioms:** a failed request is a malformed 200 (`not-json`); a race holds the request with
   `page.route` and releases it after the competing input is confirmed; a request is never
@@ -79,30 +81,29 @@ paths:
   `Picked` for the current input); after a show `advance_after_show` clears the field, pins the
   next target for the empty input and sets `after_show` → "ĎALŠÍ: …". Typing resets it. The
   input effect keeps a `Picked` made for the value the input just took, or the pin dies with the
-  clear; a load from the old inputs drops it itself (the input may not change). The primary is
+  clear. The primary is
   `disabled` only with no target; every wait is `aria-disabled`, so the focus stays for the next
   Enter or Space. No dead tap: over a failed preview it reads "SKÚSIŤ ZNOVA" and asks again, past
-  the book's last verse it reads "KONIEC KNIHY" (`at_end`, cleared by ◀, typing, an old-inputs
-  load, or a translation that goes on past it: `recheck_end`) and refuses. ◀ / ▶ refuse while a show is on its way: the show moves on from the preview
+  the book's last verse it reads "KONIEC KNIHY" (`at_end`, cleared by ◀, typing, or a
+  translation that goes on past it: `recheck_end`) and refuses. ◀ / ▶ refuse while a show is on its way: the show moves on from the preview
   when it lands, a step in between skips a part.
 - **iOS keyboard:** `state::keyboard_inset` writes `body`'s `--kb-inset` from the visual
   viewport (0 when pinch-zoomed); the phone bar uses `bottom: var(--kb-inset)`; the tab bar hides
   while the console field has focus (`:has()`, iOS 15.4+). Playwright cannot open an iPhone
   keyboard — the inline ZOBRAZIŤ is the guaranteed path.
 
-## One owner of `bs.slides` (until B2c)
+## The console is the only writer of `bs.slides` (B2c)
 
-The grid holds the current target only. The console empties it the moment its target changes, so
-no card of an older verse stays tappable while a new one loads or fails. A load from the old inputs
-bumps `classic_loads` (the console clears its field and lets go); the console bumps `console_takes`
-on every new target, and an old-inputs answer that started before it is dropped. The 300 ms
-auto-load skips too when the console took over during its wait, and when it is only the echo of a
-translation switch (`translation_echo`: `list_books` re-sets chapter and verse, `set` always
-notifies) while `console_owns_grid`: it would bump `classic_loads` and wipe what is being typed.
+The grid holds the current target only. The console empties it the moment its target changes (and
+when there is no target), so no card of an older verse stays tappable while a new one loads or
+fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console_takes`,
+`console_owns_grid`, `translation_echo`, the 300 ms auto-load) went with them in B2c.
 
-- **Translation bar** (`translation_bar.rs`, order in `state::bible_translations`): phone only
-  until B2c (the desktop selects stay, seven specs drive them); SEB · ROH · SEVP · KJV, the rest
-  behind "…", NLT never main. It writes the same `BibleState` signals as the selects, so #701
+- **A secondary that did not load** (`resp.warning`, #826 NLT down) is a toast as well as the
+  card's inline text: a desktop draws no preview card.
+- **Translation bar** (`translation_bar.rs`, order in `state::bible_translations`): phone and
+  desktop; SEB · ROH · SEVP · KJV, the rest behind "…", NLT never main. Labels: "Preklad" / "Pod
+  ním" inline on a phone, "Hlavný preklad" / "Druhý preklad" as row headings on a desktop. It writes the same `BibleState` signals as the selects, so #701
   holds: localStorage per browser + the server default. "žiadny" cannot clear the server default
   (`BiblePreferencesDraft` reads None as "keep").
 - **Log fields:** `/bible/resolve` carries `query` (non-empty input) + `device`; `/bible/trigger-slide`
@@ -113,5 +114,18 @@ notifies) while `console_owns_grid`: it would bump `classic_loads` and wipe what
   keystroke, 10 hits labelled with the translation; a tap previews (a `Picked` from `hit_target`),
   never shows. An answer counts only for its input AND main translation. `build_fts_query` splits
   on punctuation, counts characters and keeps a combining accent inside its word (persistence
-  `fts_query_tests`). Numbers stay as tokens: header search and the AI tool call it too, `Ján 3:16`
-  must not answer with every verse holding "Ján".
+  `fts_query_tests`). Numbers stay as tokens: the AI tool calls it too, `Ján 3:16` must not
+  answer with every verse holding "Ján". The console is the operator's only full-text verse
+  search since B2c (the header search is gone on Biblia).
+- **Window keys on Biblia (B2d, `state::global_keys`, host-tested):** with the focus outside a
+  field, ←/→ press the console's ◀ / ▶ (the button's own `click()`, so its refusals hold: nothing
+  loaded, a show on its way, the end of the book) and never move the song; Space or `/` focus the
+  field (prevented, nothing typed). Only on the Live tab (`[data-bible-panel=live][data-visible=true]`),
+  in Live and Edit mode alike. Piesne keeps ←/→ = song slides and Space = header search in Live
+  mode; other sections: Space = header search, arrows nothing. Never taken: any key while a modal
+  or the Viac sheet is open (`overlay_open`: `op.open_modal`, `more_sheet_open`, the "Upraviť
+  prezentáciu" dialog), and Space / `/` / Enter while a button, link or `role="button"` has the
+  focus (`KeyFocus::Button`): Space presses Zhasnúť, ◀ / ▶, a translation button like any button
+  (review of 65eab96c, a swallowed Space jumped to the field). Arrows still step from a focused
+  button: after the desktop Enter the focus sits on Zobraziť. Pinned by `bible-console.spec.ts`
+  (stage POST count unchanged on Biblia, one more on Piesne).

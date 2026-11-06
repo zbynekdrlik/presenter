@@ -22,6 +22,23 @@ export async function openView(page: Page, view: string): Promise<void> {
   await toggle.click();
 }
 
+/**
+ * Look a passage up the way an operator does since #850 B2c: type it into the
+ * verse console on Biblia's Live tab (any spelling the resolver reads, e.g.
+ * "jan 1", "zid 11 1", "Ján 3:16-18"), then wait until the console's preview
+ * is ready for it and its slides are in the grid. The console is the only
+ * way in (the book list and the chapter / verse fields are gone).
+ */
+export async function selectPassage(page: Page, query: string): Promise<void> {
+  const root = page.locator('[data-bible-panel="live"] [data-role="bible-console"]');
+  await expect(root).toHaveAttribute("data-books-translation", /.+/, { timeout: 30_000 });
+  await root.locator('[data-role="console-field"]').fill(query);
+  await expect(root).toHaveAttribute("data-preview-ready", "true");
+  await expect(
+    page.locator('[data-view-panel="bible"] [data-role="slide-card"]').first(),
+  ).toBeVisible();
+}
+
 /** The desktop header menus (#875 H1): `pages` (Stránky), `screens` (Obrazovky), `connections` (Pripojenia). */
 export function headerMenu(page: Page, id: "pages" | "screens" | "connections") {
   return {

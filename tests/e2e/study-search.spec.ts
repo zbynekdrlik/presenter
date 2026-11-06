@@ -22,6 +22,7 @@ import {
   dropDeliberateNlt503,
   expectChapter,
   favourite,
+  chapter,
   field,
   finish,
   gateRoute,
@@ -63,8 +64,91 @@ test("zid 11 1 + Enter opens the reader at the verse, highlighted", async ({ bro
   await expect(page).toHaveURL(/t=slk-seb&p=HEB\.11&v=1$/);
   await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
   await expect(verse(page, 2)).toHaveAttribute("data-selected", "false");
-  await expect(field(page)).toHaveValue("");
+  // The reference stays, so a slip is fixed in place (owner, 2026-11-06).
+  await expect(field(page)).toHaveValue("zid 11 1");
   await expect(suggest(page)).toHaveCount(0);
+  await finish(opened);
+});
+
+test("a wrong book is fixed in the field; another chapter empties it (owner, 2026-11-06)", async ({
+  browser,
+}) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=GEN.1", "slk-seb:GEN.1");
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("2 kor 5");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:2CO.5");
+  await expect(field(page)).toHaveValue("2 kor 5");
+  // "2kor" -> "1kor": one character, Enter again.
+  await field(page).tap();
+  await field(page).press("Home");
+  await field(page).press("Delete");
+  await field(page).type("1");
+  await expect(field(page)).toHaveValue("1 kor 5");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:1CO.5");
+  await expect(field(page)).toHaveValue("1 kor 5");
+  // A translation switch is the same place: the reference stays.
+  await page.locator('[data-role="study-fav"][data-translation="slk-roh"]').tap();
+  await expectChapter(page, "slk-roh:1CO.5");
+  await expect(field(page)).toHaveValue("1 kor 5");
+  // Turning the chapter leaves that reference behind.
+  await page.locator('[data-role="study-next-chapter"]').tap();
+  await expectChapter(page, "slk-roh:1CO.6");
+  await expect(field(page)).toHaveValue("");
+  await page.goBack();
+  await expectChapter(page, "slk-roh:1CO.5");
+  await expect(field(page)).toHaveValue("");
+  await finish(opened);
+});
+
+test("✕ clears the field and ▾ fills it from the earlier searches (owner, 2026-11-06)", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=GEN.1", "slk-seb:GEN.1");
+  const { page } = opened;
+  const recent = page.locator('[data-role="study-field-recent"]');
+  const items = page.locator('[data-role="study-recent-item"]');
+  // Nothing searched yet: the list says so.
+  await recent.tap();
+  await expect(field(page)).toBeFocused();
+  await expect(page.locator('[data-role="study-recent-empty"]')).toBeVisible();
+  await recent.tap();
+  await expect(page.locator('[data-role="study-recent"]')).toHaveCount(0);
+
+  await field(page).fill("2 kor 5");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:2CO.5");
+  await field(page).tap();
+  await field(page).fill("ján 3");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:JHN.3");
+
+  // ✕ empties the field and keeps it ready for typing.
+  await page.locator('[data-role="study-field-clear"]').tap();
+  await expect(field(page)).toHaveValue("");
+  await expect(field(page)).toBeFocused();
+
+  // ▾ lists both, newest first; a pick fills the field without opening it.
+  await recent.tap();
+  await expect(recent).toHaveAttribute("aria-expanded", "true");
+  await expect(items).toHaveText(["ján 3", "2 kor 5"]);
+  await assertMinTapTarget(recent, 44);
+  await assertMinTapTarget(items.first(), 44);
+  await assertNoHorizontalOverflow(page);
+  await items.nth(1).tap();
+  await expect(field(page)).toHaveValue("2 kor 5");
+  await expect(field(page)).toBeFocused();
+  await expect(page.locator('[data-role="study-recent"]')).toHaveCount(0);
+  await expectChapter(page, "slk-seb:JHN.3");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:2CO.5");
+
+  // The list belongs to this browser and survives a reload; the reopened
+  // search moved to the top instead of appearing twice.
+  await page.reload();
+  await expectChapter(page, "slk-seb:2CO.5");
+  await recent.tap();
+  await expect(items).toHaveText(["2 kor 5", "ján 3"]);
   await finish(opened);
 });
 
@@ -414,3 +498,77 @@ for (const [name, profile] of [
     await finish(opened);
   });
 }
+
+test("a tapped row or chapter leaves its reference in the field", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("");
+  await page.locator('[data-role="study-book"][data-book-code="RUT"]').tap();
+  await page.locator('[data-role="study-chapter-cell"][data-chapter="2"]').tap();
+  await expectChapter(page, "slk-seb:RUT.2");
+  await expect(field(page)).toHaveValue(/ 2$/);
+  // The slip the owner fixes in place: the last digit, then Enter.
+  await field(page).tap();
+  await field(page).press("End");
+  await field(page).press("Backspace");
+  await field(page).pressSequentially("3");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.3");
+
+  await field(page).tap();
+  await field(page).fill("j 3:16");
+  const row = page.locator('[data-role="study-row"]').first();
+  const label = (await row.locator(".study-row__label").innerText()).trim();
+  await row.tap();
+  await expect(chapter(page)).toHaveAttribute("data-state", "ready");
+  await expect(field(page)).toHaveValue(label);
+  await finish(opened);
+});
+
+test("a reference left behind under the finger goes when the field is left", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("rut 2");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.2");
+  await field(page).tap();
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  // Not while the field has focus: the reader may be typing.
+  await expect(field(page)).toHaveValue("rut 2");
+  await field(page).blur();
+  await expect(field(page)).toHaveValue("");
+  await finish(opened);
+});
+
+test("a tapped alternative leaves the whole reference, not its book", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("jan 3 16");
+  await page.locator('[data-role="study-chip"]', { hasText: "1 Ján" }).tap();
+  await expectChapter(page, "slk-seb:1JN.3");
+  await expect(field(page)).toHaveValue(/^1 Ján 3:16/);
+  await field(page).tap();
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:1JN.3");
+  await finish(opened);
+});
+
+test("an open from a field left behind keeps its text", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("rut 2");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.2");
+  await field(page).tap();
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.2");
+  await expect(field(page)).toHaveValue("rut 2");
+  await finish(opened);
+});

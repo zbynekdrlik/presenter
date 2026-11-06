@@ -201,7 +201,7 @@ test.describe("WASM Operator Slide Interactions", () => {
     await expect(firstSlide).toHaveClass(/is-active/, { timeout: 5_000 });
 
     // Click body to ensure no input is focused
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // Press ArrowRight to move to next slide
     await page.keyboard.press("ArrowRight");

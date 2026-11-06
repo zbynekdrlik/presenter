@@ -13,6 +13,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
   deriveTestConfig,
   refreshDevData,
+  selectPassage,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -57,7 +58,7 @@ function collectConsoleMessages(page: Page): string[] {
   return messages;
 }
 
-/** Open the Bible page, pick SEB + KJV and load 1 Ján 1:1-3 by button. */
+/** Open the Bible page, pick SEB + KJV and look 1 Ján 1:1-3 up in the console. */
 async function loadFirstJohn(page: Page): Promise<void> {
   await page.goto(new URL("/ui/operator/bible", baseURL).toString(), {
     waitUntil: "domcontentloaded",
@@ -65,29 +66,18 @@ async function loadFirstJohn(page: Page): Promise<void> {
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
-  const main = page.locator('[data-role="main-translation"]');
-  await expect(main.locator('option[value="slk-seb"]')).toHaveCount(1, {
-    timeout: 15_000,
-  });
-  await main.selectOption("slk-seb");
-  await page
-    .locator('[data-role="secondary-translation"]')
-    .selectOption("eng-kjv");
-  await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+  const button = (kind: string, code: string) =>
+    page.locator(
+      `[data-role="console-translation"][data-kind="${kind}"][data-translation="${code}"]`,
+    );
+  await button("main", "slk-seb").click();
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
     "data-books-translation",
     "slk-seb",
   );
-  await page.locator('[data-role="book-item"][data-book-code="1JN"]').click();
-  const verseStart = page.locator('[data-role="verse-start"]');
-  await verseStart.fill("1");
-  await verseStart.press("Tab");
-  const verseEnd = page.locator('[data-role="verse-end"]');
-  await verseEnd.fill("3");
-  await verseEnd.press("Tab");
-  await page.locator('[data-role="load-button"]').click();
-  await expect(
-    page.locator('[data-role="slide-card"]').first(),
-  ).toBeVisible({ timeout: 15_000 });
+  await button("secondary", "eng-kjv").click();
+  await expect(button("secondary", "eng-kjv")).toHaveAttribute("aria-pressed", "true");
+  await selectPassage(page, "1jn 1:1-3");
 }
 
 /** Characters (Unicode scalar values, like Rust `chars().count()`). */

@@ -22,6 +22,7 @@ use crate::components::version_label::VersionLabel;
 use crate::pages::ai::AiPage;
 use crate::pages::bible::BiblePage;
 use crate::pages::settings::SettingsPage;
+use crate::state::global_keys::{global_key, GlobalKey, KeyFocus, KeyScope};
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::ws;
@@ -162,8 +163,13 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     // Expose test helpers
     crate::utils::test_helpers::expose_globals(&ctx, &op);
 
-    // Catalog resizer
-    let catalog_top_style = move || format!("height: {}px", op.catalog_top_height.get());
+    // Catalog resizer. A desktop (#875 mockup v3) lets the libraries +
+    // playlists take only the rows they have, up to this height
+    // (`--catalog-top-max`, operator_frame.css); the phone keeps `height`.
+    let catalog_top_style = move || {
+        let height = op.catalog_top_height.get();
+        format!("height: {height}px; --catalog-top-max: {height}px")
+    };
 
     // #850 S8: Settings and AI mount the first time their view opens and then
     // stay mounted (the Menovky latch, #871). Settings' cards are a third of the
@@ -539,42 +545,95 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
                 if tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" {
                     return;
                 }
-                // Space presses a focused ZOBRAZIŤ like any button (spec §7.3).
-                if key == " "
-                    && active.get_attribute("data-role").as_deref() == Some("console-show")
-                {
-                    return;
-                }
             }
 
-            let is_live = ctx.mode.get_untracked() == "live";
-
-            // Space in live mode: focus search
-            if key == " " && is_live {
-                ev.prevent_default();
-                if let Ok(Some(input)) = crate::utils::window::document()
-                    .query_selector("[data-role='global-search-query']")
-                {
-                    if let Ok(html_el) = input.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = html_el.focus();
-                    }
-                }
-                return;
-            }
-
-            // Arrow keys for slide navigation in live mode
-            if is_live
-                && (key == crate::utils::keyboard::KEY_ARROW_LEFT
-                    || key == crate::utils::keyboard::KEY_ARROW_RIGHT)
-            {
-                ev.prevent_default();
-                navigate_slides(&ctx, key == crate::utils::keyboard::KEY_ARROW_RIGHT);
-            }
+            // #850 B2d: the key belongs to the shown section.
+            let view = ctx.view.get_untracked();
+            let scope = KeyScope {
+                view: &view,
+                live: ctx.mode.get_untracked() == "live",
+                bible_live_tab: element("[data-bible-panel='live'][data-visible='true']").is_some(),
+                focus: focus_kind(),
+                overlay_open: op.open_modal.get_untracked().is_some()
+                    || op.more_sheet_open.get_untracked()
+                    || presentation_modal_open(),
+            };
+            run_global_key(&ctx, &ev, global_key(scope, &key));
         });
 
     let window = crate::utils::window::window();
     let _ = window.add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref());
     handler.forget();
+}
+
+/// Carry out a window key's action (#850 B2d, `state::global_keys`).
+fn run_global_key(ctx: &AppContext, ev: &web_sys::KeyboardEvent, action: GlobalKey) {
+    match action {
+        GlobalKey::SongSlide { forward } => {
+            ev.prevent_default();
+            navigate_slides(ctx, forward);
+        }
+        GlobalKey::FocusSearch => {
+            ev.prevent_default();
+            focus("[data-role='global-search-query']");
+        }
+        GlobalKey::ConsoleStep { forward } => {
+            ev.prevent_default();
+            let role = if forward {
+                "console-next"
+            } else {
+                "console-prev"
+            };
+            // The button's own click: the same refusals (nothing
+            // loaded, a show on its way, the end of the book).
+            if let Some(button) =
+                element(&format!("[data-bible-panel='live'] [data-role='{role}']"))
+            {
+                button.click();
+            }
+        }
+        GlobalKey::FocusConsole => {
+            ev.prevent_default();
+            focus("[data-bible-panel='live'] [data-role='console-field']");
+        }
+        GlobalKey::Nothing => {}
+    }
+}
+
+/// A button, link or `role="button"` has the focus: Space / `/` / Enter
+/// belong to it (spec section 7.3: Space presses a focused Zobraziť).
+fn focus_kind() -> KeyFocus {
+    let Some(active) = crate::utils::window::document().active_element() else {
+        return KeyFocus::Page;
+    };
+    let tag = active.tag_name();
+    if tag == "BUTTON" || tag == "A" || active.get_attribute("role").as_deref() == Some("button") {
+        KeyFocus::Button
+    } else {
+        KeyFocus::Page
+    }
+}
+
+/// Biblia's "Upraviť prezentáciu" dialog is open (`bible_prepared.rs`).
+fn presentation_modal_open() -> bool {
+    element("[data-role='presentation-modal']")
+        .and_then(|modal| modal.style().get_property_value("display").ok())
+        .is_some_and(|display| display != "none")
+}
+
+/// The first element matching `selector`, as an `HtmlElement`.
+fn element(selector: &str) -> Option<web_sys::HtmlElement> {
+    crate::utils::window::document()
+        .query_selector(selector)
+        .ok()
+        .flatten()
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+}
+
+fn focus(selector: &str) {
+    if let Some(el) = element(selector) {
+        let _ = el.focus();
+    }
 }
 
 fn setup_popstate_listener(ctx: AppContext, op: OperatorState) {

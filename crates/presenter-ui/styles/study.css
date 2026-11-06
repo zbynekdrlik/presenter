@@ -69,6 +69,11 @@
 }
 
 .study-head__title {
+  /* Gives way to the buttons on a narrow phone (the sermon views add Biblia). */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
   font-size: 18px;
   font-weight: 650;
@@ -77,6 +82,7 @@
 
 .study-head__actions {
   display: flex;
+  flex: none;
 }
 
 .study-icon {
@@ -123,7 +129,7 @@
   display: block;
   width: 100%;
   height: 46px;
-  padding: 0 46px 0 14px;
+  padding: 0 90px 0 14px;
   border: 1.5px solid var(--study-line);
   border-radius: 12px;
   background: var(--study-panel);
@@ -141,7 +147,8 @@
   border-color: var(--study-blue);
 }
 
-.study-field__clear {
+.study-field__clear,
+.study-field__recent {
   position: absolute;
   top: 1px;
   right: 1px;
@@ -151,6 +158,20 @@
   background: transparent;
   color: var(--study-muted);
   cursor: pointer;
+}
+
+/* ✕ left of ▾ (owner, 2026-11-06: clear on the right, earlier searches
+   under the arrow). */
+.study-field__clear {
+  right: 45px;
+}
+
+.study-field__recent {
+  font-size: 18px;
+}
+
+.study-field[data-recent-open="true"] .study-field__recent {
+  color: var(--study-blue);
 }
 
 .study-suggest {
@@ -1071,6 +1092,10 @@
   }
 
   .study-field__clear {
+    right: 57px;
+  }
+
+  .study-field__recent {
     right: 13px;
   }
 

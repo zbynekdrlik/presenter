@@ -63,8 +63,9 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
       await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
     }
 
-    // Click neutral area
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    // Focus on the page itself: (10, 10) is the Piesne button of the 40 px
+    // header since #875 H1, and Space presses a focused button (#850 B2d).
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // Press space
     await page.keyboard.press("Space");
@@ -87,8 +88,9 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
       { timeout: 5_000 },
     );
 
-    // Click neutral area
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    // Focus on the page itself: (10, 10) is the Piesne button of the 40 px
+    // header since #875 H1, and Space presses a focused button (#850 B2d).
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // Press space - should NOT focus search
     await page.keyboard.press("Space");
@@ -185,7 +187,7 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
     await expect(firstSlide).toHaveClass(/is-active/, { timeout: 5_000 });
 
     // Click body to unfocus inputs
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // Press ArrowRight
     await page.keyboard.press("ArrowRight");
@@ -217,7 +219,7 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
     await expect(secondSlide).toHaveClass(/is-active/, { timeout: 5_000 });
 
     // Click body to unfocus inputs
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // Press ArrowLeft
     await page.keyboard.press("ArrowLeft");

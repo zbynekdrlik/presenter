@@ -158,7 +158,13 @@ test.describe("Operator Control Buttons", () => {
     });
     await expect(followButton).toHaveText("Sledovať pódium");
     await expect(followButton).toHaveAttribute("aria-pressed", "true");
-    const onBackground = await followButton.evaluate((el) => getComputedStyle(el).backgroundColor);
+    // #875 mockup v3: on = green border + light green text on the preview
+    // (the phone keeps the filled accent), so compare the whole look.
+    const lookOf = (el: Element) => {
+      const s = getComputedStyle(el);
+      return `${s.backgroundColor} ${s.borderTopColor} ${s.color}`;
+    };
+    const onLook = await followButton.evaluate(lookOf);
 
     // Click to disable
     await followButton.click();
@@ -169,9 +175,7 @@ test.describe("Operator Control Buttons", () => {
     await expect(followButton).toHaveAttribute("aria-pressed", "false");
     // The text no longer says ON/OFF: the same button must LOOK different
     // in its two states.
-    await expect
-      .poll(() => followButton.evaluate((el) => getComputedStyle(el).backgroundColor))
-      .not.toBe(onBackground);
+    await expect.poll(() => followButton.evaluate(lookOf)).not.toBe(onLook);
 
     // Verify via API
     const statusResp = await page.request.get(

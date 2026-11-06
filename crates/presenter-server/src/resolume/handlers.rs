@@ -39,11 +39,6 @@ struct StagePushMetrics {
 }
 
 use super::driver::TRIGGER_DELAY;
-use super::legacy_reference::legacy_translation_reference;
-
-pub(super) fn translation_short_code(code: &str) -> String {
-    code.rsplit('-').next().unwrap_or(code).to_uppercase()
-}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum MetadataSlot {
@@ -359,24 +354,12 @@ impl HostDriver {
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);
             let mut to_trigger = Vec::new();
 
-            // Prefer slide_output (single source of truth) over legacy passage
+            // #850 A2b: every path (the legacy `/bible/trigger` included)
+            // sends the one `BibleSlideOutput`; `None` is a clear.
             let (bible_lane_filled, bible_translation_lane_filled) =
                 if let Some(ref output) = update.slide_output {
-                    // New path: use BibleSlideOutput directly (no transformations)
                     self.handle_bible_slide_output(
                         output,
-                        &mapping,
-                        bible_lane,
-                        bible_translation_lane,
-                        &mut to_trigger,
-                        status,
-                    )
-                    .await?
-                } else if let Some(ref passage) = update.passage {
-                    // Legacy path: use BibleBroadcast with derived values
-                    self.handle_bible_legacy(
-                        passage,
-                        &update,
                         &mapping,
                         bible_lane,
                         bible_translation_lane,
@@ -479,90 +462,6 @@ impl HostDriver {
                 &mapping.bible_translate_reference_a,
                 &mapping.bible_translate_reference_b,
                 Some(&output.secondary_reference),
-                status,
-            )
-            .await?;
-        if !sec_ref_targets.is_empty() {
-            to_trigger.extend(sec_ref_targets);
-        }
-
-        Ok((bible_lane_filled, bible_translation_lane_filled))
-    }
-
-    /// Handle Bible update using the legacy BibleBroadcast path (deprecated).
-    async fn handle_bible_legacy(
-        &mut self,
-        passage: &presenter_core::BibleBroadcast,
-        update: &BibleUpdate,
-        mapping: &ClipMapping,
-        bible_lane: LaneTarget,
-        bible_translation_lane: LaneTarget,
-        to_trigger: &mut Vec<ClipTarget>,
-        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
-    ) -> anyhow::Result<(bool, bool)> {
-        let verse_text = passage.passage.text.clone();
-        let translation_code = passage.passage.translation.code.clone();
-        let reference = passage.passage.reference.to_human_readable();
-        let short_code = translation_short_code(&translation_code);
-        let reference_with_code = format!("{reference} ({short_code})");
-
-        // Send verse text to #bible-a/b
-        let bible_targets = self
-            .update_lane_text(
-                bible_lane,
-                &mapping.bible_a,
-                &mapping.bible_b,
-                Some(&verse_text),
-                status,
-            )
-            .await?;
-        let bible_lane_filled = !bible_targets.is_empty();
-        if bible_lane_filled {
-            to_trigger.extend(bible_targets);
-        }
-
-        // Send reference to #bible-reference-a/b (same lane as bible)
-        let bible_ref_targets = self
-            .update_lane_text(
-                bible_lane,
-                &mapping.bible_reference_a,
-                &mapping.bible_reference_b,
-                Some(&reference_with_code),
-                status,
-            )
-            .await?;
-        if !bible_ref_targets.is_empty() {
-            to_trigger.extend(bible_ref_targets);
-        }
-
-        // Send secondary translation text to #bible-translate-a/b
-        let sec_text = update.secondary_text.as_deref().unwrap_or("").to_string();
-        let bible_translation_targets = self
-            .update_lane_text(
-                bible_translation_lane,
-                &mapping.bible_translation_a,
-                &mapping.bible_translation_b,
-                Some(&sec_text),
-                status,
-            )
-            .await?;
-        let bible_translation_lane_filled = !bible_translation_targets.is_empty();
-        if bible_translation_lane_filled {
-            to_trigger.extend(bible_translation_targets);
-        }
-
-        // Send secondary translation reference to #bible-translate-reference-a/b
-        let sec_ref = legacy_translation_reference(
-            &passage.passage.reference,
-            update.secondary_book.as_deref(),
-            update.secondary_translation_code.as_deref(),
-        );
-        let sec_ref_targets = self
-            .update_lane_text(
-                bible_translation_lane,
-                &mapping.bible_translate_reference_a,
-                &mapping.bible_translate_reference_b,
-                Some(&sec_ref),
                 status,
             )
             .await?;

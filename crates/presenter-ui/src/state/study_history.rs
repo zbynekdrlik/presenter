@@ -104,6 +104,24 @@ impl StudyHistory {
         }
     }
 
+    /// Whether the run of entries right behind the current one, all of this
+    /// label, holds a row for it.
+    pub fn has_row_behind(&self, label: &str) -> bool {
+        self.entries
+            .iter()
+            .take(self.offset())
+            .rev()
+            .take_while(|entry| entry.label == label)
+            .any(|entry| entry.listed)
+    }
+
+    /// Whether the current entry is a row of the long-press list.
+    pub fn current_listed(&self) -> bool {
+        self.entries
+            .get(self.offset())
+            .is_none_or(|entry| entry.listed)
+    }
+
     /// The current entry's row, once the chapter's real book name is known.
     pub fn relabel(&mut self, label: String) {
         let offset = self.offset();
@@ -330,6 +348,47 @@ mod tests {
         history.relabel("Hebrejom 11 · SEB".to_string());
         history.push(place("c"));
         assert_eq!(history.back_list().len(), 1);
+    }
+
+    fn labelled(label: &str, listed: bool) -> HistoryEntry {
+        HistoryEntry {
+            listed,
+            ..place(label)
+        }
+    }
+
+    #[test]
+    fn a_row_behind_is_found_past_the_sheets_over_the_same_place() {
+        let mut history = walked(&["a"]);
+        assert!(!history.has_row_behind("a"));
+        history.push(labelled("a", false));
+        assert!(history.has_row_behind("a"));
+        // A second sheet stacked on the first (wide screen, sheet not modal).
+        history.push(labelled("a", false));
+        assert!(history.has_row_behind("a"));
+    }
+
+    #[test]
+    fn a_row_of_the_same_place_past_another_place_does_not_count() {
+        let mut history = walked(&["a", "b"]);
+        history.push(labelled("a", false));
+        assert!(!history.has_row_behind("a"));
+    }
+
+    #[test]
+    fn a_list_started_on_sheets_has_no_row_behind() {
+        let mut history = StudyHistory::default();
+        history.push(labelled("a", false));
+        history.push(labelled("a", false));
+        assert!(!history.has_row_behind("a"));
+    }
+
+    #[test]
+    fn current_listed_tells_a_place_from_a_step() {
+        let mut history = walked(&["a"]);
+        assert!(history.current_listed());
+        history.push(sheet("b"));
+        assert!(!history.current_listed());
     }
 
     #[test]

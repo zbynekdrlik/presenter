@@ -11,6 +11,7 @@ mod compare;
 mod crossrefs;
 mod favourites;
 mod field;
+mod field_recent;
 mod header;
 mod history;
 mod long_press;
@@ -476,13 +477,19 @@ fn install_pwa() {
     let tags: [(&str, &[(&str, &str)]); 5] = [
         (
             "link",
-            &[("rel", "manifest"), ("href", "/ui/study/manifest.json")],
+            // With credentials: behind Cloudflare Access a cookie-less fetch of
+            // the manifest gets the login page and the phone offers no install.
+            &[
+                ("rel", "manifest"),
+                ("href", "/ui/study/manifest.json"),
+                ("crossorigin", "use-credentials"),
+            ],
         ),
         (
             "link",
             &[
                 ("rel", "apple-touch-icon"),
-                ("href", "/ui/tablet/apple-touch-icon.png"),
+                ("href", "/ui/study/apple-touch-icon.png"),
             ],
         ),
         (

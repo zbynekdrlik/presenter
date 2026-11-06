@@ -3,7 +3,8 @@
  *
  * On a desktop the stage preview is the LAST block of the left column: on
  * Piesne the live mirror under the library / playlist / song lists, on Biblia
- * the verse on the wall under the Bible tabs. It is the column's full width at
+ * the verse on the wall under the Bible tabs (the Biblia column is the Piesne
+ * mockup-v3 frame since #875: 361 px at x = 0, the preview 360 × 202.5). It is the column's full width at
  * 16:9 and ends at the column's bottom edge; the lists end above it. Ableton +
  * Follow (top-left), the broom (top-right) and the stage counter
  * (bottom-right) lie on the picture and take clicks. Every other section
@@ -183,6 +184,30 @@ for (const viewport of VIEWPORTS) {
     const b = await boxes(page, "bible", [".operator__catalog-top", "bible-preview", "clear-slide", "stage-monitor"]);
     const preview = b.preview!;
     expectPinned(b.column!, preview, size);
+    // The Piesne frame (#875 mockup v3): a 360 px column + its 1 px line at
+    // x = 0, no card; the verse on the wall 360 × 202.5 like the mirror.
+    expect(Math.abs(b.column!.left), "column at x = 0").toBeLessThanOrEqual(0.5);
+    expect(Math.abs(b.column!.width - 361), "column width").toBeLessThanOrEqual(0.5);
+    expect(Math.abs(preview.width - 360), "preview width").toBeLessThanOrEqual(0.5);
+    expect(Math.abs(preview.height - 202.5), "preview height").toBeLessThanOrEqual(0.5);
+    const frame = await column.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return {
+        right: cs.borderRightWidth,
+        left: cs.borderLeftWidth,
+        top: cs.borderTopWidth,
+        radius: cs.borderTopLeftRadius,
+      };
+    });
+    expect(frame).toEqual({ right: "1px", left: "0px", top: "0px", radius: "0px" });
+    const work = await page
+      .locator('[data-view-panel="bible"] [data-role="slides-column"]')
+      .evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, border: getComputedStyle(el).borderLeftWidth };
+      });
+    expect(Math.abs(work.left - 361), "work area flush with the line").toBeLessThanOrEqual(0.5);
+    expect(work.border).toBe("0px");
     expect(b.parts[".operator__catalog-top"]!.bottom, "Bible tabs").toBeLessThanOrEqual(preview.top + 1);
     for (const role of ["bible-preview", "clear-slide", "stage-monitor"]) {
       expectInside(b.parts[role]!, preview, role);

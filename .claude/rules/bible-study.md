@@ -27,6 +27,10 @@ preparation (the sermon views are in `sermon-prep.md`).
   Obrazovky surface list (those open a new tab). The page is also entered from `/`.
 - **A chapter comes from `GET /bible/study/chapter`, in ONE function** (`api/study.rs::load_chapter`).
   An empty `verses` = this translation lacks it; specs gate it with a URL regex, it has no body.
+- **Every view leads back to the verses without the history:** a tab reopened on a sermon or the
+  sermon list has no ◀ and no field, so the header adds `study-bible` "Biblia" on those views
+  (`sermon_pane::reading_route` = the last reading place, its saved verse) beside Kázne (owner,
+  2026-11-06). A new view without the field needs the same way out.
 - **The URL is the state.** `state::study::StudyRoute::{parse,to_url}`; every view AND sheet has a
   URL (`s=akcie|historia|pismo|prekladN`), so the system Back closes a sheet. `v=3-12` = the
   selected verses. Moves go through `pages/study/nav.rs`, never a direct `route.set`.
@@ -45,6 +49,22 @@ preparation (the sermon views are in `sermon-prep.md`).
   in a `requestAnimationFrame` once that chapter (or that search) is on screen. `study.lastVerse` holds
   `<chapter key>|<verse>`, written for the chapter ON SCREEN and read only for that chapter: a saved
   verse is ignored anywhere else, and a link's `v=` wins over it (a reload keeps the place).
+- **A tap on a verse's text highlights it** (`reader::on_text_tap`, `v=<n>` by `nav::replace`, no
+  history entry; a second tap lets go; with the verse sheet open it grows the selection like the
+  number; a KJV word tap highlights AND opens the word sheet, `VerseBody`'s `on_tap` runs first).
+  Owner 2026-11-06: "aby bolo jasné, na ktorý sa fokusujem".
+- **A translation switch keeps the eye's verse at its screen offset** (`ScrollPlan::VerseAt`): the
+  highlighted verse while it shows, else `verse_in_view`. `verse_in_view` reads 2 px below the
+  landing gap (`SLACK_PX`): a landed verse sits at the gap and the verse before ends there plus a
+  fraction of a pixel, so without the slack every switch stepped one verse back (20 → 16 in seven).
+  `land` rounds its whole-pixel scroll step DOWN (`scroll_step`): rounding 412.53 up left the verse
+  0.47 px above the reader's top and failed the `>= 0` E2E bound on CI only.
+  `verse_offset` rounds DOWN too (`screen_offset`): read to the nearest, a verse landed at 172.8 read
+  173 and every switch walked it a pixel down the screen. Read and landing must agree.
+- **Its own app:** manifest + icons under `/ui/study/` (open book, `study_icons/`, not the tablet's
+  "B"), `<link rel=manifest crossorigin="use-credentials">`: a cookie-less manifest fetch behind
+  Cloudflare Access (`prsnv.newlevel.media`) gets the login page and Android offers no install. Dev2
+  and the church sit on the Access bypass IP, so only a phone off-site shows that case.
 - **A verse number works only on the route's chapter** (`reader::chapter_settled`): during a load
   the URL has moved on and the old text is on screen, so numbers are disabled and the sheet reads
   nothing from a chapter the route does not name.
@@ -57,6 +77,19 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **Verse numbers are a 44 px gutter, not superscripts:** a number is a control (T3).
 - **A translation lacking a place** answers no slides: `Chapter::Missing`, and `step_chapter` walks to
   its nearest chapter by the canonical book number, so the reader never gets stuck.
+- **The field keeps an opened reference** (`Field::opened`): while that chapter is read, in any
+  translation, the typed text stays so "2kor 5" is fixed to "1kor 5" in place (owner, 2026-11-06);
+  another chapter, view or Back empties it (not while the field has focus). One `FieldPlace` effect
+  owns the field's text for both this and the search query.
+- **✕ and ▾ in the field** (owner, 2026-11-06): ✕ clears and keeps the focus; ▾
+  (`field_recent.rs`) lists this browser's earlier searches (`state::study_recent`, localStorage
+  `studyRecent`, 12, newest first, case/space duplicates move to the top). What is kept: the typed
+  text on Enter, a row's label, "Book N" for a chapter cell, the Strong's number, the search words.
+  A pick only FILLS the field (Enter opens it); typing, a blur or Escape closes the list.
+- **A tap on a † is the note's** (`tapped_note`), never the verse's. **A chip tapped during a load**
+  keeps the waiting `ScrollPlan`: what is on screen is the chapter being left. **`nav::replace` keeps
+  `listed`** unless a sheet closes: a highlight on a closed sheet's step is no second row. **Whatever
+  opens a passage leaves its text in the field** (`Field::open`), a row's label or "Book N" too.
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.

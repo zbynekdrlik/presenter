@@ -78,7 +78,7 @@ async function openFaith(page: Page): Promise<void> {
   await expect(role(page, "word-sheet-lemma")).toHaveText("πίστις");
 }
 
-test("a word opens its entry and touches neither the verse nor the scroll", async ({ browser }) => {
+test("a word opens its entry, highlights its verse and leaves the scroll alone", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
   const { page } = opened;
   await expect(word(page, 1, 2)).toHaveText("faith");
@@ -92,7 +92,9 @@ test("a word opens its entry and touches neither the verse nor the scroll", asyn
   await expect(role(page, "word-sheet-definition")).toHaveText("persuasion, i.e. credence");
   await expect(role(page, "word-sheet-kjv")).toContainText("V KJV: assurance, belief");
   await expect(word(page, 1, 2)).toHaveAttribute("data-active", "true");
-  await expect(verse(page, 1)).toHaveAttribute("data-selected", "false");
+  // A tap on a word marks its verse too (owner, 2026-11-06: a tap shows which
+  // verse is in focus); the verse actions still stay closed.
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
   await expect(role(page, "verse-actions")).toHaveCount(0);
   await assertNoHorizontalOverflow(page);
   await assertMinTapTarget(role(page, "word-sheet-occurrences"), 44);
@@ -769,5 +771,25 @@ test("text selected with a mouse opens no sheet, a plain click still does", asyn
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
   await word(page, 1, 6).click();
   await expect(sheet(page)).toHaveAttribute("data-strongs", "G5287");
+  await finish(opened);
+});
+
+test("a tap on a note is no tap on its verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=1CH.1", "slk-seb:1CH.1");
+  const { page } = opened;
+  const note = verse(page, 3).locator('[data-role="study-note"]').first();
+  await note.tap();
+  await expect(role(page, "study-note-text")).toBeVisible();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "false");
+  await note.tap();
+
+  // A highlighted verse keeps its highlight, the open text lets nothing through.
+  await verse(page, 3).locator(".study-verse__text").tap({ position: { x: 2, y: 2 } });
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await note.tap();
+  await expect(role(page, "study-note-text")).toBeVisible();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await role(page, "study-note-text").tap();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
   await finish(opened);
 });

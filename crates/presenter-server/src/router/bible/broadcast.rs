@@ -60,6 +60,8 @@ pub(crate) struct BibleTriggerRequest {
 #[instrument(skip_all)]
 pub(crate) async fn trigger_bible_broadcast(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(payload): Json<BibleTriggerRequest>,
 ) -> Result<Json<presenter_core::BibleBroadcast>, AppError> {
     let verse_end = payload.verse_end.unwrap_or(payload.verse_start);
@@ -89,8 +91,9 @@ pub(crate) async fn trigger_bible_broadcast(
     // centralized `From<anyhow::Error> for AppError` — `AppError::from` here
     // just performs that conversion explicitly since this is the function's
     // tail expression, not a `?`-propagated call.
+    let origin = show_origin(BibleShowSource::Trigger, &headers, connect_info);
     state
-        .trigger_bible_passage(&payload.translation, &reference, text_overrides)
+        .trigger_bible_passage(&payload.translation, &reference, text_overrides, origin)
         .await
         .map(Json)
         .map_err(AppError::from)

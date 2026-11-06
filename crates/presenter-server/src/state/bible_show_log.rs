@@ -4,8 +4,7 @@
 
 use presenter_core::BibleSlideOutput;
 
-/// The endpoint a Bible show came from. A2b adds Companion and the AI tools
-/// when the legacy trigger is rerouted here.
+/// The endpoint a Bible show came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BibleShowSource {
     /// `POST /bible/trigger-slide`.
@@ -14,6 +13,12 @@ pub enum BibleShowSource {
     Prepared,
     /// `POST /bible/trigger-slide` from the verse console (#850 B2a).
     Console,
+    /// The legacy reference trigger `POST /bible/trigger` (#850 A2b).
+    Trigger,
+    /// Companion's `bible.trigger` command (#850 A2b).
+    Companion,
+    /// The AI `trigger_bible_verse` tool (#850 A2b).
+    Ai,
 }
 
 impl BibleShowSource {
@@ -22,6 +27,9 @@ impl BibleShowSource {
             Self::Api => "api",
             Self::Prepared => "prepared",
             Self::Console => "console",
+            Self::Trigger => "trigger",
+            Self::Companion => "companion",
+            Self::Ai => "ai",
         }
     }
 
@@ -51,6 +59,18 @@ pub struct BibleShowOrigin {
     /// `touch` / `desktop` once the console sends it (#850 B2a).
     pub device: Option<String>,
     pub client_ip: String,
+}
+
+impl BibleShowOrigin {
+    /// A show with no HTTP client of its own (Companion's socket, the AI
+    /// tool): no device, client IP `-`.
+    pub fn internal(source: BibleShowSource) -> Self {
+        Self {
+            source,
+            device: None,
+            client_ip: "-".to_string(),
+        }
+    }
 }
 
 /// The fields of one `presenter::bible::show` line; `-` for a missing value.

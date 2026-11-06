@@ -13,6 +13,11 @@ use crate::state::study::{chapter_key, StudyRoute, StudyView, KEY_LAST_VERSE};
 
 /// The gap left above a verse scrolled to the top.
 const TOP_GAP_PX: f64 = 8.0;
+/// What a verse may still show above the top gap and not count as being read:
+/// a landed verse sits at the gap, so the one before it ends there too, and a
+/// fraction of a pixel of it must not make it the verse in view (owner,
+/// 2026-11-06: every translation switch stepped one verse back).
+const SLACK_PX: f64 = 2.0;
 /// The verse in view is saved this long after the last scroll event.
 const SAVE_AFTER_MS: u32 = 300;
 
@@ -22,6 +27,9 @@ pub(super) enum ScrollPlan {
     Keep,
     Top,
     Verse(u16),
+    /// This verse's top this far below the reader's top: a translation switch
+    /// keeps the verse where the eye was.
+    VerseAt(u16, i32),
     Offset(i32),
 }
 
@@ -67,30 +75,78 @@ fn apply(s: Study, plan: ScrollPlan) {
         ScrollPlan::Keep => {}
         ScrollPlan::Top => scroller.set_scroll_top(0),
         ScrollPlan::Offset(offset) => scroller.set_scroll_top(offset),
-        ScrollPlan::Verse(verse) => {
-            let selector = format!("[data-role=\"study-verse\"][data-verse=\"{verse}\"]");
-            if let Ok(Some(found)) = scroller.query_selector(&selector) {
-                let distance = found.get_bounding_client_rect().top()
-                    - scroller.get_bounding_client_rect().top()
-                    - TOP_GAP_PX;
-                scroller.set_scroll_top(scroller.scroll_top() + distance as i32);
-            }
-        }
+        ScrollPlan::Verse(verse) => land(&scroller, verse, TOP_GAP_PX),
+        ScrollPlan::VerseAt(verse, offset) => land(&scroller, verse, f64::from(offset)),
     }
+}
+
+fn verse_element(scroller: &web_sys::Element, verse: u16) -> Option<web_sys::Element> {
+    let selector = format!("[data-role=\"study-verse\"][data-verse=\"{verse}\"]");
+    scroller.query_selector(&selector).ok().flatten()
+}
+
+/// Put the verse's top `offset` px below the reader's top, never above it:
+/// the scroll offset is whole pixels while the layout is not, so the step is
+/// rounded down and the verse lands within one pixel below `offset`.
+fn land(scroller: &web_sys::HtmlElement, verse: u16, offset: f64) {
+    if let Some(found) = verse_element(scroller, verse) {
+        let distance = found.get_bounding_client_rect().top()
+            - scroller.get_bounding_client_rect().top()
+            - offset;
+        scroller.set_scroll_top(scroller.scroll_top() + scroll_step(distance));
+    }
+}
+
+/// The whole-pixel scroll step for a distance: rounded down, so the target
+/// ends at or just below the line, never a fraction above it.
+fn scroll_step(distance: f64) -> i32 {
+    distance.floor() as i32
+}
+
+/// The first of the verse bottoms (top to bottom) below `line`, by index.
+fn first_below(bottoms: impl IntoIterator<Item = f64>, line: f64) -> Option<usize> {
+    bottoms.into_iter().position(|bottom| bottom > line)
 }
 
 /// The first verse still showing at the top of the reader.
 pub(super) fn verse_in_view(s: Study) -> Option<u16> {
     let scroller = s.scroller.get_untracked()?;
-    let top = scroller.get_bounding_client_rect().top() + TOP_GAP_PX;
+    let line = scroller.get_bounding_client_rect().top() + TOP_GAP_PX + SLACK_PX;
     let verses = scroller
         .query_selector_all("[data-role=\"study-verse\"]")
         .ok()?;
-    (0..verses.length())
+    let elements: Vec<web_sys::Element> = (0..verses.length())
         .filter_map(|index| verses.item(index))
         .filter_map(|node| node.dyn_into::<web_sys::Element>().ok())
-        .find(|element| element.get_bounding_client_rect().bottom() > top)
-        .and_then(|element| element.get_attribute("data-verse")?.parse().ok())
+        .collect();
+    let index = first_below(
+        elements
+            .iter()
+            .map(|element| element.get_bounding_client_rect().bottom()),
+        line,
+    )?;
+    elements[index].get_attribute("data-verse")?.parse().ok()
+}
+
+/// Where a verse's top is, from the reader's top, while any of it shows.
+pub(super) fn verse_offset(s: Study, verse: u16) -> Option<i32> {
+    let scroller = s.scroller.get_untracked()?;
+    let frame = scroller.get_bounding_client_rect();
+    let found = verse_element(&scroller, verse)?.get_bounding_client_rect();
+    let shows = found.bottom() > frame.top() && found.top() < frame.bottom();
+    shows.then(|| screen_offset(found.top() - frame.top()))
+}
+
+/// The whole-pixel offset kept for a verse's fractional top: rounded down like
+/// the landing step, so a verse landed at `n` reads back `n`. Rounding to the
+/// nearest read 172.8 as 173 and walked the verse a pixel down per switch. A
+/// verse a fraction above the top is at the top: read as -1 it would land above.
+fn screen_offset(top: f64) -> i32 {
+    if top > -1.0 && top < 0.0 {
+        0
+    } else {
+        top.floor() as i32
+    }
 }
 
 /// The history entry being left keeps its scroll offset for Back.
@@ -158,4 +214,61 @@ pub(super) fn saved_verse(route: &StudyRoute) -> Option<u16> {
     let saved = session::get_persistent(KEY_LAST_VERSE)?;
     let (held, verse) = saved.rsplit_once('|')?;
     (held == key).then(|| verse.parse().ok()).flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{first_below, screen_offset, scroll_step, SLACK_PX, TOP_GAP_PX};
+
+    #[test]
+    fn a_landing_step_never_leaves_the_verse_above_its_line() {
+        // CI: the verse sat 0.47 px above the reader's top after a switch
+        // (rounding 412.53 up scrolled one pixel too far).
+        assert_eq!(scroll_step(412.53), 412);
+        assert_eq!(scroll_step(412.0), 412);
+        assert_eq!(scroll_step(-0.25), -1);
+    }
+
+    #[test]
+    fn switching_translations_never_walks_the_verse_down_the_screen() {
+        // CI: the highlighted verse went 171.8 -> 174.8 px in three switches.
+        // Each switch reads the offset, the new text moves the verse, the
+        // landing puts it back; the fraction is the new layout's.
+        for start in [171.796875, 8.4, 0.5, -0.25, -12.6] {
+            let kept = screen_offset(start);
+            let mut top: f64 = start;
+            for layout_shift in [1234.796875, -310.5, 88.25, 2000.75, -77.125] {
+                let offset = screen_offset(top);
+                let moved = top + layout_shift;
+                top = moved - f64::from(scroll_step(moved - f64::from(offset)));
+                assert_eq!(screen_offset(top), kept, "from {start} via {layout_shift}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_verse_a_fraction_above_the_top_is_kept_at_the_top() {
+        // CI: a verse scrolled to the top sat at -0.22 px; read as -1 it landed
+        // above the reader's top after every switch.
+        assert_eq!(screen_offset(-0.21875), 0);
+        assert_eq!(screen_offset(-0.734375), 0);
+        assert_eq!(screen_offset(-1.0), -1);
+    }
+
+    #[test]
+    fn a_landed_verse_stays_the_verse_in_view_despite_a_fraction_of_a_pixel() {
+        // Verse 20 landed 8 px below the top; verse 19 ends there, plus the
+        // fraction the integer scroll offset leaves.
+        let top = 100.0;
+        let bottoms = [top + TOP_GAP_PX + 0.4, top + 120.0];
+        assert_eq!(first_below(bottoms, top + TOP_GAP_PX + SLACK_PX), Some(1));
+        // The line without the slack picks verse 19: one verse back per switch.
+        assert_eq!(first_below(bottoms, top + TOP_GAP_PX), Some(0));
+    }
+
+    #[test]
+    fn a_verse_with_lines_still_showing_is_the_verse_in_view() {
+        assert_eq!(first_below([30.0, 90.0], TOP_GAP_PX + SLACK_PX), Some(0));
+        assert_eq!(first_below([], 0.0), None);
+    }
 }

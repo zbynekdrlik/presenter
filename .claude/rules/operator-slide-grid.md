@@ -1,5 +1,6 @@
 ---
 paths:
+  - "crates/presenter-ui/src/state/global_keys.rs"
   - "crates/presenter-ui/src/components/slide_columns.rs"
   - "crates/presenter-ui/src/components/slide_list.rs"
   - "crates/presenter-ui/src/components/slide_list_scroll.rs"
@@ -46,6 +47,20 @@ paths:
 - **Readable at 8.** 6+ per row sets `body[data-slide-columns-dense="true"]`
   (tighter cards, smaller type, `overflow-wrap: anywhere`) and grid children
   have `min-width: 0` — nothing may widen the grid past its container.
+- **Desktop card look = mockup v3 (#875, `styles/operator_frame.css`).** Live
+  cards are `aspect-ratio: 16 / 9` as a MINIMUM (never `overflow: hidden` or a
+  fixed height: at 6–8 per row the text must grow the card, not be cut), 10 px
+  radius, 1 px border, text top left, the header reordered under the text as
+  the 11 px caption; the slide on the wall is `.is-active` = 2 px red + "NA
+  STENE". Edit mode keeps the header on top. The stepper sits in the work
+  area's top row with its "Snímok v riadku" label (desktop only, 32 px
+  buttons; the phone keeps 44 px and no label).
+  "NA STENE" shows in Live mode only: in Edit mode it wrapped the card's
+  buttons onto a second line, so every AbleSet step grew the stage slide's row
+  48 px and the list jumped under the caret. One slide per row
+  (`body[data-slide-columns-single]`) drops the 16:9 minimum: a full-width
+  card was taller than the list, so Follow could never show the stage slide
+  whole.
 - **Anything that assumes 3 columns is now wrong.** The #271 next-row lookahead
   (`slide_list_scroll::columns_per_row`) reads the grid's computed
   `grid-template-columns` (`state::slide_columns::track_count`); the
@@ -55,6 +70,12 @@ paths:
   hidden grid's computed `gridTemplateColumns` is the specified `repeat(…)`
   text, not resolved tracks. The control renders in both the worship and the
   Bible toolbar — select it with `:visible`.
+- **The arrow keys belong to the shown section (#850 B2d).** ←/→ send the
+  previous / next song slide only on Piesne in Live mode
+  (`state::global_keys::global_key`, host-tested; `pages/operator.rs`
+  dispatches). On Biblia they step the verse console's preview, elsewhere
+  they do nothing: an arrow pressed while reading a verse once changed the
+  song on the wall. A new window-wide key goes into that one table.
 - **In Edit mode a stage change never moves the operator's place (#853).**
   AbleSet advances the stage every few seconds during a rehearsal; on SNV an
   operator editing slides on the FOH PC saw "the page refresh and jump to the

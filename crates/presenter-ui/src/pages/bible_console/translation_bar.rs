@@ -3,13 +3,15 @@
 //! signals as the old selects, so the #701 behaviour stays: the browser keeps
 //! its choice (localStorage) and the server preference is the default every
 //! new console starts from. The preview re-resolves at once; what is on the
-//! wall changes only on the next show.
+//! wall changes only on the next show. Phone and desktop alike since #850 B2c
+//! (it replaced the desktop selects).
 
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
 
 use crate::state::bible::BibleState;
 use crate::state::bible_translations::translation_chips;
+use crate::state::AppContext;
 
 #[component]
 pub(super) fn TranslationBar() -> impl IntoView {
@@ -30,11 +32,28 @@ pub(super) fn TranslationBar() -> impl IntoView {
     let main = move || chips.with(|c| c.main.clone());
     let more = move || chips.with(|c| c.more.clone());
     let secondary = move || chips.with(|c| c.secondary.clone());
+    // A desktop names the rows like the mockup v3 Biblia panel (a heading
+    // over each row); a phone keeps the short inline labels of mockup v2.
+    let phone = use_ctx!(AppContext).phone_shell;
+    let main_label = move || {
+        if phone.get() {
+            "Preklad"
+        } else {
+            "Hlavný preklad"
+        }
+    };
+    let secondary_label = move || {
+        if phone.get() {
+            "Pod ním"
+        } else {
+            "Druhý preklad"
+        }
+    };
 
     view! {
         <div class="console-translations" data-role="console-translations">
             <div class="console-translations__row">
-                <span class="console-translations__label">"Preklad"</span>
+                <span class="console-translations__label">{main_label}</span>
                 <For
                     each=main
                     key=|code| code.clone()
@@ -60,7 +79,7 @@ pub(super) fn TranslationBar() -> impl IntoView {
                 </Show>
             </div>
             <div class="console-translations__row">
-                <span class="console-translations__label">"Pod ním"</span>
+                <span class="console-translations__label">{secondary_label}</span>
                 <For
                     each=secondary
                     key=|code| code.clone()

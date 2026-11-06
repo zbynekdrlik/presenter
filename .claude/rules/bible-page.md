@@ -1,11 +1,11 @@
 ---
 paths:
   - "crates/presenter-ui/src/pages/bible.rs"
-  - "crates/presenter-ui/src/pages/bible_reference.rs"
   - "crates/presenter-ui/src/state/bible.rs"
-  - "crates/presenter-ui/src/state/bible_range.rs"
   - "tests/e2e/wasm-bible.spec.ts"
-  - "tests/e2e/bible-range-hint.spec.ts"
+  - "crates/presenter-ui/src/pages/bible_slides.rs"
+  - "crates/presenter-ui/src/pages/bible_controls.rs"
+  - "crates/presenter-ui/styles/bible.css"
   - "crates/presenter-ui/src/pages/bible_prepared.rs"
   - "crates/presenter-ui/src/pages/bible_prepared_list.rs"
   - "crates/presenter-persistence/src/repository/bible/presentation_order.rs"
@@ -14,59 +14,65 @@ paths:
 
 # Bible page (`/ui/operator/bible`) — DOM contract & E2E determinism
 
-## Book-list has TWO render variants — keep their `data-*` contract identical (#727)
+## The Live tab IS the verse console (#850 B2c)
 
-`BookList` renders either the FULL list (one `<button data-role="book-item" data-book-code=… data-active=…>` per book) OR, when a book is selected AND `book_filter` is empty, a COLLAPSED single item. Both variants MUST expose the SAME automation attributes — `data-role="book-item"`, `data-book-code`, `data-active`. The collapsed variant once dropped `data-book-code`, so any test reading the active book's code got `null`; the "preserves book" E2E could then only ever pass via the "cleared" branch and timed out (10 s) whenever the book was actually preserved. When you add/remove a `data-*` on one variant, mirror it on the other.
+`BibleLiveTab` mounts only `<BibleConsole/>` (rules in `bible-console.md`), on a phone and a
+desktop alike. Gone in B2c, never bring them back: the book filter / book list, the chapter and
+verse fields (#825 range hint, `state/bible_range.rs`, `pages/bible_reference.rs`), the load
+button, the 300 ms auto-load, the history list, the two translation `<select>`s (the console's
+translation bar replaced them), the header verse search and its results branch
+(`AppContext.bible_search_*`). `BibleState` keeps only what the console, the grid and the Prepared
+tab read: no selected book / chapter / verse, no `classic_loads` / `console_takes` /
+`console_owns_grid` / `translation_echo`.
 
-## Async-effect settle signal, NOT `expect.poll`-with-timeout (#727)
-
-The translation-switch effect (`selected_translation` change → `spawn_local(list_books)` → preserve-or-clear `selected_book`) is async; nothing in the DOM signalled *when it finished*, so E2E raced it. Fix pattern: the effect publishes a **settle marker as its LAST synchronous write** — `books_translation.set(Some(code))` after `books`/`selected_book` are set — exposed on the book-list container as `data-books-translation`. Leptos coalesces the block's synchronous signal writes into one render flush, so the render that first shows `data-books-translation == <newTrans>` already reflects the settled selection. Tests `await expect(bookList).toHaveAttribute("data-books-translation", target)` (a real async-completion gate, load-tolerant) then read the settled state — never a poll that guesses render timing. Per `no-timeout-band-aids.md` a bigger poll timeout cannot fix a predicate the preserved branch never satisfies.
-
-## Reproducing bible UI behaviour on the live dev server
-
-Drive the live dev server: `http://10.77.8.134:8080/ui/operator/bible`, `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and SHARED across full translations (`eng-kjv`, `slk-seb`, `slk-roh` all carry `1CH`/`1JN`); the list is sorted by code (first book = `1CH`). Partial translations exist (`slk-mil` = 4 gospels only) — switching TO one whose books lack the selected code exercises the "cleared" path.
-
-## Chapter / verse inputs bound to the selected book (#825)
-
-`ReferenceInputs` lives in `pages/bible_reference.rs` (moved out of the
-1000-line-capped `bible.rs`). A typed chapter / verse is bounded on change /
-input AND on Enter by `state::bible_range::{bound_chapter, bound_verse}`
-(host-tested, reusing `clamp_selection`), the boxes carry `max=` and a "/ N"
-next to the label (`data-role="chapter-max" | "verse-max" | "verse-end-max"`),
-and a clamp shows `data-role="bible-range-hint"` ("Kniha má len N kapitol" /
-"Kapitola má len M veršov", Slovak plural forms) until the next valid value or a
-book change. Three traps:
-
-- Never pass a typed verse END through `clamp_selection`'s end logic: it turns
-  `end <= start` into `None` ("whole chapter"), but the #702 mirror sets
-  `end = start` for the single-verse fast path. `bound_verse` bounds the end like
-  the start.
-- After a clamp, write the bounded value back into the `<input>` itself
-  (`show_bounded`): the signal may already hold that value, so a re-render alone
-  can leave "60" visible.
-- That write-back makes the browser fire `change` with the CLAMPED value as soon
-  as the focus moves (Enter → focus to the next box; verse end's Enter blurs) —
-  synchronously, inside the keydown handler. A plain "valid value → clear the
-  note" then wipes the note before it ever renders. Every commit goes through a
-  host-tested `bible_range` note helper — `next_hint`: a commit that changes
-  nothing keeps the note, whichever box it came from (Enter on the untouched
-  mirrored end box too); only a NEW valid value clears it. A verse-start commit
-  also moves the end through the #702 mirror, so it goes through
-  `next_verse_start_hint` (an unchanged start that moves the end is a new
-  value); an emptied end box goes through `next_end_cleared_hint` (new only when
-  the end was set). Likewise a re-commit of the same chapter must not reset the
-  verses.
-
-
-## The verse console replaces these inputs on phones (#850 B2a)
-
-`BibleLiveTab` mounts `<BibleConsole/>` under the translation selects and wraps the old inputs
-(`BookFilter`, `BookList`, `ReferenceInputs`, `LoadButton`, `SelectionControls`) in
-`.bible__classic`, which the phone shell hides (`styles/bible_console.css`). The desktop keeps
-them — and the book filter's autofocus, which `wasm-bible-keyboard-nav.spec.ts` pins — until B2c
-removes them. When no stored name contains the filter text, `BibleState::filtered_books` falls
-back to `resolver::resolve_book_name` (`zid` → Hebrejom, #850 U1). `bible.rs` sits at 809
-production lines: every new console piece goes into `pages/bible_console/`.
+- **Settle marker:** the books effect publishes `books_translation` as its LAST write (after a
+  stale-answer check against the selected translation); `[data-role="bible-console"]` carries it as
+  `data-books-translation`. E2E awaits that attribute after any main translation change, never a
+  timing guess (#727 rule: a bigger poll timeout cannot fix a predicate).
+- **E2E entry:** `selectPassage(page, query)` from `support.ts` types into the console field and
+  waits for `data-preview-ready="true"` plus a slide card. A translation is picked with the bar's
+  buttons: `[data-role="console-translation"][data-kind="main|secondary"][data-translation=<code>]`
+  (`""` = žiadny), never a select. NLT is never a main button.
+- **Desktop layout = mockup v3 section 3** (`docs/mockups/operator-redesign-v3.html`, owner
+  complaint 2026-11-06 on #875): sub-tabs 34 px segmented, then the on-air strip (spec section
+  7.1 keeps Zhasnúť reachable; one 48 px line, transparent until a verse is live, then a red left
+  edge), the field 52 px / 18 px text / 2 px border (blue while focused), "Hlavný preklad" + a row
+  of 36 px buttons (on = filled #3b82f6), "Druhý preklad" + its row led by "žiadny" (CSS `order`,
+  on = #1e3a5f + blue border), then ◀ Zobraziť ▶ on a 48 px / 1fr / 48 px grid (the step labels
+  are `display: none`, their text stays for screen readers and `toHaveText`). Rows, hints, the text
+  search and the prepared sermons come after the bar (CSS `order`, DOM order stays the phone's);
+  the phone's preview card is not drawn on a desktop (the grid on the right is the preview; its
+  data attributes stay for the specs). All in the `body.operator:not([data-shell="phone"])` block
+  at the end of `styles/bible_console.css`; `bible-console.spec.ts` pins sizes and order at
+  1280×720 and 1920×1080.
+- **The page frame = the Piesne one** (#875, `bible.css` end): the left column 360 px + a 1 px
+  `border-right` at x = 0, no card border / radius / padding (the tabs get 8 px like the mockup's
+  `.lists`), the work area flush beside it (`.operator__slides-column` padding 0), the verse on the
+  wall at the bottom 360 × 202.5 (stage_preview.css; under 1025 px the column is 301 px and the
+  preview 300 × 168.75, the Piesne mirror's rule). Pinned in
+  `operator-stage-preview-layout.spec.ts`.
+- **The work area = the Piesne one** (#875 mockup section 3, `operator-mockup-v3.spec.ts`
+  "Biblia work area"): the toolbar is an `.operator__worktop operator__worktop--bible` — the
+  title `[data-role=bible-worktop-title]` (Live: `state::bible_grid::passage_title`, "Ján 3:16-18
+  · SEB + KJV", the reference every live slide carries minus its "(SEB)", the secondary code only
+  when a slide has its text; Prepared: the open presentation's name), then "+ Snímka"
+  (`add-empty-slide`, `.operator__worktop-add`; desktop = Prepared tab only, the phone keeps its
+  "+"), the selection controls, the stepper. The cards share the Piesne rules in
+  `operator_frame.css` (selectors list `.operator__slide-card--bible` next to `--worship`), plus a
+  Biblia block there: the select zone (text top left, #828 counts floated top right) over the
+  trigger zone drawn as the caption `[data-role=slide-caption]` "1 · Ján 3:16"
+  (`slide_caption`, verses from the metadata) + `slide-live-tag` "NA STENE". The phone keeps
+  "▶ Ján 3:16-18 (SEB)" (`.operator__slide-trigger-ref`; the caption and tag are hidden there). The grid shows on a phone on the
+  Pripravené tab only: `BibleSlidesColumn` is always mounted, CSS hides it on the Live tab.
+  On the wall = `is_on_wall` (same main text + reference as `AppContext::active_bible_slide`) →
+  class `is-on-wall` + `data-on-wall`, never `is-active` (operator.css paints that blue on the
+  phone). The Live grid hides the reference footer on a desktop; a prepared card keeps it.
+- **Multi-select + add to a presentation** (`SelectionControls`) sit in the title row
+  (`bible_slides.rs`, `[data-role="bible-selection"]`), desktop Live tab only (spec section 7.1),
+  and only while the grid holds slides; their buttons take the "+ Snímka" look.
+- **Reproducing on the live dev server:** `http://10.77.8.134:8080/ui/operator/bible`,
+  `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and shared
+  across full translations; `slk-mil` is partial (Gospels only).
 
 ## Prepared tab: order + archive (#874)
 

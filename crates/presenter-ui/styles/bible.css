@@ -95,27 +95,6 @@ body.operator.operator--bible .operator__panel--bible {
   overflow-y: auto;
 }
 
-/* ---------- Translation row in Live tab ---------- */
-.bible__translation-row {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.bible__translation-row .operator__field--compact {
-  flex: 1;
-  min-width: 0;
-}
-
-.bible__translation-row .operator__field--compact span {
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-}
-
-.bible__translation-row select {
-  width: 100%;
-  text-overflow: ellipsis;
-}
-
 /* ---------- PREPARED panel ---------- */
 .bible__prepared-header {
   display: flex;
@@ -178,7 +157,7 @@ body.operator.operator--bible .operator__panel--bible {
   cursor: grab;
   touch-action: none;
   min-width: 2rem;
-  min-height: 2rem;
+  min-height: 40px; /* a real control: the 40 px floor (#875 H3) */
   font-size: 1.1rem;
   line-height: 1;
 }
@@ -496,44 +475,6 @@ body.operator.operator--bible .operator__panel--bible {
   margin: 0.5rem 0;
 }
 
-.operator--bible .operator__reference-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 0.5rem;
-}
-
-.operator--bible .operator__reference-grid input {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-/* #825: the maximum next to each box ("Chapter / 50") and the inline note
-   when a typed chapter/verse was past the range and got clamped. */
-.operator--bible .operator__field-max {
-  margin-left: 0.3rem;
-  color: #64748b;
-  font-variant-numeric: tabular-nums;
-}
-
-.operator--bible .operator__range-hint {
-  margin: 0.35rem 0 0;
-  font-size: 0.75rem;
-  color: #f59e0b;
-}
-
-/* Position the header search dropdown below the sticky header
-   Header height ≈ padding (0.65rem × 2) + content (~1.6rem) = ~2.9rem */
-.operator--bible .operator__search-results {
-  top: 3.2rem;
-}
-
-/* Ensure header search form sits above the dropdown so the clear button
-   is not obscured by the fixed-position results panel */
-.operator--bible .operator__search {
-  position: relative;
-  z-index: 21;
-}
-
 /* ---------- Minimal slides column for Bible UI ---------- */
 .operator__slides-column--minimal {
   padding: 0.5rem 1rem 1rem;
@@ -544,6 +485,7 @@ body.operator.operator--bible .operator__panel--bible {
   padding: 0.25rem 0.5rem;
   border-bottom: none;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 /* ---------- Add-to-presentation scrollable list ---------- */
@@ -763,4 +705,79 @@ body.operator.operator--bible .operator__panel--bible {
   display: inline-flex;
   align-items: center;
   color: #93c5fd;
+}
+
+/* ── Desktop frame = mockup v3 section 3 (#875, owner 2026-11-06) ──
+   The same frame operator_frame.css draws for Piesne: the left column 360 px
+   at x = 0 plus its 1 px line (361 px), flush, no card border / radius /
+   margins; the work area flush beside it; the verse on the wall at the
+   column's bottom, its full width at 16:9 (360 × 202.5, stage_preview.css).
+   Under 1025 px the column is 300 px (+ the line) and the preview
+   300 × 168.75, like the Piesne mirror's rule. */
+body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible {
+  grid-template-columns: 361px minmax(0, 1fr);
+  background: #0f172a;
+}
+body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible {
+  width: 361px;
+  box-sizing: border-box;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-right: 1px solid #334155;
+  border-radius: 0;
+  background: #0f172a;
+  box-shadow: none;
+}
+body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible .operator__catalog-top {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  padding: 8px;
+}
+body.operator:not([data-shell="phone"]) .operator__catalog > .operator__stage-preview--bible {
+  width: 360px;
+  margin: 0;
+  border-radius: 0;
+  background: #000;
+}
+/* The verse on the wall as the mockup's `.stagepv`: white, centred. */
+body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operator__bible-preview {
+  align-items: center;
+  padding: 0 24px;
+  text-align: center;
+}
+body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operator__bible-preview-text {
+  font-size: 16px;
+  line-height: 1.3;
+  color: #ffffff;
+}
+body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operator__bible-preview-ref {
+  justify-content: center;
+  color: #ffffff;
+  font-size: 13px;
+  font-style: normal;
+}
+/* Flush like the Piesne work area: the title row and the grid carry their
+   own padding (operator_frame.css, `.operator__worktop` / `.operator__slides`). */
+body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible .operator__slides-column {
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 0;
+  background: #0f172a;
+  box-shadow: none;
+  min-width: 0;
+}
+@media (max-width: 1024px) {
+  body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible {
+    grid-template-columns: 301px minmax(0, 1fr);
+  }
+  body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible {
+    width: 301px;
+  }
+  body.operator:not([data-shell="phone"]) .operator__catalog > .operator__stage-preview--bible {
+    width: 300px;
+  }
 }

@@ -8,12 +8,13 @@ use leptos::prelude::*;
 use crate::state::operator::OperatorState;
 use crate::state::session;
 use crate::state::slide_columns::{
-    default_slide_columns, is_dense, step_slide_columns, SLIDE_COLUMNS_KEY,
+    default_slide_columns, is_dense, is_single, step_slide_columns, SLIDE_COLUMNS_KEY,
 };
 
 /// Apply this browser's choice to `body`: the inherited
 /// `--operator-slide-columns-choice` (removed without a choice, so the CSS
-/// default — 3, or 2 on a phone — applies) and the dense-card flag.
+/// default — 3, or 2 on a phone — applies), the dense-card flag and the
+/// one-per-row flag.
 pub fn apply_slide_columns(body: &web_sys::HtmlElement, choice: Option<u8>) {
     let style = body.style();
     match choice {
@@ -28,6 +29,11 @@ pub fn apply_slide_columns(body: &web_sys::HtmlElement, choice: Option<u8>) {
     let _ = body.set_attribute(
         "data-slide-columns-dense",
         if dense { "true" } else { "false" },
+    );
+    let single = choice.is_some_and(is_single);
+    let _ = body.set_attribute(
+        "data-slide-columns-single",
+        if single { "true" } else { "false" },
     );
 }
 
@@ -72,6 +78,8 @@ pub fn SlideColumnsControl() -> impl IntoView {
             data-role="slide-columns-control"
             title="Snímok v riadku (pamätá si to tento prehliadač)"
         >
+            // #875 mockup v3: the label beside the stepper (desktop only).
+            <span class="operator__slide-columns-label">"Snímok v riadku"</span>
             <button
                 type="button"
                 data-role="slide-columns-decrease"

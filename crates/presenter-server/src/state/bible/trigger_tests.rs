@@ -1,5 +1,5 @@
 //! #824 phase 2: the secondary side of a legacy `/bible/trigger` carries the
-//! book name the SECONDARY translation uses, so `handle_bible_legacy` can name
+//! book name the SECONDARY translation uses, so the wall output can name
 //! it in `#bible-translate-reference` ("1 John …", not the main "1 Ján …").
 
 use super::*;
@@ -30,7 +30,7 @@ async fn seed(state: &AppState, code: &str, language: &str, book: &str, texts: &
 }
 
 /// SEB + KJV with 1 John 1:1-3, KJV saved as the secondary translation.
-async fn seb_main_kjv_secondary() -> AppState {
+pub(super) async fn seb_main_kjv_secondary() -> AppState {
     let state = AppState::in_memory().await.expect("state");
     seed(
         &state,

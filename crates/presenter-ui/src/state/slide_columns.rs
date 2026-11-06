@@ -54,6 +54,13 @@ pub fn is_dense(columns: u8) -> bool {
     columns >= 6
 }
 
+/// One slide per row: the card is as wide as the work area, so the desktop
+/// 16:9 minimum (mockup v3) would make it taller than the list and the slide
+/// on the wall could never be shown whole. Such cards size to their text.
+pub fn is_single(columns: u8) -> bool {
+    columns == 1
+}
+
 /// The column count of a laid-out grid from its computed
 /// `grid-template-columns` ("120px 120px 120px" → 3); `None` when there are
 /// no tracks.
@@ -124,6 +131,13 @@ mod tests {
         assert!(!is_dense(5));
         assert!(is_dense(6));
         assert!(is_dense(8));
+    }
+
+    #[test]
+    fn only_one_per_row_drops_the_16_9_minimum() {
+        assert!(is_single(1));
+        assert!(!is_single(2));
+        assert!(!is_single(3));
     }
 
     #[test]

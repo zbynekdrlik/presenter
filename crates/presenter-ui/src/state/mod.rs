@@ -3,8 +3,9 @@ pub mod bible_console;
 pub mod bible_console_prepared;
 pub mod bible_console_search;
 pub mod bible_console_step;
-pub mod bible_range;
+pub mod bible_grid;
 pub mod bible_translations;
+pub mod global_keys;
 pub mod interpreter;
 pub mod keyboard_inset;
 pub mod operator;
@@ -19,6 +20,7 @@ pub mod study;
 pub mod study_compare;
 pub mod study_field;
 pub mod study_history;
+pub mod study_recent;
 pub mod study_word;
 pub mod tablet;
 pub mod view_nav;
@@ -30,7 +32,6 @@ use presenter_core::{
     StageDisplaySnapshot, StageTextMode, TimersOverview,
 };
 
-use crate::api::bible::BibleSearchHit;
 use std::collections::{HashMap, HashSet};
 
 use crate::api::settings::AbleSetStatusSnapshot;
@@ -154,11 +155,6 @@ pub struct AppContext {
     pub libraries_loading: RwSignal<bool>,
     /// Loading state for playlists
     pub playlists_loading: RwSignal<bool>,
-    /// Bible search signals (shared between header and bible page)
-    pub bible_search_query: RwSignal<String>,
-    pub bible_search_results: RwSignal<Vec<BibleSearchHit>>,
-    pub bible_searching: RwSignal<bool>,
-    pub bible_has_searched: RwSignal<bool>,
     /// Bumped when a BibleSlidesChanged event arrives, so Bible page can re-fetch
     pub bible_presentations_version: RwSignal<u64>,
 }
@@ -210,10 +206,6 @@ impl AppContext {
             active_bible_slide: RwSignal::new(None),
             libraries_loading: RwSignal::new(false),
             playlists_loading: RwSignal::new(false),
-            bible_search_query: RwSignal::new(String::new()),
-            bible_search_results: RwSignal::new(Vec::new()),
-            bible_searching: RwSignal::new(false),
-            bible_has_searched: RwSignal::new(false),
             bible_presentations_version: RwSignal::new(0),
         }
     }

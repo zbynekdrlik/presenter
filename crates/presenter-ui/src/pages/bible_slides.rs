@@ -3,8 +3,10 @@ use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
 use crate::components::slide_columns::SlideColumnsControl;
+use crate::pages::bible_controls::SelectionControls;
 use crate::pages::bible_prepared_sermon::{active_sermon_badge, SermonSlides};
 use crate::state::bible::{slide_char_count, BibleState};
+use crate::state::bible_grid::{is_on_wall, passage_title, slide_caption};
 use crate::state::AppContext;
 
 // ---------------------------------------------------------------------------
@@ -16,15 +18,43 @@ pub fn BibleSlidesColumn() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let bible_tab = bs.bible_tab;
     let sermon = active_sermon_badge(&bs);
+    let phone = use_ctx!(AppContext).phone_shell;
+    let title = worktop_title(&bs);
 
     view! {
         <section
             class="operator__slides-column operator__slides-column--minimal"
             data-role="slides-column"
         >
-            <div class="operator__slides-toolbar operator__slides-toolbar--minimal">
-                <Show when=move || sermon.with(Option::is_none)>
+            // #875 mockup v3 section 3: on a desktop this row is the work
+            // area's top, as on Piesne — the loaded passage (or the open
+            // presentation) bold on the left, the controls and "Snímok v
+            // riadku − N +" on the right. The phone keeps its "+" and stepper.
+            <div class="operator__slides-toolbar operator__slides-toolbar--minimal operator__worktop operator__worktop--bible">
+                <Show when=move || !phone.get()>
+                    <span class="operator__worktop-title" data-role="bible-worktop-title">
+                        {move || title.get()}
+                    </span>
+                </Show>
+                // On a desktop "+ Snímka" goes into the open prepared
+                // presentation, so it is offered on the Prepared tab only.
+                <Show when=move || {
+                    sermon.with(Option::is_none)
+                        && (phone.get() || bible_tab.with(|t| t == "prepared"))
+                }>
                     <AddEmptySlideButton />
+                </Show>
+                // Multi-select + add to a prepared presentation, over the grid
+                // they act on (spec section 7.1: desktop only, until #851); not
+                // over an empty grid, where there is nothing to select (#875).
+                <Show when=move || {
+                    !phone.get()
+                        && bible_tab.with(|t| t == "live")
+                        && bs.slides.with(|slides| !slides.is_empty())
+                }>
+                    <div class="bible__selection" data-role="bible-selection">
+                        <SelectionControls />
+                    </div>
                 </Show>
                 <SlideColumnsControl />
             </div>
@@ -45,10 +75,36 @@ pub fn BibleSlidesColumn() -> impl IntoView {
     }
 }
 
+/// The work area's title: the loaded passage with its translations on the
+/// Live tab ("Ján 3:16-18 · SEB + KJV"), the open presentation's name on the
+/// Prepared tab; empty while there is nothing to name.
+fn worktop_title(bs: &BibleState) -> Memo<String> {
+    let bs = *bs;
+    Memo::new(move |_| {
+        if bs.bible_tab.with(|t| t == "prepared") {
+            let Some(id) = bs.active_presentation_id.get() else {
+                return String::new();
+            };
+            return bs.presentations.with(|list| {
+                list.iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default()
+            });
+        }
+        let main = bs.selected_translation.get();
+        let secondary = bs.secondary_translation.get();
+        bs.slides
+            .with(|slides| passage_title(slides, main.as_deref(), secondary.as_deref()))
+            .unwrap_or_default()
+    })
+}
+
 #[component]
 fn AddEmptySlideButton() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
+    let phone = ctx.phone_shell;
 
     let on_click = move |_| {
         let pres_id = bs.active_presentation_id.get_untracked();
@@ -84,13 +140,20 @@ fn AddEmptySlideButton() -> impl IntoView {
     };
 
     view! {
+        // Desktop: the Piesne "+ Snímka" button of the title row (#875 v3).
         <button
             type="button"
-            class="operator__slides-add operator__list-action"
+            class=move || {
+                if phone.get() {
+                    "operator__slides-add operator__list-action"
+                } else {
+                    "operator__slides-add operator__worktop-add"
+                }
+            }
             data-role="add-empty-slide"
             title="Pridať prázdnu snímku do otvorenej prezentácie"
             on:click=on_click
-        >"+"</button>
+        >{move || if phone.get() { "+" } else { "+ Snímka" }}</button>
     }
 }
 
@@ -107,8 +170,8 @@ fn LiveSlides() -> impl IntoView {
                     <p class="operator__slides-empty">"Načítaj verše a zobrazia sa tu snímky."</p>
                 }.into_any()
             } else {
-                slide_list.into_iter().map(|slide| {
-                    view! { <LiveSlideCard slide=slide /> }
+                slide_list.into_iter().enumerate().map(|(index, slide)| {
+                    view! { <LiveSlideCard slide=slide index=index /> }
                 }).collect_view().into_any()
             }
         }}
@@ -377,12 +440,43 @@ fn make_trigger_handler(
     }
 }
 
+/// The trigger zone's content. The phone shows "▶ Ján 3:16-18 (SEB)" as
+/// before; the desktop (#875 v3) shows the mockup's caption instead,
+/// "1 · Ján 3:16", plus "NA STENE" while the card is on the wall (CSS picks).
+fn trigger_zone_content(main_ref: String, caption: String) -> impl IntoView {
+    let shown_ref = if main_ref.is_empty() {
+        "Zobraziť".to_string()
+    } else {
+        main_ref
+    };
+    view! {
+        <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
+        <span class="operator__slide-trigger-ref">{shown_ref}</span>
+        <span class="operator__slide-caption" data-role="slide-caption">{caption}</span>
+        <span class="operator__slide-live-tag" data-role="slide-live-tag">"NA STENE"</span>
+    }
+}
+
+/// Whether the wall shows what this card would send (its current text).
+fn on_wall_memo(
+    ctx: &AppContext,
+    main_text_sig: RwSignal<String>,
+    main_ref_sig: RwSignal<String>,
+) -> Memo<bool> {
+    let on_air = ctx.active_bible_slide;
+    Memo::new(move |_| {
+        let main = main_text_sig.get();
+        let main_ref = main_ref_sig.get();
+        on_air.with(|output| is_on_wall(output.as_ref(), &main, &main_ref))
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Live slide card — broadcast trigger + selection checkboxes
 // ---------------------------------------------------------------------------
 
 #[component]
-fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
+fn LiveSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
     let mode = ctx.mode;
@@ -396,6 +490,8 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(trans_ref_initial);
     let character_limit = bs.character_limit;
+    let caption = slide_caption(index, &slide);
+    let on_wall = on_wall_memo(&ctx, main_text_sig, main_ref_sig);
 
     let is_selected = {
         let sid = slide_id.clone();
@@ -435,6 +531,8 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
             class="operator__slide-card operator__slide-card--bible"
             class:operator__slide-card--edit=move || mode.get() == "edit"
             class:is-selected=is_selected
+            class:is-on-wall=move || on_wall.get()
+            data-on-wall=move || if on_wall.get() { "true" } else { "false" }
             data-role="slide-card"
             data-slide-id=slide_id.clone()
         >
@@ -444,8 +542,7 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
                 on:click=on_trigger.clone()
                 title="Kliknutím zobrazíš snímku na stene"
             >
-                <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
-                <span>{if !main_ref.is_empty() { main_ref.clone() } else { "Zobraziť".to_string() }}</span>
+                {trigger_zone_content(main_ref.clone(), caption)}
             </div>
             <div
                 class="operator__slide-select-zone"
@@ -543,6 +640,8 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(slide.bible_translation_reference.clone());
     let character_limit = bs.character_limit;
+    let caption = slide_caption(index, &slide);
+    let on_wall = on_wall_memo(&ctx, main_text_sig, main_ref_sig);
 
     let on_trigger = make_trigger_handler(
         &ctx,
@@ -696,6 +795,8 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             class="operator__slide-card operator__slide-card--bible"
             class:operator__slide-card--drag-over=is_drag_over
             class:operator__slide-card--edit=move || mode.get() == "edit"
+            class:is-on-wall=move || on_wall.get()
+            data-on-wall=move || if on_wall.get() { "true" } else { "false" }
             data-role="slide-card"
             data-slide-id=slide_id.clone()
             on:dragover=on_dragover
@@ -715,6 +816,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             {
                 let on_trigger = on_trigger.clone();
                 let main_ref_trigger = main_ref.clone();
+                let caption = caption.clone();
                 move || {
                     if mode.get() != "edit" {
                         Some(view! {
@@ -724,8 +826,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                                 on:click=on_trigger.clone()
                                 title="Kliknutím zobrazíš snímku na stene"
                             >
-                                <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
-                                <span>{if !main_ref_trigger.is_empty() { main_ref_trigger.clone() } else { "Zobraziť".to_string() }}</span>
+                                {trigger_zone_content(main_ref_trigger.clone(), caption.clone())}
                             </div>
                         })
                     } else {

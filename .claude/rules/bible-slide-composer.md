@@ -3,7 +3,8 @@ paths:
   - "crates/presenter-server/src/state/slides/compose.rs"
   - "crates/presenter-server/src/state/slides/tests.rs"
   - "crates/presenter-server/src/state/bible.rs"
-  - "crates/presenter-server/src/resolume/legacy_reference.rs"
+  - "crates/presenter-server/src/state/bible_labels.rs"
+  - "crates/presenter-server/src/state/bible/legacy_wall_tests.rs"
   - "crates/presenter-server/src/resolume/handlers.rs"
   - "crates/presenter-ui/src/pages/bible_slides.rs"
 ---
@@ -36,11 +37,24 @@ server, so the badge and the split always agree.
 
 - Live path: the composer takes the secondary label's book name from the
   secondary passages (`secondary_book_name`); no secondary passage → no label.
-- Legacy `/bible/trigger` path (Companion, the AI `trigger_bible` tool):
+- Legacy `/bible/trigger` path (Companion, the AI `trigger_bible_verse` tool):
   `trigger_secondary_text` returns `TriggerSecondary { text, translation_code,
-  book }`; `BibleUpdate.secondary_book` carries the book to the Resolume
-  workers, and `legacy_reference::legacy_translation_reference` swaps it into
-  the main reference ("1 John 1:1-3 (KJV)"), falling back to the main name.
+  book }`; `state/bible_labels.rs::legacy_slide_output` builds the ONE
+  `BibleSlideOutput` from it — the secondary book swapped into the main
+  reference ("1 John 1:1-3 (KJV)", falling back to the main name), and NO
+  secondary reference without a secondary text (an empty `translationText`
+  with a stored secondary translation used to still send "… (KJV)").
+- **One shape of output for every path (#850 A2b, spec §5.10).**
+  `trigger_bible_passage` and `trigger_bible_slide_output` both end in
+  `AppState::show_bible_on_wall` (show log, `slide_output` + `broadcast`,
+  `Bible` + `BibleSlide`, `BibleUpdate::from_slide_output`). There is no
+  legacy Resolume branch any more: `BibleUpdate` carries only `slide_output`
+  (`None` = clear). The legacy trigger still returns and publishes its passage
+  broadcast (translation name, code, number) — the `/bible/trigger` and
+  Companion `apply_bible` contract — while the slide path publishes the
+  metadata broadcast (`slide_broadcast`). Each caller passes a
+  `BibleShowOrigin` (`trigger` with the client IP, `companion` / `ai` via
+  `BibleShowOrigin::internal`, client IP `-`).
 - A legacy reference may carry ONLY the main-language name ("1 Ján", no or a
   blank `book_code`): look the secondary translation up by the canonical code
   (`secondary_book_code` → `bible_source::canonical_book`), never by the main
@@ -49,12 +63,12 @@ server, so the badge and the split always agree.
 - The edited-text branch reads the book name from the translation's STRUCTURE
   source (`bible_remote::structure_source`): for the NLT that is eng-kjv, so it
   never waits on an API request before going on air.
-- New `BibleUpdate` field? Grep every `BibleUpdate {` literal (`resolume/tests.rs`,
-  `bible_clear_tests.rs`, `legacy_bible_tests.rs`, `state/bible.rs`). New legacy-path
-  tests go to
-  `resolume/legacy_bible_tests.rs`, not the over-long `resolume/tests.rs` (#487);
-  reuse `tests::setup_bible_driver` (`pub(super)`, the 16-clip Arena with every
-  Bible lane clip) instead of copying the arena/driver helpers.
+- Build a `BibleUpdate` only through `BibleUpdate::from_slide_output`. Legacy-path
+  wall tests live in `state/bible/legacy_wall_tests.rs`: real host workers
+  (`resolume_registry.set_hosts`) against `resolume::tests::mount_full_composition`
+  (`pub(crate)`, the 16-clip Arena with every Bible lane clip), compared push for
+  push with the slide path. Driver-level tests reuse `tests::setup_bible_driver`
+  and stay out of the over-long `resolume/tests.rs` (#487).
 
 ## Caller labels: `compose_bible_slides_labelled` (#851 P2a)
 

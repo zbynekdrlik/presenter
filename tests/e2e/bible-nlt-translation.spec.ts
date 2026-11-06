@@ -13,8 +13,9 @@
  *   no footnote) and the English reference `1 John 1:1-3 (NLT)` (#824).
  * - SEB main + NLT secondary while the API fails → the SEB slides still load,
  *   without the English line, and a toast says "NLT nedostupné".
- * - NLT main while the API fails → nothing to show; the load toast carries
- *   the server's "NLT nedostupné" message (not just "Bad Gateway").
+ * - NLT is never offered as main (#850 B2c); a browser that stored it keeps
+ *   its chip, and while the API fails the console's toast carries the
+ *   server's "NLT nedostupné" message (not just "Bad Gateway").
  */
 
 import { test, expect, type ConsoleMessage, type Page } from "@playwright/test";
@@ -151,39 +152,35 @@ async function openBible(page: Page): Promise<void> {
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
-  await expect(
-    page.locator('[data-role="main-translation"] option[value="eng-nlt"]'),
-  ).toHaveCount(1, { timeout: 15_000 });
+  await expect(translationButton(page, "secondary", "eng-nlt")).toHaveCount(1, {
+    timeout: 15_000,
+  });
 }
 
-/** Pick the translations, then load 1 John/Ján 1:<start>-<end> by button. */
+/** A button of the verse console's translation bar (#850 B2c). */
+function translationButton(page: Page, kind: "main" | "secondary", code: string) {
+  return page.locator(
+    `[data-role="console-translation"][data-kind="${kind}"][data-translation="${code}"]`,
+  );
+}
+
+/** Pick the translations, then look 1 John/Ján 1:<start>-<end> up in the console. */
 async function loadFirstJohn(
   page: Page,
   translations: { main: string; secondary: string },
   verses: { start: number; end: number },
 ): Promise<void> {
-  await page
-    .locator('[data-role="main-translation"]')
-    .selectOption(translations.main);
-  const secondary = page.locator('[data-role="secondary-translation"]');
-  await secondary.selectOption(translations.secondary);
-  await expect(secondary).toHaveValue(translations.secondary);
-  await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+  await translationButton(page, "main", translations.main).click();
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
     "data-books-translation",
     translations.main,
   );
-
-  await page.locator('[data-role="book-item"][data-book-code="1JN"]').click();
-  const chapter = page.locator('[data-role="chapter-input"]');
-  await chapter.fill("1");
-  await chapter.press("Tab");
-  const verseStart = page.locator('[data-role="verse-start"]');
-  await verseStart.fill(String(verses.start));
-  await verseStart.press("Tab");
-  const verseEnd = page.locator('[data-role="verse-end"]');
-  await verseEnd.fill(String(verses.end));
-  await verseEnd.press("Tab");
-  await page.locator('[data-role="load-button"]').click();
+  const secondary = translationButton(page, "secondary", translations.secondary);
+  await secondary.click();
+  await expect(secondary).toHaveAttribute("aria-pressed", "true");
+  await page
+    .locator('[data-role="console-field"]')
+    .fill(`1jn 1:${verses.start}-${verses.end}`);
 }
 
 test("NLT as secondary translation: parsed NLT lines and the English '(NLT)' reference", async ({
@@ -192,13 +189,10 @@ test("NLT as secondary translation: parsed NLT lines and the English '(NLT)' ref
   const consoleMessages = collectConsoleMessages(page);
   await openBible(page);
 
-  // The NLT is offered as main AND as secondary translation.
-  await expect(
-    page.locator('[data-role="main-translation"] option[value="eng-nlt"]'),
-  ).toHaveText("New Living Translation (en)");
-  await expect(
-    page.locator('[data-role="secondary-translation"] option[value="eng-nlt"]'),
-  ).toHaveCount(1);
+  // The NLT is offered as the line below, never as the main translation
+  // (remote, #826; owner decision 2026-10-13).
+  await expect(translationButton(page, "secondary", "eng-nlt")).toHaveText("NLT");
+  await expect(translationButton(page, "main", "eng-nlt")).toHaveCount(0);
 
   await loadFirstJohn(
     page,
@@ -269,32 +263,44 @@ test("NLT API down: the SEB slides still load and a toast says the NLT is unavai
   expect(consoleMessages).toEqual([]);
 });
 
-test("NLT API down with NLT as main: the load toast carries the server's reason", async ({
+test("a stored NLT main with the API down: the preview's toast carries the server's reason", async ({
   page,
 }) => {
-  // The 502 of /bible/resolve is the point of this test; Chrome logs it.
-  const consoleMessages = collectConsoleMessages(
-    page,
-    (msg) =>
+  // NLT is never offered as main (#850 B2c), but a browser that stored it
+  // before keeps its chip (#701). The 502 of /bible/resolve is the point of
+  // this test; Chrome logs exactly that one failed load.
+  const failedLoads: string[] = [];
+  const consoleMessages = collectConsoleMessages(page, (msg) => {
+    const is502 =
       msg.type() === "error" &&
       msg.text().includes("status of 502") &&
-      msg.location().url.endsWith("/bible/resolve"),
-  );
+      msg.location().url.endsWith("/bible/resolve");
+    if (is502) failedLoads.push(msg.text());
+    return is502;
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem("presenter:bibleMainTranslation", JSON.stringify("eng-nlt"));
+  });
   await openBible(page);
-
-  await loadFirstJohn(
-    page,
-    { main: "eng-nlt", secondary: "" },
-    { start: 7, end: 9 },
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+    "data-books-translation",
+    "eng-nlt",
   );
+  await expect(translationButton(page, "main", "eng-nlt")).toHaveAttribute("aria-pressed", "true");
 
+  const answered = page.waitForResponse((res) => new URL(res.url()).pathname === "/bible/resolve");
+  await page.locator('[data-role="console-field"]').fill("1jn 1:7-9");
+  expect((await answered).status()).toBe(502);
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+    "data-preview-state",
+    "error",
+  );
   await expect(page.locator('[data-role="toast"]')).toContainText(
-    "Verše sa nenačítali: HTTP 502: NLT nedostupné",
+    "Náhľad sa nenačítal: HTTP 502: NLT nedostupné",
     { timeout: 15_000 },
   );
-  expect(nltRequests.some((query) => query.get("ref") === "1Jn.1.7-9")).toBe(
-    true,
-  );
+  expect(nltRequests.some((query) => query.get("ref") === "1Jn.1.7-9")).toBe(true);
+  expect(failedLoads).toHaveLength(1);
 
   expect(consoleMessages).toEqual([]);
 });
