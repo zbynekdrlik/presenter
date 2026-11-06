@@ -89,13 +89,13 @@ pub fn SlideStageLayoutControl(
                     let is_selected = code == selected;
                     view! {
                         <option value=code prop:selected=is_selected>
-                            {format!("Stage: {}", layout.name)}
+                            {format!("Pódium: {}", layout.name)}
                         </option>
                     }
                 })
                 .collect_view();
             view! {
-                <option value="" prop:selected=selected.is_empty()>"Stage: —"</option>
+                <option value="" prop:selected=selected.is_empty()>"Pódium: —"</option>
                 {layout_options}
             }
         };
@@ -144,7 +144,7 @@ pub fn SlideStageLayoutControl(
             <select
                 class="operator__slide-stage-layout-select"
                 data-role="slide-stage-layout-select"
-                title="Stage layout for this slide (switches when triggered)"
+                title="Rozloženie pódia pre túto snímku (prepne sa pri zobrazení)"
                 on:change=on_change
             >
                 {options}
@@ -157,7 +157,7 @@ pub fn SlideStageLayoutControl(
                 <span
                     class="operator__slide-stage-layout-badge"
                     data-role="slide-stage-layout-badge"
-                    title="Triggering this slide switches the stage layout"
+                    title="Zobrazenie tejto snímky prepne rozloženie pódia"
                 >
                     {move || {
                         current_code

@@ -41,7 +41,7 @@ test.describe("WASM Operator Edge Cases", () => {
       () => {
         const list = document.querySelector('[data-role="library-list"]');
         if (!list) return false;
-        const loading = list.textContent?.includes("Loading");
+        const loading = list.textContent?.includes("Načítavam");
         return !loading;
       },
       { timeout: 30_000 },
@@ -51,7 +51,7 @@ test.describe("WASM Operator Edge Cases", () => {
     const items = await page.locator('[data-role="library-item"]').count();
     if (items === 0) {
       const message = page.locator('[data-role="library-list"]');
-      await expect(message).toContainText(/(No libraries|Star libraries)/);
+      await expect(message).toContainText(/(Žiadne knižnice|Obľúbené knižnice)/);
     }
   });
 
@@ -65,7 +65,7 @@ test.describe("WASM Operator Edge Cases", () => {
     const items = await page.locator('[data-role="playlist-item"]').count();
     if (items === 0) {
       const message = page.locator('[data-role="playlist-list"]');
-      await expect(message).toContainText(/No playlists|Create/);
+      await expect(message).toContainText(/Zatiaľ žiadny playlist/);
     }
   });
 
@@ -81,7 +81,7 @@ test.describe("WASM Operator Edge Cases", () => {
     );
     const emptyMessage = slidesArea.locator(".empty");
     if ((await emptyMessage.count()) > 0) {
-      await expect(emptyMessage).toContainText(/Select/);
+      await expect(emptyMessage).toContainText("Vyber pieseň vľavo.");
     }
   });
 

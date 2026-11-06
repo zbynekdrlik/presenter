@@ -37,26 +37,26 @@ pub(crate) fn chip_dot_state(state: &str, failing_for_secs: Option<i64>) -> &'st
 /// `connect_refused`.
 pub(crate) fn error_kind_label(kind: Option<&str>) -> &'static str {
     match kind {
-        Some("timeout") => "timed out",
-        Some("connect_refused") => "connection refused",
-        Some("connect_other") => "could not connect",
-        Some("reset") => "connection reset",
-        Some("other") => "request failed",
-        _ => "not reachable",
+        Some("timeout") => "vypršal čas",
+        Some("connect_refused") => "spojenie odmietnuté",
+        Some("connect_other") => "nedá sa pripojiť",
+        Some("reset") => "spojenie prerušené",
+        Some("other") => "požiadavka zlyhala",
+        _ => "nedostupné",
     }
 }
 
-/// The drift note ("Port drifted: 8090 → 8091 (auto-detected)"), only when a
+/// The drift note ("Port sa zmenil: 8090 → 8091 (zistené samo)"), only when a
 /// port-drift probe actually found the host somewhere other than its
 /// configured port. `None` while dialing the configured port as usual.
 pub(crate) fn port_drift_note(configured_port: u16, active_port: Option<u16>) -> Option<String> {
-    active_port.map(|p| format!("Port drifted: {configured_port} \u{2192} {p} (auto-detected)"))
+    active_port.map(|p| format!("Port sa zmenil: {configured_port} \u{2192} {p} (zistené samo)"))
 }
 
 /// #808: shown under the missing-clips line. Presenter re-reads the Arena
 /// composition only on connect, recovery, a stale id or this button.
 pub(crate) const MISSING_CLIPS_HINT: &str =
-    "After editing clips in Arena: Settings \u{2192} Refresh mapping";
+    "Po úprave klipov v Arene: Nastavenia \u{2192} Refresh mapping";
 
 /// The full tooltip text (native `title` attribute — no custom popover
 /// needed for this MVP): the host's FULL label first (the visible chip text
@@ -66,25 +66,25 @@ pub(crate) const MISSING_CLIPS_HINT: &str =
 pub(crate) fn chip_tooltip(dto: &ResolumeConnectionStatusDto) -> String {
     let mut lines = vec![dto.label.clone()];
     match dto.state.as_str() {
-        "connected" => lines.push("Connected".to_string()),
+        "connected" => lines.push("Pripojené".to_string()),
         "error" => {
-            lines.push(format!(
-                "Not reachable — {}",
-                error_kind_label(dto.last_error_kind.as_deref())
-            ));
+            lines.push(match dto.last_error_kind.as_deref() {
+                None => "Nedostupné".to_string(),
+                kind => format!("Nedostupné — {}", error_kind_label(kind)),
+            });
             if let Some(secs) = dto.next_retry_in_secs {
-                lines.push(format!("Retrying in {secs}s"));
+                lines.push(format!("Ďalší pokus o {secs} s"));
             }
         }
-        _ => lines.push("Connecting…".to_string()),
+        _ => lines.push("Pripájam…".to_string()),
     }
-    lines.push(format!("Configured port: {}", dto.configured_port));
+    lines.push(format!("Nastavený port: {}", dto.configured_port));
     if let Some(note) = port_drift_note(dto.configured_port, dto.active_port) {
         lines.push(note);
     }
     if !dto.missing_clips.is_empty() {
         lines.push(format!(
-            "Composition missing: {}",
+            "V kompozícii chýba: {}",
             dto.missing_clips.join(", ")
         ));
         // #808: the composition is no longer re-read on a timer.
@@ -259,29 +259,36 @@ mod tests {
     fn a_drift_names_both_ports_with_an_auto_detected_label() {
         assert_eq!(
             port_drift_note(8090, Some(8091)),
-            Some("Port drifted: 8090 \u{2192} 8091 (auto-detected)".to_string())
+            Some("Port sa zmenil: 8090 \u{2192} 8091 (zistené samo)".to_string())
         );
     }
 
     #[test]
     fn error_kind_labels_are_plain_language_never_raw_wire_tokens() {
-        assert_eq!(error_kind_label(Some("timeout")), "timed out");
+        assert_eq!(error_kind_label(Some("timeout")), "vypršal čas");
         assert_eq!(
             error_kind_label(Some("connect_refused")),
-            "connection refused"
+            "spojenie odmietnuté"
         );
-        assert_eq!(error_kind_label(Some("connect_other")), "could not connect");
-        assert_eq!(error_kind_label(Some("reset")), "connection reset");
-        assert_eq!(error_kind_label(Some("other")), "request failed");
-        assert_eq!(error_kind_label(None), "not reachable");
+        assert_eq!(error_kind_label(Some("connect_other")), "nedá sa pripojiť");
+        assert_eq!(error_kind_label(Some("reset")), "spojenie prerušené");
+        assert_eq!(error_kind_label(Some("other")), "požiadavka zlyhala");
+        assert_eq!(error_kind_label(None), "nedostupné");
     }
 
     #[test]
     fn tooltip_for_a_healthy_host_has_no_error_or_drift_lines() {
         let text = chip_tooltip(&dto("connected", None));
-        assert!(text.contains("Connected"));
-        assert!(!text.contains("Not reachable"));
-        assert!(!text.contains("Port drifted"));
+        assert!(text.contains("Pripojené"));
+        assert!(!text.contains("Nedostupné"));
+        assert!(!text.contains("Port sa zmenil"));
+    }
+
+    #[test]
+    fn tooltip_for_an_error_without_a_known_cause_does_not_repeat_the_word() {
+        let text = chip_tooltip(&dto("error", Some(30)));
+        assert!(text.contains("Nedostupné"), "{text}");
+        assert!(!text.contains("Nedostupné — nedostupné"), "{text}");
     }
 
     #[test]
@@ -298,8 +305,8 @@ mod tests {
         d.last_error_kind = Some("connect_refused".to_string());
         d.next_retry_in_secs = Some(8);
         let text = chip_tooltip(&d);
-        assert!(text.contains("connection refused"), "{text}");
-        assert!(text.contains("Retrying in 8s"), "{text}");
+        assert!(text.contains("spojenie odmietnuté"), "{text}");
+        assert!(text.contains("Ďalší pokus o 8 s"), "{text}");
     }
 
     #[test]
@@ -307,7 +314,10 @@ mod tests {
         let mut d = dto("connected", None);
         d.active_port = Some(8091);
         let text = chip_tooltip(&d);
-        assert!(text.contains("Port drifted: 8090 \u{2192} 8091"), "{text}");
+        assert!(
+            text.contains("Port sa zmenil: 8090 \u{2192} 8091"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -316,7 +326,7 @@ mod tests {
         d.missing_clips = vec!["#timer".to_string(), "#song-name".to_string()];
         let text = chip_tooltip(&d);
         assert!(
-            text.contains("Composition missing: #timer, #song-name"),
+            text.contains("V kompozícii chýba: #timer, #song-name"),
             "{text}"
         );
         assert!(text.ends_with(MISSING_CLIPS_HINT), "{text}");

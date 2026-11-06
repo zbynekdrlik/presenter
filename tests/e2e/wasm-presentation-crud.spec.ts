@@ -124,7 +124,7 @@ test.describe("WASM Operator Presentation CRUD", () => {
 
     // Toast should show success
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /created|success/i,
+      /vytvorená/i,
       { timeout: 5_000 },
     );
   });
@@ -188,7 +188,7 @@ Multiple lines here`;
 
     // Toast should show success
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /created|paste|success/i,
+      /vytvorená z vloženého textu/i,
       { timeout: 5_000 },
     );
   });
@@ -250,7 +250,7 @@ Multiple lines here`;
 
     // Toast should show success
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /renamed|saved|success/i,
+      /premenovaná/i,
       { timeout: 5_000 },
     );
 
@@ -345,7 +345,7 @@ Multiple lines here`;
 
     // Toast should show success
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /deleted|success/i,
+      /zmazaná/i,
       { timeout: 5_000 },
     );
   });

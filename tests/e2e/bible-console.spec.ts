@@ -92,7 +92,7 @@ function collectPosts(page: Page, path: string): unknown[] {
   return bodies;
 }
 
-test("phone: 'zid 11 1' → one tap on ZOBRAZIŤ puts Hebrejom 11:1 on the wall and the stage (S6)", async ({
+test("phone: 'zid 11 1' → one tap on Zobraziť puts Hebrejom 11:1 on the wall and the stage (S6)", async ({
   browser,
   request,
 }) => {
@@ -413,7 +413,7 @@ test("desktop: an old-inputs answer that lands after the console took over is dr
   }
 });
 
-test("a long passage shows part by part: ZOBRAZIŤ 1/n, then 2/n", async ({ browser }) => {
+test("a long passage shows part by part: Zobraziť 1/n, then 2/n", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_390);
   try {
     const shows = collectPosts(page, "/bible/trigger-slide");
@@ -422,10 +422,10 @@ test("a long passage shows part by part: ZOBRAZIŤ 1/n, then 2/n", async ({ brow
     await expect(preview).toHaveAttribute("data-ready", "true");
     const count = Number(await preview.getAttribute("data-slide-count"));
     expect(count).toBeGreaterThan(1);
-    await expect(showButton(page)).toHaveText(`ZOBRAZIŤ 1/${count}`);
+    await expect(showButton(page)).toHaveText(`Zobraziť 1/${count}`);
     await showButton(page).tap();
     // #850 B2b: after a show the primary button offers the next part.
-    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 3:16-21 2/${count}`);
+    await expect(showButton(page)).toHaveText(`Ďalší: 3:16-21 2/${count}`);
     await expect(preview).toHaveAttribute("data-slide-index", "2");
     await showButton(page).tap();
     await expect.poll(() => shows.length).toBe(2);
@@ -598,7 +598,7 @@ test("a failed show says so inline and in a toast; nothing changes on the strip"
   }
 });
 
-test("while typing, the preview card carries its own ZOBRAZIŤ (the iPhone keyboard may hide the bar)", async ({
+test("while typing, the preview card carries its own Zobraziť (the iPhone keyboard may hide the bar)", async ({
   browser,
 }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_390);
@@ -700,7 +700,7 @@ test("a tapped alternative ends with its input: the same text typed again is the
   }
 });
 
-test("a split verse: Zhasnúť appears away from where ZOBRAZIŤ was", async ({
+test("a split verse: Zhasnúť appears away from where Zobraziť was", async ({
   browser,
 }) => {
   const { context, page, errors } = await openConsole(browser, { ...PHONE_390, viewport: { width: 390, height: 844 } });
@@ -713,7 +713,7 @@ test("a split verse: Zhasnúť appears away from where ZOBRAZIŤ was", async ({
     const clear = page.locator('[data-role="console-clear-live"]');
     await expect(clear).toBeVisible();
     const clearBox = await clear.boundingBox();
-    // A second tap where ZOBRAZIŤ was can never hit Zhasnúť.
+    // A second tap where Zobraziť was can never hit Zhasnúť.
     expect((clearBox?.y ?? 0) + (clearBox?.height ?? 0)).toBeLessThan((before?.y ?? 0) - 48);
     expect(errors).toEqual([]);
   } finally {
@@ -757,7 +757,7 @@ test("a visible phone whose socket dropped reads the wall again on reconnect", a
   }
 });
 
-test("desktop: Space on a focused ZOBRAZIŤ shows the verse", async ({ browser }) => {
+test("desktop: Space on a focused Zobraziť shows the verse", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
   try {
     const shows = collectPosts(page, "/bible/trigger-slide");
@@ -822,7 +822,7 @@ test("a slow re-read of the wall never replaces a newer live event", async ({ br
   }
 });
 
-test("desktop: the keyboard steps a split passage, the focus stays on ZOBRAZIŤ", async ({ browser }) => {
+test("desktop: the keyboard steps a split passage, the focus stays on Zobraziť", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
   try {
     const shows = collectPosts(page, "/bible/trigger-slide");
@@ -835,13 +835,13 @@ test("desktop: the keyboard steps a split passage, the focus stays on ZOBRAZIŤ"
     await field.press("Enter");
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 11:1-20 2/${count}`);
+    await expect(showButton(page)).toHaveText(`Ďalší: 11:1-20 2/${count}`);
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 11:1-20 3/${count}`);
+    await expect(showButton(page)).toHaveText(`Ďalší: 11:1-20 3/${count}`);
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(showButton(page)).toHaveText(`ĎALŠÍ: 11:1-20 4/${count}`);
+    await expect(showButton(page)).toHaveText(`Ďalší: 11:1-20 4/${count}`);
     expect(shows).toHaveLength(3);
     expect(errors).toEqual([]);
   } finally {
@@ -888,7 +888,7 @@ test("a show that fails after its verse left says so in a toast, not on the empt
   }
 });
 
-test("phone: the first verse on the wall moves neither the field nor ZOBRAZIŤ", async ({ browser }) => {
+test("phone: the first verse on the wall moves neither the field nor Zobraziť", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_360);
   try {
     await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').tap();
@@ -941,7 +941,7 @@ test("a verse sent past the console, by Companion or the AI, is on the strip wit
   }
 });
 
-test("desktop: a held Enter stops at ZOBRAZIŤ, a held key never steps a split passage", async ({ browser }) => {
+test("desktop: a held Enter stops at Zobraziť, a held key never steps a split passage", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
   try {
     const shows = collectPosts(page, "/bible/trigger-slide");
@@ -1071,7 +1071,7 @@ test("a show with a deaf socket and a failing re-read still reaches the strip", 
   }
 });
 
-test("ĎALŠÍ: after a show the field clears and one tap shows the next verse (S6)", async ({ browser }) => {
+test("Ďalší: after a show the field clears and one tap shows the next verse (S6)", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_390);
   try {
     const shows = collectPosts(page, "/bible/trigger-slide");
@@ -1079,13 +1079,13 @@ test("ĎALŠÍ: after a show the field clears and one tap shows the next verse (
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await showButton(page).tap();
     await expect(page.locator('[data-role="console-field"]')).toHaveValue("");
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:2");
     await expect(preview).toHaveAttribute("data-reference", "Hebrejom 11:2 (SEB)");
     await expect(preview).toHaveAttribute("data-ready", "true");
     await showButton(page).tap(); // next verse = 1 tap
     await expect.poll(() => shows.length).toBe(2);
     expect(shows[1]).toMatchObject({ mainReference: "Hebrejom 11:2 (SEB)" });
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:3");
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -1123,7 +1123,7 @@ test("a verse list is walked verse by verse, then the verse after it", async ({ 
   const { context, page, errors } = await openConsole(browser, PHONE_390);
   try {
     await lookUp(page, "mt 5:3.5.7", "Matúš 5:3 (SEB)");
-    for (const nextLabel of ["ĎALŠÍ: 5:5", "ĎALŠÍ: 5:7", "ĎALŠÍ: 5:8"]) {
+    for (const nextLabel of ["Ďalší: 5:5", "Ďalší: 5:7", "Ďalší: 5:8"]) {
       await expect(page.locator('[data-role="console-preview"]')).toHaveAttribute("data-ready", "true");
       await showButton(page).tap();
       await expect(showButton(page)).toHaveText(nextLabel);
@@ -1160,11 +1160,11 @@ test("desktop: Enter, Enter, Space walks verse by verse, the focus stays on the 
     await field.press("Enter");
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:2");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
     await expect(showButton(page)).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:3");
     await expect(showButton(page)).toBeFocused();
     expect(shows).toMatchObject([
       { mainReference: "Hebrejom 11:1 (SEB)" },
@@ -1181,13 +1181,13 @@ test("desktop: a load from the old inputs after a show lets the next verse go", 
   try {
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await showButton(page).click();
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:2");
     await page.locator('[data-role="book-filter"]').fill("Rimanom");
     await page.locator('[data-role="book-item"]').first().click();
     await page.locator('[data-role="load-button"]').click();
     await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
-    await expect(showButton(page)).toHaveText("ZOBRAZIŤ");
+    await expect(showButton(page)).toHaveText("Zobraziť");
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -1233,10 +1233,10 @@ test("a translation switch keeps the stepped verse and the next verse after a sh
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:2 (ROH)");
 
     await showButton(page).tap();
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:3");
     await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]').tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:3 (SEB)");
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:3");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:3");
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
     await showButton(page).tap();
     await expect.poll(() => shows.length).toBe(2);
@@ -1259,12 +1259,12 @@ test("a next verse that did not load: the primary button tries again, one more t
     );
     await showButton(page).tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "error");
-    await expect(showButton(page)).toHaveText("SKÚSIŤ ZNOVA");
+    await expect(showButton(page)).toHaveText("Skúsiť znova");
     await page.unroute("**/bible/resolve");
     await showButton(page).tap();
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
     expect(shows).toHaveLength(1);
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 11:2");
+    await expect(showButton(page)).toHaveText("Ďalší: 11:2");
     await showButton(page).tap();
     await expect.poll(() => shows.length).toBe(2);
     expect(errors).toEqual([]);
@@ -1279,11 +1279,11 @@ test("the end of the book says so and sends the last verse only once", async ({ 
     const shows = collectPosts(page, "/bible/trigger-slide");
     await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
     await showButton(page).tap();
-    await expect(showButton(page)).toHaveText("KONIEC KNIHY");
+    await expect(showButton(page)).toHaveText("Koniec knihy");
     await expect(showButton(page)).toHaveAttribute("aria-disabled", "true");
     await showButton(page).tap({ force: true });
     await page.locator('[data-role="console-prev"]').tap();
-    await expect(showButton(page)).toHaveText("ĎALŠÍ: 13:24");
+    await expect(showButton(page)).toHaveText("Ďalší: 13:24");
     expect(shows).toHaveLength(1);
     expect(errors).toEqual([]);
   } finally {
@@ -1291,7 +1291,7 @@ test("the end of the book says so and sends the last verse only once", async ({ 
   }
 });
 
-test("desktop: ▶ before a show keeps the focus on ZOBRAZIŤ for the next Space", async ({ browser }) => {
+test("desktop: ▶ before a show keeps the focus on Zobraziť for the next Space", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
   try {
     const shows = collectPosts(page, "/bible/trigger-slide");
@@ -1320,9 +1320,9 @@ test("a verse typed after the end of a book shows as usual", async ({ browser })
     const shows = collectPosts(page, "/bible/trigger-slide");
     await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
     await showButton(page).tap();
-    await expect(showButton(page)).toHaveText("KONIEC KNIHY");
+    await expect(showButton(page)).toHaveText("Koniec knihy");
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    await expect(showButton(page)).toHaveText("ZOBRAZIŤ");
+    await expect(showButton(page)).toHaveText("Zobraziť");
     await showButton(page).tap();
     await expect.poll(() => shows.length).toBe(2);
     expect(shows[1]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)" });
@@ -1337,12 +1337,12 @@ test("desktop: a load from the old inputs after the end of a book frees the butt
   try {
     await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
     await showButton(page).click();
-    await expect(showButton(page)).toHaveText("KONIEC KNIHY");
+    await expect(showButton(page)).toHaveText("Koniec knihy");
     await page.locator('[data-role="book-filter"]').fill("Rimanom");
     await page.locator('[data-role="book-item"]').first().click();
     await page.locator('[data-role="load-button"]').click();
     await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
-    await expect(showButton(page)).toHaveText("ZOBRAZIŤ");
+    await expect(showButton(page)).toHaveText("Zobraziť");
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await expect(showButton(page)).toHaveAttribute("aria-disabled", "false");
     expect(errors).toEqual([]);

@@ -86,7 +86,7 @@ test.describe("AI Tab Navigation", () => {
 
     // Header with title
     const title = chat.locator("h2");
-    await expect(title).toHaveText("AI Assistant");
+    await expect(title).toHaveText("AI asistent");
 
     // Settings and Clear buttons
     const settingsBtn = page.locator('[data-role="ai-settings-toggle"]');
@@ -154,9 +154,9 @@ test.describe("AI Chat Empty State", () => {
 
     // Should show helper text
     await expect(
-      messages.getByText("Paste the pastor's message"),
+      messages.getByText("Vlož sem text od pastora"),
     ).toBeVisible();
-    await expect(messages.getByText("Bible references")).toBeVisible();
+    await expect(messages.getByText("Rozumie odkazom na Bibliu")).toBeVisible();
   });
 
   test("textarea and Send button are present", async ({ page }) => {
@@ -166,7 +166,7 @@ test.describe("AI Chat Empty State", () => {
     await expect(textarea).toBeVisible();
     await expect(textarea).toHaveAttribute(
       "placeholder",
-      "Type a message or paste pastor's text...",
+      "Napíš správu alebo vlož text od pastora…",
     );
 
     const sendBtn = page.locator('[data-role="ai-send"]');
@@ -354,7 +354,7 @@ test.describe("AI Settings Panel", () => {
     await saveBtn.click();
 
     // Should show success toast
-    await expect(page.getByText("AI settings saved")).toBeVisible({
+    await expect(page.getByText("Nastavenie AI uložené")).toBeVisible({
       timeout: 5_000,
     });
 
@@ -401,7 +401,7 @@ test.describe("AI Conversation Management", () => {
 
     // Messages should be gone, empty state should return
     await expect(userMsg).not.toBeVisible();
-    await expect(page.getByText("Paste the pastor's message")).toBeVisible();
+    await expect(page.getByText("Vlož sem text od pastora")).toBeVisible();
 
     // Error should also be cleared
     const error = page.locator('[data-role="ai-error"]');

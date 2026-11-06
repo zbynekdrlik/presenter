@@ -110,11 +110,11 @@ pub fn PlaylistModals() -> impl IntoView {
                 match result {
                     Ok(()) => {
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Playlist saved".to_string()));
+                        toast_message.set(Some("Playlist uložený".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Error: {e}")));
+                        toast_message.set(Some(format!("Chyba: {e}")));
                     }
                 }
             });
@@ -133,7 +133,7 @@ pub fn PlaylistModals() -> impl IntoView {
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
 
-            if !crate::components::modal::confirm(&format!("Delete playlist \"{pl_name}\"?")) {
+            if !crate::components::modal::confirm(&format!("Zmazať playlist „{pl_name}“?")) {
                 return;
             }
 
@@ -154,7 +154,7 @@ pub fn PlaylistModals() -> impl IntoView {
                     body.dataset().delete("modalOpen");
                 }
                 toast_variant.set("success".to_string());
-                toast_message.set(Some("Playlist deleted".to_string()));
+                toast_message.set(Some("Playlist zmazaný".to_string()));
             });
         }
     };
@@ -213,12 +213,12 @@ pub fn PlaylistModals() -> impl IntoView {
         >
             <div class="operator__playlist-modal-panel">
                 <header class="operator__playlist-modal-header">
-                    <h3>"All Playlists"</h3>
+                    <h3>"Všetky playlisty"</h3>
                     <button
                         type="button"
                         class="operator__playlist-modal-close"
                         data-role="playlist-modal-close"
-                        aria-label="Close"
+                        aria-label="Zavrieť"
                         on:click=close_list_btn
                     >{"\u{00D7}"}</button>
                 </header>
@@ -286,12 +286,12 @@ pub fn PlaylistModals() -> impl IntoView {
                 >
                     <header class="operator__library-edit-header">
                         <h3 data-role="playlist-edit-title">
-                            {move || if edit_mode() == "create" { "Create Playlist" } else { "Edit Playlist" }}
+                            {move || if edit_mode() == "create" { "Nový playlist" } else { "Upraviť playlist" }}
                         </h3>
                     </header>
                     <div class="operator__library-edit-body">
                         <label>
-                            <span>"Playlist name"</span>
+                            <span>"Názov playlistu"</span>
                             <input
                                 type="text"
                                 data-role="playlist-edit-name"
@@ -312,7 +312,7 @@ pub fn PlaylistModals() -> impl IntoView {
                                     dashboard_value.set(checkbox_checked(&ev));
                                 }
                             />
-                            <span>"Show in dashboard"</span>
+                            <span>"Zobraziť v zozname vľavo"</span>
                         </label>
                     </div>
                     <footer class="operator__library-edit-footer">
@@ -323,14 +323,14 @@ pub fn PlaylistModals() -> impl IntoView {
                             style:display=move || if edit_mode() == "edit" { "inline-block" } else { "none" }
                             prop:disabled=is_submitting
                             on:click=on_delete
-                        >"Delete playlist"</button>
+                        >"Zmazať playlist"</button>
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="playlist-edit-cancel"
                                 on:click=on_cancel
-                            >"Cancel"</button>
+                            >"Zrušiť"</button>
                             <button type="submit" data-role="playlist-edit-save"
                                 prop:disabled=is_submitting
-                            >"Save changes"</button>
+                            >"Uložiť"</button>
                         </div>
                     </footer>
                 </form>

@@ -121,7 +121,7 @@ test.describe("WASM Operator Stage Monitor Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("cleared");
+        return toast && toast.textContent?.includes("vymazaná");
       },
       { timeout: 3_000 },
     );

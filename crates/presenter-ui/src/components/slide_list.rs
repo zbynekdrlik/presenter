@@ -146,7 +146,8 @@ pub fn SlideList() -> impl IntoView {
                         type="button"
                         class="operator__slides-add-floating"
                         data-role="add-slide"
-                        title="Add slide"
+                        title="Pridať snímku"
+                        aria-label="Pridať snímku"
                         on:click=add_slide
                     >
                         "+"
@@ -221,7 +222,7 @@ pub fn SlideList() -> impl IntoView {
                     let line_limit = op.line_limit.get();
 
                     let Some(presentation) = pres else {
-                        return view! { <p class="empty">"Select a presentation to load slides."</p> }.into_any();
+                        return view! { <p class="empty">"Vyber pieseň vľavo."</p> }.into_any();
                     };
 
                     let pres_id = presentation.id.to_string();
@@ -503,7 +504,7 @@ pub fn SlideList() -> impl IntoView {
                                                     data-role="slide-drag-handle"
                                                     draggable="true"
                                                     tabindex="-1"
-                                                    aria-label="Reorder slide"
+                                                    aria-label="Presunúť snímku"
                                                     on:dragstart=move |ev: web_sys::DragEvent| {
                                                         if let Some(dt) = ev.data_transfer() {
                                                             let _ = dt.set_data("application/x-slide-id", &slide_id);
@@ -584,21 +585,21 @@ pub fn SlideList() -> impl IntoView {
                                                                 class="operator__slide-save-indicator"
                                                                 data-role="slide-save-indicator"
                                                                 data-status="saving"
-                                                            >"Saving…"</span>
+                                                            >"Ukladám…"</span>
                                                         }.into_any(),
                                                         SaveStatus::Saved => view! {
                                                             <span
                                                                 class="operator__slide-save-indicator"
                                                                 data-role="slide-save-indicator"
                                                                 data-status="saved"
-                                                            >"Saved ✓"</span>
+                                                            >"Uložené ✓"</span>
                                                         }.into_any(),
                                                         SaveStatus::Failed => view! {
                                                             <span
                                                                 class="operator__slide-save-indicator"
                                                                 data-role="slide-save-indicator"
                                                                 data-status="failed"
-                                                            >"Save failed"</span>
+                                                            >"Uloženie zlyhalo"</span>
                                                         }.into_any(),
                                                     }
                                                 }}
@@ -633,12 +634,12 @@ pub fn SlideList() -> impl IntoView {
                                                             }
                                                         });
                                                     }
-                                                >"Duplicate"</button>
+                                                >"Duplikovať"</button>
                                                 <button type="button" data-action="delete"
                                                     on:click=move |_| {
                                                         // CRITICAL #1: Add delete confirmation
                                                         let window = crate::utils::window::window();
-                                                        let confirmed = window.confirm_with_message(&format!("Delete slide {}?", slide_index + 1)).unwrap_or(false);
+                                                        let confirmed = window.confirm_with_message(&format!("Zmazať snímku {}?", slide_index + 1)).unwrap_or(false);
                                                         if !confirmed { return; }
 
                                                         let pres_id = pres_id_del.clone();
@@ -654,7 +655,7 @@ pub fn SlideList() -> impl IntoView {
                                                             }
                                                         });
                                                     }
-                                                >"Delete"</button>
+                                                >"Zmazať"</button>
                                             </div>
                                         }
                                     })}
@@ -690,7 +691,7 @@ pub fn SlideList() -> impl IntoView {
                                             <div class="operator__slide-warning" data-role="slide-warning"
                                                 data-visible=move || if any_warning { "true" } else { "false" }
                                             >
-                                                {format!("Line exceeds {line_limit} characters")}
+                                                {format!("Riadok má viac ako {line_limit} znakov")}
                                             </div>
                                         }.into_any()
                                     } else {
@@ -729,11 +730,11 @@ pub fn SlideList() -> impl IntoView {
                                             <div class="operator__slide-warning" data-role="slide-warning"
                                                 data-visible=move || if any_warn_sig.get() { "true" } else { "false" }
                                             >
-                                                {format!("Line exceeds {line_limit} characters")}
+                                                {format!("Riadok má viac ako {line_limit} znakov")}
                                             </div>
                                             <div class="operator__slide-editor">
                                                 <label>
-                                                    <span>"Main"</span>
+                                                    <span>"Hlavný text"</span>
                                                     <textarea
                                                         data-field="main"
                                                         rows="2"
@@ -768,7 +769,7 @@ pub fn SlideList() -> impl IntoView {
                                                     />
                                                 </label>
                                                 <label>
-                                                    <span>"Translation"</span>
+                                                    <span>"Preklad"</span>
                                                     <textarea
                                                         data-field="translation"
                                                         rows="2"
@@ -802,7 +803,7 @@ pub fn SlideList() -> impl IntoView {
                                                     />
                                                 </label>
                                                 <label>
-                                                    <span>"Stage"</span>
+                                                    <span>"Pódium"</span>
                                                     <textarea
                                                         data-field="stage"
                                                         rows="2"
@@ -837,7 +838,7 @@ pub fn SlideList() -> impl IntoView {
                                                     />
                                                 </label>
                                                 <label>
-                                                    <span>"Group"</span>
+                                                    <span>"Skupina"</span>
                                                     <input
                                                         type="text"
                                                         data-field="group"

@@ -81,7 +81,6 @@ body.operator[data-shell="phone"] .bible__translation-row {
   color: #94a3b8;
   font-size: 0.65rem;
   letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 .console-translation {
   flex: 1 0 44px;
@@ -180,7 +179,6 @@ body.operator[data-shell="phone"] .bible__translation-row {
   color: #94a3b8;
   font-size: 0.7rem;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 .console-chip {
   min-height: 44px;
@@ -408,7 +406,6 @@ body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: #94a3b8;
 }
 

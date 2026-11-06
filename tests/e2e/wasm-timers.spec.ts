@@ -289,7 +289,7 @@ test.describe("WASM Operator Timer Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("copied");
+        return toast && toast.textContent?.includes("skopírovaná");
       },
       { timeout: 3_000 },
     );
@@ -330,7 +330,7 @@ test.describe("WASM Operator Timer Tests", () => {
 
     // Preach card should show "No limit" initially
     const preachLimit = page.locator("#preach-limit");
-    await expect(preachLimit).toContainText("No limit", { timeout: 5_000 });
+    await expect(preachLimit).toContainText("Bez limitu", { timeout: 5_000 });
 
     // Type "5" and press Enter → sets limit to 300 seconds (5 min)
     await limitInput.click();
@@ -365,7 +365,7 @@ test.describe("WASM Operator Timer Tests", () => {
     }).toPass({ timeout: 10_000, intervals: [500] });
 
     // Preach card should show "No limit" again
-    await expect(preachLimit).toContainText("No limit", { timeout: 5_000 });
+    await expect(preachLimit).toContainText("Bez limitu", { timeout: 5_000 });
 
     // Clean console
     expect(consoleMessages).toEqual([]);

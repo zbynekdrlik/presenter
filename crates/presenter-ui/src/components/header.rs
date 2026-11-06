@@ -270,12 +270,12 @@ pub fn Header() -> impl IntoView {
         // ready.
         <Show when=move || new_version_available.get() fallback=|| ()>
             <div class="operator__version-banner" data-role="version-update-banner">
-                <span>"A new version is available."</span>
+                <span>"Je k dispozícii nová verzia."</span>
                 <button
                     type="button"
                     data-role="version-update-reload"
                     on:click=reload_now
-                >"Reload"</button>
+                >"Načítať znova"</button>
             </div>
         </Show>
         <header class="operator__header">
@@ -298,10 +298,10 @@ pub fn Header() -> impl IntoView {
                     <input
                         type="search"
                         placeholder=move || {
-                            if ctx.view.get() == "bible" { "Search Bible verses" } else { "Search libraries, songs, slides" }
+                            if ctx.view.get() == "bible" { "Hľadať verše v Biblii" } else { "Hľadať knižnice, piesne, slajdy" }
                         }
                         data-role="global-search-query"
-                        aria-label="Search presenter content"
+                        aria-label="Hľadať v Presenteri"
                         autocomplete="off"
                         prop:value=move || {
                             if ctx.view.get() == "bible" {
@@ -315,11 +315,11 @@ pub fn Header() -> impl IntoView {
                     <button
                         type="button"
                         data-role="global-search-clear"
-                        aria-label="Clear search"
+                        aria-label="Vymazať hľadanie"
                         on:click=on_search_clear
                     >
                         <span aria-hidden="true">{"\u{00d7}"}</span>
-                        <span class="sr-only">"Clear search"</span>
+                        <span class="sr-only">"Vymazať hľadanie"</span>
                     </button>
                 </form>
             </div>
@@ -366,7 +366,7 @@ pub fn Header() -> impl IntoView {
                 <div class="operator__mode-toggle">
                     {["live", "edit"].into_iter().map(|m| {
                         let mode_name = m.to_string();
-                        let label = match m { "live" => "Live", "edit" => "Edit", _ => m };
+                        let label = match m { "live" => "Naživo", "edit" => "Úprava", _ => m };
                         let mn = mode_name.clone();
                         view! {
                             <button

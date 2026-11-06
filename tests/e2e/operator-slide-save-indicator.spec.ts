@@ -130,7 +130,7 @@ test("Saved indicator appears and fades after blur", async ({ page }) => {
   const indicator = slideCard.locator('[data-role="slide-save-indicator"]');
   await expect(indicator).toBeVisible({ timeout: 3_000 });
   await expect(indicator).toHaveAttribute("data-status", "saved");
-  await expect(indicator).toHaveText(/Saved/);
+  await expect(indicator).toHaveText(/Uložené/);
 
   // Indicator must fade (disappear) within 5s after that
   await expect(indicator).toHaveCount(0, { timeout: 5_000 });
@@ -189,7 +189,7 @@ test("Save failed sticks when server returns 500", async ({ page }) => {
   const indicator = slideCard.locator('[data-role="slide-save-indicator"]');
   await expect(indicator).toBeVisible({ timeout: 3_000 });
   await expect(indicator).toHaveAttribute("data-status", "failed");
-  await expect(indicator).toHaveText(/failed/i);
+  await expect(indicator).toHaveText(/zlyhalo/i);
 
   // Must NOT fade within 5s
   await page.waitForTimeout(5_000);

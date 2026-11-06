@@ -106,7 +106,7 @@ fn SermonSlideCard(slide: BibleSlideDto) -> impl IntoView {
         let (id, ctx) = (id.clone(), ctx.clone());
         leptos::task::spawn_local(async move {
             match bible::trigger_presentation_slide(&presentation, &id).await {
-                Ok(_) => ctx.show_toast("Triggered", "success"),
+                Ok(_) => ctx.show_toast("Zobrazené na stene", "success"),
                 Err(err) => ctx.show_toast(&format!("Verš sa nezobrazil: {err}"), "error"),
             }
         });

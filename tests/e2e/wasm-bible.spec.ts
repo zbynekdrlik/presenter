@@ -44,7 +44,7 @@ async function navigateToBible(page: import("@playwright/test").Page) {
   if ((await bibleButton.count()) > 0) {
     await bibleButton.click();
   } else {
-    const bibleTab = page.locator('button:has-text("Bible")').first();
+    const bibleTab = page.locator('button:has-text("Biblia")').first();
     if ((await bibleTab.count()) > 0) {
       await bibleTab.click();
     }
@@ -102,7 +102,7 @@ test.describe("WASM Operator Bible Tests", () => {
     if ((await bibleButton.count()) > 0) {
       await expect(bibleButton).toBeVisible();
     } else {
-      const bibleTab = page.locator('button:has-text("Bible")').first();
+      const bibleTab = page.locator('button:has-text("Biblia")').first();
       await expect(bibleTab).toBeVisible();
     }
   });
@@ -237,7 +237,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await expect(secondaryTranslation).toBeVisible({ timeout: 10_000 });
 
     const noneOption = secondaryTranslation.locator('option[value=""]');
-    await expect(noneOption).toHaveText("None");
+    await expect(noneOption).toHaveText("žiadny");
   });
 
   // -----------------------------------------------------------------------
@@ -310,8 +310,8 @@ test.describe("WASM Operator Bible Tests", () => {
     const meta = firstBook.locator(".operator__list-meta");
     await expect(meta).toBeVisible();
     const metaText = await meta.textContent();
-    // Meta should show chapter count like "50 ch."
-    expect(metaText).toMatch(/\d+\s*ch\./);
+    // Meta should show chapter count like "50 kap."
+    expect(metaText).toMatch(/\d+\s*kap\./);
 
     // Button should have pointer cursor (styled as clickable)
     const cursor = await firstBook.evaluate(
@@ -469,7 +469,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
+        return toast && toast.textContent?.includes("Zobrazené na stene");
       },
       { timeout: 5_000 },
     );
@@ -521,7 +521,7 @@ test.describe("WASM Operator Bible Tests", () => {
 
     // Selection count should update
     const selectionCount = page.locator('[data-role="selection-count"]');
-    await expect(selectionCount).toHaveText("1 selected");
+    await expect(selectionCount).toHaveText("Vybrané: 1");
   });
 
   test("select all selects all slides", async ({ page }) => {
@@ -548,7 +548,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.locator('[data-role="select-all-slides"]').click();
 
     const selectionCount = page.locator('[data-role="selection-count"]');
-    await expect(selectionCount).toHaveText(`${totalSlides} selected`);
+    await expect(selectionCount).toHaveText(`Vybrané: ${totalSlides}`);
   });
 
   // -----------------------------------------------------------------------
@@ -721,13 +721,13 @@ test.describe("WASM Operator Bible Tests", () => {
     // Labels should be visible
     const mainLabel = editorSection
       .locator("label span")
-      .filter({ hasText: "Main" })
+      .filter({ hasText: "Hlavný text" })
       .first();
     await expect(mainLabel).toBeVisible();
 
     const transLabel = editorSection
       .locator("label span")
-      .filter({ hasText: "Translation" })
+      .filter({ hasText: "Preklad" })
       .first();
     await expect(transLabel).toBeVisible();
 
@@ -752,7 +752,7 @@ test.describe("WASM Operator Bible Tests", () => {
       ".operator__slide-header .operator__list-action--primary",
     );
     await expect(triggerBtn).toBeVisible();
-    await expect(triggerBtn).toHaveText("Trigger");
+    await expect(triggerBtn).toHaveText("Zobraziť");
 
     // Checkbox should be present in the DOM (may be visually hidden by custom label styling)
     const checkbox = firstCard.locator(
@@ -889,27 +889,27 @@ test.describe("WASM Operator Bible Tests", () => {
       "translation-ref",
     );
 
-    // Labels should include "Main Reference" and "Translation Reference"
+    // Labels should include "Odkaz hlavného textu" and "Odkaz prekladu"
     const editorSection = firstCard.locator(".operator__slide-editor--bible");
     const mainRefLabel = editorSection
       .locator("label span")
-      .filter({ hasText: "Main Reference" });
+      .filter({ hasText: "Odkaz hlavného textu" });
     await expect(mainRefLabel).toBeVisible();
 
     const transRefLabel = editorSection
       .locator("label span")
-      .filter({ hasText: "Translation Reference" });
+      .filter({ hasText: "Odkaz prekladu" });
     await expect(transRefLabel).toBeVisible();
 
-    // There should be NO "Stage" or "Group" fields
+    // There should be NO "Pódium" or "Skupina" fields
     const stageLabel = editorSection
       .locator("label span")
-      .filter({ hasText: /^Stage$/ });
+      .filter({ hasText: /^Pódium$/ });
     expect(await stageLabel.count()).toBe(0);
 
     const groupLabel = editorSection
       .locator("label span")
-      .filter({ hasText: /^Group$/ });
+      .filter({ hasText: /^Skupina$/ });
     expect(await groupLabel.count()).toBe(0);
 
     // Cleanup
@@ -1016,10 +1016,10 @@ test.describe("WASM Operator Bible Tests", () => {
 
     // Both tabs should have identical field sets
     expect(prepFieldSet).toEqual(liveFieldSet);
-    expect(prepFieldSet).toContain("Main");
-    expect(prepFieldSet).toContain("Translation");
-    expect(prepFieldSet).toContain("Main Reference");
-    expect(prepFieldSet).toContain("Translation Reference");
+    expect(prepFieldSet).toContain("Hlavný text");
+    expect(prepFieldSet).toContain("Preklad");
+    expect(prepFieldSet).toContain("Odkaz hlavného textu");
+    expect(prepFieldSet).toContain("Odkaz prekladu");
 
     // Cleanup
     await page.evaluate(
@@ -1383,7 +1383,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Added");
+        return toast && toast.textContent?.includes("Pridané snímky");
       },
       { timeout: 10_000 },
     );
@@ -1428,7 +1428,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Preferences saved");
+        return toast && toast.textContent?.includes("Nastavenie uložené");
       },
       { timeout: 5_000 },
     );
@@ -1509,7 +1509,7 @@ test.describe("WASM Operator Bible Tests", () => {
 
     const emptyState = slidesColumn.locator(".operator__slides-empty");
     await expect(emptyState).toBeVisible();
-    await expect(emptyState).toHaveText("Load a passage to populate slides.");
+    await expect(emptyState).toHaveText("Načítaj verše a zobrazia sa tu snímky.");
   });
 
   test("prepared tab slides column shows empty state", async ({ page }) => {
@@ -1522,7 +1522,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const slidesColumn = bp.locator('[data-role="slides"]');
     const emptyState = slidesColumn.locator(".operator__slides-empty");
     await expect(emptyState).toHaveText(
-      "Select a presentation to view slides.",
+      "Vyber prezentáciu vľavo.",
     );
   });
 
@@ -1587,7 +1587,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
+        return toast && toast.textContent?.includes("Zobrazené na stene");
       },
       { timeout: 5_000 },
     );
@@ -1661,7 +1661,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
+        return toast && toast.textContent?.includes("Zobrazené na stene");
       },
       { timeout: 5_000 },
     );
@@ -1741,7 +1741,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
+        return toast && toast.textContent?.includes("Zobrazené na stene");
       },
       { timeout: 5_000 },
     );
@@ -1811,7 +1811,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const searchInput = page.locator('[data-role="global-search-query"]');
     await expect(searchInput).toBeVisible();
     // Placeholder should indicate Bible search when on bible view
-    await expect(searchInput).toHaveAttribute("placeholder", /Bible/i);
+    await expect(searchInput).toHaveAttribute("placeholder", /Bibli/i);
   });
 
   test("search requires minimum 3 characters", async ({ page }) => {
@@ -2183,7 +2183,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
+        return toast && toast.textContent?.includes("Zobrazené na stene");
       },
       { timeout: 5_000 },
     );
@@ -2198,7 +2198,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Added");
+        return toast && toast.textContent?.includes("Pridané snímky");
       },
       { timeout: 10_000 },
     );
@@ -2231,7 +2231,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
+        return toast && toast.textContent?.includes("Zobrazené na stene");
       },
       { timeout: 5_000 },
     );

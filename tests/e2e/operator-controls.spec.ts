@@ -9,7 +9,7 @@
  * migration (camelCase serde mismatch) and no test caught it.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
   assertVersionLabel,
   deriveTestConfig,
@@ -18,6 +18,8 @@ import {
   stopServer,
   type ServerHandle,
 } from "./support";
+
+const abletonButtonOf = (page: Page) => page.locator('[data-role="ableset-enable"]');
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
@@ -90,14 +92,17 @@ test.describe("Operator Control Buttons", () => {
     await expect(abletonButton).toHaveAttribute("data-state", "on", {
       timeout: 10_000,
     });
-    await expect(abletonButton).toHaveText("Ableton ON");
+    // #875 H3: one label, the state is the style + aria-pressed.
+    await expect(abletonButton).toHaveText("Ableton");
+    await expect(abletonButton).toHaveAttribute("aria-pressed", "true");
 
     // Click to disable
     await abletonButton.click();
     await expect(abletonButton).toHaveAttribute("data-state", "off", {
       timeout: 5_000,
     });
-    await expect(abletonButton).toHaveText("Ableton OFF");
+    await expect(abletonButton).toHaveText("Ableton");
+    await expect(abletonButton).toHaveAttribute("aria-pressed", "false");
 
     // Verify via API that server state changed
     const statusResp = await page.request.get(
@@ -111,7 +116,9 @@ test.describe("Operator Control Buttons", () => {
     await expect(abletonButton).toHaveAttribute("data-state", "on", {
       timeout: 5_000,
     });
-    await expect(abletonButton).toHaveText("Ableton ON");
+    // #875 H3: one label, the state is the style + aria-pressed.
+    await expect(abletonButton).toHaveText("Ableton");
+    await expect(abletonButton).toHaveAttribute("aria-pressed", "true");
 
     // Verify via API
     const statusResp2 = await page.request.get(
@@ -149,14 +156,22 @@ test.describe("Operator Control Buttons", () => {
     await expect(followButton).toHaveAttribute("data-state", "on", {
       timeout: 10_000,
     });
-    await expect(followButton).toHaveText("Follow ON");
+    await expect(followButton).toHaveText("Sledovať pódium");
+    await expect(followButton).toHaveAttribute("aria-pressed", "true");
+    const onBackground = await followButton.evaluate((el) => getComputedStyle(el).backgroundColor);
 
     // Click to disable
     await followButton.click();
     await expect(followButton).toHaveAttribute("data-state", "off", {
       timeout: 5_000,
     });
-    await expect(followButton).toHaveText("Follow OFF");
+    await expect(followButton).toHaveText("Sledovať pódium");
+    await expect(followButton).toHaveAttribute("aria-pressed", "false");
+    // The text no longer says ON/OFF: the same button must LOOK different
+    // in its two states.
+    await expect
+      .poll(() => followButton.evaluate((el) => getComputedStyle(el).backgroundColor))
+      .not.toBe(onBackground);
 
     // Verify via API
     const statusResp = await page.request.get(
@@ -170,7 +185,8 @@ test.describe("Operator Control Buttons", () => {
     await expect(followButton).toHaveAttribute("data-state", "on", {
       timeout: 5_000,
     });
-    await expect(followButton).toHaveText("Follow ON");
+    await expect(followButton).toHaveText("Sledovať pódium");
+    await expect(followButton).toHaveAttribute("aria-pressed", "true");
 
     expect(filterRealErrors(consoleMessages)).toEqual([]);
   });

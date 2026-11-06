@@ -53,7 +53,7 @@ fn AddEmptySlideButton() -> impl IntoView {
     let on_click = move |_| {
         let pres_id = bs.active_presentation_id.get_untracked();
         let Some(id) = pres_id else {
-            ctx.show_toast("Select a presentation first", "error");
+            ctx.show_toast("Najprv vyber prezentáciu", "error");
             return;
         };
         let active_slides = bs.active_presentation_slides;
@@ -73,11 +73,11 @@ fn AddEmptySlideButton() -> impl IntoView {
                 Ok(detail) => {
                     active_slides.set(detail.slides);
                     toast_variant.set("success".to_string());
-                    toast_message.set(Some("Added empty slide".to_string()));
+                    toast_message.set(Some("Pridaná prázdna snímka".to_string()));
                 }
                 Err(e) => {
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Failed: {e}")));
+                    toast_message.set(Some(format!("Zlyhalo: {e}")));
                 }
             }
         });
@@ -86,9 +86,9 @@ fn AddEmptySlideButton() -> impl IntoView {
     view! {
         <button
             type="button"
-            class="operator__slides-add"
+            class="operator__slides-add operator__list-action"
             data-role="add-empty-slide"
-            title="Add empty slide to active presentation"
+            title="Pridať prázdnu snímku do otvorenej prezentácie"
             on:click=on_click
         >"+"</button>
     }
@@ -104,7 +104,7 @@ fn LiveSlides() -> impl IntoView {
             let slide_list = slides.get();
             if slide_list.is_empty() {
                 view! {
-                    <p class="operator__slides-empty">"Load a passage to populate slides."</p>
+                    <p class="operator__slides-empty">"Načítaj verše a zobrazia sa tu snímky."</p>
                 }.into_any()
             } else {
                 slide_list.into_iter().map(|slide| {
@@ -125,7 +125,7 @@ fn PreparedSlides() -> impl IntoView {
             let slide_list = slides.get();
             if slide_list.is_empty() {
                 view! {
-                    <p class="operator__slides-empty">"Select a presentation to view slides."</p>
+                    <p class="operator__slides-empty">"Vyber prezentáciu vľavo."</p>
                 }.into_any()
             } else {
                 slide_list.into_iter().enumerate().map(|(idx, slide)| {
@@ -182,9 +182,9 @@ fn build_trigger_request(
 fn char_count_badge(field: &'static str, text: &str, limit: u32) -> impl IntoView {
     let (count, over) = slide_char_count(text, limit);
     let title = if over {
-        format!("{count} characters, over the limit of {limit}")
+        format!("{count} znakov, viac ako limit {limit}")
     } else {
-        format!("{count} characters (limit {limit})")
+        format!("{count} znakov (limit {limit})")
     };
     view! {
         <span
@@ -262,7 +262,7 @@ fn bible_slide_editor_view(
     view! {
         <section class="operator__slide-editor operator__slide-editor--bible">
             <label>
-                <span>"Main"</span>
+                <span>"Hlavný text"</span>
                 <textarea
                     data-field="main"
                     data-role="slide-main-edit"
@@ -279,7 +279,7 @@ fn bible_slide_editor_view(
                 ></textarea>
             </label>
             <label>
-                <span>"Translation"</span>
+                <span>"Preklad"</span>
                 <textarea
                     data-field="translation"
                     data-role="slide-translation-edit"
@@ -297,7 +297,7 @@ fn bible_slide_editor_view(
             </label>
             <div class="operator__slide-editor-grid">
                 <label>
-                    <span>"Main Reference"</span>
+                    <span>"Odkaz hlavného textu"</span>
                     <input type="text"
                         data-field="main-ref"
                         data-role="slide-main-ref"
@@ -313,7 +313,7 @@ fn bible_slide_editor_view(
                     />
                 </label>
                 <label>
-                    <span>"Translation Reference"</span>
+                    <span>"Odkaz prekladu"</span>
                     <input type="text"
                         data-field="translation-ref"
                         data-role="slide-translation-ref"
@@ -363,14 +363,14 @@ fn make_trigger_handler(
             match bible::trigger_slide(&req).await {
                 Ok(_) => {
                     toast_variant.set("success".to_string());
-                    toast_message.set(Some("Triggered".to_string()));
+                    toast_message.set(Some("Zobrazené na stene".to_string()));
                     if let Ok(broadcast) = bible::get_broadcast().await {
                         active_broadcast.set(broadcast);
                     }
                 }
                 Err(e) => {
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Trigger failed: {e}")));
+                    toast_message.set(Some(format!("Zobrazenie zlyhalo: {e}")));
                 }
             }
         });
@@ -442,10 +442,10 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
                 class="operator__slide-trigger-zone"
                 data-role="slide-trigger-zone"
                 on:click=on_trigger.clone()
-                title="Click to trigger this slide"
+                title="Kliknutím zobrazíš snímku na stene"
             >
                 <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
-                <span>{if !main_ref.is_empty() { main_ref.clone() } else { "Trigger".to_string() }}</span>
+                <span>{if !main_ref.is_empty() { main_ref.clone() } else { "Zobraziť".to_string() }}</span>
             </div>
             <div
                 class="operator__slide-select-zone"
@@ -467,7 +467,7 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
                             class="operator__list-action operator__list-action--primary"
                             data-role="slide-trigger"
                             on:click=on_trigger.clone()
-                        >"Trigger"</button>
+                        >"Zobraziť"</button>
                     </div>
                 </header>
                 {bible_slide_editor_view(
@@ -566,7 +566,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             let sid = slide_id_for_delete.clone();
 
             let window = crate::utils::window::window();
-            if let Ok(confirmed) = window.confirm_with_message("Delete this slide?") {
+            if let Ok(confirmed) = window.confirm_with_message("Zmazať túto snímku?") {
                 if !confirmed {
                     return;
                 }
@@ -582,11 +582,11 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                             active_slides.set(detail.slides);
                         }
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Slide deleted".to_string()));
+                        toast_message.set(Some("Snímka zmazaná".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Delete failed: {e}")));
+                        toast_message.set(Some(format!("Zmazanie zlyhalo: {e}")));
                     }
                 }
             });
@@ -661,7 +661,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Reorder failed: {e}")));
+                        toast_message.set(Some(format!("Zmena poradia zlyhala: {e}")));
                         if let Ok(detail) = bible::get_presentation(&pid).await {
                             active_slides.set(detail.slides);
                         }
@@ -708,7 +708,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 data-role="slide-drag-handle"
                 draggable="true"
                 on:dragstart=on_dragstart
-                title="Drag to reorder"
+                title="Potiahnutím zmeníš poradie"
             >"\u{2630}"</div>
 
             // Trigger zone (live mode only)
@@ -722,10 +722,10 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                                 class="operator__slide-trigger-zone operator__slide-trigger-zone--full"
                                 data-role="slide-trigger-zone"
                                 on:click=on_trigger.clone()
-                                title="Click to trigger this slide"
+                                title="Kliknutím zobrazíš snímku na stene"
                             >
                                 <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
-                                <span>{if !main_ref_trigger.is_empty() { main_ref_trigger.clone() } else { "Trigger".to_string() }}</span>
+                                <span>{if !main_ref_trigger.is_empty() { main_ref_trigger.clone() } else { "Zobraziť".to_string() }}</span>
                             </div>
                         })
                     } else {
@@ -782,7 +782,8 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                                     class="operator__slide-delete-btn"
                                     data-action="delete"
                                     data-role="slide-delete"
-                                    title="Delete slide"
+                                    title="Zmazať snímku"
+                                    aria-label="Zmazať snímku"
                                     on:click=on_delete.clone()
                                 >"\u{2715}"</button>
                             </div>

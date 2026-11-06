@@ -53,13 +53,13 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
         }
         if c.at_end.get() {
             return if c.prepared.with(Option::is_some) {
-                "KONIEC KÁZNE".to_string()
+                "Koniec kázne".to_string()
             } else {
-                "KONIEC KNIHY".to_string()
+                "Koniec knihy".to_string()
             };
         }
         if failed.get() {
-            return "SKÚSIŤ ZNOVA".to_string();
+            return "Skúsiť znova".to_string();
         }
         let part = split()
             .map(|(i, n)| format!(" {i}/{n}"))
@@ -71,8 +71,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
             c.target.get().map(|target| short_label(&target))
         };
         match (c.after_show.get(), next) {
-            (true, Some(next)) => format!("ĎALŠÍ: {next}{part}"),
-            _ => format!("ZOBRAZIŤ{part}"),
+            (true, Some(next)) => format!("Ďalší: {next}{part}"),
+            _ => format!("Zobraziť{part}"),
         }
     };
     let step_busy = move || if c.showing.get() { "true" } else { "false" };

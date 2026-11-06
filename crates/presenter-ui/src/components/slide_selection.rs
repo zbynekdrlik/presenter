@@ -192,7 +192,7 @@ pub(super) fn render_insertion_bar(
             }
             on:click=move |_| paste_at_gap(&ctx, &op_click, gap)
         >
-            <span class="operator__slide-insert-hint">"Paste here"</span>
+            <span class="operator__slide-insert-hint">"Vložiť sem"</span>
         </div>
     }
 }
@@ -374,7 +374,7 @@ fn paste_copy(
                     op.clipboard.set(None);
                     op.choosing_paste_target.set(false);
                     op.paste_target_gap.set(None);
-                    ctx.show_toast("Those slides no longer exist", "error");
+                    ctx.show_toast("Tieto snímky už neexistujú", "error");
                 }
             }
             Err(ApiError::Status(409, _)) => {
@@ -407,7 +407,7 @@ fn paste_copy(
                         {
                             ctx.selected_presentation.set(Some(detail.presentation));
                             ctx.show_toast(
-                                "Paste position changed — refreshed, try again",
+                                "Miesto vloženia sa zmenilo — obnovené, skús znova",
                                 "error",
                             );
                         }
@@ -422,7 +422,7 @@ fn paste_copy(
             }
             Err(_) => {
                 // Clipboard KEPT so the user can retry.
-                ctx.show_toast("Paste failed — try again", "error");
+                ctx.show_toast("Vloženie zlyhalo — skús znova", "error");
             }
         }
         // F3: the request has now fully resolved (every arm above,
@@ -469,7 +469,7 @@ fn paste_cut(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<Str
         // permanently blocked (F3).
         clear_selection_and_clipboard(op);
         op.paste_in_flight.set(false);
-        ctx.show_toast("Those slides no longer exist", "error");
+        ctx.show_toast("Tieto snímky už neexistujú", "error");
         return;
     };
     op.slide_edit_seq.update(|s| *s += 1);
@@ -485,7 +485,7 @@ fn paste_cut(ctx: &AppContext, op: &OperatorState, pres_id: String, ids: Vec<Str
             }
             Err(_) => {
                 // Originals stay in place, still marked; retry or Escape.
-                ctx.show_toast("Move failed — try again", "error");
+                ctx.show_toast("Presun zlyhal — skús znova", "error");
             }
         }
         // F3: request fully resolved — allow the next paste activation.
@@ -640,17 +640,17 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 class="operator__slide-selection-count"
                                 data-role="slide-selection-count"
                             >
-                                {move || format!("{} selected", selected_slide_ids.with(|s| s.len()))}
+                                {move || format!("Vybrané: {}", selected_slide_ids.with(|s| s.len()))}
                             </span>
                             <button
                                 type="button"
                                 class="operator__list-action"
                                 data-action="copy"
                                 data-role="slide-copy"
-                                title="Copy the selected slides (Ctrl+C)"
+                                title="Kopírovať vybrané snímky (Ctrl+C)"
                                 on:click=move |_| copy_selection(&ctx_copy, &op_copy)
                             >
-                                "Copy "
+                                "Kopírovať "
                                 <span
                                     class="operator__slide-selection-shortcut"
                                     data-role="slide-selection-shortcut"
@@ -661,10 +661,10 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 class="operator__list-action"
                                 data-action="cut"
                                 data-role="slide-cut"
-                                title="Cut the selected slides (Ctrl+X)"
+                                title="Vystrihnúť vybrané snímky (Ctrl+X)"
                                 on:click=move |_| cut_selection(&ctx_cut, &op_cut)
                             >
-                                "Cut "
+                                "Vystrihnúť "
                                 <span
                                     class="operator__slide-selection-shortcut"
                                     data-role="slide-selection-shortcut"
@@ -683,15 +683,15 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 // this button is actually in.
                                 title=move || {
                                     if paste_target_gap.get().is_some() {
-                                        "Paste at the highlighted gap (Ctrl+V)"
+                                        "Vložiť na zvýraznené miesto (Ctrl+V)"
                                     } else {
-                                        "Click a gap to choose where to paste, then Paste again (Ctrl+V)"
+                                        "Klikni na medzeru, kam vložiť, potom znova Vložiť (Ctrl+V)"
                                     }
                                 }
                                 prop:disabled=move || clipboard.get().is_none()
                                 on:click=move |_| paste_at_target_or_rearm(&ctx_paste, &op_paste)
                             >
-                                "Paste "
+                                "Vložiť "
                                 <span
                                     class="operator__slide-selection-shortcut"
                                     data-role="slide-selection-shortcut"
@@ -702,10 +702,10 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                 class="operator__list-action"
                                 data-action="clear"
                                 data-role="slide-clear"
-                                title="Clear the selection and clipboard (Esc)"
+                                title="Zrušiť výber a schránku (Esc)"
                                 on:click=move |_| clear_selection_and_clipboard(&op_clear)
                             >
-                                "Clear "
+                                "Zrušiť "
                                 <span
                                     class="operator__slide-selection-shortcut"
                                     data-role="slide-selection-shortcut"
@@ -719,7 +719,7 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                             class="operator__slide-selection-drag"
                                             data-role="clipboard-drag"
                                             draggable="true"
-                                            title="Drag the block onto a gap"
+                                            title="Pretiahni blok na medzeru"
                                             on:dragstart=move |ev: web_sys::DragEvent| {
                                                 if let Some(dt) = ev.data_transfer() {
                                                     let _ = dt.set_data("application/x-slide-clipboard", "1");
@@ -728,7 +728,7 @@ pub fn SlideSelectionPanel() -> impl IntoView {
                                                 dragging_clipboard.set(true);
                                             }
                                             on:dragend=move |_| dragging_clipboard.set(false)
-                                        >"\u{2195} Drag block"</span>
+                                        >"\u{2195} Presunúť blok"</span>
                                     }
                                 }
                             </Show>

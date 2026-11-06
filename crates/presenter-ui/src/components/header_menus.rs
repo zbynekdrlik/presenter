@@ -225,7 +225,7 @@ pub fn HeaderMenus(version: RwSignal<String>) -> impl IntoView {
                 open=open
                 label=ViewFn::from(|| view! { <span class="header-menu__label">"Obrazovky"</span> })
             >
-                <SurfaceNav slovak=true />
+                <SurfaceNav />
             </HeaderMenu>
             <HeaderMenu
                 id="connections"

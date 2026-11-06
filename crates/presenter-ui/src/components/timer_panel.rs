@@ -1,7 +1,17 @@
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use leptos::prelude::*;
-use presenter_core::TimerCommand;
+use presenter_core::{TimerCommand, TimerState};
+
+/// Operator-facing label of the preach timer state (#875 H3).
+pub fn timer_state_label(state: TimerState) -> &'static str {
+    match state {
+        TimerState::Idle => "Pripravené",
+        TimerState::Running => "Beží",
+        TimerState::Paused => "Pozastavené",
+        TimerState::Completed => "Skončené",
+    }
+}
 
 fn format_seconds(seconds: i64) -> String {
     let abs = seconds.unsigned_abs();
@@ -174,10 +184,10 @@ pub fn TimerPanel() -> impl IntoView {
         let copied = copy_to_clipboard(&url);
         if copied {
             toast_variant.set("success".to_string());
-            toast_message.set(Some("Timer overlay URL copied".to_string()));
+            toast_message.set(Some("Adresa časovača skopírovaná".to_string()));
         } else {
             toast_variant.set("error".to_string());
-            toast_message.set(Some(format!("Could not copy. URL: {url}")));
+            toast_message.set(Some(format!("Nepodarilo sa skopírovať. Adresa: {url}")));
         }
     };
 
@@ -185,7 +195,7 @@ pub fn TimerPanel() -> impl IntoView {
         <div class="operator__timers" data-role="timer-cards">
             <article class="operator__timer-card" data-role="timer-countdown">
                 <header>
-                    <strong>"Countdown"</strong>
+                    <strong>"Odpočet"</strong>
                 </header>
                 <p class="operator__timer-primary" id="countdown-value">
                     {move || {
@@ -197,7 +207,7 @@ pub fn TimerPanel() -> impl IntoView {
                 <small id="countdown-target">
                     {move || {
                         ctx.timers.get()
-                            .map(|t| format!("Target {}", t.countdown_to_start.target_local))
+                            .map(|t| format!("Začiatok {}", t.countdown_to_start.target_local))
                             .unwrap_or_default()
                     }}
                 </small>
@@ -205,12 +215,12 @@ pub fn TimerPanel() -> impl IntoView {
 
             <article class="operator__timer-card" data-role="timer-preach">
                 <header>
-                    <strong>"Preach"</strong>
+                    <strong>"Kázeň"</strong>
                     <span class="operator__timer-state" id="preach-state">
                         {move || {
                             ctx.timers.get()
-                                .map(|t| format!("{:?}", t.preach_timer.state))
-                                .unwrap_or_else(|| "Idle".to_string())
+                                .map(|t| timer_state_label(t.preach_timer.state))
+                                .unwrap_or(timer_state_label(TimerState::Idle))
                         }}
                     </span>
                 </header>
@@ -226,22 +236,22 @@ pub fn TimerPanel() -> impl IntoView {
                         ctx.timers.get()
                             .and_then(|t| t.preach_timer.limit_seconds)
                             .map(|s| format!("Limit: {}", format_seconds(s as i64)))
-                            .unwrap_or_else(|| "No limit".to_string())
+                            .unwrap_or_else(|| "Bez limitu".to_string())
                     }}
                 </small>
             </article>
         </div>
         <div class="operator__timer-actions" data-role="timer-actions">
             <div class="operator__timer-group">
-                <h3>"Countdown"</h3>
+                <h3>"Odpočet"</h3>
                 <label class="operator__timer-field">
-                    <span>"Service start"</span>
+                    <span>"Začiatok bohoslužby"</span>
                     <input
                         type="text"
                         inputmode="numeric"
                         placeholder="HH:MM"
                         data-role="countdown-target-input"
-                        aria-label="Countdown target time (HH:MM)"
+                        aria-label="Začiatok bohoslužby (HH:MM)"
                         on:focus=on_countdown_focus
                         on:blur=on_countdown_blur
                         on:input=on_countdown_input
@@ -249,31 +259,31 @@ pub fn TimerPanel() -> impl IntoView {
                     />
                 </label>
                 <p class="operator__timer-help">
-                    "Type the service start time and press Enter. Examples: "
+                    "Napíš čas začiatku bohoslužby a stlač Enter. Príklady: "
                     <code>"18"</code>" → 18:00, "
                     <code>"830"</code>" → 8:30, "
                     <code>"1915"</code>" → 19:15, "
-                    <code>"18:30"</code>" → 18:30. Setting a target starts the countdown automatically."
+                    <code>"18:30"</code>" → 18:30. Zadaním času sa odpočet spustí sám."
                 </p>
                 <div class="operator__timer-buttons">
                     <button type="button" data-role="countdown-offset-minus" on:click=on_offset_minus>"-5 min"</button>
                     <button type="button" data-role="countdown-offset-plus" on:click=on_offset_plus>"+5 min"</button>
                 </div>
                 <div class="operator__timer-links">
-                    <button type="button" data-role="timer-overlay-open" on:click=on_overlay_open>"Open Countdown Overlay"</button>
-                    <button type="button" data-role="timer-overlay-copy" on:click=on_overlay_copy>"Copy Overlay URL"</button>
+                    <button type="button" data-role="timer-overlay-open" on:click=on_overlay_open>"Otvoriť časovač pre stream"</button>
+                    <button type="button" data-role="timer-overlay-copy" on:click=on_overlay_copy>"Kopírovať adresu časovača"</button>
                 </div>
             </div>
             <div class="operator__timer-group">
-                <h3>"Preach"</h3>
+                <h3>"Kázeň"</h3>
                 <label class="operator__timer-field">
-                    <span>"Preach limit"</span>
+                    <span>"Limit kázne"</span>
                     <input
                         type="text"
                         inputmode="numeric"
                         placeholder="5"
                         data-role="preach-limit-input"
-                        aria-label="Preach limit (HH:MM or minutes)"
+                        aria-label="Limit kázne (HH:MM alebo minúty)"
                         on:focus=on_preach_limit_focus
                         on:blur=on_preach_limit_blur
                         on:input=on_preach_limit_input
@@ -281,15 +291,15 @@ pub fn TimerPanel() -> impl IntoView {
                     />
                 </label>
                 <p class="operator__timer-help">
-                    "Type minutes (or HH:MM) and press Enter. "
-                    <button type="button" data-role="preach-limit-clear" on:click=on_preach_limit_clear>
-                        "Clear limit"
+                    "Napíš minúty (alebo HH:MM) a stlač Enter. "
+                    <button type="button" class="operator__list-action" data-role="preach-limit-clear" on:click=on_preach_limit_clear>
+                        "Zrušiť limit"
                     </button>
                 </p>
                 <div class="operator__timer-buttons">
-                    <button type="button" data-command="start_preach" on:click=on_preach_start>"Start"</button>
-                    <button type="button" data-command="pause_preach" on:click=on_preach_pause>"Pause"</button>
-                    <button type="button" data-command="reset_preach" on:click=on_preach_reset>"Reset"</button>
+                    <button type="button" data-command="start_preach" on:click=on_preach_start>"Spustiť"</button>
+                    <button type="button" data-command="pause_preach" on:click=on_preach_pause>"Pozastaviť"</button>
+                    <button type="button" data-command="reset_preach" on:click=on_preach_reset>"Vynulovať"</button>
                 </div>
             </div>
         </div>
@@ -433,6 +443,21 @@ fn parse_limit_input(input: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_timer_state_has_a_distinct_slovak_label() {
+        let states = [
+            TimerState::Idle,
+            TimerState::Running,
+            TimerState::Paused,
+            TimerState::Completed,
+        ];
+        let labels: std::collections::HashSet<_> =
+            states.into_iter().map(timer_state_label).collect();
+        assert_eq!(labels.len(), states.len());
+        assert_eq!(timer_state_label(TimerState::Running), "Beží");
+        assert!(!labels.contains("Idle"));
+    }
 
     #[test]
     fn parse_time_input_single_digit_hour() {

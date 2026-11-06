@@ -352,21 +352,21 @@ fn BibleTabNav() -> impl IntoView {
                 data-tab="live"
                 data-active=move || if bible_tab.get() == "live" { "true" } else { "false" }
                 on:click=make_tab_click("live")
-            >"Live"</button>
+            >"Naživo"</button>
             <button
                 type="button"
                 data-role="bible-tab"
                 data-tab="prepared"
                 data-active=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
                 on:click=make_tab_click("prepared")
-            >"Prepared"</button>
+            >"Pripravené"</button>
             <button
                 type="button"
                 data-role="bible-tab"
                 data-tab="settings"
                 data-active=move || if bible_tab.get() == "settings" { "true" } else { "false" }
                 on:click=make_tab_click("settings")
-            >"Settings"</button>
+            >"Nastavenie"</button>
         </nav>
     }
 }
@@ -462,7 +462,7 @@ fn TranslationSelectors() -> impl IntoView {
     view! {
         <div class="bible__translation-row">
             <label class="operator__field operator__field--compact">
-                <span>"Main"</span>
+                <span>"Hlavný preklad"</span>
                 <select data-role="main-translation" on:change=on_main_change>
                     {move || {
                         let current = selected_translation.get();
@@ -482,9 +482,9 @@ fn TranslationSelectors() -> impl IntoView {
                 </select>
             </label>
             <label class="operator__field operator__field--compact">
-                <span>"Secondary"</span>
+                <span>"Druhý preklad"</span>
                 <select data-role="secondary-translation" on:change=on_secondary_change>
-                    <option value="">"None"</option>
+                    <option value="">"žiadny"</option>
                     {move || {
                         let current = secondary_translation.get();
                         translations.get().into_iter().map(|t| {
@@ -570,11 +570,11 @@ fn BookFilter() -> impl IntoView {
 
     view! {
         <label class="operator__field">
-            <span>"Find book"</span>
+            <span>"Kniha"</span>
             <input
                 type="search"
                 data-role="book-filter"
-                placeholder="Start typing\u{2026}"
+                placeholder="Začni písať názov knihy"
                 node_ref=refs.book_filter
                 prop:value=move || book_filter.get()
                 on:input=on_input
@@ -626,7 +626,7 @@ fn BookList() -> impl IntoView {
 
                 if filtered.is_empty() {
                     view! {
-                        <p class="operator__slides-empty">"No books found."</p>
+                        <p class="operator__slides-empty">"Žiadna kniha sa nenašla."</p>
                     }.into_any()
                 } else {
                     filtered.into_iter().map(|book| {
@@ -690,7 +690,7 @@ fn BookList() -> impl IntoView {
                                     on:click=on_click
                                 >
                                     <span class="operator__list-label">{display_name}</span>
-                                    <span class="operator__list-meta">{chapter_count}" ch."</span>
+                                    <span class="operator__list-meta">{chapter_count}" kap."</span>
                                 </button>
                             </div>
                         }
@@ -709,13 +709,13 @@ fn BookList() -> impl IntoView {
 fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     let Some(book) = bs.selected_book.get_untracked() else {
         if show_errors {
-            ctx.show_toast("Select a book first", "error");
+            ctx.show_toast("Najprv vyber knihu", "error");
         }
         return;
     };
     let Some(main_code) = bs.selected_translation.get_untracked() else {
         if show_errors {
-            ctx.show_toast("Select a translation first", "error");
+            ctx.show_toast("Najprv vyber preklad", "error");
         }
         return;
     };
@@ -794,7 +794,7 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
             Err(e) => {
                 if show_errors {
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Failed to load passage: {e}")));
+                    toast_message.set(Some(format!("Verše sa nenačítali: {e}")));
                 }
             }
         }
@@ -829,7 +829,7 @@ fn LoadButton() -> impl IntoView {
             on:click=on_load
             disabled=is_disabled
         >
-            {move || if bs.loading_slides.get() { "Loading\u{2026}" } else { "Load passage" }}
+            {move || if bs.loading_slides.get() { "Načítavam\u{2026}" } else { "Načítať verše" }}
         </button>
     }
 }

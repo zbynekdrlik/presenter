@@ -6,9 +6,9 @@ use crate::state::AppContext;
 /// Operator-facing label of a text mode.
 pub fn text_mode_label(mode: StageTextMode) -> &'static str {
     match mode {
-        StageTextMode::Original => "Original",
-        StageTextMode::Translation => "Translation",
-        StageTextMode::Both => "Both",
+        StageTextMode::Original => "Originál",
+        StageTextMode::Translation => "Preklad",
+        StageTextMode::Both => "Oboje",
     }
 }
 
@@ -45,13 +45,14 @@ pub fn StageTextModePicker() -> impl IntoView {
 
     view! {
         <Show when=move || is_api_stage_layout(&layout_code.get())>
-            <div class="operator__stage-layout" aria-label="Stage text mode">
+            <div class="operator__stage-layout" aria-label="Text na pódiu">
                 <label class="operator__stage-layout-label" for="stage-text-mode-select">
-                    "Stage Text"
+                    "Text na pódiu"
                 </label>
                 <select
                     id="stage-text-mode-select"
                     data-role="stage-text-mode-select"
+                    title="Text na pódiu"
                     on:change=on_change
                 >
                     {StageTextMode::ALL.into_iter().map(|mode| {

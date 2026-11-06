@@ -119,7 +119,7 @@ test("an enabled host tracks the mock's connection state: green while up, yellow
   // configured, a bare "Connected" never says WHICH Resolume it is.
   // Connection state lives in the dot color + tooltip.
   await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(label);
-  await expect(chip).toHaveAttribute("title", /Connected/);
+  await expect(chip).toHaveAttribute("title", /Pripojené/);
   const menu = headerMenu(page, "connections");
   await expect(menu.toggle).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
   await expect(menu.toggle).toContainText("Pripojenia");
@@ -130,7 +130,7 @@ test("an enabled host tracks the mock's connection state: green while up, yellow
   mockResolume.setOnline(false);
   await expect(chip).toHaveAttribute("data-state", "yellow", { timeout: 30_000 });
   await expect(chip.locator(".operator__resolume-chip-label")).toHaveText(label);
-  await expect(chip).toHaveAttribute("title", /Not reachable/);
+  await expect(chip).toHaveAttribute("title", /Nedostupné/);
   // #875 H1: the closed Pripojenia button turns orange and names the host.
   await expect(menu.panel).toBeHidden();
   await expect(menu.toggle).toHaveAttribute("data-state", "down");
