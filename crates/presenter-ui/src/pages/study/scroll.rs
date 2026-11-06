@@ -139,9 +139,14 @@ pub(super) fn verse_offset(s: Study, verse: u16) -> Option<i32> {
 
 /// The whole-pixel offset kept for a verse's fractional top: rounded down like
 /// the landing step, so a verse landed at `n` reads back `n`. Rounding to the
-/// nearest read 172.8 as 173 and walked the verse a pixel down per switch.
+/// nearest read 172.8 as 173 and walked the verse a pixel down per switch. A
+/// verse a fraction above the top is at the top: read as -1 it would land above.
 fn screen_offset(top: f64) -> i32 {
-    top.floor() as i32
+    if top > -1.0 && top < 0.0 {
+        0
+    } else {
+        top.floor() as i32
+    }
 }
 
 /// The history entry being left keeps its scroll offset for Back.
