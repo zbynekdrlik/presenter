@@ -715,4 +715,4 @@ async fn legacy_composition_check(client: &Client, base_url: &str) -> Result<(),
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

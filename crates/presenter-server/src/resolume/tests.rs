@@ -166,7 +166,7 @@ fn build_driver(server: &MockServer) -> (HostDriver, Arc<RwLock<ResolumeConnecti
 /// Mount the standard 16-clip composition (main/translate/bible/metadata/timer)
 /// plus all of its param and clip endpoints — the fixture shared by the stage
 /// and bible tests.
-async fn mount_full_composition(server: &MockServer) {
+pub(crate) async fn mount_full_composition(server: &MockServer) {
     let composition = serde_json::json!({
         "layers": [
             {

@@ -30,7 +30,7 @@ async fn seed(state: &AppState, code: &str, language: &str, book: &str, texts: &
 }
 
 /// SEB + KJV with 1 John 1:1-3, KJV saved as the secondary translation.
-async fn seb_main_kjv_secondary() -> AppState {
+pub(super) async fn seb_main_kjv_secondary() -> AppState {
     let state = AppState::in_memory().await.expect("state");
     seed(
         &state,

@@ -820,4 +820,6 @@ fn numbered_verse_text(range: &[presenter_core::BiblePassage]) -> String {
 }
 
 #[cfg(test)]
+mod legacy_wall_tests;
+#[cfg(test)]
 mod trigger_tests;
