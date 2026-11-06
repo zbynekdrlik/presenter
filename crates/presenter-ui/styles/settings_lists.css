@@ -43,12 +43,6 @@
   border-style: solid;
 }
 
-/* Row buttons (Test / Edit / Refresh mapping …): the ghost grey is 4.0:1 on the
-   row background, this is 7.0:1 (#819). */
-.settings__list-item .settings__button--ghost {
-  color: #cbd5e1;
-}
-
 /* The editor inside a list row needs no second frame of its own. */
 .settings__form--inline-editor {
   padding: 0;
@@ -58,11 +52,9 @@
 
 .settings__editor-title {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #a5b4fc;
+  color: #c7d2fe;
 }
 
 .settings__list-summary {
@@ -91,9 +83,8 @@
 }
 
 .settings__status {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 0.78rem;
+  font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
   white-space: nowrap;
@@ -192,7 +183,7 @@
 
 /* #789: each discovered name is a one-click "add this source" chip. */
 .settings__discovered-name {
-  padding: 2px 8px;
+  padding: 2px 12px;
   border: none;
   border-radius: 999px;
   background: #e2e8f0;
@@ -330,6 +321,28 @@
   margin: 0;
   font-size: 0.9rem;
   color: #94a3b8;
+}
+
+/* The Ableton / OSC status facts (moved here from operator.css in #875 H4;
+   sentence case, no uppercase). */
+.settings__status-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.8rem 1.2rem;
+  margin: 0 0 0.75rem 0;
+  padding: 0;
+}
+
+.settings__status-list dt {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  margin: 0 0 0.2rem 0;
+}
+
+.settings__status-list dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
 }
 
 .settings__status-panel {

@@ -82,7 +82,7 @@ pub fn AssetPickerButton(
     view! {
         <button
             type="button"
-            class="stream-editor__btn stream-editor__btn--ghost"
+            class="ui-button"
             data-role="stream-asset-pick"
             on:click=on_open
         >
@@ -95,7 +95,7 @@ pub fn AssetPickerButton(
                     <h3 class="stream-editor__section-title">"Obrázky"</h3>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--ghost"
+                        class="ui-button"
                         data-role="stream-asset-picker-close"
                         on:click=move |_| open.set(false)
                     >
@@ -111,7 +111,7 @@ pub fn AssetPickerButton(
                     />
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--primary"
+                        class="ui-button ui-button--primary"
                         data-role="stream-asset-upload-btn"
                         on:click=on_upload
                     >
@@ -159,7 +159,7 @@ pub fn AssetPickerButton(
                                     <div class="stream-editor__asset-actions">
                                         <button
                                             type="button"
-                                            class="stream-editor__btn stream-editor__btn--primary"
+                                            class="ui-button ui-button--primary"
                                             data-role="stream-asset-select"
                                             on:click=move |_| {
                                                 draft.update(|p| {
@@ -174,7 +174,7 @@ pub fn AssetPickerButton(
                                         </button>
                                         <button
                                             type="button"
-                                            class="stream-editor__btn stream-editor__btn--danger"
+                                            class="ui-button ui-button--danger"
                                             data-role="stream-asset-delete"
                                             on:click=del
                                         >

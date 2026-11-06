@@ -491,8 +491,12 @@ test("#787 Escape with no drag deselects; a click on empty canvas deselects", as
   await expect(listRow(page, el)).toHaveAttribute("data-selected", "false");
   await expect(page.locator('[data-role="stream-prop-form"]')).toHaveCount(0);
 
-  // Select again, then click an EMPTY spot of the canvas → deselected.
-  await page.mouse.click(cx, cy);
+  // Select again, then click an EMPTY spot of the canvas → deselected. The
+  // element is clicked where it is NOW: closing the property form shortens the
+  // page, and the browser's scroll clamp can move the canvas (#875 H4: with
+  // the one-row header and 40 px controls the page was scrolled at this point).
+  const [againX, againY] = await centerOf(page, el);
+  await page.mouse.click(againX, againY);
   await expect(overlayEl(page, el)).toHaveAttribute("data-selected", "true");
   const canvas = (await page.locator(sel.overlay).boundingBox())!;
   await page.mouse.click(canvas.x + canvas.width * 0.8, canvas.y + canvas.height * 0.8);

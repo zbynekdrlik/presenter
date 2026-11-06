@@ -207,7 +207,7 @@ pub fn NameplatePanel(ctx: StreamEditorCtx) -> impl IntoView {
                 <Show when=move || !ctx.has_lower_third()>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--primary"
+                        class="ui-button ui-button--primary"
                         data-role="stream-nameplate-create-layer"
                         on:click=move |_| ctx.create_nameplate_layer()
                     >

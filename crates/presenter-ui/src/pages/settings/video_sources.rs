@@ -19,13 +19,13 @@ use presenter_core::ndi_name_parts;
 /// the same honest "Checking…" rather than rendering a raw wire token.
 pub(crate) fn status_label(state: &str) -> &'static str {
     match state {
-        "live" => "Live",
-        "not-broadcasting" => "Not broadcasting",
-        "not-found" => "Not found on the network",
-        "ready" => "Ready",
-        "connecting" => "Connecting…",
-        "unknown" => "NDI unavailable",
-        _ => "Checking…",
+        "live" => "Naživo",
+        "not-broadcasting" => "Nevysiela",
+        "not-found" => "Nie je v sieti",
+        "ready" => "Pripravené",
+        "connecting" => "Pripája sa…",
+        "unknown" => "NDI nedostupné",
+        _ => "Zisťujem…",
     }
 }
 
@@ -65,9 +65,9 @@ pub(crate) fn is_stale(consecutive_failures: u32) -> bool {
 /// no more; the header was simply missed the first time round.
 pub(crate) fn header_badge_label(available: Option<bool>) -> &'static str {
     match available {
-        None => "Checking…",
-        Some(true) => "NDI Available",
-        Some(false) => "NDI Unavailable",
+        None => "Zisťujem…",
+        Some(true) => "NDI dostupné",
+        Some(false) => "NDI nedostupné",
     }
 }
 
@@ -89,13 +89,12 @@ pub(crate) fn header_badge_class(available: Option<bool>) -> &'static str {
 pub(crate) fn status_hint(state: &str) -> Option<&'static str> {
     match state {
         "not-found" => Some(
-            "This NDI name is not on the network. Check the sending machine is on and its \
-             NDI output is switched on — or pick one of the names listed below.",
+            "Tento názov NDI nie je v sieti. Skontroluj, či je vysielací počítač zapnutý a má \
+             zapnutý výstup NDI — alebo vyber jeden z názvov nižšie.",
         ),
-        "not-broadcasting" => Some(
-            "On the network, but sending no video. Start the NDI output on the sending \
-             machine.",
-        ),
+        "not-broadcasting" => {
+            Some("V sieti je, ale neposiela obraz. Zapni výstup NDI na vysielacom počítači.")
+        }
         _ => None,
     }
 }
@@ -184,9 +183,9 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     ndi_available.set(Some(status.ndi_available));
                     discovered.set(status.discovered);
                     statuses.set(status.sources);
-                    toast.show(&format!("Found {count} NDI source(s)"), "info");
+                    toast.show(&format!("Nájdené zdroje NDI: {count}"), "info");
                 }
-                Err(err) => toast.show(&format!("Scan failed: {err}"), "error"),
+                Err(err) => toast.show(&format!("Hľadanie zlyhalo: {err}"), "error"),
             }
         });
     };
@@ -211,7 +210,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         // chips' `Memo` subscribes through).
         let already = sources.with_untracked(|list| list.iter().any(|s| s.ndi_name == ndi_name));
         if already {
-            toast.show("That NDI source is already added", "error");
+            toast.show("Tento zdroj NDI už je pridaný", "error");
             return;
         }
         adding.set(true);
@@ -225,9 +224,9 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                         sources.set(list);
                     }
                     poll_status();
-                    toast.show("Source added", "success");
+                    toast.show("Zdroj je pridaný", "success");
                 }
-                Err(err) => toast.show(&format!("Failed to add source. {err}"), "error"),
+                Err(err) => toast.show(&format!("Zdroj sa nepodarilo pridať. {err}"), "error"),
             }
             adding.set(false);
         });
@@ -236,7 +235,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
     let add_typed_source = move |_| {
         let ndi_name = new_ndi_name.get_untracked().trim().to_string();
         if ndi_name.is_empty() {
-            toast.show("NDI name required", "error");
+            toast.show("Zadaj názov NDI", "error");
             return;
         }
         create_source(ndi_name, true);
@@ -247,9 +246,9 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             match ndi::activate_video_source(&id).await {
                 Ok(_) => {
                     refresh();
-                    toast.show("Source activated", "success");
+                    toast.show("Zdroj je aktívny", "success");
                 }
-                Err(err) => toast.show(&format!("Error: {err}"), "error"),
+                Err(err) => toast.show(&format!("Chyba: {err}"), "error"),
             }
         });
     };
@@ -259,24 +258,24 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             match ndi::deactivate_video_sources().await {
                 Ok(()) => {
                     refresh();
-                    toast.show("Sources deactivated", "success");
+                    toast.show("Zdroje sú vypnuté", "success");
                 }
-                Err(err) => toast.show(&format!("Error: {err}"), "error"),
+                Err(err) => toast.show(&format!("Chyba: {err}"), "error"),
             }
         });
     };
 
     let delete_source = move |id: String| {
-        if !confirm("Delete this video source?") {
+        if !confirm("Odstrániť tento zdroj videa?") {
             return;
         }
         leptos::task::spawn_local(async move {
             match ndi::delete_video_source(&id).await {
                 Ok(()) => {
                     refresh();
-                    toast.show("Source deleted", "success");
+                    toast.show("Zdroj je odstránený", "success");
                 }
-                Err(err) => toast.show(&format!("Error: {err}"), "error"),
+                Err(err) => toast.show(&format!("Chyba: {err}"), "error"),
             }
         });
     };
@@ -285,8 +284,8 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
         <section class="settings__card" data-role="video-sources-card">
             <header class="settings__card-header">
                 <div>
-                    <h2>"Video Sources"</h2>
-                    <p>"Configure NDI sources for stage display"</p>
+                    <h2>"Zdroje videa"</h2>
+                    <p>"Zdroje NDI pre pódiové obrazovky"</p>
                 </div>
                 <div class="settings__badge-group">
                     <span class=move || header_badge_class(ndi_available.get())
@@ -357,20 +356,32 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                     data-state=state_str>
                                     {move || status_label(&state_str())}
                                 </span>
-                                {move || if is_active() {
-                                    view! {
-                                        <button class="settings__btn settings__btn--active"
-                                            on:click=move |_| deactivate(())>"ACTIVE"</button>
-                                    }.into_any()
-                                } else {
-                                    let id = id_activate.clone();
-                                    view! {
-                                        <button class="settings__btn settings__btn--activate"
-                                            on:click=move |_| activate(id.clone())>"Activate"</button>
-                                    }.into_any()
-                                }}
-                                <button class="settings__btn settings__btn--delete"
-                                    on:click=move |_| delete_source(id_delete.clone())>"Delete"</button>
+                                // #875 H4: ONE label, the state is the look (the shared
+                                // `ui-toggle`, H3's Ableton pattern): on = this source is
+                                // the one on the stage displays, a click switches it off;
+                                // off = a click makes it the active one.
+                                <button type="button" class="ui-toggle"
+                                    data-role="video-source-active"
+                                    data-state=move || if is_active() { "on" } else { "off" }
+                                    aria-pressed=move || is_active().to_string()
+                                    title=move || if is_active() {
+                                        "Aktívny zdroj — kliknutím ho vypneš"
+                                    } else {
+                                        "Kliknutím z neho urobíš aktívny zdroj"
+                                    }
+                                    on:click=move |_| {
+                                        let active_now = status
+                                            .get_untracked()
+                                            .map(|st| st.is_active)
+                                            .unwrap_or(listed_active);
+                                        if active_now {
+                                            deactivate(());
+                                        } else {
+                                            activate(id_activate.clone());
+                                        }
+                                    }>"Aktívny"</button>
+                                <button class="ui-button ui-button--danger"
+                                    on:click=move |_| delete_source(id_delete.clone())>"Odstrániť"</button>
                             </div>
                         }
                     }
@@ -382,12 +393,12 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             // name is also the way to ADD it — one click, nothing typed.
             <Show when=move || ndi_available.get() == Some(true)>
                 <div class="settings__discovered" data-role="ndi-discovered">
-                    <span class="settings__discovered-title">"On the network now: "</span>
+                    <span class="settings__discovered-title">"Teraz v sieti: "</span>
                     <Show
                         when=move || !discovered.get().is_empty()
                         fallback=|| view! {
                             <span class="settings__discovered-empty">
-                                "nothing — no NDI source is broadcasting."
+                                "nič — žiadny zdroj NDI nevysiela."
                             </span>
                         }
                     >
@@ -403,9 +414,9 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                 let add_name = name.clone();
                                 let chip_name = name.clone();
                                 let title = move || if mapped.get() {
-                                    "Already added"
+                                    "Už je pridaný"
                                 } else {
-                                    "Add this source"
+                                    "Pridať tento zdroj"
                                 };
                                 view! {
                                     <button type="button" class="settings__discovered-name"
@@ -424,13 +435,13 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             </Show>
             <div class="settings__form" data-role="add-video-source-form">
                 <div class="settings__form-header">
-                    <h3>"Add Video Source"</h3>
+                    <h3>"Pridať zdroj videa"</h3>
                 </div>
                 <p class="settings__form-hint">
-                    "Click a source under “On the network now” to add it, or type its NDI name."
+                    "Klikni na zdroj v riadku „Teraz v sieti“ alebo napíš jeho názov NDI."
                 </p>
                 <div class="settings__ndi-field">
-                    <label>"NDI Source"</label>
+                    <label>"Zdroj NDI"</label>
                     <div class="settings__ndi-select">
                         <input type="text" placeholder="CAM1 (usb)" class="settings__input"
                             data-role="video-source-ndi-name" list="ndi-sources"
@@ -444,11 +455,11 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                 children=|name: String| view! { <option value=name.clone()></option> }
                             />
                         </datalist>
-                        <button class="settings__btn settings__btn--scan" on:click=scan>"Scan"</button>
+                        <button class="ui-button" on:click=scan>"Hľadať"</button>
                     </div>
                 </div>
-                <button class="settings__btn settings__btn--add" data-role="video-source-add"
-                    on:click=add_typed_source>"+ Add Source"</button>
+                <button class="ui-button ui-button--primary settings__add-source" data-role="video-source-add"
+                    on:click=add_typed_source>"+ Pridať zdroj"</button>
             </div>
         </section>
     }
@@ -489,19 +500,19 @@ mod tests {
     /// copy is the deliverable, and it is pinned.
     #[test]
     fn every_state_has_plain_operator_copy() {
-        assert_eq!(status_label("live"), "Live");
-        assert_eq!(status_label("not-broadcasting"), "Not broadcasting");
-        assert_eq!(status_label("not-found"), "Not found on the network");
-        assert_eq!(status_label("ready"), "Ready");
-        assert_eq!(status_label("connecting"), "Connecting…");
-        assert_eq!(status_label("unknown"), "NDI unavailable");
+        assert_eq!(status_label("live"), "Naživo");
+        assert_eq!(status_label("not-broadcasting"), "Nevysiela");
+        assert_eq!(status_label("not-found"), "Nie je v sieti");
+        assert_eq!(status_label("ready"), "Pripravené");
+        assert_eq!(status_label("connecting"), "Pripája sa…");
+        assert_eq!(status_label("unknown"), "NDI nedostupné");
     }
 
     /// A state we do not know must not render a raw wire token at the operator, and must
     /// not panic the WASM app.
     #[test]
     fn an_unknown_state_degrades_instead_of_leaking_or_panicking() {
-        assert_eq!(status_label("wat"), "Checking…");
+        assert_eq!(status_label("wat"), "Zisťujem…");
     }
 
     /// A row whose status has not arrived yet (first paint, or a source added since the
@@ -509,7 +520,7 @@ mod tests {
     /// operator with a perfectly healthy server to go hunt a phantom fault.
     #[test]
     fn a_not_yet_loaded_status_reads_checking_not_ndi_unavailable() {
-        assert_eq!(status_label(""), "Checking…");
+        assert_eq!(status_label(""), "Zisťujem…");
         assert_eq!(
             status_class(""),
             "settings__status settings__status--checking"
@@ -535,9 +546,9 @@ mod tests {
     /// first poll landed — and stayed there forever if that poll errored.
     #[test]
     fn the_header_badge_says_checking_until_the_first_poll_answers() {
-        assert_eq!(header_badge_label(None), "Checking…");
-        assert_eq!(header_badge_label(Some(true)), "NDI Available");
-        assert_eq!(header_badge_label(Some(false)), "NDI Unavailable");
+        assert_eq!(header_badge_label(None), "Zisťujem…");
+        assert_eq!(header_badge_label(Some(true)), "NDI dostupné");
+        assert_eq!(header_badge_label(Some(false)), "NDI nedostupné");
     }
 
     /// …and it must not wear the RED "off" class while it is merely waiting.
@@ -579,13 +590,13 @@ mod tests {
     fn only_the_broken_states_tell_the_operator_what_to_do() {
         let not_found = status_hint("not-found").expect("not-found must explain itself");
         assert!(
-            not_found.contains("not on the network"),
+            not_found.contains("nie je v sieti"),
             "the hint must name the actual problem: {not_found}"
         );
 
         let silent = status_hint("not-broadcasting").expect("not-broadcasting must explain itself");
         assert!(
-            silent.contains("sending machine"),
+            silent.contains("vysielacom počítači"),
             "the hint must point at the sending machine: {silent}"
         );
 

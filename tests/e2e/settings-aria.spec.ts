@@ -183,7 +183,7 @@ test('aria-invalid flips on a rejected submit and the described-by status carrie
   // The status <p> referenced by aria-describedby now carries the error and is
   // in the error state.
   const status = page.locator(`#${selectors.resolumeStatusId}`);
-  await expect(status).toHaveText('Port must be between 1 and 65535.');
+  await expect(status).toHaveText('Port musí byť od 1 do 65535.');
   await expect(status).toHaveAttribute('data-state', 'error');
 
   // aria-invalid flips to "true" on the fields once the form is in error state.
@@ -199,7 +199,7 @@ test('aria-invalid flips on a rejected submit and the described-by status carrie
   await page.locator('[data-role="android-submit"]').click();
 
   const androidStatus = page.locator(`#${selectors.androidStatusId}`);
-  await expect(androidStatus).toHaveText('Port must be between 1 and 65535.');
+  await expect(androidStatus).toHaveText('Port musí byť od 1 do 65535.');
   await expect(androidStatus).toHaveAttribute('data-state', 'error');
   await expect(page.locator(selectors.androidLabel)).toHaveAttribute('aria-invalid', 'true');
   await expect(page.locator(selectors.androidHost)).toHaveAttribute('aria-invalid', 'true');

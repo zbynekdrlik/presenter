@@ -26,14 +26,14 @@ pub fn CompanionCard() -> impl IntoView {
             Ok(p) if p >= 1 => p,
             _ => {
                 status_state.set("error".to_string());
-                status_msg.set("Port must be between 1 and 65535.".to_string());
+                status_msg.set("Port musí byť od 1 do 65535.".to_string());
                 return;
             }
         };
         let want_enabled = enabled.get_untracked();
         busy.set(true);
         status_state.set("info".to_string());
-        status_msg.set("Saving…".to_string());
+        status_msg.set("Ukladám…".to_string());
         leptos::task::spawn_local(async move {
             let draft = FeatureFlagsDraft {
                 companion_enabled: want_enabled,
@@ -44,11 +44,11 @@ pub fn CompanionCard() -> impl IntoView {
                     enabled.set(flags.companion_enabled);
                     port.set(flags.companion_port.to_string());
                     status_state.set("success".to_string());
-                    status_msg.set("Saved.".to_string());
+                    status_msg.set("Uložené.".to_string());
                 }
                 Err(err) => {
                     status_state.set("error".to_string());
-                    status_msg.set(format!("Unable to save Companion settings. {err}"));
+                    status_msg.set(format!("Nastavenia Companionu sa nepodarilo uložiť. {err}"));
                 }
             }
             busy.set(false);
@@ -79,7 +79,7 @@ pub fn CompanionCard() -> impl IntoView {
                                 status_msg.set(String::new());
                             }
                         />
-                        <span>"Enable"</span>
+                        <span>"Zapnuté"</span>
                     </label>
                     <label class="settings__form-control--tiny">
                         <span>"Port"</span>
@@ -103,10 +103,10 @@ pub fn CompanionCard() -> impl IntoView {
                     </label>
                     <button
                         type="submit"
-                        class="settings__button settings__button--primary"
+                        class="ui-button ui-button--primary"
                         data-role="feature-submit"
                         prop:disabled=move || busy.get()
-                    >"Save"</button>
+                    >"Uložiť"</button>
                 </div>
                 <p
                     id="feature-companion-status"

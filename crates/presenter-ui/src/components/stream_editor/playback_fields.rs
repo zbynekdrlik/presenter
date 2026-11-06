@@ -154,7 +154,7 @@ pub fn PlaybackFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx)
                     </span>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--ghost"
+                        class="ui-button"
                         data-role="stream-playback-refresh"
                         prop:disabled=move || refreshing.get()
                         on:click=on_refresh

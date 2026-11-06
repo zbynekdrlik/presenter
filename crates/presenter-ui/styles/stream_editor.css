@@ -5,9 +5,9 @@
 
 body.stream-editor-page {
   margin: 0;
-  background: #14161c;
-  color: #e7e9ee;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 /* #738: tablet.css ships a bare GLOBAL `html { height:100%; overflow:hidden }`
@@ -29,74 +29,33 @@ html[data-stream-editor="true"] {
   flex-direction: column;
 }
 
-/* #829: the title and the nav wrap onto separate lines at phone width (the
- * nav items keep `nowrap` each, but wrap between themselves), so the header
- * never forces a horizontal page scroll. */
+/* #875 H4: the header is ONE `.ui-topbar` row (controls.css): Stream, the
+ * output select, the output bar (OBS address + Nový / Premenovať / Zmazať),
+ * the Scény | Menovky | Písma tabs, then ← Operátor and the version on the
+ * right. At 1280 px everything fits one row (the OBS address gives way first);
+ * a narrower window wraps between the groups, never sideways (#829). */
 .stream-editor__header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.5rem;
-  background: #1a1d26;
+  z-index: 10;
 }
 
-.stream-editor__header-title h1 {
-  margin: 0;
-  font-size: 1.25rem;
-}
-
-.stream-editor__header-title p {
-  margin: 0.25rem 0 0;
-  color: #9aa1b1;
-  font-size: 0.85rem;
-}
-
+/* The way back and the version, pushed to the right end of the row. */
 .stream-editor__header-nav {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 1rem;
+  gap: 4px 10px;
+  margin-left: auto;
   white-space: nowrap;
   /* #855: a long output name in the select must shrink the nav, not widen the page. */
   max-width: 100%;
   min-width: 0;
 }
 
-/* #829: Scény | Menovky | Písma tab bar under the header (it carries the
- * header's bottom border). The buttons wrap at phone width. */
+/* #829: Scény | Menovky | Písma — `.ui-topbar__tab` buttons in the row. */
 .stream-editor__tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  padding: 0 1.5rem;
-  border-bottom: 1px solid #2a2e3a;
-  background: #1a1d26;
-}
-
-.stream-editor__tab {
-  margin-bottom: -1px;
-  padding: 0.55rem 1rem;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  background: transparent;
-  color: #9aa1b1;
-  font: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-.stream-editor__tab:hover {
-  color: #e7e9ee;
-}
-
-.stream-editor__tab[data-active="true"] {
-  border-color: #2a2e3a;
-  background: #14161c;
-  color: #e7e9ee;
-  font-weight: 600;
+  gap: 2px;
 }
 
 /* Inactive panels stay MOUNTED (an unsaved element draft or a half-typed
@@ -105,49 +64,35 @@ html[data-stream-editor="true"] {
   display: none;
 }
 
-.stream-editor__link {
-  color: #8ab4ff;
-  text-decoration: none;
-}
-
-.stream-editor__link:hover {
-  text-decoration: underline;
-}
-
 .stream-editor__version {
-  color: #6f7688;
+  color: #94a3b8;
   font-size: 0.8rem;
 }
 
-/* #785: the output switcher in the header (list from GET /stream/api/outputs). */
+/* #785: the output switcher (list from GET /stream/api/outputs). */
 .stream-editor__output-select {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.85rem;
-  color: #b8c0d0;
+  font-size: 13px;
+  color: #cbd5e1;
   /* #855: outputs may carry long names; the select shrinks instead of overflowing. */
   max-width: 100%;
   min-width: 0;
 }
 
 .stream-editor__output-select select {
-  background: #1b2130;
-  color: #e6eaf2;
-  border: 1px solid #333c4f;
-  border-radius: 6px;
-  padding: 0.25rem 0.5rem;
   min-width: 0;
-  max-width: 100%;
+  max-width: min(14rem, 100%);
 }
 
 .stream-editor__main {
   flex: 1;
-  padding: 1.5rem;
+  padding: 1.25rem 1.5rem;
 }
 
 .stream-editor__loading {
-  color: #9aa1b1;
+  color: #94a3b8;
 }
 
 .stream-editor__body {
@@ -158,10 +103,9 @@ html[data-stream-editor="true"] {
 
 .stream-editor__section-title {
   margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #9aa1b1;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
 }
 
 .stream-editor__bases-head {
@@ -178,8 +122,8 @@ html[data-stream-editor="true"] {
   align-items: center;
   gap: 0.5rem;
   margin-right: auto;
-  font-size: 0.85rem;
-  color: #9aa1b1;
+  font-size: 0.875rem;
+  color: #cbd5e1;
 }
 
 .stream-editor__transition-toggle {
@@ -192,20 +136,10 @@ html[data-stream-editor="true"] {
 
 .stream-editor__transition-ms {
   width: 5.5rem;
-  padding: 0.35rem 0.45rem;
-  border: 1px solid #3a4152;
-  border-radius: 6px;
-  background: #12141b;
-  color: #e7e9ee;
-}
-
-.stream-editor__transition-ms:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .stream-editor__transition-unit {
-  color: #6f7688;
+  color: #94a3b8;
 }
 
 .stream-editor__overlay-list {
@@ -222,36 +156,36 @@ html[data-stream-editor="true"] {
 }
 
 .stream-editor__empty {
-  color: #6f7688;
+  color: #94a3b8;
   font-style: italic;
   margin: 0.25rem 0;
 }
 
-/* A scene card (base column or overlay chip). */
+/* A scene card (base column or overlay chip): the operator panel look. */
 .stream-editor__scene {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.75rem;
-  border: 1px solid #2f3442;
-  border-radius: 8px;
-  background: #1f2330;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  background: #1e293b;
 }
 
 .stream-editor__scene--base {
-  width: 200px;
+  width: 220px;
 }
 
 .stream-editor__scene--overlay {
-  width: 200px;
-  background: #241f30;
+  width: 220px;
+  background: #1f2a44;
 }
 
 /* Active-state highlight is driven by data-active (set reactively) so no
  * class toggle is needed — the same attribute the E2E test asserts on. */
 .stream-editor__scene[data-active="true"] {
-  border-color: #4f8cff;
-  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.35);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
 }
 
 .stream-editor__scene-head {
@@ -270,18 +204,12 @@ html[data-stream-editor="true"] {
 
 .stream-editor__scene-count {
   width: 100%;
-  color: #6f7688;
-  font-size: 0.75rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
 }
 
 .stream-editor__rename-input {
   flex: 1;
-  min-width: 0;
-  padding: 0.3rem 0.4rem;
-  border: 1px solid #3a4152;
-  border-radius: 5px;
-  background: #12141b;
-  color: #e7e9ee;
 }
 
 .stream-editor__scene-actions {
@@ -290,54 +218,9 @@ html[data-stream-editor="true"] {
   gap: 0.35rem;
 }
 
+/* „Naživo" (`ui-toggle`) spans the card. */
 .stream-editor__activate {
-  padding: 0.4rem 0.6rem;
-  border: 1px solid #3a4152;
-  border-radius: 6px;
-  background: #2b3550;
-  color: #e7e9ee;
-  cursor: pointer;
-}
-
-.stream-editor__scene[data-active="true"] .stream-editor__activate {
-  background: #4f8cff;
-  border-color: #4f8cff;
-  color: #0e1016;
-  font-weight: 600;
-}
-
-.stream-editor__btn {
-  padding: 0.3rem 0.5rem;
-  border: 1px solid #3a4152;
-  border-radius: 6px;
-  background: #262b38;
-  color: #e7e9ee;
-  cursor: pointer;
-  font-size: 0.8rem;
-}
-
-.stream-editor__btn:hover:not(:disabled) {
-  background: #303646;
-}
-
-.stream-editor__btn--primary {
-  background: #4f8cff;
-  border-color: #4f8cff;
-  color: #0e1016;
-  font-weight: 600;
-}
-
-.stream-editor__btn--ghost {
-  background: transparent;
-}
-
-.stream-editor__btn--danger {
-  border-color: #6b2b34;
-  color: #ff9aa6;
-}
-
-.stream-editor__btn--danger:hover:not(:disabled) {
-  background: #3a2027;
+  width: 100%;
 }
 
 .stream-editor__add {
@@ -345,17 +228,8 @@ html[data-stream-editor="true"] {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
-  padding-top: 0.5rem;
-  border-top: 1px solid #2a2e3a;
-}
-
-.stream-editor__add-name,
-.stream-editor__add-kind {
-  padding: 0.45rem 0.55rem;
-  border: 1px solid #3a4152;
-  border-radius: 6px;
-  background: #12141b;
-  color: #e7e9ee;
+  padding-top: 0.75rem;
+  border-top: 1px solid #334155;
 }
 
 .stream-editor__add-name {
@@ -370,8 +244,8 @@ html[data-stream-editor="true"] {
   transform: translateX(-50%);
   padding: 0.6rem 1rem;
   border-radius: 8px;
-  background: #2b3550;
-  color: #e7e9ee;
+  background: #1e293b;
+  color: #f8fafc;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
   opacity: 0;
   pointer-events: none;
@@ -403,15 +277,15 @@ html[data-stream-editor="true"] {
   flex-wrap: wrap;
   gap: 1rem;
   padding: 1rem 1.5rem;
-  border-top: 1px solid #2a2e3a;
+  border-top: 1px solid #334155;
   align-items: flex-start;
 }
 
 .stream-editor__panel {
   flex: 1 1 22rem;
   min-width: 20rem;
-  background: #1a1d26;
-  border: 1px solid #2a2e3a;
+  background: #1e293b;
+  border: 1px solid #334155;
   border-radius: 10px;
   padding: 1rem;
 }
@@ -446,9 +320,9 @@ html[data-stream-editor="true"] {
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0.4rem 0.5rem;
-  border: 1px solid #2a2e3a;
+  border: 1px solid #334155;
   border-radius: 8px;
-  background: #14161c;
+  background: #0f172a;
 }
 
 .stream-editor__element[data-selected="true"] {
@@ -460,7 +334,7 @@ html[data-stream-editor="true"] {
   text-align: left;
   background: none;
   border: none;
-  color: #e7e9ee;
+  color: #f8fafc;
   cursor: pointer;
   font: inherit;
   padding: 0.2rem 0.3rem;
@@ -476,14 +350,14 @@ html[data-stream-editor="true"] {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  border-top: 1px solid #2a2e3a;
+  border-top: 1px solid #334155;
   padding-top: 0.75rem;
 }
 
 .stream-editor__frame,
 .stream-editor__ts-group,
 .stream-editor__transition {
-  border: 1px solid #2a2e3a;
+  border: 1px solid #334155;
   border-radius: 8px;
   padding: 0.6rem 0.75rem;
   display: flex;
@@ -492,7 +366,7 @@ html[data-stream-editor="true"] {
 }
 
 .stream-editor__ts-legend {
-  color: #9aa1b1;
+  color: #94a3b8;
   font-size: 0.8rem;
   padding: 0 0.3rem;
 }
@@ -500,23 +374,18 @@ html[data-stream-editor="true"] {
 .stream-editor__field {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.8rem;
-  color: #9aa1b1;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #cbd5e1;
 }
 
 .stream-editor__field span {
   white-space: nowrap;
 }
 
+/* The field look is the shared one (controls.css, #875 H4). */
 .stream-editor__field input,
 .stream-editor__field select {
-  background: #14161c;
-  color: #e7e9ee;
-  border: 1px solid #2a2e3a;
-  border-radius: 6px;
-  padding: 0.3rem 0.4rem;
-  font: inherit;
   max-width: 9rem;
 }
 
@@ -538,12 +407,6 @@ html[data-stream-editor="true"] {
 .stream-editor__align-buttons {
   display: flex;
   gap: 0.3rem;
-}
-
-.stream-editor__btn[data-active="true"] {
-  background: #2f6fed;
-  border-color: #2f6fed;
-  color: #fff;
 }
 
 .stream-editor__shadow-fields {
@@ -617,15 +480,15 @@ html[data-stream-editor="true"] {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  border: 1px solid #2a2e3a;
+  border: 1px solid #334155;
   border-radius: 8px;
   overflow: hidden;
-  background-color: #2a2e3a;
+  background-color: #334155;
   background-image:
-    linear-gradient(45deg, #20242e 25%, transparent 25%),
-    linear-gradient(-45deg, #20242e 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #20242e 75%),
-    linear-gradient(-45deg, transparent 75%, #20242e 75%);
+    linear-gradient(45deg, #1e293b 25%, transparent 25%),
+    linear-gradient(-45deg, #1e293b 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1e293b 75%),
+    linear-gradient(-45deg, transparent 75%, #1e293b 75%);
   background-size: 24px 24px;
   background-position: 0 0, 0 12px, 12px -12px, -12px 0;
 }
@@ -725,23 +588,18 @@ html[data-stream-editor="true"] {
   font-size: 0.8rem;
 }
 
-.stream-editor__btn[data-dirty="true"] {
+/* Save with unsaved changes: an amber ring next to „Neuložené zmeny". */
+.stream-editor [data-role="stream-prop-save"][data-dirty="true"] {
   box-shadow: 0 0 0 2px rgba(255, 210, 122, 0.6);
-}
-
-.stream-editor__btn[data-live="true"] {
-  background: #234a34;
-  border-color: #234a34;
-  color: #fff;
 }
 
 /* Asset picker overlay (opened from the image property form). */
 .stream-editor__asset-picker {
   margin-top: 0.5rem;
-  border: 1px solid #2a2e3a;
+  border: 1px solid #334155;
   border-radius: 8px;
   padding: 0.75rem;
-  background: #14161c;
+  background: #0f172a;
 }
 
 .stream-editor__asset-picker-head {
@@ -776,7 +634,7 @@ html[data-stream-editor="true"] {
   align-items: center;
   gap: 0.6rem;
   padding: 0.35rem 0.4rem;
-  border: 1px solid #2a2e3a;
+  border: 1px solid #334155;
   border-radius: 6px;
 }
 
@@ -784,7 +642,7 @@ html[data-stream-editor="true"] {
   width: 56px;
   height: 32px;
   object-fit: contain;
-  background: #20242e;
+  background: #1e293b;
   border-radius: 4px;
   flex: 0 0 auto;
 }
@@ -792,7 +650,7 @@ html[data-stream-editor="true"] {
 .stream-editor__asset-name {
   flex: 1;
   font-size: 0.8rem;
-  color: #c7ccd8;
+  color: #cbd5e1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -844,7 +702,7 @@ html[data-stream-editor="true"] {
     padding: 0.4rem 0.6rem;
     border: 1px solid #1e293b;
     border-radius: 6px;
-    background: #111827;
+    background: #0f172a;
 }
 .stream-editor__font-preview {
     font-size: 1.25rem;
@@ -871,23 +729,23 @@ html[data-stream-editor="true"] {
     margin: 0 0 0.75rem;
 }
 
-/* #842: the output bar under the header — the selected output's OBS URL and
- * the create / rename form. Everything wraps, so it fits a phone. */
+/* #842: the output bar — the selected output's OBS address and Nový /
+ * Premenovať / Zmazať výstup — a group of the top row (#875 H4). The name
+ * form and the delete question open as a `.ui-topbar__panel` under the row. */
 .stream-editor__outputs {
   display: flex;
+  flex: 1 1 16rem;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1.5rem;
-  border-bottom: 1px solid #2a2e3a;
-  background: #161922;
-  color: #b8c0d0;
-  font-size: 0.85rem;
+  gap: 6px;
+  min-width: 0;
+  color: #cbd5e1;
+  font-size: 13px;
 }
 
 .stream-editor__obs-url {
   display: inline-flex;
-  flex: 1 1 18rem;
+  flex: 1 1 8rem;
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
@@ -895,21 +753,9 @@ html[data-stream-editor="true"] {
 
 .stream-editor__obs-url input {
   flex: 1;
-  min-width: 0;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid #333c4f;
-  border-radius: 6px;
-  background: #12141b;
-  color: #e6eaf2;
+  width: 0;
+  min-width: 4rem;
   font-family: ui-monospace, monospace;
-}
-
-.stream-editor__output-form {
-  display: flex;
-  flex: 1 1 100%;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
 }
 
 .stream-editor__output-form .stream-editor__add-name {
@@ -918,36 +764,22 @@ html[data-stream-editor="true"] {
 }
 
 .stream-editor__output-slug {
-  color: #9aa1b1;
+  color: #94a3b8;
   font-family: ui-monospace, monospace;
 }
 
 .stream-editor__output-error {
   flex-basis: 100%;
   margin: 0;
-  color: #ff9aa6;
-}
-
-/* #855: a disabled bar button (the seeded `stream` output is not deletable)
- * must read as unavailable; it keeps its tooltip (title) on hover. The base
- * `.stream-editor__btn:hover` rules skip disabled buttons. */
-.stream-editor__outputs .stream-editor__btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  color: #fca5a5;
 }
 
 /* #855: the inline delete confirmation in the output bar — the output's name,
  * its OBS address (it may be long: wrap anywhere) and what goes with it. */
+/* #855: the disabled „Zmazať výstup" (the seeded `stream` output) reads as
+ * unavailable through `.ui-topbar__button:disabled`; its tooltip stays. */
 .stream-editor__output-confirm {
-  display: flex;
-  flex: 1 1 100%;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #6b2b34;
-  border-radius: 6px;
-  background: #2a1a1f;
+  border-color: rgba(239, 68, 68, 0.55);
 }
 
 .stream-editor__output-confirm-body {
@@ -962,7 +794,7 @@ html[data-stream-editor="true"] {
 
 .stream-editor__output-confirm-body code {
   overflow-wrap: anywhere;
-  color: #e6eaf2;
+  color: #f8fafc;
   font-family: ui-monospace, monospace;
 }
 
@@ -970,18 +802,6 @@ html[data-stream-editor="true"] {
  * drop their 20rem minimum, so the tabs and an open scene fit 320 px.
  * Kept LAST so it overrides the base rules above. */
 @media (max-width: 480px) {
-    .stream-editor__outputs {
-        padding: 0.6rem 1rem;
-    }
-
-    .stream-editor__header {
-        padding: 0.75rem 1rem;
-    }
-
-    .stream-editor__tabs {
-        padding: 0 1rem;
-    }
-
     .stream-editor__main {
         padding: 1rem;
     }

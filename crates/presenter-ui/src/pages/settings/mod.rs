@@ -49,7 +49,7 @@ const TOAST_HIDE_MS: u32 = 4_200;
 /// Parse a port from form input, rejecting anything outside 1..=65535.
 ///
 /// Returns `None` for empty / non-numeric / out-of-range input so the caller
-/// shows "Port must be between 1 and 65535." — matching the original JS, which
+/// shows "Port musí byť od 1 do 65535." — matching the original JS, which
 /// validated `port < 1 || port > 65535` and threw. A naive `parse::<u16>()`
 /// would make a too-large value (e.g. 99999) *overflow-fail* and silently fall
 /// back to a default port, saving the wrong host (the bug this replaces). We
@@ -146,11 +146,11 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
             {(!embedded).then(|| view! {
                 <header class="settings__header">
                     <div class="settings__header-title">
-                        <h1>"Presenter Settings"</h1>
-                        <p>"Configure integrations and controller connections."</p>
+                        <h1>"Nastavenia"</h1>
+
                     </div>
                     <nav class="settings__header-nav">
-                        <a href="/" class="settings__link">"← Back to hub"</a>
+                        <a href="/" class="settings__link">"← Späť na rozcestník"</a>
                         <VersionLabel />
                     </nav>
                 </header>
@@ -182,7 +182,7 @@ mod tests {
     use super::parse_port_in_range;
 
     // #455: out-of-range / non-numeric / empty input must return None so the
-    // caller shows "Port must be between 1 and 65535." instead of silently
+    // caller shows "Port musí byť od 1 do 65535." instead of silently
     // falling back to a default port. These cases also pin the boundary so the
     // mutation gate cannot survive a flipped comparison on `1..=65535`.
 

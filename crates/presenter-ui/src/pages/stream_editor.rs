@@ -157,22 +157,23 @@ pub fn StreamEditorPage() -> impl IntoView {
 
     view! {
         <div class="stream-editor" data-role="stream-editor-page">
-            <header class="stream-editor__header">
-                <div class="stream-editor__header-title">
-                    <h1>"Stream Graphics"</h1>
-                    <p>"Base scény ako stĺpce, overlay scény hore. Klik na scénu ju aktivuje."</p>
-                </div>
+            // #875 H4: ONE top row in the operator header's look (controls.css
+            // `.ui-topbar`): the page, the output (#785 select, #842 OBS URL +
+            // create / rename / delete, whose forms open as a panel under the
+            // row), the tabs (#829: one area at a time; every panel stays
+            // mounted, so unsaved work survives a tab switch) and the way back.
+            <header class="ui-topbar stream-editor__header" data-role="stream-editor-header">
+                <h1 class="ui-topbar__title">"Stream"</h1>
+                <OutputSelect ctx=ctx />
+                <OutputManage ctx=ctx />
+                <EditorTabs ctx=ctx />
                 <nav class="stream-editor__header-nav">
-                    <OutputSelect ctx=ctx />
-                    <a href="/ui/operator" class="stream-editor__link">"← Operator"</a>
+                    <a href="/ui/operator" class="ui-topbar__button" data-role="stream-editor-back">
+                        "← Operátor"
+                    </a>
                     <span class="stream-editor__version"><VersionLabel /></span>
                 </nav>
             </header>
-            // #842: the selected output's OBS URL + create / rename outputs.
-            <OutputManage ctx=ctx />
-            // #829: one area at a time. Every panel stays mounted (hidden, not
-            // unmounted), so unsaved work survives a tab switch.
-            <EditorTabs ctx=ctx />
             <main class="stream-editor__main">
                 <TabPanel ctx=ctx tab=EditorTab::Scenes>
                     <EditorScenes ctx=ctx />

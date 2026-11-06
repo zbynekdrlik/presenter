@@ -96,15 +96,10 @@
   min-width: 12rem;
 }
 
+/* The field look is the shared one (controls.css, #875 H4). */
 .nameplates__texts input,
 .nameplates__add input {
-  box-sizing: border-box;
   max-width: 100%;
-  background: #0b1220;
-  border: 1px solid #334155;
-  border-radius: 4px;
-  color: #e2e8f0;
-  padding: 0.25rem 0.5rem;
 }
 
 .nameplates__song-live {
@@ -126,49 +121,11 @@
 }
 
 .nameplates__add input {
-  padding: 0.4rem 0.6rem;
   flex: 1 1 10rem;
   min-width: 8rem;
 }
 
-/* Buttons: the stream editor's __btn look. */
-.nameplates__btn {
-  padding: 0.3rem 0.5rem;
-  border: 1px solid #3a4152;
-  border-radius: 6px;
-  background: #262b38;
-  color: #e7e9ee;
-  cursor: pointer;
-  font-size: 0.8rem;
-}
-
-.nameplates__btn:hover:not(:disabled) {
-  background: #303646;
-}
-
-.nameplates__btn--primary {
-  background: #4f8cff;
-  border-color: #4f8cff;
-  color: #0e1016;
-  font-weight: 600;
-}
-
-.nameplates__btn--primary:hover:not(:disabled) {
-  background: #6a9dff;
-}
-
-.nameplates__btn--ghost {
-  background: transparent;
-}
-
-.nameplates__btn--danger {
-  border-color: #6b2b34;
-  color: #ff9aa6;
-}
-
-.nameplates__btn--danger:hover:not(:disabled) {
-  background: #3a2027;
-}
+/* Buttons are the shared `.ui-button` (controls.css, #875 H4). */
 
 /* The Stream Deck button number (operator view, #870 grid order). A plate
  * past button 12 has no grid button: dashed and dimmer. */
@@ -241,7 +198,7 @@
 
 /* Operated by touch too (#850 phone use): every control at least 44 px, and
  * 16 px inputs so a phone does not zoom in on focus. */
-.nameplates-view .nameplates__btn {
+.nameplates-view .ui-button {
   min-height: 44px;
   min-width: 44px;
   padding: 0.5rem 0.75rem;

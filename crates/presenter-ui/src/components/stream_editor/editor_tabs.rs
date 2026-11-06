@@ -118,7 +118,7 @@ pub fn EditorTabs(ctx: StreamEditorCtx) -> impl IntoView {
                     role="tab"
                     id=tab_dom_id(t)
                     aria-controls=panel_dom_id(t)
-                    class="stream-editor__tab"
+                    class="ui-topbar__tab"
                     data-role="stream-editor-tab"
                     data-tab=t.id()
                     data-active=active

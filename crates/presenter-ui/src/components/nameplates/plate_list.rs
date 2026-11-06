@@ -77,17 +77,17 @@ pub fn NameplateSongRow(store: NameplateStore, options: RowOptions) -> impl Into
                 </span>
             </div>
             <div class="nameplates__actions">
-                <button type="button" class="nameplates__btn" data-role="stream-nameplate-song-show"
+                <button type="button" class="ui-button" data-role="stream-nameplate-song-show"
                     on:click=move |_| store.show_song()>"Zobraziť"</button>
                 {options.preview.map(move |preview| view! {
-                    <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-song-preview"
+                    <button type="button" class="ui-button" data-role="stream-nameplate-song-preview"
                         on:click=move |_| {
                             let (name, library) = store.song.get_untracked();
                             let name = if name.is_empty() { "Názov piesne".to_string() } else { name };
                             preview(NameplateSource::Song, None, name, library);
                         }>"Prehrať"</button>
                 })}
-                <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-hide"
+                <button type="button" class="ui-button" data-role="stream-nameplate-hide"
                     on:click=move |_| hide(store, options)>"Skryť"</button>
             </div>
         </div>
@@ -307,7 +307,7 @@ fn NameplateRow(
         >
             <button
                 type="button"
-                class="nameplates__btn nameplates__btn--ghost nameplates__handle"
+                class="ui-button nameplates__handle"
                 data-role="stream-nameplate-drag"
                 title="Ťahaním presuniete menovku (alebo šípkami hore / dole)"
                 aria-label="Presunúť menovku"
@@ -348,19 +348,19 @@ fn NameplateRow(
                 </Show>
             </div>
             <div class="nameplates__actions">
-                <button type="button" class="nameplates__btn" data-role="stream-nameplate-show"
+                <button type="button" class="ui-button" data-role="stream-nameplate-show"
                     on:click=move |_| save.show()>"Zobraziť"</button>
                 {options.preview.map(move |preview| view! {
-                    <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-preview"
+                    <button type="button" class="ui-button" data-role="stream-nameplate-preview"
                         on:click=move |_| preview(NameplateSource::Person, Some(id), name.value(), role.value())>"Prehrať"</button>
                 })}
-                <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-hide"
+                <button type="button" class="ui-button" data-role="stream-nameplate-hide"
                     on:click=move |_| hide(store, options)>"Skryť"</button>
-                <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-up"
+                <button type="button" class="ui-button" data-role="stream-nameplate-up"
                     title="Vyššie" aria-label="Vyššie" on:click=move |_| store.move_plate(id, true)>"↑"</button>
-                <button type="button" class="nameplates__btn nameplates__btn--ghost" data-role="stream-nameplate-down"
+                <button type="button" class="ui-button" data-role="stream-nameplate-down"
                     title="Nižšie" aria-label="Nižšie" on:click=move |_| store.move_plate(id, false)>"↓"</button>
-                <button type="button" class="nameplates__btn nameplates__btn--danger" data-role="stream-nameplate-delete"
+                <button type="button" class="ui-button ui-button--danger" data-role="stream-nameplate-delete"
                     on:click=move |_| store.delete(id)>"Zmazať"</button>
             </div>
         </li>
@@ -389,7 +389,7 @@ pub fn NameplateAddForm(store: NameplateStore) -> impl IntoView {
             <input type="text" placeholder="Pozícia (napr. pastor)" aria-label="Pozícia novej menovky" data-role="stream-nameplate-new-role"
                 prop:value=move || new_role.get()
                 on:input=move |ev| new_role.set(event_target_value(&ev)) />
-            <button type="submit" class="nameplates__btn nameplates__btn--primary" data-role="stream-nameplate-add-submit">
+            <button type="submit" class="ui-button ui-button--primary" data-role="stream-nameplate-add-submit">
                 "Pridať menovku"
             </button>
         </form>

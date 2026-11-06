@@ -2370,28 +2370,6 @@ body[data-slide-columns-dense="true"] .operator__slide-text {
 .operator__presentation-item[data-type="separator"] span {
   opacity: 0.85;
 }
-.settings__status-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.8rem 1.2rem;
-  margin: 0 0 0.75rem 0;
-  padding: 0;
-}
-
-.settings__status-list dt {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.65);
-  margin: 0 0 0.2rem 0;
-}
-
-.settings__status-list dd {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 500;
-}
-
 /* Version footer */
 .operator__version {
   position: fixed;
@@ -3253,19 +3231,10 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
 }
 
 /* ── #875 H3: one control size on every operator page (desktop) ──
-   The smallest button, select and field is 40 px tall; the main actions
-   (show on the wall, clear the wall) 48 px. `:where()` keeps the base rule at
-   the specificity of a bare `button`, so a component that asks for MORE (the
-   verse console's 44 / 48 px) still wins. Not here: the 40 px header row
-   (header.css, 32 px controls inside it), the controls lying ON the stage
-   preview picture (H2, stage_preview.css), Nastavenia (H4) and the phone
-   shell (phone_shell.css: 44 px). */
-:where(body.operator:not([data-shell="phone"]) .operator__main > section:not([data-view-panel="settings"])) button,
-:where(body.operator:not([data-shell="phone"]) .operator__main > section:not([data-view-panel="settings"])) select,
-:where(body.operator:not([data-shell="phone"]) .operator__main > section:not([data-view-panel="settings"])) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]) {
-  min-height: 40px;
-  box-sizing: border-box;
-}
+   The 40 px base rule lives in controls.css (H4: ONE rule for the operator
+   pages, Nastavenia and the Stream editor). Here only the operator's own
+   exceptions: the controls lying ON the stage preview picture keep their H2
+   sizes, and the main actions (show on the wall, clear the wall) get 48 px. */
 body.operator:not([data-shell="phone"]) .operator__main .operator__stage-preview button {
   min-height: 0;
 }

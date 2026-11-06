@@ -139,11 +139,11 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   const abletonToggle = page.locator('[data-role="ableset-enabled"]');
   await abletonToggle.check();
   await page.click('[data-role="ableset-submit"]');
-  await waitForToast(page, 'Ableton settings saved.');
+  await waitForToast(page, 'Nastavenia Abletonu sú uložené.');
   await expect(page.locator('[data-role="ableset-status-indicator"]').first()).toHaveAttribute('data-state', /(enabled|tracking)/);
 
   // Ensure the list starts empty.
-  await expect(page.locator('[data-role="resolume-host-list"]').first()).toContainText('No Resolume connections defined yet.');
+  await expect(page.locator('[data-role="resolume-host-list"]').first()).toContainText('Zatiaľ žiadne pripojenie Resolume.');
 
   if (!mockResolume) {
     throw new Error('Mock Resolume server not started');
@@ -158,7 +158,7 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   await page.fill(selectors.portInput, mockPort);
   await page.check(selectors.enabledCheckbox);
   await page.click(selectors.submitButton);
-  await waitForToast(page, 'Added Resolume connection.');
+  await waitForToast(page, 'Pripojenie Resolume je pridané.');
   // A successful save closes the editor.
   await expect(page.locator(selectors.editor)).toHaveCount(0);
 
@@ -199,7 +199,7 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   await page.fill(selectors.hostInput, mockHost);
   await page.fill(selectors.portInput, mockPort);
   await page.click(selectors.submitButton);
-  await waitForToast(page, 'Updated Resolume connection.');
+  await waitForToast(page, 'Pripojenie Resolume je uložené.');
   await expect(hostRow).toContainText(updatedLabel);
 
   const hostsAfterUpdate = await getHostsViaApi(page);
@@ -209,8 +209,8 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   // Delete the connection.
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator(`[data-role="host-delete"][data-id="${hostId}"]`).click();
-  await waitForToast(page, 'Deleted Resolume connection.');
-  await expect(page.locator(selectors.list)).toContainText('No Resolume connections defined yet.');
+  await waitForToast(page, 'Pripojenie Resolume je odstránené.');
+  await expect(page.locator(selectors.list)).toContainText('Zatiaľ žiadne pripojenie Resolume.');
 
   const hostsAfterDelete = await getHostsViaApi(page);
   expect(hostsAfterDelete).toHaveLength(0);
@@ -245,7 +245,7 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
   await page.fill(selectors.portInput, mockPort);
   await page.check(selectors.enabledCheckbox);
   await page.click(selectors.submitButton);
-  await waitForToast(page, 'Added Resolume connection.');
+  await waitForToast(page, 'Pripojenie Resolume je pridané.');
 
   // Wait for connected state
   await expect.poll(async () => {
@@ -266,7 +266,7 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
   const testBtn = page.locator(`[data-role="host-test"][data-id="${hostId}"]`);
   await expect(testBtn).toBeVisible({ timeout: 10_000 });
   await testBtn.click();
-  await waitForToast(page, /Connection OK/);
+  await waitForToast(page, /Pripojenie funguje/);
 
   // Take connection offline — verify diagnostics appear
   mockResolume.setOnline(false);
@@ -283,13 +283,13 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
   const errorDetail = page.locator('[data-role="host-error-detail"]');
-  await expect(errorDetail).toContainText('Retrying', { timeout: 20_000 });
-  await expect(errorDetail).toContainText('failure', { timeout: 5_000 });
+  await expect(errorDetail).toContainText('Skúšam znova', { timeout: 20_000 });
+  await expect(errorDetail).toContainText(/zlyhan(ie|ia|í)/, { timeout: 5_000 });
 
   // Test connection while offline should fail
   const testBtnAfterReload = page.locator(`[data-role="host-test"][data-id="${hostId}"]`);
   await testBtnAfterReload.click();
-  await waitForToast(page, /Connection failed/);
+  await waitForToast(page, /Pripojenie zlyhalo/);
 
   // Bring back online — should recover
   mockResolume.setOnline(true);
@@ -307,7 +307,7 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
   // Clean up — delete the host
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator(`[data-role="host-delete"][data-id="${hostId}"]`).click();
-  await waitForToast(page, 'Deleted Resolume connection.');
+  await waitForToast(page, 'Pripojenie Resolume je odstránené.');
 
   // Clean console check
   expect(consoleMessages).toEqual([]);
@@ -334,7 +334,7 @@ test('resolume refresh mapping re-reads the composition only on demand', async (
   await page.goto(new URL('/ui/settings', baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
-  await expect(page.locator('[data-role="resolume-mapping-hint"]')).toContainText('Refresh mapping');
+  await expect(page.locator('[data-role="resolume-mapping-hint"]')).toContainText('Načítať klipy');
 
   const compositionBefore = compositionGets();
   const productBefore = productGets();
@@ -345,7 +345,7 @@ test('resolume refresh mapping re-reads the composition only on demand', async (
   await page.fill(selectors.portInput, String(mock.port));
   await page.check(selectors.enabledCheckbox);
   await page.click(selectors.submitButton);
-  await waitForToast(page, 'Added Resolume connection.');
+  await waitForToast(page, 'Pripojenie Resolume je pridané.');
 
   await expect.poll(async () => {
     const hosts = await getHostsViaApi(page);
@@ -370,14 +370,14 @@ test('resolume refresh mapping re-reads the composition only on demand', async (
   await expect(refreshButton).toBeEnabled();
   await refreshButton.click();
   await expect(refreshButton).toBeDisabled();
-  await waitForToast(page, /Mapping refreshed/);
+  await waitForToast(page, /Klipy sú načítané/);
   await expect(refreshButton).toBeEnabled();
   expect(compositionGets() - compositionBefore).toBe(2);
   await page.unroute('**/integrations/resolume/hosts/*/refresh-mapping');
 
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator(`[data-role="host-delete"][data-id="${hostId}"]`).click();
-  await waitForToast(page, 'Deleted Resolume connection.');
+  await waitForToast(page, 'Pripojenie Resolume je odstránené.');
 
   expect(consoleMessages).toEqual([]);
 });
@@ -404,7 +404,7 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page.fill(selectors.androidPort, '5555');
   await page.check(selectors.androidEnabled);
   await page.click(selectors.androidSubmit);
-  await waitForToast(page, 'Added Android stage display.');
+  await waitForToast(page, 'Obrazovka je pridaná.');
 
   const displaysAfterCreate = await getAndroidDisplaysViaApi(page);
   expect(displaysAfterCreate).toHaveLength(initialCount + 1);
@@ -426,7 +426,7 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page.fill(selectors.androidPort, '5566');
   await page.uncheck(selectors.androidEnabled);
   await page.click(selectors.androidSubmit);
-  await waitForToast(page, 'Saved Android stage display.');
+  await waitForToast(page, 'Obrazovka je uložená.');
   await expect(androidListItem).toContainText(updatedLabel);
   await expect(androidListItem).toContainText('other-stage.invalid');
 
@@ -445,7 +445,7 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page
     .locator(`[data-role="android-delete"][data-id="${created!.id}"]`)
     .click();
-  await waitForToast(page, 'Deleted Android stage display.');
+  await waitForToast(page, 'Obrazovka je odstránená.');
 
   const displaysAfterDelete = await getAndroidDisplaysViaApi(page);
   expect(displaysAfterDelete).toHaveLength(initialCount);
@@ -543,7 +543,7 @@ test('migrated WASM settings page renders every card with a clean console', asyn
   await expect(page.locator('[data-role="toast"]')).toHaveAttribute('data-visible', 'true', {
     timeout: 20_000,
   });
-  await expect(page.locator('[data-role="toast"]')).toHaveText('Ableton settings saved.');
+  await expect(page.locator('[data-role="toast"]')).toHaveText('Nastavenia Abletonu sú uložené.');
 
   // #272 line-limit pref persists to localStorage from the migrated component.
   // The WASM session layer namespaces keys with the `presenter:` prefix and
@@ -593,7 +593,7 @@ test('#455 out-of-range port is rejected, not silently saved', async ({ page }) 
   await page.click(selectors.submitButton);
 
   const resolumeStatus = page.locator('[data-role="form-status"]');
-  await expect(resolumeStatus).toHaveText('Port must be between 1 and 65535.');
+  await expect(resolumeStatus).toHaveText('Port musí byť od 1 do 65535.');
   await expect(resolumeStatus).toHaveAttribute('data-state', 'error');
 
   // The bug: a host would have been created with port 8090. The fix: none.
@@ -612,7 +612,7 @@ test('#455 out-of-range port is rejected, not silently saved', async ({ page }) 
   await page.click(selectors.androidSubmit);
 
   const androidStatus = page.locator('[data-role="android-form-status"]');
-  await expect(androidStatus).toHaveText('Port must be between 1 and 65535.');
+  await expect(androidStatus).toHaveText('Port musí byť od 1 do 65535.');
   await expect(androidStatus).toHaveAttribute('data-state', 'error');
 
   const androidAfter = await getAndroidDisplaysViaApi(page);
@@ -639,7 +639,7 @@ test('resolume settings shows the static supported-clip-names reference panel (#
   // of whether any Resolume host is connected (#697).
   const legend = page.locator('[data-role="resolume-clip-legend"]');
   await expect(legend).toBeVisible();
-  await expect(legend.locator('h3')).toHaveText('Supported Clip Names');
+  await expect(legend.locator('h3')).toHaveText('Podporované názvy klipov');
 
   // Every supported magic clip name is documented — spot-check the full set,
   // including #timer (which the pre-WASM-migration legend omitted).
@@ -661,8 +661,8 @@ test('resolume settings shows the static supported-clip-names reference panel (#
   // which is full only by default; the legend says so.
   const clearNote = legend.locator('[data-role="resolume-bible-clear-note"]');
   await expect(clearNote).toContainText('#bible-clear');
-  await expect(clearNote).toContainText('triggers no clip');
-  await expect(clearNote).toContainText('back to its opacity (full by default)');
+  await expect(clearNote).toContainText('nespustí žiadny klip');
+  await expect(clearNote).toContainText('vráti na jeho priehľadnosť (predvolene plnú)');
 
   expect(consoleMessages).toEqual([]);
 });
@@ -717,7 +717,7 @@ test('#789 add an NDI source by clicking a discovered name — no label, row sho
     await expect(pick.locator('[data-role="ndi-discovered-source"]')).toHaveText('cg-obs');
     await expect(pick.locator('[data-role="ndi-discovered-machine"]')).toHaveText(machine);
     await pick.click();
-    await waitForToast(page, 'Source added');
+    await waitForToast(page, 'Zdroj je pridaný');
 
     // The server stored exactly the NDI name, and returns no label.
     const listed = await page.request.get(
@@ -741,7 +741,7 @@ test('#789 add an NDI source by clicking a discovered name — no label, row sho
     // …and not by typing it either.
     await page.fill('[data-role="video-source-ndi-name"]', discoveredName);
     await page.click('[data-role="video-source-add"]');
-    await waitForToast(page, 'That NDI source is already added');
+    await waitForToast(page, 'Tento zdroj NDI už je pridaný');
     await expect(
       page.locator(`[data-role="video-source-row"]`, {
         has: page.locator('[data-role="video-source-machine"]', { hasText: machine }),
@@ -752,7 +752,7 @@ test('#789 add an NDI source by clicking a discovered name — no label, row sho
     // `MACHINE (Source)` shape shows as-is, with no PC line.
     await page.fill('[data-role="video-source-ndi-name"]', plainName);
     await page.click('[data-role="video-source-add"]');
-    await waitForToast(page, 'Source added');
+    await waitForToast(page, 'Zdroj je pridaný');
     const plainRow = page.locator('[data-role="video-source-row"]', {
       has: page.locator('[data-role="video-source-name"]', { hasText: plainName }),
     });

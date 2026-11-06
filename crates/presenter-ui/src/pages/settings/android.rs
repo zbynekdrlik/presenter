@@ -1,6 +1,6 @@
 //! Android stage launchers card for the settings page (#347).
 //!
-//! #819: the list, its inline editor (Edit in the row, "+ Add display" at the top),
+//! #819: the list, its inline editor (Edit in the row, "+ Pridať obrazovku" at the top),
 //! the fetch / save / delete flow and the keyed rows are the shared
 //! `list_card::ListCard`, the same as the Resolume card. This file supplies the
 //! Android API and copy and the row's own parts (launch status badge, attempts, error,
@@ -25,35 +25,35 @@ static TEXT: CardText<ConnectionForm> = CardText {
         role: "android",
         message_id: "android-form-status",
         message_role: "android-form-status",
-        new_title: "New Android stage display",
-        new_submit: "Add display",
-        edit_title: "Edit Android stage display",
-        save_text: "Save",
-        cancel_text: "Cancel",
+        new_title: "Nová pódiová obrazovka Android",
+        new_submit: "Pridať obrazovku",
+        edit_title: "Upraviť pódiovú obrazovku Android",
+        save_text: "Uložiť",
+        cancel_text: "Zrušiť",
         unsaved_title: UNSAVED_TITLE,
         saving_title: SAVING_TITLE,
     },
     form: ConnectionSpec {
-        label_placeholder: "Stage Left",
+        label_placeholder: "Pódium vľavo",
         host_placeholder: "sd1l.lan",
         // The adb port.
         default_port: 5555,
     },
     list_role: "android-display-list",
-    add_text: "+ Add display",
-    empty_text: "No Android stage displays configured yet.",
-    fallback_name: "this display",
-    edit_text: "Edit",
-    delete_text: "Delete",
-    delete_question: ("Remove ", "? Presenter will stop reconnecting."),
-    saving: "Updating display…",
-    creating: "Creating display…",
-    updated: "Saved Android stage display.",
-    added: "Added Android stage display.",
-    deleted: "Deleted Android stage display.",
-    save_failed: "Unable to save display.",
-    delete_failed: "Unable to delete display.",
-    removed_elsewhere: "This display was removed elsewhere.",
+    add_text: "+ Pridať obrazovku",
+    empty_text: "Zatiaľ žiadna pódiová obrazovka Android.",
+    fallback_name: "túto obrazovku",
+    edit_text: "Upraviť",
+    delete_text: "Odstrániť",
+    delete_question: ("Odstrániť „", "“? Presenter sa na ňu prestane pripájať."),
+    saving: "Ukladám obrazovku…",
+    creating: "Pridávam obrazovku…",
+    updated: "Obrazovka je uložená.",
+    added: "Obrazovka je pridaná.",
+    deleted: "Obrazovka je odstránená.",
+    save_failed: "Obrazovku sa nepodarilo uložiť.",
+    delete_failed: "Obrazovku sa nepodarilo odstrániť.",
+    removed_elsewhere: "Túto obrazovku medzitým niekto odstránil.",
 };
 
 /// A row's `<For>` key: its id plus every field the row shows or edits — never the
@@ -142,11 +142,11 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
         leptos::task::spawn_local(async move {
             match settings::launch_android_display(&id).await {
                 Ok(()) => {
-                    toast.show("Launch queued — refreshing status…", "success");
+                    toast.show("Spustenie je zaradené — obnovujem stav…", "success");
                     gloo_timers::future::TimeoutFuture::new(600).await;
                     card.fetch().await;
                 }
-                Err(err) => toast.show(&format!("Unable to trigger launch. {err}"), "error"),
+                Err(err) => toast.show(&format!("Spustenie sa nepodarilo. {err}"), "error"),
             }
         });
     };
@@ -187,9 +187,9 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
             ),
             warning: warning.into_any(),
             actions: view! {
-                <button type="button" class="settings__button settings__button--ghost settings__button--small"
+                <button type="button" class="ui-button"
                     data-role="android-test" data-id=id_test.clone()
-                    on:click=move |_| test_display(id_test.clone())>"Test"</button>
+                    on:click=move |_| test_display(id_test.clone())>"Otestovať"</button>
             }
             .into_any(),
         }
@@ -200,14 +200,14 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
         <section class="settings__card">
             <header class="settings__card-header">
                 <div>
-                    <h2>"Android Stage Launchers"</h2>
-                    <p>"Keep each Android TV pinned to the stage display: Presenter reconnects and reopens the stage whenever the device appears."</p>
+                    <h2>"Pódiové obrazovky Android"</h2>
+                    <p>"Každý televízor Android ostane na pódiovej obrazovke: Presenter sa naň znova pripojí a otvorí pódium vždy, keď sa zariadenie objaví."</p>
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="android-count">
                         {move || displays.with(Vec::len).to_string()}
                     </span>
-                    <span class="settings__badge-label">"Displays"</span>
+                    <span class="settings__badge-label">"Obrazovky"</span>
                 </div>
             </header>
             {card.render_list(row)}

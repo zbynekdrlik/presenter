@@ -51,8 +51,11 @@ paths:
 - `utils/dom_attr.rs::bool_attr` — the `"true"`/`"false"` attribute helper, shared by the
   editor and the plate list (the shared component imports nothing from `stream_editor`).
 - CSS: the list is `nameplates__*` in `styles/nameplates.css` (linked after
-  `stream_editor.css` in `index.html`); the operator view's touch sizes (44 px controls,
-  16 px inputs) are scoped to `.nameplates-view`, so the editor keeps its dense look.
+  `stream_editor.css` in `index.html`). Its buttons are the shared `.ui-button` (`--primary`
+  Pridať, `--danger` Zmazať; the drag handle `ui-button nameplates__handle`) and its fields the
+  shared field look (controls.css, #875 H4) in both places; no `nameplates__btn` any more. The
+  operator view's touch sizes (44 px controls, 16 px inputs) are scoped to `.nameplates-view`
+  (`.nameplates-view .ui-button`); in the editor the 40 px controls.css rule applies.
 
 ## Rules
 - **The DOM contract is the editor's (#779):** `stream-nameplate-song`, `stream-nameplate`

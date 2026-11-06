@@ -41,13 +41,13 @@ fn OverlayRow(ctx: StreamEditorCtx) -> impl IntoView {
     view! {
         <section class="stream-editor__overlays" data-role="stream-overlay-row">
             <div class="stream-editor__bases-head">
-                <h2 class="stream-editor__section-title">"Overlay scény"</h2>
+                <h2 class="stream-editor__section-title">"Prekryvné scény"</h2>
                 <KindTransitionControl ctx=ctx kind=SceneKind::Overlay />
             </div>
             <div class="stream-editor__overlay-list">
                 <For each=overlays key=|id| *id children=move |id| view! { <OverlayChip ctx=ctx id=id /> } />
                 <Show when=empty>
-                    <p class="stream-editor__empty" data-role="stream-overlay-empty">"Žiadne overlay scény."</p>
+                    <p class="stream-editor__empty" data-role="stream-overlay-empty">"Žiadne prekryvné scény."</p>
                 </Show>
             </div>
         </section>
@@ -62,11 +62,11 @@ fn BaseColumns(ctx: StreamEditorCtx) -> impl IntoView {
     view! {
         <section class="stream-editor__bases" data-role="stream-base-section">
             <div class="stream-editor__bases-head">
-                <h2 class="stream-editor__section-title">"Base scény"</h2>
+                <h2 class="stream-editor__section-title">"Základné scény"</h2>
                 <KindTransitionControl ctx=ctx kind=SceneKind::Base />
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--ghost"
+                    class="ui-button"
                     data-role="stream-clear-base"
                     on:click=move |_| ctx.activate_base(None)
                 >
@@ -76,7 +76,7 @@ fn BaseColumns(ctx: StreamEditorCtx) -> impl IntoView {
             <div class="stream-editor__columns" data-role="stream-base-columns">
                 <For each=bases key=|id| *id children=move |id| view! { <BaseColumn ctx=ctx id=id /> } />
                 <Show when=empty>
-                    <p class="stream-editor__empty" data-role="stream-base-empty">"Žiadne base scény."</p>
+                    <p class="stream-editor__empty" data-role="stream-base-empty">"Žiadne základné scény."</p>
                 </Show>
             </div>
         </section>
@@ -100,13 +100,17 @@ fn BaseColumn(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
             data-selected=selected_str
         >
             <SceneHead ctx=ctx id=id />
+            // #875 H4: ONE label, the state is the look (`ui-toggle`, H3).
             <button
                 type="button"
-                class="stream-editor__activate"
+                class="ui-toggle stream-editor__activate"
                 data-role="stream-activate"
+                data-state=move || if is_active() { "on" } else { "off" }
+                aria-pressed=move || is_active().to_string()
+                title="Pustiť túto scénu na výstup"
                 on:click=move |_| ctx.activate_base(Some(id))
             >
-                {move || if is_active() { "Aktívna" } else { "Aktivovať" }}
+                "Naživo"
             </button>
             <div class="stream-editor__scene-actions">
                 <SceneControls ctx=ctx id=id />
@@ -134,14 +138,17 @@ fn OverlayChip(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
             <SceneHead ctx=ctx id=id />
             <button
                 type="button"
-                class="stream-editor__activate stream-editor__activate--toggle"
+                class="ui-toggle stream-editor__activate"
                 data-role="stream-overlay-toggle"
+                data-state=move || if is_active() { "on" } else { "off" }
+                aria-pressed=move || is_active().to_string()
+                title="Zapnúť alebo vypnúť túto prekryvnú scénu na výstupe"
                 on:click=move |_| {
                     let now = ctx.active.get_untracked().active_overlay_ids.contains(&id);
                     ctx.toggle_overlay(id, !now);
                 }
             >
-                {move || if is_active() { "Vypnúť" } else { "Zapnúť" }}
+                "Naživo"
             </button>
             <div class="stream-editor__scene-actions">
                 <SceneControls ctx=ctx id=id />
@@ -178,7 +185,7 @@ fn SceneHead(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                     <span class="stream-editor__scene-name" data-role="stream-scene-name">{name}</span>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--ghost"
+                        class="ui-button"
                         data-role="stream-scene-rename"
                         on:click=start
                     >
@@ -195,7 +202,7 @@ fn SceneHead(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 />
                 <button
                     type="button"
-                    class="stream-editor__btn"
+                    class="ui-button"
                     data-role="stream-scene-rename-save"
                     on:click=save
                 >
@@ -203,14 +210,14 @@ fn SceneHead(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 </button>
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--ghost"
+                    class="ui-button"
                     on:click=move |_| editing.set(false)
                 >
                     "Zrušiť"
                 </button>
             </Show>
             <span class="stream-editor__scene-count" data-role="stream-scene-element-count">
-                {move || format!("{} prvkov", count())}
+                {move || element_count_text(count())}
             </span>
         </div>
     }
@@ -223,7 +230,7 @@ fn SceneControls(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
     view! {
         <button
             type="button"
-            class="stream-editor__btn stream-editor__btn--primary"
+            class="ui-button ui-button--primary"
             data-role="stream-scene-edit"
             title="Upraviť prvky scény"
             on:click=move |_| ctx.select_scene(id)
@@ -232,7 +239,7 @@ fn SceneControls(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
         </button>
         <button
             type="button"
-            class="stream-editor__btn stream-editor__btn--ghost"
+            class="ui-button"
             data-role="stream-scene-up"
             title="Posunúť skôr"
             on:click=move |_| ctx.move_scene(id, true)
@@ -241,7 +248,7 @@ fn SceneControls(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
         </button>
         <button
             type="button"
-            class="stream-editor__btn stream-editor__btn--ghost"
+            class="ui-button"
             data-role="stream-scene-down"
             title="Posunúť neskôr"
             on:click=move |_| ctx.move_scene(id, false)
@@ -250,7 +257,7 @@ fn SceneControls(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
         </button>
         <button
             type="button"
-            class="stream-editor__btn stream-editor__btn--danger"
+            class="ui-button ui-button--danger"
             data-role="stream-scene-delete"
             on:click=move |_| ctx.delete_scene(id)
         >
@@ -290,12 +297,12 @@ fn AddSceneForm(ctx: StreamEditorCtx) -> impl IntoView {
                 prop:value=move || kind.get()
                 on:change=move |ev| kind.set(event_target_value(&ev))
             >
-                <option value="base">"Base scéna"</option>
-                <option value="overlay">"Overlay scéna"</option>
+                <option value="base">"Základná scéna"</option>
+                <option value="overlay">"Prekryvná scéna"</option>
             </select>
             <button
                 type="submit"
-                class="stream-editor__btn stream-editor__btn--primary"
+                class="ui-button ui-button--primary"
                 data-role="stream-add-submit"
             >
                 "Pridať scénu"
@@ -383,6 +390,16 @@ fn KindTransitionControl(ctx: StreamEditorCtx, kind: SceneKind) -> impl IntoView
     }
 }
 
+/// "1 prvok", "2 prvky" … "4 prvky", "0 / 5 prvkov" (#875 H4: Slovak plural).
+fn element_count_text(count: usize) -> String {
+    let noun = match count {
+        1 => "prvok",
+        2..=4 => "prvky",
+        _ => "prvkov",
+    };
+    format!("{count} {noun}")
+}
+
 // ---- Reactive readers (track the def signal) ------------------------------
 
 /// The stored kind-level column for a scene kind (`None` = inherit default).
@@ -437,4 +454,18 @@ fn scene_element_count(ctx: StreamEditorCtx, id: i64) -> usize {
                 .map(|s| s.elements.len())
         })
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::element_count_text;
+
+    #[test]
+    fn the_element_count_takes_the_slovak_plural() {
+        assert_eq!(element_count_text(0), "0 prvkov");
+        assert_eq!(element_count_text(1), "1 prvok");
+        assert_eq!(element_count_text(2), "2 prvky");
+        assert_eq!(element_count_text(4), "4 prvky");
+        assert_eq!(element_count_text(5), "5 prvkov");
+    }
 }

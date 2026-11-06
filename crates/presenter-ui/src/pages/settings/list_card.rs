@@ -280,7 +280,7 @@ impl<T: CardItem> ListCard<T> {
         view! {
             <>
                 <div class="settings__list-toolbar">
-                    <button type="button" class="settings__button settings__button--primary"
+                    <button type="button" class="ui-button ui-button--primary"
                         node_ref=add_ref data-role=format!("{role}-add")
                         data-lock=move || add_lock.get().map(TriggerLock::data_lock)
                         title=move || add_lock.get().and_then(|lock| lock.title(&spec))
@@ -398,13 +398,13 @@ impl<T: CardItem> ListCard<T> {
                 </div>
                 <div class="settings__list-actions">
                     {parts.actions}
-                    <button type="button" class="settings__button settings__button--ghost settings__button--small"
+                    <button type="button" class="ui-button"
                         node_ref=edit_ref data-role=format!("{role}-edit") data-id=id_edit.clone()
                         data-lock=move || lock.get().map(TriggerLock::data_lock)
                         title=move || lock.get().and_then(|lock| lock.title(&spec))
                         prop:disabled=move || lock.get().is_some()
                         on:click=move |_| self.open_edit(&id_edit)>{text.edit_text}</button>
-                    <button type="button" class="settings__button settings__button--danger settings__button--small"
+                    <button type="button" class="ui-button ui-button--danger"
                         data-role=format!("{role}-delete") data-id=id_delete.clone()
                         on:click=move |_| self.delete(id_delete.clone())>{text.delete_text}</button>
                 </div>
@@ -433,8 +433,8 @@ mod tests {
         );
         let status = ApiError::Status(500, "Internal Server Error".into());
         assert_eq!(
-            failure_text("Unable to save connection.", &status),
-            "Unable to save connection. HTTP 500: Internal Server Error",
+            failure_text("Pripojenie sa nepodarilo uložiť.", &status),
+            "Pripojenie sa nepodarilo uložiť. HTTP 500: Internal Server Error",
             "the connection cards' lines are unchanged"
         );
     }

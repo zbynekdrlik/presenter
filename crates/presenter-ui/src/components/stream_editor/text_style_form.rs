@@ -303,22 +303,32 @@ pub fn TextStyleForm(
             <div class="stream-editor__field stream-editor__align">
                 <span>"Zarovnanie"</span>
                 <div class="stream-editor__align-buttons">
+                    // #875 H4: the shared toggle look; the picked alignment is on.
                     <button
-                        type="button" class="stream-editor__btn stream-editor__btn--ghost"
+                        type="button" class="ui-toggle ui-button--icon"
                         data-role="stream-ts-align-left"
+                        title="Zarovnať vľavo" aria-label="Zarovnať vľavo"
                         data-active=move || if align_is(TextAlign::Left) { "true" } else { "false" }
+                        data-state=move || if align_is(TextAlign::Left) { "on" } else { "off" }
+                        aria-pressed=move || align_is(TextAlign::Left).to_string()
                         on:click=move |_| draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.align = TextAlign::Left))
                     >"◧"</button>
                     <button
-                        type="button" class="stream-editor__btn stream-editor__btn--ghost"
+                        type="button" class="ui-toggle ui-button--icon"
                         data-role="stream-ts-align-center"
+                        title="Zarovnať na stred" aria-label="Zarovnať na stred"
                         data-active=move || if align_is(TextAlign::Center) { "true" } else { "false" }
+                        data-state=move || if align_is(TextAlign::Center) { "on" } else { "off" }
+                        aria-pressed=move || align_is(TextAlign::Center).to_string()
                         on:click=move |_| draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.align = TextAlign::Center))
                     >"◫"</button>
                     <button
-                        type="button" class="stream-editor__btn stream-editor__btn--ghost"
+                        type="button" class="ui-toggle ui-button--icon"
                         data-role="stream-ts-align-right"
+                        title="Zarovnať vpravo" aria-label="Zarovnať vpravo"
                         data-active=move || if align_is(TextAlign::Right) { "true" } else { "false" }
+                        data-state=move || if align_is(TextAlign::Right) { "on" } else { "off" }
+                        aria-pressed=move || align_is(TextAlign::Right).to_string()
                         on:click=move |_| draft.update(|p| with_ts_mut(p, ts_slot, |ts| ts.align = TextAlign::Right))
                     >"◨"</button>
                 </div>

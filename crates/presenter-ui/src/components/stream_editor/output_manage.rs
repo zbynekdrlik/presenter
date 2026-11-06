@@ -529,11 +529,12 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
     };
     view! {
         <section class="stream-editor__outputs" data-role="stream-output-manage">
-            <label class="stream-editor__obs-url">
-                <span>"OBS URL"</span>
+            <label class="stream-editor__obs-url" title="Adresa tohto výstupu pre zdroj prehliadača v OBS">
+                <span>"OBS"</span>
                 <input
                     type="text"
                     readonly
+                    aria-label="Adresa výstupu pre OBS"
                     data-role="stream-output-url"
                     prop:value=url
                     on:focus=select_on_focus
@@ -544,7 +545,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             </label>
             <button
                 type="button"
-                class="stream-editor__btn"
+                class="ui-topbar__button"
                 data-role="stream-output-new"
                 prop:disabled=busy
                 on:click=open_create
@@ -553,7 +554,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             </button>
             <button
                 type="button"
-                class="stream-editor__btn"
+                class="ui-topbar__button"
                 data-role="stream-output-rename"
                 prop:disabled=busy
                 on:click=open_rename
@@ -562,7 +563,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             </button>
             <button
                 type="button"
-                class="stream-editor__btn stream-editor__btn--danger"
+                class="ui-topbar__button ui-topbar__button--danger"
                 data-role="stream-output-delete"
                 title=move || delete_block().unwrap_or("Zmazať vybraný výstup")
                 prop:disabled=move || busy() || delete_block().is_some()
@@ -572,7 +573,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             </button>
             <Show when=is_delete>
                 <div
-                    class="stream-editor__output-confirm"
+                    class="ui-topbar__panel stream-editor__output-confirm"
                     role="group"
                     aria-label="Potvrdenie zmazania výstupu"
                     data-role="stream-output-delete-confirm"
@@ -585,7 +586,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                     </div>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--danger"
+                        class="ui-button ui-button--danger"
                         data-role="stream-output-delete-confirm-yes"
                         prop:disabled=busy
                         on:click=move |_| submit_delete(ctx, form)
@@ -594,7 +595,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                     </button>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--ghost"
+                        class="ui-button ui-button--quiet"
                         data-role="stream-output-delete-confirm-cancel"
                         node_ref=delete_cancel
                         prop:disabled=busy
@@ -606,7 +607,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
             </Show>
             <Show when=is_edit>
                 <form
-                    class="stream-editor__output-form"
+                    class="ui-topbar__panel stream-editor__output-form"
                     data-role="stream-output-form"
                     data-mode=move || if is_create() { "create" } else { "rename" }
                     on:submit=on_submit
@@ -630,7 +631,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                     </Show>
                     <button
                         type="submit"
-                        class="stream-editor__btn stream-editor__btn--primary"
+                        class="ui-button ui-button--primary"
                         data-role="stream-output-save"
                         prop:disabled=busy
                     >
@@ -638,7 +639,7 @@ pub fn OutputManage(ctx: StreamEditorCtx) -> impl IntoView {
                     </button>
                     <button
                         type="button"
-                        class="stream-editor__btn stream-editor__btn--ghost"
+                        class="ui-button ui-button--quiet"
                         data-role="stream-output-cancel"
                         prop:disabled=busy
                         on:click=move |_| form.close()

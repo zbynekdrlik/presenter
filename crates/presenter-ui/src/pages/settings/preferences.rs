@@ -30,14 +30,14 @@ pub fn PreferencesCard() -> impl IntoView {
         <section class="settings__card" data-role="preferences-card">
             <header class="settings__card-header">
                 <div>
-                    <h2>"Preferences"</h2>
-                    <p>"Operator-side settings stored in your browser."</p>
+                    <h2>"Predvoľby"</h2>
+                    <p>"Nastavenia operátora uložené v tomto prehliadači."</p>
                 </div>
             </header>
             <form class="settings__form" autocomplete="off" on:submit=|ev| ev.prevent_default()>
                 <div class="settings__form-row settings__form-row--inline">
                     <label class="settings__form-control--tiny">
-                        <span>"Line limit (chars per line)"</span>
+                        <span>"Najviac znakov v riadku"</span>
                         <input
                             type="number"
                             min="10"
@@ -50,7 +50,7 @@ pub fn PreferencesCard() -> impl IntoView {
                     </label>
                 </div>
                 <p class="settings__hint">
-                    "Slides with longer lines show a warning marker. Reload the operator after changing."
+                    "Slajd s dlhším riadkom dostane výstražnú značku. Po zmene znova načítaj stránku operátora."
                 </p>
             </form>
         </section>
