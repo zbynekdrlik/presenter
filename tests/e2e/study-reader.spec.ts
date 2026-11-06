@@ -95,6 +95,70 @@ test("a switch keeps the verse being read at the top", async ({ browser }) => {
   await finish(opened);
 });
 
+test("switching back and forth keeps the same verse at the top (owner, 2026-11-06)", async ({ browser }) => {
+  // Every switch used to step one verse back: the verse ending at the landing
+  // line by a fraction of a pixel counted as the one being read.
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await scrollToVerse(page, 20);
+  for (const code of ["slk-roh", "eng-kjv", "slk-seb", "slk-roh", "slk-seb", "eng-kjv", "slk-seb"]) {
+    await favourite(page, code).tap();
+    await expectChapter(page, `${code}:HEB.11`);
+    await expect.poll(() => verseOffset(page, 20), { message: code }).toBeGreaterThanOrEqual(0);
+    await expect.poll(() => verseOffset(page, 20), { message: code }).toBeLessThanOrEqual(16);
+  }
+  await finish(opened);
+});
+
+test("a tap on a verse's text highlights it, a second tap lets go, no sheet", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  const text = (n: number) => verse(page, n).locator(".study-verse__text");
+  await text(3).tap();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await expect(page.locator('[data-role="study-verse"][data-selected="true"]')).toHaveCount(1);
+  await expect(page).toHaveURL(/[?&]v=3(&|$)/);
+  await expect(page.locator('[data-role="verse-actions"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="history-back"]')).toHaveAttribute("aria-disabled", "true");
+  await text(5).tap();
+  await expect(verse(page, 5)).toHaveAttribute("data-selected", "true");
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "false");
+  await text(5).tap();
+  await expect(page.locator('[data-role="study-verse"][data-selected="true"]')).toHaveCount(0);
+  await expect(page).not.toHaveURL(/[?&]v=/);
+  await finish(opened);
+});
+
+test("the highlighted verse stays where it was on screen across a switch", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await scrollToVerse(page, 18);
+  const text = verse(page, 20).locator(".study-verse__text");
+  await text.tap();
+  const before = await verseOffset(page, 20);
+  expect(before).toBeGreaterThan(40);
+  for (const code of ["eng-kjv", "slk-roh", "slk-seb"]) {
+    await favourite(page, code).tap();
+    await expectChapter(page, `${code}:HEB.11`);
+    await expect(verse(page, 20)).toHaveAttribute("data-selected", "true");
+    await expect.poll(() => verseOffset(page, 20), { message: code }).toBeGreaterThanOrEqual(before - 2);
+    await expect.poll(() => verseOffset(page, 20), { message: code }).toBeLessThanOrEqual(before + 2);
+  }
+  await finish(opened);
+});
+
+test("a tap on a KJV word highlights its verse and opens the word", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=eng-kjv&p=HEB.11", "eng-kjv:HEB.11");
+  const { page } = opened;
+  await verse(page, 1).locator('[data-role="study-word"]').first().tap();
+  await expect(page.locator('[data-role="word-sheet"]')).toBeVisible();
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
+  await page.goBack();
+  await expect(page.locator('[data-role="word-sheet"]')).toHaveCount(0);
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
+  await finish(opened);
+});
+
 test("the bar turns chapters over book boundaries, with a URL for each", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=MAT.27", "slk-seb:MAT.27");
   const { page } = opened;
@@ -362,6 +426,14 @@ test("the page installs as its own app and its worker caches nothing", async ({ 
     "href",
     "/ui/study/manifest.json",
   );
+  // Behind Cloudflare Access a manifest fetched without the cookie is the
+  // login page, and the phone offers no install.
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("crossorigin", "use-credentials");
+  // Its own icon: on the home screen it is not the tablet's "B".
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute(
+    "href",
+    "/ui/study/apple-touch-icon.png",
+  );
   const manifest = await page.request.get("/ui/study/manifest.json");
   expect(manifest.ok()).toBeTruthy();
   expect(manifest.headers()["content-type"]).toContain("application/manifest+json");
@@ -374,6 +446,12 @@ test("the page installs as its own app and its worker caches nothing", async ({ 
     short_name: "Štúdium",
     orientation: "any",
   });
+  for (const icon of body.icons as { src: string }[]) {
+    expect(icon.src).toMatch(/^\/ui\/study\//);
+    const png = await page.request.get(icon.src);
+    expect(png.ok(), icon.src).toBeTruthy();
+    expect(png.headers()["content-type"]).toBe("image/png");
+  }
   const worker = await page.request.get("/ui/study/sw.js");
   expect(worker.ok()).toBeTruthy();
   const code = await worker.text();
