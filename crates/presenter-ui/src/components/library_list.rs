@@ -66,12 +66,14 @@ pub fn LibraryList() -> impl IntoView {
                         class="operator__group-count"
                         data-role="library-more"
                         aria-label="Zobraziť všetky knižnice"
+                        title=move || format!("Všetky knižnice ({})", ctx.libraries.get().len())
                         on:click=on_more
                     >
-                        {move || {
-                            let total = ctx.libraries.get().len();
-                            total.to_string()
-                        }}
+                        // #875: a phone shows the count, a desktop the ⋯ (mockup v3).
+                        <span class="operator__group-count-value">
+                            {move || ctx.libraries.get().len().to_string()}
+                        </span>
+                        <span class="operator__group-more-icon" aria-hidden="true">"\u{22ef}"</span>
                     </button>
                     <button
                         type="button"

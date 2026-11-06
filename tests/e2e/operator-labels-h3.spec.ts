@@ -6,8 +6,9 @@
  *   - the approved Slovak labels are on screen, none of the old English ones remains
  *     (data — library, song and book names, layout names — is not a label);
  *   - every button, select and field is at least 40 px tall, except the header row
- *     (its controls fit the 40 px row) and the controls lying ON the stage preview
- *     picture (H2); the main actions (show on the wall, clear the wall) are 48 px.
+ *     (its controls fit the 40 px row), the controls lying ON the stage preview
+ *     picture (H2) and the dense Piesne rows + work-area top row of mockup v3
+ *     (`MOCKUP_DENSE`); the main actions (show on the wall, clear the wall) are 48 px.
  * The Stage Text select (API layouts only) offers Originál / Preklad / Oboje.
  *
  * Also asserts zero browser console errors/warnings per
@@ -86,6 +87,7 @@ const DATA = [
   '[data-role="book-list"]',
   '[data-role="slides"]',
   '[data-role="context-title"]',
+  '[data-role="slides-song-bubble"]',
   '[data-role="stage-preview-frame"]',
   "option",
 ].join(", ");
@@ -139,20 +141,34 @@ function englishIn(texts: string[]): string[] {
   );
 }
 
-/** Visible buttons / selects / fields below `min` px, outside the header row and the preview picture. */
+/** Where the approved mockup v3 draws smaller controls than 40 px (#875,
+ *  owner 2026-11-06): the Piesne list rows (30 px) with their "+" / ⋯ (26 px)
+ *  and ⋮ menus, and the work area's top row (32 px: the song title row with
+ *  "+ Snímka" and the "Snímok v riadku" stepper, the same stepper on Biblia).
+ *  operator-mockup-v3.spec.ts pins those sizes. */
+const MOCKUP_DENSE = [
+  '[data-view-panel="worship"] .operator__group',
+  '[data-view-panel="worship"] .operator__catalog-bottom',
+  ".operator__worktop",
+  ".operator__slide-columns",
+].join(", ");
+
+/** Visible buttons / selects / fields below `min` px, outside the header row,
+ *  the preview picture and the mockup's dense rows. */
 function smallControls(page: Page, min: number) {
-  return page.evaluate((minHeight) => {
+  return page.evaluate(({ minHeight, dense }) => {
     const skip = ["checkbox", "radio", "range", "color", "file", "hidden"];
     return [...document.querySelectorAll<HTMLElement>(".operator__main button, .operator__main select, .operator__main input")]
       .filter((el) => el.getClientRects().length > 0)
       .filter((el) => !(el instanceof HTMLInputElement && skip.includes(el.type)))
       .filter((el) => !el.closest(".operator__stage-preview"))
+      .filter((el) => !el.closest(dense))
       .filter((el) => el.getBoundingClientRect().height < minHeight - 0.5)
       .map(
         (el) =>
           `${el.tagName.toLowerCase()}[${el.dataset.role ?? ""}] "${(el.innerText || el.getAttribute("aria-label") || "").trim().slice(0, 30)}" ${el.getBoundingClientRect().height.toFixed(1)} px`,
       );
-  }, min);
+  }, { minHeight: min, dense: MOCKUP_DENSE });
 }
 
 /** Header row controls must lie inside the header (≤ 44 px, H1). */
@@ -189,7 +205,7 @@ for (const viewport of VIEWPORTS) {
 
     await expect(worship.locator(".operator__group h2").first()).toHaveText("Knižnice");
     await expect(worship.locator("h2", { hasText: "Playlisty" })).toBeVisible();
-    await expect(page.locator('[data-role="context-title"]')).toHaveText("Piesne v knižnici");
+    await expect(page.locator(".operator__presentations-kind")).toHaveText("Piesne v knižnici");
     await expect(worship.locator('[data-role="slides"] .empty')).toHaveText("Vyber pieseň vľavo.");
     await expect(page.locator('[data-role="global-search-query"]')).toHaveAttribute(
       "placeholder",
