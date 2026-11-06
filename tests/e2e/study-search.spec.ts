@@ -542,3 +542,33 @@ test("a reference left behind under the finger goes when the field is left", asy
   await expect(field(page)).toHaveValue("");
   await finish(opened);
 });
+
+test("a tapped alternative leaves the whole reference, not its book", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("jan 3 16");
+  await page.locator('[data-role="study-chip"]', { hasText: "1 Ján" }).tap();
+  await expectChapter(page, "slk-seb:1JN.3");
+  await expect(field(page)).toHaveValue(/^1 Ján 3:16/);
+  await field(page).tap();
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:1JN.3");
+  await finish(opened);
+});
+
+test("an open from a field left behind keeps its text", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("rut 2");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.2");
+  await field(page).tap();
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.2");
+  await expect(field(page)).toHaveValue("rut 2");
+  await finish(opened);
+});

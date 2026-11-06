@@ -504,3 +504,18 @@ test("a highlight on a closed sheet's step makes it no second row", async ({ bro
   expect(listed).toEqual(["Hebrejom 11 · SEB", "Hebrejom 12 · SEB"]);
   await finish(opened);
 });
+
+test("a list that starts on a sheet keeps a row for its place", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=HEB.11&v=3&s=akcie");
+  const { page } = opened;
+  await expect(actions(page)).toBeVisible();
+  await drag(page, -120, 0);
+  await expectChapter(page, "slk-seb:HEB.12");
+  const listed = await page.evaluate(() => {
+    const stored = sessionStorage.getItem("presenter:study.history") ?? '""';
+    const history = JSON.parse(JSON.parse(stored)) as { entries: { label: string; listed: boolean }[] };
+    return history.entries.filter((entry) => entry.listed).map((entry) => entry.label);
+  });
+  expect(listed).toEqual(["Hebrejom 11 · SEB", "Hebrejom 12 · SEB"]);
+  await finish(opened);
+});

@@ -432,3 +432,26 @@ test("the phone keeps its own lists and slides", async ({ browser }) => {
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("the phone's prepared Bible card names itself, with no desktop caption", async ({ browser, request }) => {
+  const created = await request.post(new URL("/bible/presentations", baseURL).toString(), {
+    data: { name: "Príprava na telefóne" },
+  });
+  const id = (await created.json()).id as string;
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await page.goto("/ui/operator/bible");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  await page.locator('[data-role="bible-tab"][data-tab="prepared"]').tap();
+  await page.locator(`[data-role="presentation-card"][data-presentation-id="${id}"]`).tap();
+  await page.locator('[data-role=""]').tap();
+  const card = page.locator('[data-view-panel="bible"] [data-role="slide-card"]').first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".operator__slide-trigger-ref")).toHaveText("Zobraziť");
+  await expect(card.locator('[data-role="slide-caption"]')).toBeHidden();
+  await request.delete(new URL(`/bible/presentations/${id}`, baseURL).toString());
+  expect(errors).toEqual([]);
+  await context.close();
+});
