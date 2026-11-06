@@ -1,5 +1,6 @@
 ---
 paths:
+  - "crates/presenter-ui/src/state/global_keys.rs"
   - "crates/presenter-ui/src/components/slide_columns.rs"
   - "crates/presenter-ui/src/components/slide_list.rs"
   - "crates/presenter-ui/src/components/slide_list_scroll.rs"
@@ -55,6 +56,12 @@ paths:
   hidden grid's computed `gridTemplateColumns` is the specified `repeat(…)`
   text, not resolved tracks. The control renders in both the worship and the
   Bible toolbar — select it with `:visible`.
+- **The arrow keys belong to the shown section (#850 B2d).** ←/→ send the
+  previous / next song slide only on Piesne in Live mode
+  (`state::global_keys::global_key`, host-tested; `pages/operator.rs`
+  dispatches). On Biblia they step the verse console's preview, elsewhere
+  they do nothing: an arrow pressed while reading a verse once changed the
+  song on the wall. A new window-wide key goes into that one table.
 - **In Edit mode a stage change never moves the operator's place (#853).**
   AbleSet advances the stage every few seconds during a rehearsal; on SNV an
   operator editing slides on the FOH PC saw "the page refresh and jump to the

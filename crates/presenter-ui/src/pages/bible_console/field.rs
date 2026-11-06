@@ -1,12 +1,14 @@
 //! The console field (spec §7.1 item 2): any way of writing a reference.
 //! Enter / "Go" closes the phone keyboard (and retries a failed preview); on
 //! a desktop it moves focus to ZOBRAZIŤ, so Enter again shows. Escape clears,
-//! and blurs when already empty. It never autofocuses on a phone (the
-//! keyboard would cover the screen).
+//! and blurs when already empty. On a desktop it takes the focus whenever
+//! Biblia's Live tab is shown; never on a phone (the keyboard would cover
+//! the screen).
 
 use leptos::prelude::*;
 
 use super::Console;
+use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
 #[component]
@@ -45,6 +47,24 @@ pub(super) fn ConsoleField(console: Console) -> impl IntoView {
             let _ = field.set_attribute("autocorrect", "off");
         }
     });
+    // Desktop: the field takes the focus whenever the Live tab of Biblia
+    // becomes the shown page (spec section 7.1 item 2), deferred behind the
+    // render that shows it (#819). The panel stays mounted behind CSS, so a
+    // one-shot focus at mount would land on a hidden field.
+    {
+        let ctx = use_ctx!(AppContext);
+        let tab = use_ctx!(BibleState).bible_tab;
+        Effect::new(move |_| {
+            let shown = ctx.view.get() == "bible" && tab.with(|t| t == "live");
+            if shown && !phone.get() {
+                leptos::task::spawn_local(async move {
+                    if let Some(field) = c.field.get_untracked() {
+                        let _ = field.focus();
+                    }
+                });
+            }
+        });
+    }
     let on_clear = move |_| {
         c.input.set(String::new());
         if let Some(field) = c.field.get_untracked() {

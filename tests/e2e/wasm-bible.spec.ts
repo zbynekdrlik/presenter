@@ -11,6 +11,7 @@ import {
   attachConsoleErrorCollector,
   deriveTestConfig,
   refreshDevData,
+  selectPassage,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -62,14 +63,15 @@ function biblePanel(page: import("@playwright/test").Page) {
   return page.locator('[data-view-panel="bible"]');
 }
 
-/** Check if Bible data is available (translations + books loaded). */
-async function hasBibleData(
+/** A button of the console's translation bar (`kind` = main | secondary, "" = žiadny). */
+function translationButton(
   page: import("@playwright/test").Page,
-): Promise<boolean> {
-  const bookList = page.locator('[data-role="book-list"]');
-  const bookItems = bookList.locator('[data-role="book-item"]');
-  const count = await bookItems.count();
-  return count > 0;
+  kind: "main" | "secondary",
+  code: string,
+) {
+  return page.locator(
+    `[data-role="console-translation"][data-kind="${kind}"][data-translation="${code}"]`,
+  );
 }
 
 /** Clear any active Bible broadcast before tests that need clean state. */
@@ -188,249 +190,35 @@ test.describe("WASM Operator Bible Tests", () => {
   });
 
   // -----------------------------------------------------------------------
-  // Live tab: translation selectors
+  // Live tab: the console's translation buttons (#850 B2c replaced the selects)
   // -----------------------------------------------------------------------
 
-  test("translation selectors are visible", async ({ page }) => {
-    await navigateToBible(page);
-
-    const mainTranslation = page.locator('[data-role="main-translation"]');
-    const secondaryTranslation = page.locator(
-      '[data-role="secondary-translation"]',
-    );
-
-    await expect(mainTranslation).toBeVisible({ timeout: 10_000 });
-    await expect(secondaryTranslation).toBeVisible();
-  });
-
-  test("main translation dropdown has options", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    const mainTranslation = page.locator('[data-role="main-translation"]');
-    await expect(mainTranslation).toBeVisible({ timeout: 10_000 });
-
-    // Wait for translation options to load asynchronously
-    await page.waitForFunction(
-      () => {
-        const select = document.querySelector('[data-role="main-translation"]');
-        return select && select.querySelectorAll("option").length >= 1;
-      },
-      { timeout: 15_000 },
-    );
-
-    const options = mainTranslation.locator("option");
-    const count = await options.count();
-    expect(count).toBeGreaterThanOrEqual(1);
-  });
-
-  test("secondary translation has 'None' option", async ({ page }) => {
-    await navigateToBible(page);
-
-    const secondaryTranslation = page.locator(
-      '[data-role="secondary-translation"]',
-    );
-    await expect(secondaryTranslation).toBeVisible({ timeout: 10_000 });
-
-    const noneOption = secondaryTranslation.locator('option[value=""]');
-    await expect(noneOption).toHaveText("žiadny");
-  });
-
-  // -----------------------------------------------------------------------
-  // Live tab: book selection
-  // -----------------------------------------------------------------------
-
-  test("book filter input is visible", async ({ page }) => {
-    await navigateToBible(page);
-
-    const bookFilter = page.locator('[data-role="book-filter"]');
-    await expect(bookFilter).toBeVisible({ timeout: 10_000 });
-  });
-
-  test("book list loads when translation is selected", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    // Wait for books to load
-    const bookList = page.locator('[data-role="book-list"]');
-    await expect(bookList).toBeVisible({ timeout: 10_000 });
-
-    // Should have book items
-    await page.waitForFunction(
-      () => {
-        const items = document.querySelectorAll('[data-role="book-item"]');
-        return items.length > 0;
-      },
-      { timeout: 10_000 },
-    );
-
-    const bookItems = bookList.locator('[data-role="book-item"]');
-    const count = await bookItems.count();
-    expect(count).toBeGreaterThan(0);
-  });
-
-  test("book items have proper button structure and chapter count badges", async ({
+  test("translation buttons are visible: a main row and a second row with žiadny", async ({
     page,
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    await page.waitForFunction(
-      () => document.querySelectorAll('[data-role="book-item"]').length > 0,
-      { timeout: 10_000 },
+    const bar = page.locator('[data-role="console-translations"]');
+    await expect(bar).toBeVisible({ timeout: 10_000 });
+    const main = bar.locator('[data-role="console-translation"][data-kind="main"]');
+    await expect(main.first()).toBeVisible();
+    expect(await main.count()).toBeGreaterThanOrEqual(2);
+    await expect(main.filter({ hasText: "SEB" })).toBeVisible();
+    const none = bar.locator(
+      '[data-role="console-translation"][data-kind="secondary"][data-translation=""]',
     );
-
-    const firstBook = page.locator('[data-role="book-item"]').first();
-
-    // Book item should be a button with operator__list-button class
-    await expect(firstBook).toHaveClass(/operator__list-button/);
-
-    // Should be wrapped in a div.operator__list-item
-    const wrapper = firstBook.locator("..");
-    await expect(wrapper).toHaveClass(/operator__list-item/);
-
-    // Should contain a label span and a chapter count meta span
-    const label = firstBook.locator(".operator__list-label");
-    await expect(label).toBeVisible();
-    const labelText = await label.textContent();
-    expect(labelText?.trim().length).toBeGreaterThan(0);
-
-    const meta = firstBook.locator(".operator__list-meta");
-    await expect(meta).toBeVisible();
-    const metaText = await meta.textContent();
-    // Meta should show chapter count like "50 kap."
-    expect(metaText).toMatch(/\d+\s*kap\./);
-
-    // Button should have pointer cursor (styled as clickable)
-    const cursor = await firstBook.evaluate(
-      (el) => window.getComputedStyle(el).cursor,
-    );
-    expect(cursor).toBe("pointer");
-  });
-
-  test("book filter narrows book list", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    // Wait for books to load
-    await page.waitForFunction(
-      () => document.querySelectorAll('[data-role="book-item"]').length > 0,
-      { timeout: 10_000 },
-    );
-
-    const initialCount = await page.locator('[data-role="book-item"]').count();
-
-    // Type a filter
-    const bookFilter = page.locator('[data-role="book-filter"]');
-    await bookFilter.fill("John");
-
-    // Wait for filtered list to update reactively
-    await expect
-      .poll(async () => page.locator('[data-role="book-item"]').count(), {
-        timeout: 5_000,
-      })
-      .toBeLessThan(initialCount > 5 ? initialCount : initialCount + 1);
-
-    const filteredCount = await page.locator('[data-role="book-item"]').count();
-
-    // Filtered count should be less (unless all books contain "John", unlikely)
-    if (initialCount > 5) {
-      expect(filteredCount).toBeLessThan(initialCount);
-    }
-    expect(filteredCount).toBeGreaterThan(0);
-  });
-
-  test("clicking a book selects it", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    await page.waitForFunction(
-      () => document.querySelectorAll('[data-role="book-item"]').length > 0,
-      { timeout: 10_000 },
-    );
-
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-
-    // Should be marked active
-    await expect(firstBook).toHaveAttribute("data-active", "true");
+    await expect(none).toHaveText("žiadny");
+    // Exactly one main translation is on.
+    await expect(main.and(page.locator('[aria-pressed="true"]'))).toHaveCount(1);
   });
 
   // -----------------------------------------------------------------------
-  // Live tab: reference inputs and load passage
+  // Live tab: the console loads a passage into the slide grid
   // -----------------------------------------------------------------------
-
-  test("chapter and verse inputs are visible", async ({ page }) => {
-    await navigateToBible(page);
-
-    const chapterInput = page.locator('[data-role="chapter-input"]');
-    const verseStart = page.locator('[data-role="verse-start"]');
-    const verseEnd = page.locator('[data-role="verse-end"]');
-
-    await expect(chapterInput).toBeVisible();
-    await expect(verseStart).toBeVisible();
-    await expect(verseEnd).toBeVisible();
-  });
-
-  test("load passage button is visible", async ({ page }) => {
-    await navigateToBible(page);
-
-    const loadButton = page.locator('[data-role="load-button"]');
-    await expect(loadButton).toBeVisible();
-  });
 
   test("loading a passage generates slides", async ({ page }) => {
     await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    // Select first book
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-
-    // Set chapter to 1, verse 1
-    const chapterInput = page.locator('[data-role="chapter-input"]');
-    await chapterInput.fill("1");
-
-    const verseStart = page.locator('[data-role="verse-start"]');
-    await verseStart.fill("1");
-
-    // Click Load passage
-    const loadButton = page.locator('[data-role="load-button"]');
-    await loadButton.click();
-
-    // Wait for slides to appear
-    await page.waitForFunction(
-      () => {
-        const slides = document.querySelectorAll('[data-role="slide-card"]');
-        return slides.length > 0;
-      },
-      { timeout: 15_000 },
-    );
-
+    await selectPassage(page, "jan 1:1");
     const slideCount = await page.locator('[data-role="slide-card"]').count();
     expect(slideCount).toBeGreaterThan(0);
   });
@@ -443,15 +231,9 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     // Wait for slides
     await page.waitForFunction(
@@ -494,15 +276,9 @@ test.describe("WASM Operator Bible Tests", () => {
   test("slide selection toggles on click", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -527,15 +303,9 @@ test.describe("WASM Operator Bible Tests", () => {
   test("select all selects all slides", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -558,15 +328,9 @@ test.describe("WASM Operator Bible Tests", () => {
   test("edit mode shows textareas in slide cards", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -604,15 +368,9 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -649,16 +407,8 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="chapter-input"]').fill("1");
-    await page.locator('[data-role="verse-start"]').fill("1");
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1:1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -685,14 +435,8 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -766,27 +510,17 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
-    // Select secondary translation first
-    const secondarySelect = page.locator('[data-role="secondary-translation"]');
-    await expect(secondarySelect).toBeVisible({ timeout: 10_000 });
-    const options = secondarySelect.locator("option");
-    const count = await options.count();
-    if (count < 2) return; // Need at least one real translation
-
-    const secondOption = await options.nth(1).getAttribute("value");
-    if (secondOption) {
-      await secondarySelect.selectOption(secondOption);
-    }
+    // SEB under main, KJV as the line below.
+    await translationButton(page, "main", "slk-seb").click();
+    await translationButton(page, "secondary", "eng-kjv").click();
+    await expect(translationButton(page, "secondary", "eng-kjv")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -926,15 +660,9 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage on Live tab
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -1355,15 +1083,9 @@ test.describe("WASM Operator Bible Tests", () => {
   test("add selected slides to presentation", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -1459,41 +1181,15 @@ test.describe("WASM Operator Bible Tests", () => {
   test("secondary translation can be set", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    const secondarySelect = page.locator('[data-role="secondary-translation"]');
-    await expect(secondarySelect).toBeVisible({ timeout: 10_000 });
-
-    // Wait for options to be populated (loaded asynchronously)
-    await page.waitForFunction(
-      () => {
-        const sel = document.querySelector(
-          '[data-role="secondary-translation"]',
-        );
-        return sel && sel.querySelectorAll("option").length >= 2;
-      },
-      { timeout: 10_000 },
-    );
-
-    const options = secondarySelect.locator("option");
-    const count = await options.count();
-
-    // Should have at least "None" + one translation
-    expect(count).toBeGreaterThanOrEqual(2);
-
-    // Select first non-None option
-    if (count >= 2) {
-      const secondOption = await options.nth(1).getAttribute("value");
-      if (secondOption) {
-        await secondarySelect.selectOption(secondOption);
-        // Verify selection stuck
-        const selected = await secondarySelect.inputValue();
-        expect(selected).toBe(secondOption);
-      }
-    }
+    const kjv = translationButton(page, "secondary", "eng-kjv");
+    await expect(kjv).toBeVisible({ timeout: 10_000 });
+    await kjv.click();
+    await expect(kjv).toHaveAttribute("aria-pressed", "true");
+    const none = translationButton(page, "secondary", "");
+    await expect(none).toHaveAttribute("aria-pressed", "false");
+    await none.click();
+    await expect(none).toHaveAttribute("aria-pressed", "true");
+    await expect(kjv).toHaveAttribute("aria-pressed", "false");
   });
 
   // -----------------------------------------------------------------------
@@ -1562,15 +1258,9 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -1627,10 +1317,6 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // #700: the stage-mirror iframe is worship-only — absent on the bible tab.
     await expect(page.locator("iframe.operator__stage-iframe")).toHaveCount(0);
@@ -1643,9 +1329,7 @@ test.describe("WASM Operator Bible Tests", () => {
     // Load a passage and trigger the first slide via the operator UI. The verse
     // preview reads the active broadcast (pushed over the operator WS on
     // trigger) — no stage-layout change is needed (unlike the removed iframe).
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -1708,15 +1392,9 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -1764,15 +1442,9 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -1804,107 +1476,6 @@ test.describe("WASM Operator Bible Tests", () => {
   // Bible search
   // -----------------------------------------------------------------------
 
-  test("bible search input is visible and functional", async ({ page }) => {
-    await navigateToBible(page);
-
-    // Bible search uses the header global search input
-    const searchInput = page.locator('[data-role="global-search-query"]');
-    await expect(searchInput).toBeVisible();
-    // Placeholder should indicate Bible search when on bible view
-    await expect(searchInput).toHaveAttribute("placeholder", /Bibli/i);
-  });
-
-  test("search requires minimum 3 characters", async ({ page }) => {
-    await navigateToBible(page);
-
-    const searchInput = page.locator('[data-role="global-search-query"]');
-    await searchInput.fill("ab");
-
-    // No bible search results should appear (wait for debounce to settle)
-    await expect
-      .poll(
-        async () => page.locator('[data-role="bible-search-result"]').count(),
-        { timeout: 3_000 },
-      )
-      .toBe(0);
-  });
-
-  test("search results appear with 3+ characters", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    const searchInput = page.locator('[data-role="global-search-query"]');
-    await searchInput.fill("love");
-
-    // Wait for Bible search results to appear in the header dropdown
-    await page.waitForSelector('[data-role="bible-search-result"]', {
-      timeout: 10_000,
-    });
-
-    const results = page.locator('[data-role="global-search-results"]');
-    await expect(results).toBeVisible();
-  });
-
-  test("clicking search result sets reference inputs", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    const searchInput = page.locator('[data-role="global-search-query"]');
-    await searchInput.fill("love");
-
-    // Wait for results
-    await page.waitForSelector('[data-role="bible-search-result"]', {
-      timeout: 10_000,
-    });
-
-    const firstResult = page
-      .locator('[data-role="bible-search-result"]')
-      .first();
-    if ((await firstResult.count()) > 0) {
-      await firstResult.click();
-
-      // Search should be cleared
-      await expect(searchInput).toHaveValue("", { timeout: 3_000 });
-
-      // Reference inputs should be populated (chapter set to a number)
-      const chapterInput = page.locator('[data-role="chapter-input"]');
-      await expect(chapterInput).toHaveValue(/\d+/, { timeout: 10_000 });
-    }
-  });
-
-  test("search clear button clears results", async ({ page }) => {
-    await navigateToBible(page);
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    const searchInput = page.locator('[data-role="global-search-query"]');
-    await searchInput.fill("love");
-
-    await page.waitForSelector('[data-role="global-search-results"]', {
-      timeout: 10_000,
-    });
-
-    const clearBtn = page.locator('[data-role="global-search-clear"]');
-    await clearBtn.click();
-
-    await expect(searchInput).toHaveValue("", { timeout: 3_000 });
-
-    await expect(
-      page.locator('[data-role="global-search-results"]'),
-    ).toHaveAttribute("data-visible", "false", { timeout: 5_000 });
-  });
-
   // -----------------------------------------------------------------------
   // Loaded passages history
   // -----------------------------------------------------------------------
@@ -1922,10 +1493,6 @@ test.describe("WASM Operator Bible Tests", () => {
   test("delete slide from prepared presentation", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Create a presentation with slides
     const presResponse = await page.evaluate(async (url: string) => {
@@ -2045,10 +1612,6 @@ test.describe("WASM Operator Bible Tests", () => {
   test("prepared slides are draggable", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Create a presentation with slides via API
     const presResponse = await page.evaluate(async (url: string) => {
@@ -2159,15 +1722,9 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // 1. Load a passage
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
+    await selectPassage(page, "jan 1");
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
@@ -2311,10 +1868,6 @@ test.describe("WASM Operator Bible Tests", () => {
   test("add empty slide button in prepared tab works", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
 
     // Create a presentation via API
     const presResponse = await page.evaluate(async (url: string) => {
@@ -2505,56 +2058,6 @@ test.describe("WASM Operator Bible Tests", () => {
   // Bug fixes (#219)
   // -----------------------------------------------------------------------
 
-  test("book filter re-search after book selection (#219 bug 1)", async ({
-    page,
-  }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-
-    await navigateToBible(page);
-    if (!(await hasBibleData(page))) {
-      test.skip();
-      return;
-    }
-
-    const panel = biblePanel(page);
-    const bookList = panel.locator('[data-role="book-list"]');
-    const filterInput = panel.locator('[data-role="book-filter"]');
-
-    // Select the first book
-    const firstBook = bookList.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-
-    // Book should now be selected (collapsed view)
-    await expect(
-      bookList.locator('[data-role="book-item"][data-active="true"]'),
-    ).toHaveCount(1);
-
-    // Type a new search term — list expands with matches, selection is preserved
-    await filterInput.fill("Psalm");
-    await page.waitForTimeout(300);
-
-    // Should see filtered book list
-    const items = bookList.locator('[data-role="book-item"]');
-    const count = await items.count();
-    expect(count).toBeGreaterThan(0);
-
-    // At least one item should contain "Psalm" in its label
-    const labels = await items.allTextContents();
-    const hasPsalm = labels.some((l) =>
-      l.toLowerCase().includes("psalm"),
-    );
-    expect(hasPsalm).toBe(true);
-
-    expect(consoleMessages).toEqual([]);
-  });
-
   test("translation selection persists after reload (#219 bug 2)", async ({
     page,
   }) => {
@@ -2567,41 +2070,33 @@ test.describe("WASM Operator Bible Tests", () => {
     });
 
     await navigateToBible(page);
-    if (!(await hasBibleData(page))) {
-      test.skip();
-      return;
-    }
 
-    const panel = biblePanel(page);
-    const mainSelect = panel.locator('[data-role="main-translation"]');
-    await expect(mainSelect).toBeVisible({ timeout: 10_000 });
+    // The button that is not on now, then a reload.
+    const main = page.locator('[data-role="console-translation"][data-kind="main"]');
+    await expect(main.first()).toBeVisible({ timeout: 10_000 });
+    const off = main.and(page.locator('[aria-pressed="false"]')).first();
+    const chosen = await off.getAttribute("data-translation");
+    expect(chosen).toBeTruthy();
+    // The server default is written too; the reload must not cut it off.
+    const saved = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/bible/preferences" && res.request().method() === "PUT",
+    );
+    await off.click();
+    await saved;
+    // This browser remembers it (#701) before the reload.
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem("presenter:bibleMainTranslation")))
+      .toBe(JSON.stringify(chosen));
 
-    // Get available translations
-    const options = await mainSelect.locator("option").allTextContents();
-    if (options.length < 2) {
-      test.skip();
-      return;
-    }
-
-    // Select the second translation
-    const secondValue = await mainSelect
-      .locator("option")
-      .nth(1)
-      .getAttribute("value");
-    await mainSelect.selectOption(secondValue!);
-
-    // Wait for auto-save to complete
-    await page.waitForTimeout(1000);
-
-    // Reload and navigate back to bible
     await navigateToBible(page);
-    await page.waitForTimeout(2000);
-
-    // Verify the translation is still selected
-    const currentValue = await panel
-      .locator('[data-role="main-translation"]')
-      .inputValue();
-    expect(currentValue).toBe(secondValue);
+    await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+      "data-books-translation",
+      chosen!,
+    );
+    await expect(translationButton(page, "main", chosen!)).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     expect(consoleMessages).toEqual([]);
   });
@@ -2618,26 +2113,11 @@ test.describe("WASM Operator Bible Tests", () => {
     });
 
     await navigateToBible(page);
-    if (!(await hasBibleData(page))) {
-      test.skip();
-      return;
-    }
 
     const panel = biblePanel(page);
 
     // Select a book and load verses to create a broadcast
-    const firstBook = panel
-      .locator('[data-role="book-list"] [data-role="book-item"]')
-      .first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-
-    // Wait for chapter/verse inputs and load
-    const loadButton = panel.locator('[data-role="load-verses"]');
-    if ((await loadButton.count()) > 0) {
-      await loadButton.click();
-      await page.waitForTimeout(2000);
-    }
+    await selectPassage(page, "jan 1");
 
     // Trigger the first slide to broadcast it
     const slideCard = page
@@ -2680,24 +2160,11 @@ test.describe("WASM Operator Bible Tests", () => {
     });
 
     await navigateToBible(page);
-    if (!(await hasBibleData(page))) {
-      test.skip();
-      return;
-    }
 
     const panel = biblePanel(page);
 
     // Select a book and load verses
-    const firstBook = panel
-      .locator('[data-role="book-list"] [data-role="book-item"]')
-      .first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-    const loadButton = panel.locator('[data-role="load-verses"]');
-    if ((await loadButton.count()) > 0) {
-      await loadButton.click();
-      await page.waitForTimeout(2000);
-    }
+    await selectPassage(page, "jan 1");
 
     // Check that slide text uses pre-wrap, not ellipsis
     const slideText = page.locator(".operator__slide-card--bible .operator__slide-text").first();
@@ -2753,24 +2220,11 @@ test.describe("WASM Operator Bible Tests", () => {
     });
 
     await navigateToBible(page);
-    if (!(await hasBibleData(page))) {
-      test.skip();
-      return;
-    }
 
     const panel = biblePanel(page);
 
     // Load some verses
-    const firstBook = panel
-      .locator('[data-role="book-list"] [data-role="book-item"]')
-      .first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-    const loadButton = panel.locator('[data-role="load-verses"]');
-    if ((await loadButton.count()) > 0) {
-      await loadButton.click();
-      await page.waitForTimeout(2000);
-    }
+    await selectPassage(page, "jan 1");
 
     // Switch to edit mode
     const editButton = page.locator(
@@ -2812,289 +2266,6 @@ test.describe("WASM Operator Bible Tests", () => {
 });
 
 test.describe("Bible workflow fixes (issue #256)", () => {
-  test("typing in filter does not deselect book", async ({ page }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    // Wait for books to load
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-
-    // Book is selected - the collapsed view is visible
-    await expect(
-      page.locator('[data-role="book-item"][data-active="true"]'),
-    ).toBeVisible();
-
-    // Type in the filter - selection must stay (collapsed view disappears
-    // because list expands, but the book remains selected internally)
-    await page.locator('[data-role="book-filter"]').fill("xyz");
-    const filterVal = await page
-      .locator('[data-role="book-filter"]')
-      .inputValue();
-    expect(filterVal).toBe("xyz");
-
-    expect(consoleMessages).toEqual([]);
-  });
-
-  test("selecting a book clears the filter", async ({ page }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    // Reset main translation to the English option so the "Ge" filter has a
-    // match. Earlier tests in this spec change Main translation; preferences
-    // persist in the test DB, so navigateToBible alone does not reset it.
-    const mainSelect = page.locator('[data-role="main-translation"]');
-    await expect(mainSelect).toBeVisible({ timeout: 10_000 });
-    const englishValue = await mainSelect.evaluate((el) => {
-      const select = el as HTMLSelectElement;
-      for (const opt of Array.from(select.options)) {
-        if (/eng-|english|KJV|King James/i.test(opt.value + " " + (opt.textContent ?? ""))) {
-          return opt.value;
-        }
-      }
-      return null;
-    });
-    if (englishValue) {
-      await mainSelect.selectOption(englishValue);
-    }
-
-    // Wait for books to load first
-    await expect(
-      page.locator('[data-role="book-item"]').first(),
-    ).toBeVisible({ timeout: 10_000 });
-
-    // Type into filter to narrow
-    await page.locator('[data-role="book-filter"]').fill("Ge");
-
-    const firstMatch = page.locator('[data-role="book-item"]').first();
-    await expect(firstMatch).toBeVisible({ timeout: 10_000 });
-    await firstMatch.click();
-
-    // Filter must be cleared after selection
-    const filterVal = await page
-      .locator('[data-role="book-filter"]')
-      .inputValue();
-    expect(filterVal).toBe("");
-
-    expect(consoleMessages).toEqual([]);
-  });
-
-  test("no Change button exists on collapsed book view", async ({ page }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-
-    // "Change" text should not appear anywhere in the book list
-    const changeText = page.locator(
-      '[data-role="book-list"] >> text="Change"',
-    );
-    await expect(changeText).toHaveCount(0);
-
-    expect(consoleMessages).toEqual([]);
-  });
-
-  test("clicking collapsed selected book is a no-op", async ({ page }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-
-    // Click the collapsed book - selection should remain
-    const collapsed = page.locator(
-      '[data-role="book-item"][data-active="true"]',
-    );
-    await expect(collapsed).toBeVisible();
-    await collapsed.click();
-
-    // Still selected and filter still empty
-    await expect(
-      page.locator('[data-role="book-item"][data-active="true"]'),
-    ).toBeVisible();
-    expect(
-      await page.locator('[data-role="book-filter"]').inputValue(),
-    ).toBe("");
-
-    expect(consoleMessages).toEqual([]);
-  });
-
-  test("picking a different book preserves chapter/verse when they fit", async ({
-    page,
-  }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    // Pick first book, set chapter=2, verse_start=3
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-    await page.locator('[data-role="chapter-input"]').fill("2");
-    await page.locator('[data-role="chapter-input"]').press("Tab");
-    await page.locator('[data-role="verse-start"]').fill("3");
-    await page.locator('[data-role="verse-start"]').press("Tab");
-
-    // Open the list by typing and pick a different book if available
-    await page.locator('[data-role="book-filter"]').fill("a");
-    const books = page.locator('[data-role="book-item"]');
-    const count = await books.count();
-    if (count >= 2) {
-      await books.nth(1).click();
-    } else {
-      await books.first().click();
-    }
-
-    // Fields should be preserved OR clamped, but NOT reset to 1 unless the
-    // new book required it. Verify chapter is still 1-2 and verse_start 1-3.
-    const chapterStr = await page
-      .locator('[data-role="chapter-input"]')
-      .inputValue();
-    const vstartStr = await page
-      .locator('[data-role="verse-start"]')
-      .inputValue();
-    const chapterNum = parseInt(chapterStr, 10);
-    const vstartNum = parseInt(vstartStr, 10);
-    expect(chapterNum).toBeGreaterThanOrEqual(1);
-    expect(chapterNum).toBeLessThanOrEqual(2);
-    expect(vstartNum).toBeGreaterThanOrEqual(1);
-    expect(vstartNum).toBeLessThanOrEqual(3);
-
-    expect(consoleMessages).toEqual([]);
-  });
-
-  test("auto-load fires after verse change (no button click)", async ({
-    page,
-  }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    // Wait for translation to auto-select (first translation in list)
-    await expect(page.locator('[data-role="main-translation"]')).toHaveValue(
-      /.+/,
-      { timeout: 10_000 },
-    );
-
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    await firstBook.click();
-
-    // Change verse_end — auto-load should fire after 300ms debounce
-    await page.locator('[data-role="verse-end"]').fill("2");
-    await page.locator('[data-role="verse-end"]').press("Tab");
-
-    // Wait for slides to appear without clicking the Load button
-    const slideLocator = page.locator('[data-role="slide-card"]');
-    await expect(slideLocator.first()).toBeVisible({ timeout: 15_000 });
-
-    expect(consoleMessages).toEqual([]);
-  });
-
-  test("translation change preserves book when available", async ({ page }) => {
-    const consoleMessages: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") {
-        if (msg.text().includes("crbug.com/981419")) return;
-        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
-      }
-    });
-    await navigateToBible(page);
-
-    // Select first book and capture its canonical CODE (not the localized
-    // label). Cross-translation preservation matches by book code; labels
-    // legitimately change between translations.
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    const firstBookCode = await firstBook.getAttribute("data-book-code");
-    await firstBook.click();
-    await expect(
-      page.locator('[data-role="book-item"][data-active="true"]'),
-    ).toBeVisible();
-
-    // Try switching to another translation if multiple exist
-    const select = page.locator('[data-role="main-translation"]');
-    const options = select.locator("option");
-    const optCount = await options.count();
-    if (optCount >= 2) {
-      const currentValue = await select.inputValue();
-      let switchTarget: string | null = null;
-      for (let i = 0; i < optCount; i++) {
-        const val = await options.nth(i).getAttribute("value");
-        if (val && val !== currentValue) {
-          switchTarget = val;
-          await select.selectOption(val);
-          break;
-        }
-      }
-      expect(switchTarget).not.toBeNull();
-
-      // Await the explicit readiness signal instead of racing the async
-      // translation-switch effect: the book-list container publishes
-      // data-books-translation as the effect's LAST write, once list_books
-      // has resolved and the selection has settled (preserved or cleared).
-      // This waits on the real async completion, not a render-timing guess,
-      // so it is deterministic under CI load (issue #727).
-      await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
-        "data-books-translation",
-        switchTarget as string,
-        { timeout: 10_000 },
-      );
-
-      // Settled state: the book is either preserved (same canonical code,
-      // possibly a new localized label) or cleared. Both are acceptable; a
-      // DIFFERENT book code is not. The active book-item — collapsed or in
-      // the full list — always exposes data-book-code.
-      const active = page.locator('[data-role="book-item"][data-active="true"]');
-      const activeCount = await active.count();
-      if (activeCount > 0) {
-        expect(await active.first().getAttribute("data-book-code")).toBe(
-          firstBookCode,
-        );
-      }
-    }
-
-    expect(consoleMessages).toEqual([]);
-  });
-
   test("#875 a toast goes away by itself, and a new one gets its full time", async ({
     page,
   }) => {

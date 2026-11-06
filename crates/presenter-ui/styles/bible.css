@@ -95,27 +95,6 @@ body.operator.operator--bible .operator__panel--bible {
   overflow-y: auto;
 }
 
-/* ---------- Translation row in Live tab ---------- */
-.bible__translation-row {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.bible__translation-row .operator__field--compact {
-  flex: 1;
-  min-width: 0;
-}
-
-.bible__translation-row .operator__field--compact span {
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-}
-
-.bible__translation-row select {
-  width: 100%;
-  text-overflow: ellipsis;
-}
-
 /* ---------- PREPARED panel ---------- */
 .bible__prepared-header {
   display: flex;
@@ -496,44 +475,6 @@ body.operator.operator--bible .operator__panel--bible {
   margin: 0.5rem 0;
 }
 
-.operator--bible .operator__reference-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 0.5rem;
-}
-
-.operator--bible .operator__reference-grid input {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-/* #825: the maximum next to each box ("Chapter / 50") and the inline note
-   when a typed chapter/verse was past the range and got clamped. */
-.operator--bible .operator__field-max {
-  margin-left: 0.3rem;
-  color: #64748b;
-  font-variant-numeric: tabular-nums;
-}
-
-.operator--bible .operator__range-hint {
-  margin: 0.35rem 0 0;
-  font-size: 0.75rem;
-  color: #f59e0b;
-}
-
-/* Position the header search dropdown below the sticky header
-   Header height ≈ padding (0.65rem × 2) + content (~1.6rem) = ~2.9rem */
-.operator--bible .operator__search-results {
-  top: 3.2rem;
-}
-
-/* Ensure header search form sits above the dropdown so the clear button
-   is not obscured by the fixed-position results panel */
-.operator--bible .operator__search {
-  position: relative;
-  z-index: 21;
-}
-
 /* ---------- Minimal slides column for Bible UI ---------- */
 .operator__slides-column--minimal {
   padding: 0.5rem 1rem 1rem;
@@ -544,6 +485,7 @@ body.operator.operator--bible .operator__panel--bible {
   padding: 0.25rem 0.5rem;
   border-bottom: none;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 /* ---------- Add-to-presentation scrollable list ---------- */

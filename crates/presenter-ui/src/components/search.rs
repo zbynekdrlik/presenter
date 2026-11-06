@@ -1,4 +1,3 @@
-use crate::state::bible::SelectedBook;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use leptos::prelude::*;
@@ -13,7 +12,7 @@ pub fn SearchResults() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    // Debounced search effect (for library/song search only, bible is handled in header)
+    // Debounced library / song search (Biblia has no header search, #850 B2c).
     let timeout_handle: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
         Rc::new(RefCell::new(None));
 
@@ -59,9 +58,6 @@ pub fn SearchResults() -> impl IntoView {
     {
         let op_close = op.clone();
         let search_results_close = ctx.search_results;
-        let bible_search_query = ctx.bible_search_query;
-        let bible_search_results = ctx.bible_search_results;
-        let bible_has_searched = ctx.bible_has_searched;
         let handler = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::MouseEvent)>::new(
             move |ev: web_sys::MouseEvent| {
                 if !op_close.search_open.get_untracked() {
@@ -89,10 +85,6 @@ pub fn SearchResults() -> impl IntoView {
                         op_close.search_open.set(false);
                         op_close.search_query.set(String::new());
                         search_results_close.set(Vec::new());
-                        // Also clear bible search
-                        bible_search_query.set(String::new());
-                        bible_search_results.set(Vec::new());
-                        bible_has_searched.set(false);
                     }
                 }
             },
@@ -160,109 +152,12 @@ pub fn SearchResults() -> impl IntoView {
             data-role="global-search-results"
             data-visible=move || {
                 let open = op_visible.search_open.get();
-                let is_bible = ctx.view.get() == "bible";
-                if is_bible {
-                    let has_query = !ctx.bible_search_query.get().is_empty()
-                        && ctx.bible_search_query.get().len() >= 3;
-                    let has_results = !ctx.bible_search_results.get().is_empty()
-                        || ctx.bible_searching.get()
-                        || ctx.bible_has_searched.get();
-                    if open && has_query && has_results { "true" } else { "false" }
-                } else {
-                    let has_query = !op_visible.search_query.get().is_empty();
-                    if open && has_query { "true" } else { "false" }
-                }
+                let has_query = !op_visible.search_query.get().is_empty();
+                if open && has_query && ctx.view.get() != "bible" { "true" } else { "false" }
             }
             class="operator__search-results"
         >
             {move || {
-                let is_bible = ctx.view.get() == "bible";
-
-                if is_bible {
-                    // Render Bible search results
-                    let results = ctx.bible_search_results.get();
-                    let searching = ctx.bible_searching.get();
-                    let has_searched = ctx.bible_has_searched.get();
-
-                    if searching {
-                        return view! {
-                            <div class="operator__search-loading">"Hľadám\u{2026}"</div>
-                        }.into_any();
-                    }
-                    if results.is_empty() && has_searched {
-                        return view! {
-                            <div class="operator__search-empty">"Nič sa nenašlo."</div>
-                        }.into_any();
-                    }
-                    if results.is_empty() {
-                        return view! {
-                            <div class="operator__search-empty">"Začni písať\u{2026}"</div>
-                        }.into_any();
-                    }
-
-                    view! {
-                        <section class="operator__search-group" data-kind="bible">
-                            <h3>"Verše v Biblii"</h3>
-                            {results.into_iter().map(|hit| {
-                                let ref_label = hit.reference.to_human_readable();
-                                let text_preview = {
-                                    let t = &hit.text;
-                                    if t.chars().count() > 80 {
-                                        let end: usize = t.char_indices().nth(80).map(|(i, _)| i).unwrap_or(t.len());
-                                        format!("{}\u{2026}", &t[..end])
-                                    } else {
-                                        t.clone()
-                                    }
-                                };
-                                let book = hit.reference.book.clone();
-                                let book_code = hit.reference.book_code.clone();
-                                let book_number = hit.reference.book_number;
-                                let chapter = hit.reference.chapter;
-                                let verse_start = hit.reference.verse_start;
-                                let verse_end = hit.reference.verse_end;
-
-                                let on_click = move |_| {
-                                    // Navigate to the verse in the Bible live tab
-                                    if let Some(bs) = leptos::prelude::use_context::<crate::state::bible::BibleState>() {
-                                        let books = bs.books.get_untracked();
-                                        if let Some(found_book) = books.iter().find(|b| {
-                                            book_code.as_ref().map(|c| c == &b.code).unwrap_or(false)
-                                                || b.book == book
-                                        }) {
-                                            let verse_counts: Vec<u16> = found_book.chapters.iter().map(|c| c.verse_count).collect();
-                                            bs.selected_book.set(Some(SelectedBook {
-                                                book: found_book.book.clone(),
-                                                code: found_book.code.clone(),
-                                                number: book_number.unwrap_or(found_book.number),
-                                                chapter_count: found_book.chapters.len() as u16,
-                                                verse_counts,
-                                            }));
-                                        }
-                                        bs.selected_chapter.set(chapter);
-                                        bs.verse_start.set(verse_start);
-                                        bs.verse_end.set(if verse_end > verse_start { Some(verse_end) } else { None });
-                                    }
-                                    // Close search
-                                    ctx.bible_search_query.set(String::new());
-                                    ctx.bible_search_results.set(Vec::new());
-                                    ctx.bible_has_searched.set(false);
-                                    op.search_open.set(false);
-                                };
-
-                                view! {
-                                    <div
-                                        data-role="bible-search-result"
-                                        class="operator__search-result"
-                                        on:click=on_click
-                                    >
-                                        <span class="operator__search-result-title">{ref_label}</span>
-                                        <span class="operator__search-result-snippet">{text_preview}</span>
-                                    </div>
-                                }
-                            }).collect_view()}
-                        </section>
-                    }.into_any()
-                } else {
                     // Render library/song search results
                     let results = ctx.search_results.get();
                     if results.is_empty() && ctx.search_loading.get() {
@@ -351,7 +246,6 @@ pub fn SearchResults() -> impl IntoView {
                             })}
                         </>
                     }.into_any()
-                }
             }}
         </div>
     }

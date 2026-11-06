@@ -111,7 +111,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click=move |_| apply_move(c, Step::Prev)
             >
-                {move || format!("\u{25C0} {}", step_text(prev.get()))}
+                "\u{25C0}"
+                <span class="console-bar__step-label">{move || format!(" {}", step_text(prev.get()))}</span>
             </button>
             <button
                 type="button"
@@ -148,7 +149,8 @@ pub(super) fn ConsoleActions(console: Console) -> impl IntoView {
                 on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                 on:click=move |_| apply_move(c, Step::Next)
             >
-                {move || format!("{} \u{25B6}", step_text(next.get()))}
+                <span class="console-bar__step-label">{move || format!("{} ", step_text(next.get()))}</span>
+                "\u{25B6}"
             </button>
         </div>
     }

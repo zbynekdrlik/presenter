@@ -1,9 +1,9 @@
 //! The verse console (#850 B2a, spec §7): one field that understands any way
 //! of writing a reference (the core resolver runs on every keystroke, in the
 //! browser), a preview that loads while typing, and ZOBRAZIŤ — the only
-//! control that sends to the wall. Phone and desktop share it; on a phone it
-//! replaces the old Live-tab inputs, on a desktop it sits above them until
-//! B2c removes them.
+//! control that sends to the wall. Phone and desktop share it: it is the
+//! whole Live tab (the old book / chapter / verse inputs and the header
+//! verse search went in B2c), and the only full-text verse search.
 
 mod actions;
 mod field;
@@ -251,6 +251,7 @@ pub fn BibleConsole() -> impl IntoView {
             data-preview-reference=move || {
                 c.preview.with(|p| p.slide().map(|s| s.bible_main_reference.clone()))
             }
+            data-books-translation=move || bs.books_translation.get().unwrap_or_default()
         >
             <OnAirStrip />
             <TranslationBar />
@@ -268,24 +269,24 @@ pub fn BibleConsole() -> impl IntoView {
 /// cancels the timer and an answer for an older key is dropped (a slow church
 /// Wi-Fi must never put a stale verse in front of the operator). The slides go
 /// to the grid too, which only ever holds the current target: it empties when
-/// the target changes, or a card tap would send the older verse. A load from
-/// the old inputs takes the grid back and clears the field.
+/// the target changes, or a card tap would send the older verse.
 fn setup_auto_preview(c: Console, bs: &BibleState) {
     let secondary = bs.secondary_translation;
     let limit = bs.character_limit;
     let grid = bs.slides;
     let grid_selection = bs.selected_slide_ids;
-    let console_takes = bs.console_takes;
-    let classic_loads = bs.classic_loads;
     let ctx = use_ctx!(AppContext);
     let pending: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
-    let owns_grid = bs.console_owns_grid;
     let clear_grid = move || {
-        grid.set(Vec::new());
-        grid_selection.set(Default::default());
+        if grid.with_untracked(|slides| !slides.is_empty()) {
+            grid.set(Vec::new());
+        }
+        if grid_selection.with_untracked(|ids| !ids.is_empty()) {
+            grid_selection.set(Default::default());
+        }
     };
 
-    setup_resets(c, classic_loads, owns_grid);
+    setup_resets(c);
 
     Effect::new(move |_| {
         let key = c.target_key.get();
@@ -294,10 +295,7 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             pending.borrow_mut().take();
             c.preview.set(Preview::Empty);
             c.show_error.set(None);
-            if owns_grid.get_untracked() {
-                owns_grid.set(false);
-                clear_grid();
-            }
+            clear_grid();
             return;
         };
         let current = c.preview.with_untracked(|p| {
@@ -310,8 +308,6 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
             // Stored slides: no request, the preview IS what the wall gets.
             pending.borrow_mut().take();
             c.show_error.set(None);
-            owns_grid.set(true);
-            console_takes.update(|n| *n += 1);
             clear_grid();
             c.preview.set(Preview::Ready {
                 key,
@@ -333,8 +329,6 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
         request.query = Some(c.input.get_untracked()).filter(|text| !text.trim().is_empty());
         request.device = Some(device(c));
         c.preview.set(Preview::Loading { key: key.clone() });
-        owns_grid.set(true);
-        console_takes.update(|n| *n += 1);
         clear_grid();
         let ctx = ctx.clone();
         c.show_error.set(None);
@@ -346,6 +340,12 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
                 }
                 c.preview.set(match answer {
                     Ok(resp) if !resp.slides.is_empty() => {
+                        // #826: loaded without the secondary text (its remote
+                        // source is down): always say so, also on a desktop,
+                        // which draws no preview card.
+                        if let Some(warning) = resp.warning.as_deref() {
+                            ctx.show_toast(warning, "error");
+                        }
                         grid.set(resp.slides.clone());
                         grid_selection.set(Default::default());
                         Preview::Ready {
@@ -364,22 +364,8 @@ fn setup_auto_preview(c: Console, bs: &BibleState) {
     });
 }
 
-/// What a load from the old inputs, an edited field or a new translation
-/// takes back from the console.
-fn setup_resets(c: Console, classic_loads: RwSignal<u32>, owns_grid: RwSignal<bool>) {
-    Effect::new(move |previous: Option<u32>| {
-        let loads = classic_loads.get();
-        if previous.is_some_and(|before| before != loads) {
-            owns_grid.set(false);
-            c.after_show.set(false);
-            c.at_end.set(false);
-            c.picked.set(None);
-            c.prepared.set(None);
-            c.input.set(String::new());
-        }
-        loads
-    });
-
+/// What an edited field or a new translation takes back from the console.
+fn setup_resets(c: Console) {
     // What was tapped or asked for belongs to the input it was done in, also
     // when the same text is typed again later. A show pins the next part for
     // the field it just emptied, that one stays. A translation switch keeps

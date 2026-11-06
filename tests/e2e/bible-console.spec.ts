@@ -63,7 +63,7 @@ async function openConsole(browser: Browser, profile: BrowserContextOptions): Pr
   attachConsoleErrorCollector(page, errors);
   await page.goto("/ui/operator/bible");
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
     "data-books-translation",
     "slk-seb",
   );
@@ -114,7 +114,6 @@ test("phone: 'zid 11 1' → one tap on Zobraziť puts Hebrejom 11:1 on the wall 
     await expect(preview).toHaveAttribute("data-reference", "Hebrejom 11:1 (SEB)");
     await expect(page.locator('[data-role="console-preview-main"]')).toContainText("Viera");
     // On a phone the console IS the Live tab: no old inputs, no slide grid.
-    await expect(page.locator('[data-role="book-filter"]')).toBeHidden();
     await expect(page.locator('[data-role="slide-card"]').first()).toBeHidden();
     await expect(page.locator('[data-role="console-on-air"]')).toHaveAttribute("data-live", "false");
 
@@ -159,7 +158,7 @@ test("switching the main translation re-resolves at once: Hebrejom in SEB, Žido
     await page
       .locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]')
       .tap();
-    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+    await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
       "data-books-translation",
       "slk-roh",
     );
@@ -302,17 +301,157 @@ test("phone fit: the field is 16 px with autocorrect off, controls are 44 px, no
   }
 });
 
-test("desktop: the console sits above the old inputs and feeds the slide grid", async ({
+for (const viewport of [
+  { width: 1280, height: 720 },
+  { width: 1920, height: 1080 },
+]) {
+  test(`desktop ${viewport.width}×${viewport.height}: the console is the whole Live tab (mockup v3) and shows on the wall`, async ({
+    browser,
+  }) => {
+    const { context, page, errors } = await openConsole(browser, { viewport });
+    try {
+      await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
+      // #850 B2c: no old inputs, no selects, no header verse search.
+      for (const role of [
+        "book-filter",
+        "book-list",
+        "chapter-input",
+        "verse-start",
+        "verse-end",
+        "load-button",
+        "main-translation",
+        "secondary-translation",
+        "global-search-query",
+      ]) {
+        await expect(page.locator(`[data-role="${role}"]`), role).toHaveCount(0);
+      }
+      // The field has the focus on arrival (spec section 7.1 item 2).
+      const field = page.locator('[data-role="console-field"]');
+      await expect(field).toBeFocused();
+
+      // Mockup v3 section 3: sub-tabs, field, Hlavný / Druhý preklad rows, ◀ Zobraziť ▶.
+      const box = async (selector: string) => {
+        const found = await page.locator(selector).first().boundingBox();
+        if (!found) throw new Error(`${selector} has no box`);
+        return found;
+      };
+      const tabs = await box('[data-role="bible-tab"][data-tab="live"]');
+      const fieldBox = await box('[data-role="console-field"]');
+      const mainRow = await box('[data-role="console-translation"][data-kind="main"]');
+      const secondRow = await box('[data-role="console-translation"][data-kind="secondary"]');
+      const show = await box('[data-role="console-show"]');
+      const prev = await box('[data-role="console-prev"]');
+      const next = await box('[data-role="console-next"]');
+      expect(Math.round(tabs.height)).toBe(34);
+      expect(Math.round(fieldBox.height)).toBe(52);
+      expect(Math.round(mainRow.height)).toBe(36);
+      expect(Math.round(secondRow.height)).toBe(36);
+      expect(Math.round(show.height)).toBe(48);
+      expect(Math.round(prev.width)).toBe(48);
+      expect(Math.round(next.width)).toBe(48);
+      expect(tabs.y).toBeLessThan(fieldBox.y);
+      expect(fieldBox.y).toBeLessThan(mainRow.y);
+      expect(mainRow.y).toBeLessThan(secondRow.y);
+      expect(secondRow.y).toBeLessThan(show.y);
+      expect(prev.x).toBeLessThan(show.x);
+      expect(show.x).toBeLessThan(next.x);
+      await expect(field).toHaveCSS("font-size", "18px");
+      await expect(field).toHaveCSS("border-top-width", "2px");
+      await expect(field).toHaveCSS("border-top-color", "rgb(59, 130, 246)");
+      const labels = page.locator(".console-translations__label");
+      await expect(labels).toHaveText(["Hlavný preklad", "Druhý preklad"]);
+      // "žiadny" leads the second row; the main translation is filled blue.
+      const secondRowTexts = await page
+        .locator('[data-role="console-translation"][data-kind="secondary"]')
+        .evaluateAll((els) =>
+          els
+            .map((el) => ({ text: el.textContent?.trim(), x: el.getBoundingClientRect().x }))
+            .sort((a, b) => a.x - b.x)
+            .map((el) => el.text),
+        );
+      expect(secondRowTexts[0]).toBe("žiadny");
+      await expect(
+        page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]'),
+      ).toHaveCSS("background-color", "rgb(59, 130, 246)");
+
+      // Look the verse up and send it: the grid holds it, the wall gets it.
+      const shows = collectPosts(page, "/bible/trigger-slide");
+      await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+      await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
+        "Hebrejom 11:1 (SEB)",
+      );
+      await showButton(page).click();
+      await expect.poll(() => shows.length).toBe(1);
+      expect(shows[0]).toMatchObject({ mainReference: "Hebrejom 11:1 (SEB)", source: "console" });
+      await expect(page.locator('[data-role="console-on-air"]')).toContainText("Hebrejom 11:1");
+      await expect
+        .poll(async () => {
+          const res = await page.request.get(new URL("/bible/active-slide", baseURL).toString());
+          const body = (await res.json()) as { mainReference?: string } | null;
+          return body?.mainReference ?? null;
+        })
+        .toBe("Hebrejom 11:1 (SEB)");
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+test("desktop: on Biblia ←/→ step the preview and never the song; Space and / reach the field; Piesne keeps its arrows (#850 B2d)", async ({
   browser,
 }) => {
-  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 720 } });
   try {
-    await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
-    await expect(page.locator('[data-role="book-filter"]')).toBeVisible();
+    const stagePosts = collectPosts(page, "/stage/state");
+    const shows = collectPosts(page, "/bible/trigger-slide");
+    const blur = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+    // A song slide on the wall first, from Piesne.
+    await page.locator('.operator__header [data-role="view-toggle"][data-view="worship"]').click();
+    const worship = page.locator('[data-view-panel="worship"]');
+    await worship.locator('[data-role="library-item"]').first().click();
+    await worship.locator('[data-role="presentation-item"]').first().click();
+    const songSlides = worship.locator("[data-slide-id]");
+    await expect(songSlides.nth(1)).toBeVisible();
+    await songSlides.first().click();
+    await expect(songSlides.first()).toHaveClass(/is-active/);
+    await expect.poll(() => stagePosts.length).toBe(1);
+
+    // Biblia: a verse in the preview, focus out of the field.
+    await page.locator('.operator__header [data-role="view-toggle"][data-view="bible"]').click();
+    const field = page.locator('[data-role="console-field"]');
+    await expect(field).toBeFocused();
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
-      "Hebrejom 11:1 (SEB)",
-    );
+    await blur();
+    await page.keyboard.press("ArrowRight");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:2 (SEB)");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
+    await page.keyboard.press("ArrowLeft");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Hebrejom 11:1 (SEB)");
+    await expect(consoleRoot(page)).toHaveAttribute("data-preview-ready", "true");
+    // Nothing went to the wall: no song slide, no verse.
+    expect(stagePosts.length).toBe(1);
+    expect(shows.length).toBe(0);
+    await expect(songSlides.first()).toHaveClass(/is-active/);
+
+    // Space and / bring the focus back to the field and type nothing.
+    await blur();
+    await page.keyboard.press("Space");
+    await expect(field).toBeFocused();
+    await expect(field).toHaveValue("zid 11 1");
+    await blur();
+    await page.keyboard.press("/");
+    await expect(field).toBeFocused();
+    await expect(field).toHaveValue("zid 11 1");
+
+    // Piesne: the arrows still move the song.
+    await page.locator('.operator__header [data-role="view-toggle"][data-view="worship"]').click();
+    await blur();
+    await page.keyboard.press("ArrowRight");
+    await expect(songSlides.nth(1)).toHaveClass(/is-active/);
+    await expect.poll(() => stagePosts.length).toBe(2);
+    expect(shows.length).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -345,68 +484,6 @@ test("desktop: the grid never keeps an older verse a card tap could send", async
     await expect(cards).toHaveCount(0);
     release();
     await expect(cards.first()).toContainText("Rimanom 8:28 (SEB)");
-    expect(errors).toEqual([]);
-  } finally {
-    await context.close();
-  }
-});
-
-test("desktop: a load from the old inputs takes the grid, the console lets go", async ({ browser }) => {
-  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
-  try {
-    const cards = page.locator('[data-role="slide-card"]');
-    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-
-    await page.locator('[data-role="book-filter"]').fill("Rimanom");
-    await page.locator('[data-role="book-item"]').first().click();
-    await page.locator('[data-role="load-button"]').click();
-    await expect(cards.first()).toContainText("Rimanom 1:1-32 (SEB)");
-    await expect(page.locator('[data-role="console-field"]')).toHaveValue("");
-
-    // A later translation or limit change has no console target to reload.
-    await page.locator('[data-role="secondary-translation"]').selectOption({ index: 2 });
-    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
-    await expect(cards.first()).toContainText("Rimanom 1:1");
-    expect(errors).toEqual([]);
-  } finally {
-    await context.close();
-  }
-});
-
-test("desktop: an old-inputs answer that lands after the console took over is dropped", async ({
-  browser,
-}) => {
-  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
-  try {
-    let release: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let heldCount = 0;
-    await page.route("**/bible/resolve", async (route) => {
-      const body = route.request().postDataJSON() as { bookCode?: string };
-      if (body.bookCode === "ROM") {
-        heldCount += 1;
-        await held;
-      }
-      await route.continue();
-    });
-    await page.locator('[data-role="book-filter"]').fill("Rimanom");
-    await page.locator('[data-role="book-item"]').first().click();
-    await page.locator('[data-role="load-button"]').click();
-    await expect.poll(() => heldCount).toBe(1);
-
-    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    const late = page.waitForResponse(
-      (res) =>
-        new URL(res.url()).pathname === "/bible/resolve" &&
-        (res.request().postDataJSON() as { bookCode?: string }).bookCode === "ROM",
-    );
-    release();
-    await (await late).finished();
-    await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
-      "Hebrejom 11:1 (SEB)",
-    );
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -656,27 +733,21 @@ test("desktop: Enter on an empty field leaves the typing after it alone", async 
   }
 });
 
-test("desktop: a translation switch keeps the console's verse over a book in the old inputs", async ({
+test("desktop: a translation switch re-resolves the console's verse in the grid", async ({
   browser,
 }) => {
   const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
   try {
-    await page.locator('[data-role="book-filter"]').fill("Rimanom");
-    await page.locator('[data-role="book-item"]').first().click();
-    await page.locator('[data-role="load-button"]').click();
-    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
-
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    await page.locator('[data-role="main-translation"]').selectOption("slk-roh");
-    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+    await page
+      .locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]')
+      .click();
+    await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
       "data-books-translation",
       "slk-roh",
     );
     await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:1 (ROH)");
-    // Longer than the old inputs' 300 ms auto-load, which must not fire.
-    await page.waitForTimeout(600);
     await expect(page.locator('[data-role="console-field"]')).toHaveValue("zid 11 1");
-    await expect(consoleRoot(page)).toHaveAttribute("data-preview-reference", "Židom 11:1 (ROH)");
     await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Židom 11:1");
     expect(errors).toEqual([]);
   } finally {
@@ -1176,24 +1247,6 @@ test("desktop: Enter, Enter, Space walks verse by verse, the focus stays on the 
   }
 });
 
-test("desktop: a load from the old inputs after a show lets the next verse go", async ({ browser }) => {
-  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
-  try {
-    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    await showButton(page).click();
-    await expect(showButton(page)).toHaveText("Ďalší: 11:2");
-    await page.locator('[data-role="book-filter"]').fill("Rimanom");
-    await page.locator('[data-role="book-item"]').first().click();
-    await page.locator('[data-role="load-button"]').click();
-    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
-    await expect(consoleRoot(page)).toHaveAttribute("data-preview-state", "empty");
-    await expect(showButton(page)).toHaveText("Zobraziť");
-    expect(errors).toEqual([]);
-  } finally {
-    await context.close();
-  }
-});
-
 test("▶ during a slow show moves nothing: the next part is never skipped", async ({ browser }) => {
   const { context, page, errors } = await openConsole(browser, PHONE_390);
   try {
@@ -1332,25 +1385,6 @@ test("a verse typed after the end of a book shows as usual", async ({ browser })
   }
 });
 
-test("desktop: a load from the old inputs after the end of a book frees the button", async ({ browser }) => {
-  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 800 } });
-  try {
-    await lookUp(page, "zid 13 25", "Hebrejom 13:25 (SEB)");
-    await showButton(page).click();
-    await expect(showButton(page)).toHaveText("Koniec knihy");
-    await page.locator('[data-role="book-filter"]').fill("Rimanom");
-    await page.locator('[data-role="book-item"]').first().click();
-    await page.locator('[data-role="load-button"]').click();
-    await expect(page.locator('[data-role="slide-card"]').first()).toContainText("Rimanom 1:1-32 (SEB)");
-    await expect(showButton(page)).toHaveText("Zobraziť");
-    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
-    await expect(showButton(page)).toHaveAttribute("aria-disabled", "false");
-    expect(errors).toEqual([]);
-  } finally {
-    await context.close();
-  }
-});
-
 test("the translation bar: one tap switches the main and the line below, and is remembered", async ({
   browser,
   request,
@@ -1364,7 +1398,6 @@ test("the translation bar: one tap switches the main and the line below, and is 
     await page.locator('[data-role="console-translation-more"]').tap();
     await expect(mainChips.last()).toHaveText("MIL");
     await assertMinTapTarget(page.locator('[data-role="console-translation"]'), 44);
-    await expect(page.locator('[data-role="main-translation"]')).toBeHidden();
 
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').tap();
@@ -1496,7 +1529,7 @@ test("a cold console reads preferences and books in one answer, a switch reads i
     if (url.pathname === "/bible/books") books.push(url.searchParams.get("translation") ?? "");
     if (url.pathname === "/bible/console-start") starts.push(url.searchParams.get("translation") ?? "");
   });
-  const list = page.locator('[data-role="book-list"]');
+  const list = page.locator('[data-role="bible-console"]');
   try {
     await page.goto("/ui/operator/bible");
     await expect(list).toHaveAttribute("data-books-translation", "slk-seb");
@@ -1543,7 +1576,7 @@ test("a browser with its own main translation gets those books in the one answer
   });
   try {
     await page.goto("/ui/operator/bible");
-    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute("data-books-translation", "slk-roh");
+    await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute("data-books-translation", "slk-roh");
     expect(starts).toEqual(["slk-roh"]);
     expect(books).toEqual([]);
     expect(errors).toEqual([]);
@@ -1573,7 +1606,7 @@ test("an answer without books falls back to reading them", async ({ browser }) =
   );
   try {
     await page.goto("/ui/operator/bible");
-    await expect(page.locator('[data-role="book-list"]')).toHaveAttribute("data-books-translation", "slk-seb");
+    await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute("data-books-translation", "slk-seb");
     expect(books).toEqual(["slk-seb"]);
     expect(errors).toEqual([]);
   } finally {

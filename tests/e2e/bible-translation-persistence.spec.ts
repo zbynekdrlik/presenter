@@ -38,6 +38,20 @@ test.afterAll(async () => {
   server = undefined;
 });
 
+/** A button of the verse console's translation bar (#850 B2c replaced the selects). */
+function button(page: Page, kind: "main" | "secondary", code: string) {
+  return page.locator(
+    `[data-role="console-translation"][data-kind="${kind}"][data-translation="${code}"]`,
+  );
+}
+
+/** The code of the pressed button of a row ("" = žiadny). */
+function pressed(page: Page, kind: "main" | "secondary") {
+  return page
+    .locator(`[data-role="console-translation"][data-kind="${kind}"][aria-pressed="true"]`)
+    .getAttribute("data-translation");
+}
+
 /** Open a fresh page on the bible tab with translations loaded. */
 async function openBible(page: Page): Promise<void> {
   await page.goto(new URL("/ui/operator/bible", baseURL).toString(), {
@@ -47,10 +61,19 @@ async function openBible(page: Page): Promise<void> {
     timeout: 30_000,
   });
   // Main translation auto-selects once the list loads.
-  await expect(page.locator('[data-role="main-translation"]')).toHaveValue(
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+    "data-books-translation",
     /.+/,
     { timeout: 15_000 },
   );
+}
+
+/** Wait until this browser remembers `code` for a row (#701 localStorage). */
+async function remembered(page: Page, kind: "main" | "secondary", code: string) {
+  const key = kind === "main" ? "presenter:bibleMainTranslation" : "presenter:bibleSecondaryTranslation";
+  await expect
+    .poll(() => page.evaluate((k) => localStorage.getItem(k), key))
+    .toBe(JSON.stringify(code));
 }
 
 async function openBibleContext(
@@ -74,43 +97,29 @@ test("primary + secondary translation selection persists across refresh", async 
 
   await openBible(page);
 
-  const main = page.locator('[data-role="main-translation"]');
-  const secondary = page.locator('[data-role="secondary-translation"]');
+  // A main that is NOT on now, so the assertion fails if persistence is
+  // broken, plus a concrete non-empty secondary.
+  const before = await pressed(page, "main");
+  const chosenMain = before === "slk-roh" ? "slk-sevp" : "slk-roh";
+  await button(page, "main", chosenMain).click();
+  await remembered(page, "main", chosenMain);
+  await button(page, "secondary", "eng-kjv").click();
+  await remembered(page, "secondary", "eng-kjv");
+  await expect(button(page, "main", chosenMain)).toHaveAttribute("aria-pressed", "true");
+  await expect(button(page, "secondary", "eng-kjv")).toHaveAttribute("aria-pressed", "true");
 
-  // Need a non-default main (>=2 translations) and >=2 secondary options besides
-  // "None" for a meaningful test.
-  if (
-    (await main.locator("option").count()) < 2 ||
-    (await secondary.locator("option").count()) < 3
-  ) {
-    test.skip(true, "Need >=2 bible translations for the persistence test");
-    return;
-  }
-
-  // Pick a NON-default main (index 1 — the default is index 0) so the assertion
-  // actually fails if persistence is broken, plus a concrete non-empty secondary.
-  await main.selectOption({ index: 1 });
-  await secondary.selectOption({ index: 2 }); // index 0 == "None"
-  const chosenMain = await main.inputValue();
-  const chosenSecondary = await secondary.inputValue();
-  expect(chosenSecondary).not.toBe("");
-
-  // Let the persistence write settle, then reload.
-  await expect(main).toHaveValue(chosenMain);
-  await expect(secondary).toHaveValue(chosenSecondary);
-  await page.waitForTimeout(500);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
 
-  await expect(page.locator('[data-role="main-translation"]')).toHaveValue(
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+    "data-books-translation",
     chosenMain,
     { timeout: 15_000 },
   );
-  await expect(page.locator('[data-role="secondary-translation"]')).toHaveValue(
-    chosenSecondary,
-  );
+  await expect(button(page, "main", chosenMain)).toHaveAttribute("aria-pressed", "true");
+  await expect(button(page, "secondary", "eng-kjv")).toHaveAttribute("aria-pressed", "true");
 
   expect(consoleMessages).toEqual([]);
 });
@@ -121,31 +130,18 @@ test("explicitly-empty secondary persists and browsers keep independent selectio
   const a = await openBibleContext(browser);
   const b = await openBibleContext(browser);
   try {
-    const aMain = a.page.locator('[data-role="main-translation"]');
-    const aSecondary = a.page.locator('[data-role="secondary-translation"]');
-    const bSecondary = b.page.locator('[data-role="secondary-translation"]');
+    // Browser A: SEB with a concrete, non-empty secondary.
+    await button(a.page, "main", "slk-seb").click();
+    await remembered(a.page, "main", "slk-seb");
+    await button(a.page, "secondary", "eng-kjv").click();
+    await remembered(a.page, "secondary", "eng-kjv");
+    await expect(button(a.page, "secondary", "eng-kjv")).toHaveAttribute("aria-pressed", "true");
 
-    // Need >=2 secondary options besides "None" for a concrete non-empty pick.
-    if ((await aSecondary.locator("option").count()) < 3) {
-      test.skip(true, "Need >=2 secondary bible translations for this test");
-      return;
-    }
+    // Browser B: explicitly CLEAR the secondary ("žiadny").
+    await button(b.page, "secondary", "").click();
+    await remembered(b.page, "secondary", "");
+    await expect(button(b.page, "secondary", "")).toHaveAttribute("aria-pressed", "true");
 
-    // Browser A: choose a concrete, non-empty secondary.
-    await aMain.selectOption({ index: 0 });
-    await aSecondary.selectOption({ index: 2 });
-    const aChosenMain = await aMain.inputValue();
-    const aChosenSecondary = await aSecondary.inputValue();
-    expect(aChosenSecondary).not.toBe("");
-    await expect(aSecondary).toHaveValue(aChosenSecondary);
-
-    // Browser B: explicitly CLEAR the secondary (select "None").
-    await bSecondary.selectOption({ index: 0 });
-    await expect(bSecondary).toHaveValue("");
-
-    // Let both persistence writes settle, then reload both.
-    await a.page.waitForTimeout(500);
-    await b.page.waitForTimeout(500);
     await a.page.reload({ waitUntil: "domcontentloaded" });
     await b.page.reload({ waitUntil: "domcontentloaded" });
     await a.page.waitForSelector('body[data-wasm-ready="true"]', {
@@ -156,17 +152,18 @@ test("explicitly-empty secondary persists and browsers keep independent selectio
     });
 
     // Browser A keeps ITS chosen secondary (not clobbered by B's clear).
-    await expect(
-      a.page.locator('[data-role="main-translation"]'),
-    ).toHaveValue(aChosenMain, { timeout: 15_000 });
-    await expect(
-      a.page.locator('[data-role="secondary-translation"]'),
-    ).toHaveValue(aChosenSecondary);
+    await expect(a.page.locator('[data-role="bible-console"]')).toHaveAttribute(
+      "data-books-translation",
+      "slk-seb",
+      { timeout: 15_000 },
+    );
+    await expect(button(a.page, "main", "slk-seb")).toHaveAttribute("aria-pressed", "true");
+    await expect(button(a.page, "secondary", "eng-kjv")).toHaveAttribute("aria-pressed", "true");
 
     // Browser B stays explicitly empty (explicitly-cleared, not re-defaulted).
-    await expect(
-      b.page.locator('[data-role="secondary-translation"]'),
-    ).toHaveValue("", { timeout: 15_000 });
+    await expect(button(b.page, "secondary", "")).toHaveAttribute("aria-pressed", "true", {
+      timeout: 15_000,
+    });
   } finally {
     await a.close();
     await b.close();
