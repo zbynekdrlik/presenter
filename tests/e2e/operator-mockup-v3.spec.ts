@@ -446,7 +446,7 @@ test("the phone's prepared Bible card names itself, with no desktop caption", as
   await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
   await page.locator('[data-role="bible-tab"][data-tab="prepared"]').tap();
   await page.locator(`[data-role="presentation-card"][data-presentation-id="${id}"]`).tap();
-  await page.locator('[data-role=""]').tap();
+  await page.locator('[data-role="add-empty-slide"]').tap();
   const card = page.locator('[data-view-panel="bible"] [data-role="slide-card"]').first();
   await expect(card).toBeVisible();
   await expect(card.locator(".operator__slide-trigger-ref")).toHaveText("Zobraziť");
