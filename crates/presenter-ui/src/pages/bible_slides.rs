@@ -440,12 +440,18 @@ fn make_trigger_handler(
     }
 }
 
-/// The trigger zone's content (#875 v3): the mockup's caption "1 · Ján 3:16",
-/// plus "NA STENE" while the card is on the wall. The grid never shows on a
-/// phone (the console is its Bible tab).
-fn trigger_zone_content(caption: String) -> impl IntoView {
+/// The trigger zone's content. The phone shows "▶ Ján 3:16-18 (SEB)" as
+/// before; the desktop (#875 v3) shows the mockup's caption instead,
+/// "1 · Ján 3:16", plus "NA STENE" while the card is on the wall (CSS picks).
+fn trigger_zone_content(main_ref: String, caption: String) -> impl IntoView {
+    let shown_ref = if main_ref.is_empty() {
+        "Zobraziť".to_string()
+    } else {
+        main_ref
+    };
     view! {
         <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
+        <span class="operator__slide-trigger-ref">{shown_ref}</span>
         <span class="operator__slide-caption" data-role="slide-caption">{caption}</span>
         <span class="operator__slide-live-tag" data-role="slide-live-tag">"NA STENE"</span>
     }
@@ -536,7 +542,7 @@ fn LiveSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 on:click=on_trigger.clone()
                 title="Kliknutím zobrazíš snímku na stene"
             >
-                {trigger_zone_content(caption)}
+                {trigger_zone_content(main_ref.clone(), caption)}
             </div>
             <div
                 class="operator__slide-select-zone"
@@ -809,6 +815,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             // Trigger zone (live mode only)
             {
                 let on_trigger = on_trigger.clone();
+                let main_ref_trigger = main_ref.clone();
                 let caption = caption.clone();
                 move || {
                     if mode.get() != "edit" {
@@ -819,7 +826,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                                 on:click=on_trigger.clone()
                                 title="Kliknutím zobrazíš snímku na stene"
                             >
-                                {trigger_zone_content(caption.clone())}
+                                {trigger_zone_content(main_ref_trigger.clone(), caption.clone())}
                             </div>
                         })
                     } else {

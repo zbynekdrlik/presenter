@@ -62,7 +62,8 @@ tab read: no selected book / chapter / verse, no `classic_loads` / `console_take
   Biblia block there: the select zone (text top left, #828 counts floated top right) over the
   trigger zone drawn as the caption `[data-role=slide-caption]` "1 · Ján 3:16"
   (`slide_caption`, verses from the metadata) + `slide-live-tag` "NA STENE". The phone keeps
-  "▶ Ján 3:16-18 (SEB)" (`.operator__slide-trigger-ref`; the caption and tag are hidden there).
+  "▶ Ján 3:16-18 (SEB)" (`.operator__slide-trigger-ref`; the caption and tag are hidden there). The grid shows on a phone on the
+  Pripravené tab only: `BibleSlidesColumn` is always mounted, CSS hides it on the Live tab.
   On the wall = `is_on_wall` (same main text + reference as `AppContext::active_bible_slide`) →
   class `is-on-wall` + `data-on-wall`, never `is-active` (operator.css paints that blue on the
   phone). The Live grid hides the reference footer on a desktop; a prepared card keeps it.

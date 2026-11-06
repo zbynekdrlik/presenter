@@ -23,6 +23,7 @@
 
 /* Bits that exist only for one shell. */
 .operator__slide-live-tag,
+.operator__slide-caption,
 .operator__slide-columns-label,
 .operator__group-more-icon {
   display: none;
@@ -756,7 +757,7 @@ body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card-
 }
 
 body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag::before,
-body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag::before {
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag::before {
   content: "· ";
   font-weight: 400;
   color: var(--frame-muted);
@@ -909,7 +910,12 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__
   color: var(--frame-blue);
 }
 
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-trigger-ref {
+  display: none;
+}
+
 body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-caption {
+  display: inline;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

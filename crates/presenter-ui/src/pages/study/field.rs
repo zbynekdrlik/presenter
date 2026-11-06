@@ -47,6 +47,8 @@ enum FieldPlace {
 
 impl Field {
     fn leave(self) {
+        // What opens next says what the field holds.
+        self.left_behind.set_value(false);
         if let Some(element) = self.element.get_untracked() {
             let _ = element.blur();
         }
@@ -107,6 +109,7 @@ impl Field {
     }
 
     pub(super) fn complete(self, text: &str) {
+        self.left_behind.set_value(false);
         self.input.set(text.to_string());
         if let Some(element) = self.element.get_untracked() {
             let _ = element.focus();
@@ -152,6 +155,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
             FieldPlace::Search(query) => {
                 f.input.set(query.clone());
                 f.opened.set_value(None);
+                f.left_behind.set_value(false);
                 return now;
             }
             FieldPlace::Reader(book, chapter) => f.opened.with_value(|opened| {
@@ -417,9 +421,10 @@ fn NumberChip(f: Field, offer: StrongsOffer) -> impl IntoView {
     }
 }
 
-fn tap(f: Field, target: &RowTarget, label: &str) {
+/// The target's own label names the whole reference; a chip shows only its book.
+fn tap(f: Field, target: &RowTarget) {
     match target {
-        RowTarget::Preview(preview) => f.open(preview_target(preview), label),
+        RowTarget::Preview(preview) => f.open(preview_target(preview), &preview.label),
         RowTarget::Complete(text) => f.complete(text),
     }
 }
@@ -427,14 +432,13 @@ fn tap(f: Field, target: &RowTarget, label: &str) {
 #[component]
 fn Row(f: Field, row: ConsoleRow) -> impl IntoView {
     let target = row.target.clone();
-    let label = row.label.clone();
     view! {
         <button
             type="button"
             class="study-row"
             data-role="study-row"
             data-kind=row.kind
-            on:click=move |_| tap(f, &target, &label)
+            on:click=move |_| tap(f, &target)
         >
             <span class="study-row__label">{row.label.clone()}</span>
             {(!row.detail.is_empty())
@@ -446,14 +450,13 @@ fn Row(f: Field, row: ConsoleRow) -> impl IntoView {
 #[component]
 fn Chip(f: Field, row: ConsoleRow) -> impl IntoView {
     let target = row.target.clone();
-    let label = row.label.clone();
     view! {
         <button
             type="button"
             class="study-chip"
             data-role="study-chip"
             data-kind=row.kind
-            on:click=move |_| tap(f, &target, &label)
+            on:click=move |_| tap(f, &target)
         >
             {row.label.clone()}
         </button>

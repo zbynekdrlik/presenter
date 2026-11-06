@@ -104,6 +104,12 @@ impl StudyHistory {
         }
     }
 
+    /// The URL of the entry behind the current one.
+    pub fn previous_url(&self) -> Option<&str> {
+        let behind = self.offset().checked_sub(1)?;
+        self.entries.get(behind).map(|entry| entry.url.as_str())
+    }
+
     /// Whether the current entry is a row of the long-press list.
     pub fn current_listed(&self) -> bool {
         self.entries
@@ -337,6 +343,14 @@ mod tests {
         history.relabel("Hebrejom 11 · SEB".to_string());
         history.push(place("c"));
         assert_eq!(history.back_list().len(), 1);
+    }
+
+    #[test]
+    fn previous_url_is_the_entry_behind() {
+        let mut history = walked(&["a"]);
+        assert_eq!(history.previous_url(), None);
+        history.push(place("b"));
+        assert_eq!(history.previous_url(), Some("/ui/study?p=a"));
     }
 
     #[test]

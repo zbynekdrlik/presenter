@@ -108,6 +108,16 @@ fn replace_entry(s: Study, route: StudyRoute, entry: HistoryEntry) {
     s.route.set(route);
 }
 
+/// Whether the entry behind the current one reads this same place.
+fn same_place_behind(s: Study, place: &StudyRoute) -> bool {
+    let behind = s
+        .history
+        .with_untracked(|history| history.previous_url().map(str::to_string));
+    behind
+        .and_then(|url| StudyRoute::parse(url.split_once('?')?.1))
+        .is_some_and(|route| route.with_verses(None) == place.clone().with_verses(None))
+}
+
 /// Go to a new place. The sheet over the place being left closes first, so
 /// Back never lands on it.
 pub(super) fn go(s: Study, route: StudyRoute, plan: ScrollPlan) {
@@ -122,9 +132,10 @@ pub(super) fn go(s: Study, route: StudyRoute, plan: ScrollPlan) {
     scroll::remember_offset(s);
     if current.sheet.is_some() {
         // It stays a step for Back, but it is no second row of the same place.
+        // A list that started on the sheet has no other row for it.
         let closed = current.without_sheet();
         let mut step = entry(s, &closed);
-        step.listed = false;
+        step.listed = !same_place_behind(s, &closed);
         replace_entry(s, closed, step);
     }
     s.scroll_plan.set_value(plan);
