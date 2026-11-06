@@ -469,3 +469,22 @@ test("the home page opens the study page", async ({ browser }) => {
   await settled(page);
   await finish(opened);
 });
+
+test("a switch during a load leaves that load's landing alone", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await scrollToVerse(page, 20);
+  const release = await gateRoute(page, CHAPTER_READ);
+  await page.locator(nextChapter).tap();
+  await expect(chapter(page)).toHaveAttribute("data-state", "loading");
+  await favourite(page, "eng-kjv").tap();
+  await expect(page).toHaveURL(/t=eng-kjv/);
+  release();
+  await expectChapter(page, "eng-kjv:HEB.12");
+  await settled(page);
+  // The next chapter opens at its top, not at the old chapter's verse 20.
+  await expect
+    .poll(() => page.locator('[data-role="study-scroll"]').evaluate((el) => el.scrollTop))
+    .toBe(0);
+  await finish(opened);
+});

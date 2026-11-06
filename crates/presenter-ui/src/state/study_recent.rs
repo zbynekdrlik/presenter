@@ -60,6 +60,12 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_list_with_a_repeat_keeps_the_first() {
+        let parsed = parse(Some(r#"["ján 3","2 kor 5","JÁN  3"]"#));
+        assert_eq!(parsed, list(&["ján 3", "2 kor 5"]));
+    }
+
+    #[test]
     fn the_newest_search_comes_first() {
         let after = remember(&list(&["ján 3"]), "2 kor 5");
         assert_eq!(after, list(&["2 kor 5", "ján 3"]));

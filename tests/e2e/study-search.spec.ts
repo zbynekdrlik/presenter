@@ -22,6 +22,7 @@ import {
   dropDeliberateNlt503,
   expectChapter,
   favourite,
+  chapter,
   field,
   finish,
   gateRoute,
@@ -497,3 +498,47 @@ for (const [name, profile] of [
     await finish(opened);
   });
 }
+
+test("a tapped row or chapter leaves its reference in the field", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("");
+  await page.locator('[data-role="study-book"][data-book-code="RUT"]').tap();
+  await page.locator('[data-role="study-chapter-cell"][data-chapter="2"]').tap();
+  await expectChapter(page, "slk-seb:RUT.2");
+  await expect(field(page)).toHaveValue(/ 2$/);
+  // The slip the owner fixes in place: the last digit, then Enter.
+  await field(page).tap();
+  await field(page).press("End");
+  await field(page).press("Backspace");
+  await field(page).pressSequentially("3");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.3");
+
+  await field(page).tap();
+  await field(page).fill("j 3:16");
+  const row = page.locator('[data-role="study-row"]').first();
+  const label = (await row.locator(".study-row__label").innerText()).trim();
+  await row.tap();
+  await expect(chapter(page)).toHaveAttribute("data-state", "ready");
+  await expect(field(page)).toHaveValue(label);
+  await finish(opened);
+});
+
+test("a reference left behind under the finger goes when the field is left", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await field(page).tap();
+  await field(page).fill("rut 2");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:RUT.2");
+  await field(page).tap();
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  // Not while the field has focus: the reader may be typing.
+  await expect(field(page)).toHaveValue("rut 2");
+  await field(page).blur();
+  await expect(field(page)).toHaveValue("");
+  await finish(opened);
+});

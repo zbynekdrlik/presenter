@@ -773,3 +773,23 @@ test("text selected with a mouse opens no sheet, a plain click still does", asyn
   await expect(sheet(page)).toHaveAttribute("data-strongs", "G5287");
   await finish(opened);
 });
+
+test("a tap on a note is no tap on its verse", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=1CH.1", "slk-seb:1CH.1");
+  const { page } = opened;
+  const note = verse(page, 3).locator('[data-role="study-note"]').first();
+  await note.tap();
+  await expect(role(page, "study-note-text")).toBeVisible();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "false");
+  await note.tap();
+
+  // A highlighted verse keeps its highlight, the open text lets nothing through.
+  await verse(page, 3).locator(".study-verse__text").tap({ position: { x: 2, y: 2 } });
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await note.tap();
+  await expect(role(page, "study-note-text")).toBeVisible();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await role(page, "study-note-text").tap();
+  await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+  await finish(opened);
+});

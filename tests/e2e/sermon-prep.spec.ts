@@ -453,3 +453,15 @@ test("a sermon opened on its own leads back to the verses (owner, 2026-11-06)", 
   await assertNoHorizontalOverflow(page);
   await finish(opened);
 });
+
+test("Biblia opens a chapter in a browser that never read here", async ({ browser }) => {
+  // No last place stored: the start route names no translation of its own.
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?view=sermons", null);
+  const { page } = opened;
+  await expect(role(page, "sermon-list")).toHaveAttribute("data-state", "ready");
+  await role(page, "study-bible").tap();
+  const shown = page.locator('[data-role="study-chapter"]');
+  await expect(shown).toHaveAttribute("data-state", "ready");
+  await expect(shown).toHaveAttribute("data-loaded-for", /^[a-z]+-[a-z]+:[0-9A-Z]+\.\d+$/);
+  await finish(opened);
+});

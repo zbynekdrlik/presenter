@@ -484,3 +484,22 @@ for (const [name, profile] of [
     await finish(opened);
   });
 }
+
+test("a highlight on a closed sheet's step makes it no second row", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await verseNumber(page, 1).tap();
+  await drag(page, -120, 0);
+  await expectChapter(page, "slk-seb:HEB.12");
+  await page.goBack();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await verse(page, 2).locator(".study-verse__text").tap();
+  await expect(verse(page, 2)).toHaveAttribute("data-selected", "true");
+  const listed = await page.evaluate(() => {
+    const stored = sessionStorage.getItem("presenter:study.history") ?? '""';
+    const history = JSON.parse(JSON.parse(stored)) as { entries: { label: string; listed: boolean }[] };
+    return history.entries.filter((entry) => entry.listed).map((entry) => entry.label);
+  });
+  expect(listed).toEqual(["Hebrejom 11 · SEB", "Hebrejom 12 · SEB"]);
+  await finish(opened);
+});
