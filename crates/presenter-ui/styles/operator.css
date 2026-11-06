@@ -255,9 +255,23 @@ body.operator {
 }
 
 .operator__search-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.operator__search-result:hover {
+  background: rgba(59, 124, 255, 0.12);
+}
+
+.operator__search-result-snippet:not(:empty) {
+  flex-basis: 100%;
 }
 
 .operator__search-result button {

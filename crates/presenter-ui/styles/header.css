@@ -335,3 +335,10 @@ body.operator:not([data-shell="phone"]) .operator__settings-button[data-active="
   font-size: 11px;
   color: #94a3b8;
 }
+
+/* The results sit under the 40 px row: from the window's top they covered the
+   field being typed in and its clear button. */
+body.operator:not([data-shell="phone"]) .operator__search-results {
+  top: 44px;
+  max-height: min(420px, calc(100vh - 52px));
+}
