@@ -130,7 +130,7 @@ pub(super) fn handle_search_drop(
 
     let Some(presentation_id) = presentation_id else {
         toast_variant.set("error".to_string());
-        toast_message.set(Some("Pretiahnutiu chýba pieseň".to_string()));
+        toast_message.set(Some("Pretiahnutý prvok neobsahuje pieseň".to_string()));
         return;
     };
 
@@ -181,7 +181,7 @@ pub(super) fn handle_search_drop_at_fixed(
 
     let Some(presentation_id) = presentation_id else {
         toast_variant.set("error".to_string());
-        toast_message.set(Some("Pretiahnutiu chýba pieseň".to_string()));
+        toast_message.set(Some("Pretiahnutý prvok neobsahuje pieseň".to_string()));
         return;
     };
 

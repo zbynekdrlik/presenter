@@ -324,7 +324,7 @@ pub fn AiPage() -> impl IntoView {
                         view! {
                             <div class="ai-chat__empty">
                                 <p>"Vlož sem text od pastora a AI z neho sama pripraví prezentácie."</p>
-                                <p class="ai-chat__empty-hint">"Rozumie odkazom na Bibliu (napr. \u{017D}id 4:13 SEB), nadpisom (Nazov:) aj obyčajnému textu."</p>
+                                <p class="ai-chat__empty-hint">"Rozumie odkazom na Bibliu (napr. \u{017D}id 4:13 SEB), nadpisom (Názov:) aj obyčajnému textu."</p>
                             </div>
                         }.into_any()
                     } else {

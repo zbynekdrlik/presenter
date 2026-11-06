@@ -158,6 +158,7 @@ test.describe("Operator Control Buttons", () => {
     });
     await expect(followButton).toHaveText("Sledovať pódium");
     await expect(followButton).toHaveAttribute("aria-pressed", "true");
+    const onBackground = await followButton.evaluate((el) => getComputedStyle(el).backgroundColor);
 
     // Click to disable
     await followButton.click();
@@ -166,11 +167,11 @@ test.describe("Operator Control Buttons", () => {
     });
     await expect(followButton).toHaveText("Sledovať pódium");
     await expect(followButton).toHaveAttribute("aria-pressed", "false");
-    // The text no longer says ON/OFF: the two states must LOOK different.
-    const offBackground = await followButton.evaluate((el) => getComputedStyle(el).backgroundColor);
-    await expect(abletonButtonOf(page)).toHaveAttribute("data-state", "on");
-    const onBackground = await abletonButtonOf(page).evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(offBackground).not.toBe(onBackground);
+    // The text no longer says ON/OFF: the same button must LOOK different
+    // in its two states.
+    await expect
+      .poll(() => followButton.evaluate((el) => getComputedStyle(el).backgroundColor))
+      .not.toBe(onBackground);
 
     // Verify via API
     const statusResp = await page.request.get(

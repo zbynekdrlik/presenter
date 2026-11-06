@@ -68,10 +68,10 @@ pub(crate) fn chip_tooltip(dto: &ResolumeConnectionStatusDto) -> String {
     match dto.state.as_str() {
         "connected" => lines.push("Pripojené".to_string()),
         "error" => {
-            lines.push(format!(
-                "Nedostupné — {}",
-                error_kind_label(dto.last_error_kind.as_deref())
-            ));
+            lines.push(match dto.last_error_kind.as_deref() {
+                None => "Nedostupné".to_string(),
+                kind => format!("Nedostupné — {}", error_kind_label(kind)),
+            });
             if let Some(secs) = dto.next_retry_in_secs {
                 lines.push(format!("Ďalší pokus o {secs} s"));
             }

@@ -247,7 +247,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
             </label>
             <label class="operator__field">
                 <span>
-                    "Po verš"
+                    "Do verša"
                     {move || verse_max().map(|n| view! {
                         <span class="operator__field-max" data-role="verse-end-max">{format!("/ {n}")}</span>
                     })}
