@@ -157,7 +157,7 @@ body.operator.operator--bible .operator__panel--bible {
   cursor: grab;
   touch-action: none;
   min-width: 2rem;
-  min-height: 2rem;
+  min-height: 40px; /* a real control: the 40 px floor (#875 H3) */
   font-size: 1.1rem;
   line-height: 1;
 }

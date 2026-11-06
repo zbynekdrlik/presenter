@@ -232,9 +232,10 @@ pub fn Header() -> impl IntoView {
                     ></span>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
                 </div>
-                // #850 B2c: no header search on Biblia; the verse console's
-                // field is the reference AND the text search there.
-                <Show when=move || ctx.view.get() != "bible">
+                // #850 B2c: on a phone Biblia has no header search (the verse
+                // console's field searches the text). The desktop keeps the
+                // song search on every section, Biblia too (mockup v3, #875).
+                <Show when=move || !phone.get() || ctx.view.get() != "bible">
                     <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                         on:submit=on_search_submit
                     >

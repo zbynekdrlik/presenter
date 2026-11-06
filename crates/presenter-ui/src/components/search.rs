@@ -105,6 +105,9 @@ pub fn SearchResults() -> impl IntoView {
         op.search_open.set(false);
         op.search_query.set(String::new());
         ctx.search_results.set(Vec::new());
+        // A song picked from the header search on another section (desktop
+        // Biblia, mockup v3) is shown on Piesne.
+        crate::state::view_nav::set_view(ctx.view, "worship");
 
         if let Some(pid) = pres_id {
             // #853: the operator's pick replaces any Follow open still loading;
@@ -153,7 +156,8 @@ pub fn SearchResults() -> impl IntoView {
             data-visible=move || {
                 let open = op_visible.search_open.get();
                 let has_query = !op_visible.search_query.get().is_empty();
-                if open && has_query && ctx.view.get() != "bible" { "true" } else { "false" }
+                let shown_here = !ctx.phone_shell.get() || ctx.view.get() != "bible";
+                if open && has_query && shown_here { "true" } else { "false" }
             }
             class="operator__search-results"
         >

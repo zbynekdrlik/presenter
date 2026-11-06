@@ -426,8 +426,8 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__p
 }
 
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-actions button {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   min-height: 0;
   padding: 0;
   border-radius: 6px;

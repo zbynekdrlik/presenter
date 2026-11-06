@@ -54,9 +54,10 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
   testable.
 - **Rail = landscape AND ≥ 560 px.** `interactive-widget=resizes-content` makes a small portrait
   phone wider than tall while the keyboard is open.
-- **Header search:** not on Biblia since #850 B2c (`<Show>` on the view, phone and desktop);
-  the verse console's field is the reference AND the full-text verse search there. The other
-  sections keep it (songs, libraries).
+- **Header search:** the SONG search (songs, libraries) is in the desktop header row on every
+  section, Biblia too (mockup v3, #875); picking a result shows it on Piesne (`set_view`). Only a
+  phone's Biblia drops it (#850 B2c): there the verse console's field is the reference AND the
+  full-text verse search. The old header VERSE search is gone everywhere.
 - **Local CSS check without a WASM build:** on a deployed build delete every rule containing
   `data-shell` through the CSSOM, then `addStyleTag` the new `phone_shell.css`. Injecting on top
   alone leaves the old `display: none` rules winning.
