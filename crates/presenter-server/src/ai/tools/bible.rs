@@ -2,6 +2,7 @@
 
 use super::{slide_to_json, str_field, u64_field};
 use crate::state::bible::BibleTriggerOverrides;
+use crate::state::bible_show_log::{BibleShowOrigin, BibleShowSource};
 use crate::state::AppState;
 use presenter_core::bible::resolver::resolve_translation_code;
 use presenter_core::bible::BookScope;
@@ -266,7 +267,12 @@ pub(super) async fn trigger_bible_verse(
 
     let overrides = BibleTriggerOverrides::default();
     state
-        .trigger_bible_passage(&translation, &reference, overrides)
+        .trigger_bible_passage(
+            &translation,
+            &reference,
+            overrides,
+            BibleShowOrigin::internal(BibleShowSource::Ai),
+        )
         .await?;
     let preview = format!("Triggered {} {}:{}", book, chapter, verse_start);
     Ok((json!({"ok": true}).to_string(), preview))

@@ -1,15 +1,11 @@
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
-use super::handlers::translation_short_code;
 use super::types::TextTransform;
 use super::{
     BibleUpdate, ResolumeConnectionSnapshot, ResolumeConnectionState, TimerFrame, CONNECT_TIMEOUT,
 };
 use chrono::Utc;
-use presenter_core::{
-    BibleBroadcast, BiblePassage, BibleReference, BibleSlideOutput, BibleTranslation, ResolumeHost,
-    ResolumeHostId,
-};
+use presenter_core::{BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -166,7 +162,7 @@ fn build_driver(server: &MockServer) -> (HostDriver, Arc<RwLock<ResolumeConnecti
 /// Mount the standard 16-clip composition (main/translate/bible/metadata/timer)
 /// plus all of its param and clip endpoints — the fixture shared by the stage
 /// and bible tests.
-async fn mount_full_composition(server: &MockServer) {
+pub(crate) async fn mount_full_composition(server: &MockServer) {
     let composition = serde_json::json!({
         "layers": [
             {
@@ -696,29 +692,6 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
     );
 }
 
-// ── translation_short_code tests ────────────────────────────────────
-
-#[test]
-fn translation_short_code_extracts_after_last_dash() {
-    assert_eq!(translation_short_code("en-kjv"), "KJV");
-    assert_eq!(translation_short_code("cs-cep"), "CEP");
-}
-
-#[test]
-fn translation_short_code_handles_no_dash() {
-    assert_eq!(translation_short_code("kjv"), "KJV");
-}
-
-#[test]
-fn translation_short_code_handles_multiple_dashes() {
-    assert_eq!(translation_short_code("sk-rob-2007"), "2007");
-}
-
-#[test]
-fn translation_short_code_handles_empty_string() {
-    assert_eq!(translation_short_code(""), "");
-}
-
 // ── Helper: create a mock driver with a running wiremock server ─────
 
 pub(super) async fn setup_bible_driver() -> (
@@ -745,13 +718,7 @@ async fn handle_bible_routes_to_slide_output_when_present() {
         secondary_reference: "Jan 3:16 (CEP)".to_string(),
         triggered_at: Utc::now(),
     };
-    let update = BibleUpdate {
-        passage: None,
-        secondary_text: None,
-        secondary_translation_code: None,
-        secondary_book: None,
-        slide_output: Some(output),
-    };
+    let update = BibleUpdate::from_slide_output(Some(output));
 
     driver.handle_bible(update, &status).await.expect("bible");
 
@@ -791,73 +758,10 @@ async fn handle_bible_routes_to_slide_output_when_present() {
 }
 
 #[tokio::test]
-async fn handle_bible_routes_to_legacy_when_no_slide_output() {
-    let (server, mut driver, status) = setup_bible_driver().await;
-
-    let reference = BibleReference::new("John", 3, 16, 16).expect("ref");
-    let translation = BibleTranslation::new("en-kjv", "King James Version", "en");
-    let passage = BiblePassage::new(
-        reference,
-        translation,
-        "For God so loved the world".to_string(),
-    );
-    let broadcast = BibleBroadcast::new(passage, Utc::now());
-    let update = BibleUpdate {
-        passage: Some(broadcast),
-        secondary_text: Some("Neboť Bůh tak miloval svět".to_string()),
-        secondary_translation_code: Some("cs-cep".to_string()),
-        secondary_book: None,
-        slide_output: None,
-    };
-
-    driver.handle_bible(update, &status).await.expect("bible");
-
-    let requests = server.received_requests().await.expect("requests");
-    // Legacy path should send verse text to bible-a (param 30)
-    assert!(requests.iter().any(|req| {
-        req.method.as_str() == "PUT"
-            && req.url.path() == "/api/v1/parameter/by-id/30"
-            && std::str::from_utf8(&req.body)
-                .unwrap_or_default()
-                .contains("For God so loved the world")
-    }));
-    // Legacy path should send reference with short code to bible-reference-a (param 35)
-    assert!(requests.iter().any(|req| {
-        req.method.as_str() == "PUT"
-            && req.url.path() == "/api/v1/parameter/by-id/35"
-            && std::str::from_utf8(&req.body)
-                .unwrap_or_default()
-                .contains("John 3:16 (KJV)")
-    }));
-    // Secondary text to bible-translate-a (param 40)
-    assert!(requests.iter().any(|req| {
-        req.method.as_str() == "PUT"
-            && req.url.path() == "/api/v1/parameter/by-id/40"
-            && std::str::from_utf8(&req.body)
-                .unwrap_or_default()
-                .contains("Neboť Bůh tak miloval svět")
-    }));
-    // Secondary reference with CEP code
-    assert!(requests.iter().any(|req| {
-        req.method.as_str() == "PUT"
-            && req.url.path() == "/api/v1/parameter/by-id/45"
-            && std::str::from_utf8(&req.body)
-                .unwrap_or_default()
-                .contains("(CEP)")
-    }));
-}
-
-#[tokio::test]
 async fn handle_bible_routes_to_clear_when_no_passage() {
     let (server, mut driver, status) = setup_bible_driver().await;
 
-    let update = BibleUpdate {
-        passage: None,
-        secondary_text: None,
-        secondary_translation_code: None,
-        secondary_book: None,
-        slide_output: None,
-    };
+    let update = BibleUpdate::from_slide_output(None);
 
     driver
         .handle_bible(update, &status)

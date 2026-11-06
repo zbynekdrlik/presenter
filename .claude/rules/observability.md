@@ -63,8 +63,11 @@ paths:
   `method` (a validated token) uses `%`. The tests pin the quoted form.
 - **Client IP = `integrations::extract_client_ip`** (the #793 live-WS rule): X-Forwarded-For only
   from a loopback peer (cloudflared), else the socket peer. Never a second copy of that rule.
-- **`presenter::bible::show`** (INFO) is emitted at the top of `AppState::trigger_bible_slide_output`
-  from the `BibleShowOrigin` the caller passes (source endpoint, device, client IP). A new caller adds
+- **`presenter::bible::show`** (INFO) is emitted at the top of `AppState::show_bible_on_wall` — the
+  one wall path of `trigger_bible_slide_output` AND the legacy `trigger_bible_passage` (#850 A2b) —
+  from the `BibleShowOrigin` the caller passes (source endpoint, device, client IP). Sources: `api`,
+  `prepared`, `console`, `trigger` (`POST /bible/trigger`), `companion`, `ai` (the last two via
+  `BibleShowOrigin::internal`, client IP `-`). A new caller adds
   its `BibleShowSource` variant in the same PR that constructs it — `state::bible_show_log` is
   `pub(crate)`, so an unconstructed variant fails `dead_code` under `-D warnings`.
 - **Log tests use the ONE helper, `src/tracing_capture.rs`** (`#[cfg(test)] mod tracing_capture` in

@@ -27,10 +27,6 @@ mod keepalive_tests;
 mod lane_seed;
 #[cfg(test)]
 mod latency_tests;
-#[cfg(test)]
-mod legacy_bible_tests;
-mod legacy_reference;
-pub(crate) use legacy_reference::legacy_translation_reference;
 mod mapping_refresh;
 #[cfg(test)]
 mod mapping_refresh_tests;
@@ -51,7 +47,7 @@ mod types;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use presenter_core::{BibleBroadcast, BibleSlideOutput, ResolumeHost, ResolumeHostId};
+use presenter_core::{BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use presenter_persistence::{Repository, ResolumePushAuditEntry};
 use reqwest::Client;
 use serde::Serialize;
@@ -178,29 +174,18 @@ pub struct StageUpdate {
     pub correlation_id: Option<Uuid>,
 }
 
+/// One Bible push to the Resolume hosts: the verse every path shows
+/// (`/bible/trigger-slide`, a prepared slide, the legacy `/bible/trigger`
+/// of Companion and the AI, #850 A2b), or `None` for a clear.
 #[derive(Debug, Clone)]
 pub struct BibleUpdate {
-    /// Legacy: passage from database lookup (deprecated)
-    pub passage: Option<BibleBroadcast>,
-    pub secondary_text: Option<String>,
-    pub secondary_translation_code: Option<String>,
-    /// Legacy path (#824): the book name the SECONDARY translation uses
-    /// ("1 John" for eng-kjv), so `#bible-translate-reference` does not repeat
-    /// the main translation's ("1 Ján"). `None` falls back to the main name.
-    pub secondary_book: Option<String>,
-    /// New: single source of truth slide output (preferred)
     pub slide_output: Option<BibleSlideOutput>,
 }
 
 impl BibleUpdate {
-    /// Create a Bible update from the new single-source-of-truth slide output.
-    /// This is the preferred way to create a BibleUpdate.
+    /// The one way to build a Bible push: a shown verse or a clear.
     pub fn from_slide_output(output: Option<BibleSlideOutput>) -> Self {
         Self {
-            passage: None,
-            secondary_text: None,
-            secondary_translation_code: None,
-            secondary_book: None,
             slide_output: output,
         }
     }
@@ -715,4 +700,4 @@ async fn legacy_composition_check(client: &Client, base_url: &str) -> Result<(),
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

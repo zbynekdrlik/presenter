@@ -135,9 +135,31 @@ pub fn PresentationList() -> impl IntoView {
 
     view! {
         <div class="operator__catalog-bottom" data-role="catalog-bottom" data-dropzone-target="presentations">
+            // #875 mockup v3: a desktop shows "Piesne v knižnici" / "Piesne v
+            // playliste" and the open library or playlist name after it
+            // (muted; flex `order`). A phone keeps its old heading: the name
+            // alone (the kind only while nothing is open) and the count.
             <header class="operator__group-header operator__presentations-header">
-                <h2 data-role="context-title">
-                    {move || ctx.context_title.get()}
+                <h2 class="operator__presentations-title">
+                    <span
+                        class="operator__presentations-context"
+                        data-role="context-title"
+                        hidden=move || {
+                            ctx.selected_playlist_id.get().is_none()
+                                && ctx.selected_library_id.get().is_none()
+                        }
+                    >
+                        {move || ctx.context_title.get()}
+                    </span>
+                    <span class="operator__presentations-kind">
+                        {move || {
+                            if ctx.selected_playlist_id.get().is_some() {
+                                "Piesne v playliste"
+                            } else {
+                                "Piesne v knižnici"
+                            }
+                        }}
+                    </span>
                 </h2>
                 <div class="operator__group-controls">
                     <span class="operator__group-count operator__group-count--static" data-role="presentation-count">
@@ -709,7 +731,9 @@ pub fn PresentationList() -> impl IntoView {
                                 }
                             >
                                 <span>{name}</span>
-                                <span class="operator__presentation-meta">{lib_name}</span>
+                                // #875: a desktop hides this repeat of the open
+                                // library's name (presentation-meta--library).
+                                <span class="operator__presentation-meta operator__presentation-meta--library">{lib_name}</span>
                                 {
                                     // Capture op OUTSIDE the click handler closure
                                     let op_for_rename = op.clone();

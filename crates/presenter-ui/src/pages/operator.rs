@@ -163,8 +163,13 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     // Expose test helpers
     crate::utils::test_helpers::expose_globals(&ctx, &op);
 
-    // Catalog resizer
-    let catalog_top_style = move || format!("height: {}px", op.catalog_top_height.get());
+    // Catalog resizer. A desktop (#875 mockup v3) lets the libraries +
+    // playlists take only the rows they have, up to this height
+    // (`--catalog-top-max`, operator_frame.css); the phone keeps `height`.
+    let catalog_top_style = move || {
+        let height = op.catalog_top_height.get();
+        format!("height: {height}px; --catalog-top-max: {height}px")
+    };
 
     // #850 S8: Settings and AI mount the first time their view opens and then
     // stay mounted (the Menovky latch, #871). Settings' cards are a third of the

@@ -22,9 +22,20 @@ use super::slide_save::{
 
 /// Renders the draggable song bubble above the slide list.
 /// Returns a reactive closure that shows the bubble when a presentation is
-/// selected, or nothing otherwise.
-pub(super) fn render_song_bubble(ctx: AppContext, op: OperatorState) -> impl IntoView {
+/// selected, or nothing otherwise. `phone` picks the place: the phone shell
+/// keeps the sticky bubble row inside the slide grid, a desktop shows the
+/// song as the bold title of the slides toolbar (#875 mockup v3). Exactly one
+/// copy is rendered, so `slides-song-bubble` stays unique.
+pub(super) fn render_song_bubble(ctx: AppContext, op: OperatorState, phone: bool) -> impl IntoView {
     move || {
+        if ctx.phone_shell.get() != phone {
+            return "".into_any();
+        }
+        let class = if phone {
+            "operator__slides-bubble"
+        } else {
+            "operator__slides-bubble operator__worktop-title"
+        };
         let presentation = ctx.selected_presentation.get();
         let Some(pres) = presentation else {
             return "".into_any();
@@ -36,7 +47,7 @@ pub(super) fn render_song_bubble(ctx: AppContext, op: OperatorState) -> impl Int
         let op_end = op.clone();
         view! {
             <div
-                class="operator__slides-bubble"
+                class=class
                 data-role="slides-song-bubble"
                 data-presentation-id=pres_id
                 draggable="true"

@@ -400,7 +400,14 @@ async fn legacy_trigger_reads_the_nlt_as_main_translation() {
     let reference = BibleReference::new_with_code("1 John", "1JN", 62, 1, 1, 3).expect("reference");
 
     let broadcast = state
-        .trigger_bible_passage(NLT_CODE, &reference, Default::default())
+        .trigger_bible_passage(
+            NLT_CODE,
+            &reference,
+            Default::default(),
+            crate::state::bible_show_log::BibleShowOrigin::internal(
+                crate::state::bible_show_log::BibleShowSource::Trigger,
+            ),
+        )
         .await
         .expect("trigger");
 
@@ -430,7 +437,14 @@ async fn legacy_trigger_goes_on_air_without_an_unreachable_nlt_secondary() {
     let reference = BibleReference::new_with_code("1 Ján", "1JN", 62, 1, 1, 3).expect("reference");
 
     let broadcast = state
-        .trigger_bible_passage("slk-seb", &reference, Default::default())
+        .trigger_bible_passage(
+            "slk-seb",
+            &reference,
+            Default::default(),
+            crate::state::bible_show_log::BibleShowOrigin::internal(
+                crate::state::bible_show_log::BibleShowSource::Trigger,
+            ),
+        )
         .await
         .expect("the SEB passage still triggers");
 

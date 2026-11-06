@@ -1,0 +1,823 @@
+/* The desktop operator frame of the approved mockup v3 (#875, section
+   "1 · Piesne", docs/mockups/operator-redesign-v3.html).
+   - The lists column is 360 px flush with the window's left edge, separated
+     from the work area by ONE 1 px line; no rounded card panels, no outer
+     margins, no gaps between the columns.
+   - Dense lists: 30 px rows 4 px apart, 13 px text, the count muted at the
+     row's right end, the selected row #1d3a5f with a 3 px blue bar; the ⋮
+     menu lies inside the row (visible on hover, focus and on the selected
+     row).
+   - Section headings 13 px muted 600; "+" (and the "all" ⋯) 26 px squares.
+   - The work area's top row: the song title (bold 17 px) left, "+ Snímka"
+     and "Snímok v riadku − N +" right; 16:9 slide cards with the text top
+     left and a muted caption at the bottom, the slide on the wall red with
+     "NA STENE".
+   - Naživo selected = red, Úprava selected = blue; the preview's Ableton /
+     Sledovať pills, broom and counter as drawn.
+   Every rule is scoped to the desktop shell: the phone (`data-shell="phone"`,
+   phone_shell.css) does not change. The Biblia left panel is NOT styled here
+   (bible.css / bible_console.css, #850 B2c). Linked after stage_preview.css,
+   so it wins over operator.css, controls.css, header.css and stage_preview.css
+   at equal specificity. */
+
+/* Bits that exist only for one shell. */
+.operator__slide-live-tag,
+.operator__slide-columns-label,
+.operator__group-more-icon {
+  display: none;
+}
+
+/* The phone's song heading stays the open library / playlist name alone
+   ("Piesne v knižnici" only while nothing is open), as before #875 v3. */
+body.operator[data-shell="phone"] .operator__presentations-context:not([hidden]) + .operator__presentations-kind {
+  display: none;
+}
+
+body.operator:not([data-shell="phone"]) {
+  --frame-bg: #0f172a;
+  --frame-panel: #1e293b;
+  --frame-line: #334155;
+  --frame-ink: #e2e8f0;
+  --frame-muted: #94a3b8;
+  --frame-blue: #3b82f6;
+  --frame-selected: #1d3a5f;
+  --frame-live: #dc2626;
+  --frame-live-soft: #3b1418;
+  --frame-ok: #22c55e;
+}
+
+/* ── Header: Naživo red, Úprava blue (mockup `.thin .seg`) ── */
+
+body.operator:not([data-shell="phone"]) .operator__mode-toggle {
+  background: var(--frame-panel);
+  border: 1px solid var(--frame-line);
+  border-radius: 8px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__mode-toggle button {
+  color: var(--frame-muted);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+body.operator:not([data-shell="phone"]) .operator__mode-toggle button[data-mode="live"][data-active="true"] {
+  background: var(--frame-live);
+  color: #ffffff;
+  box-shadow: none;
+}
+
+body.operator:not([data-shell="phone"]) .operator__mode-toggle button[data-mode="edit"][data-active="true"] {
+  background: var(--frame-blue);
+  color: #ffffff;
+  box-shadow: none;
+}
+
+/* ── The page frame: flush columns, one line between them ── */
+
+body.operator:not([data-shell="phone"]) .operator__worship {
+  gap: 0;
+  background: var(--frame-bg);
+}
+
+/* 360 px inside + the 1 px line = 361 px, so the preview below keeps its
+   H2 size of 360 × 202.5 px. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog {
+  flex: 0 0 361px;
+  width: 361px;
+  box-sizing: border-box;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-right: 1px solid var(--frame-line);
+  border-radius: 0;
+  background: var(--frame-bg);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__slides-column {
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--frame-bg);
+  box-shadow: none;
+  min-width: 0;
+}
+
+/* ── Lists column (mockup `.lists`: padding 8, gap 4) ── */
+
+/* As tall as its rows, at most the resizer's height (the inline
+   `--catalog-top-max`; `!important` beats the inline `height` the phone uses). */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-top {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  gap: 4px;
+  height: auto !important;
+  max-height: var(--catalog-top-max, 320px);
+  box-sizing: border-box;
+  padding: 8px 8px 0;
+  overflow: hidden;
+}
+
+/* Libraries and playlists each keep their heading and scroll their own rows;
+   neither collapses below a heading + one row. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list {
+  display: block;
+  gap: 0;
+  min-height: 30px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__favorites {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__favorites-empty {
+  margin: 0;
+  padding: 6px 4px;
+  font-size: 13px;
+  list-style: none;
+}
+
+/* The resizer between the two halves: an 8 px gap that shows a line on hover. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-resizer {
+  flex: 0 0 8px;
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-resizer:hover {
+  background: linear-gradient(transparent 3px, var(--frame-line) 3px, var(--frame-line) 5px, transparent 5px);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px 8px;
+  border: 0;
+  overflow: hidden;
+}
+
+/* Section headings (mockup `.h`): 13 px muted 600, the "+" a 26 px square. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-header {
+  flex: none;
+  height: 26px;
+  margin: 4px 0 0;
+  gap: 6px;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-header h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: normal;
+  color: var(--frame-muted);
+  white-space: nowrap;
+}
+
+/* "Piesne v knižnici" first, the open library / playlist after it. */
+body.operator:not([data-shell="phone"]) .operator__presentations-kind {
+  order: 1;
+  flex: none;
+}
+
+body.operator:not([data-shell="phone"]) .operator__presentations-context {
+  order: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+  color: #64748b;
+}
+
+body.operator:not([data-shell="phone"]) .operator__presentations-context[hidden] {
+  display: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-controls {
+  gap: 4px;
+  flex: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-controls button {
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--frame-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--frame-ink);
+  font-size: 14px;
+  line-height: 1;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-controls button:hover {
+  background: var(--frame-panel);
+  color: #ffffff;
+}
+
+/* No round count bubble: the "all" button is a ⋯ square (its title keeps the total). */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-count-value,
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] [data-role="presentation-count"] {
+  display: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group-more-icon {
+  display: inline;
+}
+
+/* ── Rows (mockup `.row`): 30 px, 13 px, count right, selected = blue bar ── */
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-row {
+  position: relative;
+  height: 30px;
+  gap: 0;
+  border-radius: 9px;
+  background: var(--frame-panel);
+  flex: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-button {
+  height: 30px;
+  min-height: 0;
+  padding: 0 12px;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--frame-ink);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-meta {
+  flex: none;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--frame-muted);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-button:hover {
+  background: var(--frame-panel2, #273449);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-button[data-active="true"] {
+  background: var(--frame-selected);
+  box-shadow: inset 3px 0 0 var(--frame-blue);
+  font-weight: 400;
+}
+
+/* The ⋮ menu inside the row's right end; the count moves left for it. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-row:hover .operator__list-actions,
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-row:focus-within .operator__list-actions,
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-button[data-active="true"] + .operator__list-actions {
+  opacity: 1;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-row:hover .operator__list-button,
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-row:focus-within .operator__list-button,
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-button[data-active="true"] {
+  padding-right: 32px;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-action--menu {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--frame-muted);
+  background: transparent;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-action--menu:hover {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--frame-ink);
+}
+
+/* Songs of the open library / playlist: the same rows, scrolling under the heading. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-list {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Nothing in the scrolling list shrinks (the 16 px drop spacers of a
+   playlist, #274, went to 0 px and took no drop). */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-list > * {
+  flex: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-item {
+  flex: none;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--frame-panel);
+  box-shadow: none;
+  font-size: 13px;
+  color: var(--frame-ink);
+  white-space: nowrap;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-item > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-item:hover {
+  background: #273449;
+}
+
+/* The song on the wall: a red bar; the selected song: the blue one. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-item.is-stage-active {
+  background: var(--frame-panel);
+  box-shadow: inset 3px 0 0 var(--frame-live);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-item.is-active {
+  background: var(--frame-selected);
+  border: 0;
+  box-shadow: inset 3px 0 0 var(--frame-blue);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-item[data-type="separator"] {
+  background: transparent;
+  border: 1px dashed var(--frame-line);
+  color: var(--frame-muted);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-meta {
+  flex: none;
+  margin-left: auto;
+  margin-right: 0;
+  font-size: 12px;
+  color: var(--frame-muted);
+}
+
+/* The open library's name on every one of its songs said nothing new. */
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-meta--library {
+  display: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-actions {
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-meta + .operator__presentation-actions {
+  margin-left: 0;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-actions button {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__presentation-list .empty {
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+/* ── The preview under the lists (mockup `.stagepv`) ── */
+
+body.operator:not([data-shell="phone"]) .operator__catalog > .operator__stage-preview--worship {
+  width: 360px;
+  margin: 0;
+  border-radius: 0;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-preview-actions {
+  top: 6px;
+  left: 6px;
+  gap: 4px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-toggle,
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-toggle[data-state="off"] {
+  height: 26px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--frame-line);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.8);
+  color: var(--frame-ink);
+  font-size: 11px;
+  font-weight: 500;
+  box-sizing: border-box;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-toggle[data-state="on"] {
+  border-color: var(--frame-ok);
+  background: rgba(15, 23, 42, 0.8);
+  color: #bbf7d0;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__clear-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--frame-line);
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.85);
+  font-size: 15px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-monitor {
+  right: 8px;
+  bottom: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #86efac;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-monitor-count--connected {
+  color: #86efac;
+}
+
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-monitor-separator,
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-monitor-count--issues {
+  color: #86efac;
+}
+
+/* An issue still turns the counter red and pulses (operator.css). */
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-monitor--alert,
+body.operator:not([data-shell="phone"]) .operator__stage-preview--worship .operator__stage-monitor--alert .operator__stage-monitor-count--issues {
+  color: #f87171;
+}
+
+/* ── The work area's top row (mockup `.worktop`) ── */
+
+body.operator:not([data-shell="phone"]) .operator__worktop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 8px 12px 0;
+  border: 0;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop-title {
+  position: static;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--frame-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop-title .operator__slides-bubble-name {
+  display: inline;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop-add {
+  flex: none;
+  height: 32px;
+  min-height: 0;
+  padding: 0 10px;
+  border: 1px solid var(--frame-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--frame-ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop-add:hover {
+  background: var(--frame-panel);
+}
+
+/* "Snímok v riadku − 3 +" (mockup `.stepper`); the same control on Biblia. */
+body.operator:not([data-shell="phone"]) .operator__slide-columns {
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--frame-muted);
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop-add + .operator__slide-columns {
+  margin-left: 4px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-columns-label {
+  display: inline;
+  white-space: nowrap;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-columns button {
+  width: 32px;
+  height: 32px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--frame-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--frame-ink);
+  font-size: 14px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-columns-value {
+  min-width: 1ch;
+  color: var(--frame-muted);
+}
+
+/* ── Slide cards (mockup `.slides` / `.slide`) ── */
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__slides {
+  padding: 10px 12px;
+  gap: 10px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship {
+  box-sizing: border-box;
+  padding: 12px;
+  gap: 6px;
+  border: 1px solid var(--frame-line);
+  border-radius: 10px;
+  background: var(--frame-panel);
+  box-shadow: none;
+}
+
+/* Live: 16:9 at least (a long slide grows instead of being cut), the text top
+   left, the caption at the bottom. */
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship {
+  aspect-ratio: 16 / 9;
+  justify-content: space-between;
+}
+
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-bodies {
+  order: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 2px;
+}
+
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-header {
+  order: 2;
+  justify-content: flex-start;
+  gap: 4px 6px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text {
+  padding: 0;
+  text-align: left;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text--translation {
+  margin-top: 2px;
+  padding-top: 2px;
+  font-size: 14px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text--stage {
+  font-size: 13px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-warning {
+  margin: 0;
+  text-align: left;
+  font-size: 11px;
+  color: #f87171;
+}
+
+/* Edit mode: the fields stay inside the card. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-editor textarea,
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-editor input {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+/* The caption: "1 · Sloha 1 · NA STENE", muted 11 px. A group with its own
+   colour (Nastavenia) stays a small pill. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-header-left {
+  gap: 6px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-index {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--frame-muted);
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-group {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: normal;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-group:not([style*="background"]) {
+  padding: 0;
+  background: none;
+  color: var(--frame-muted);
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-group:not([style*="background"])::before {
+  content: "· ";
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-stage-layout-badge {
+  font-size: 11px;
+  letter-spacing: normal;
+  padding: 0 6px;
+}
+
+/* The slide on the wall (mockup `.slide.live`): 2 px red, soft red inside;
+   the padding gives back the extra border pixel so the text does not move. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active {
+  padding: 11px;
+  border: 2px solid var(--frame-live);
+  background: var(--frame-live-soft);
+  box-shadow: none;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag {
+  display: inline;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fca5a5;
+  white-space: nowrap;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag::before {
+  content: "· ";
+  font-weight: 400;
+  color: var(--frame-muted);
+}
+
+/* 6+ per row (#832): tighter, smaller type, still readable. */
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--worship {
+  padding: 8px;
+  gap: 4px;
+}
+
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--worship.is-active {
+  padding: 7px;
+}
+
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--worship .operator__slide-text {
+  font-size: 12px;
+}
+
+/* ── The other operator sections (Časovače, AI, Menovky): the same frame —
+   flush panes split by 1 px lines, no rounded inset cards, the page title in
+   the work-area title row's look (bold 17 px). Biblia and Nastavenia keep
+   their own (bible.css, settings). ── */
+
+body.operator:not([data-shell="phone"]) .operator__panel--timers,
+body.operator:not([data-shell="phone"]) .operator__panel--ai {
+  padding: 0;
+  background: var(--frame-bg);
+}
+
+body.operator:not([data-shell="phone"]) .operator__panel--timers {
+  overflow-y: auto;
+}
+
+body.operator:not([data-shell="phone"]) .operator__timers,
+body.operator:not([data-shell="phone"]) .operator__timer-actions {
+  gap: 0;
+  margin: 0;
+  border-bottom: 1px solid var(--frame-line);
+}
+
+body.operator:not([data-shell="phone"]) .operator__timer-card,
+body.operator:not([data-shell="phone"]) .operator__timer-group {
+  padding: 12px;
+  border: 0;
+  border-right: 1px solid var(--frame-line);
+  border-radius: 0;
+  background: var(--frame-bg);
+  box-shadow: none;
+}
+
+body.operator:not([data-shell="phone"]) .operator__timer-card:last-child,
+body.operator:not([data-shell="phone"]) .operator__timer-group:last-child {
+  border-right: 0;
+}
+
+body.operator:not([data-shell="phone"]) .operator__timer-card h2,
+body.operator:not([data-shell="phone"]) .operator__timer-card h3,
+body.operator:not([data-shell="phone"]) .operator__timer-group h2,
+body.operator:not([data-shell="phone"]) .operator__timer-group h3 {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: normal;
+}
+
+body.operator:not([data-shell="phone"]) .ai-chat {
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  background: var(--frame-bg);
+}
+
+body.operator:not([data-shell="phone"]) .ai-chat__header {
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--frame-line);
+}
+
+body.operator:not([data-shell="phone"]) .ai-chat__title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+body.operator:not([data-shell="phone"]) .operator__panel--menovky {
+  padding: 8px 12px 12px;
+  background: var(--frame-bg);
+  overflow-y: auto;
+}
+
+body.operator:not([data-shell="phone"]) .operator__panel--menovky .nameplates-view {
+  max-width: none;
+  margin: 0;
+}
+
+body.operator:not([data-shell="phone"]) .operator__panel--menovky .nameplates-view__title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+}
