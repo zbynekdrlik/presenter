@@ -59,6 +59,8 @@ preparation (the sermon views are in `sermon-prep.md`).
   fraction of a pixel, so without the slack every switch stepped one verse back (20 → 16 in seven).
   `land` rounds its whole-pixel scroll step DOWN (`scroll_step`): rounding 412.53 up left the verse
   0.47 px above the reader's top and failed the `>= 0` E2E bound on CI only.
+  `verse_offset` rounds DOWN too (`screen_offset`): read to the nearest, a verse landed at 172.8 read
+  173 and every switch walked it a pixel down the screen. Read and landing must agree.
 - **Its own app:** manifest + icons under `/ui/study/` (open book, `study_icons/`, not the tablet's
   "B"), `<link rel=manifest crossorigin="use-credentials">`: a cookie-less manifest fetch behind
   Cloudflare Access (`prsnv.newlevel.media`) gets the login page and Android offers no install. Dev2
