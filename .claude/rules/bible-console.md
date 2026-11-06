@@ -122,5 +122,10 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
   loaded, a show on its way, the end of the book) and never move the song; Space or `/` focus the
   field (prevented, nothing typed). Only on the Live tab (`[data-bible-panel=live][data-visible=true]`),
   in Live and Edit mode alike. Piesne keeps ←/→ = song slides and Space = header search in Live
-  mode; other sections: Space = header search, arrows nothing. Pinned by `bible-console.spec.ts`
+  mode; other sections: Space = header search, arrows nothing. Never taken: any key while a modal
+  or the Viac sheet is open (`overlay_open`: `op.open_modal`, `more_sheet_open`, the "Upraviť
+  prezentáciu" dialog), and Space / `/` / Enter while a button, link or `role="button"` has the
+  focus (`KeyFocus::Button`): Space presses Zhasnúť, ◀ / ▶, a translation button like any button
+  (review of 65eab96c, a swallowed Space jumped to the field). Arrows still step from a focused
+  button: after the desktop Enter the focus sits on Zobraziť. Pinned by `bible-console.spec.ts`
   (stage POST count unchanged on Biblia, one more on Piesne).

@@ -22,7 +22,7 @@ use crate::components::version_label::VersionLabel;
 use crate::pages::ai::AiPage;
 use crate::pages::bible::BiblePage;
 use crate::pages::settings::SettingsPage;
-use crate::state::global_keys::{global_key, GlobalKey, KeyScope};
+use crate::state::global_keys::{global_key, GlobalKey, KeyFocus, KeyScope};
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::ws;
@@ -545,12 +545,6 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
                 if tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" {
                     return;
                 }
-                // Space presses a focused ZOBRAZIŤ like any button (spec §7.3).
-                if key == " "
-                    && active.get_attribute("data-role").as_deref() == Some("console-show")
-                {
-                    return;
-                }
             }
 
             // #850 B2d: the key belongs to the shown section.
@@ -559,6 +553,10 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
                 view: &view,
                 live: ctx.mode.get_untracked() == "live",
                 bible_live_tab: element("[data-bible-panel='live'][data-visible='true']").is_some(),
+                focus: focus_kind(),
+                overlay_open: op.open_modal.get_untracked().is_some()
+                    || op.more_sheet_open.get_untracked()
+                    || presentation_modal_open(),
             };
             run_global_key(&ctx, &ev, global_key(scope, &key));
         });
@@ -600,6 +598,27 @@ fn run_global_key(ctx: &AppContext, ev: &web_sys::KeyboardEvent, action: GlobalK
         }
         GlobalKey::Nothing => {}
     }
+}
+
+/// A button, link or `role="button"` has the focus: Space / `/` / Enter
+/// belong to it (spec section 7.3: Space presses a focused Zobraziť).
+fn focus_kind() -> KeyFocus {
+    let Some(active) = crate::utils::window::document().active_element() else {
+        return KeyFocus::Page;
+    };
+    let tag = active.tag_name();
+    if tag == "BUTTON" || tag == "A" || active.get_attribute("role").as_deref() == Some("button") {
+        KeyFocus::Button
+    } else {
+        KeyFocus::Page
+    }
+}
+
+/// Biblia's "Upraviť prezentáciu" dialog is open (`bible_prepared.rs`).
+fn presentation_modal_open() -> bool {
+    element("[data-role='presentation-modal']")
+        .and_then(|modal| modal.style().get_property_value("display").ok())
+        .is_some_and(|display| display != "none")
 }
 
 /// The first element matching `selector`, as an `HtmlElement`.

@@ -11,6 +11,11 @@
 //! - Any other section, Live mode: Space = the header search; arrows do
 //!   nothing.
 //!
+//! Never taken (the browser keeps the key): any key while a modal or the
+//! "Viac" sheet is open; Space, `/` and Enter while a button or link has the
+//! focus, so Space presses Zhasnúť, ◀ / ▶, a translation button or a modal
+//! button like any button (review of 65eab96c). Arrows still step from a
+//! focused button: after the desktop Enter the focus sits on Zobraziť.
 //! The caller already returned for a key typed into a field.
 
 use crate::utils::keyboard::{KEY_ARROW_LEFT, KEY_ARROW_RIGHT};
@@ -30,6 +35,15 @@ pub enum GlobalKey {
     Nothing,
 }
 
+/// What has the keyboard focus when a window key arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyFocus {
+    /// The page itself, or an element that is no control.
+    Page,
+    /// A button, a link or an element with `role="button"`.
+    Button,
+}
+
 /// The shown section and mode a key lands in.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyScope<'a> {
@@ -39,9 +53,18 @@ pub struct KeyScope<'a> {
     pub live: bool,
     /// Biblia's Live tab is shown (not Pripravené / Nastavenie).
     pub bible_live_tab: bool,
+    pub focus: KeyFocus,
+    /// A modal or the "Viac" sheet is open over the page.
+    pub overlay_open: bool,
 }
 
 pub fn global_key(scope: KeyScope<'_>, key: &str) -> GlobalKey {
+    if scope.overlay_open {
+        return GlobalKey::Nothing;
+    }
+    if scope.focus == KeyFocus::Button && matches!(key, " " | "/" | "Enter") {
+        return GlobalKey::Nothing;
+    }
     let arrow = match key {
         KEY_ARROW_LEFT => Some(false),
         KEY_ARROW_RIGHT => Some(true),
@@ -73,6 +96,63 @@ mod tests {
             view,
             live,
             bible_live_tab,
+            focus: KeyFocus::Page,
+            overlay_open: false,
+        }
+    }
+
+    #[test]
+    fn space_and_slash_on_a_focused_button_stay_with_the_button() {
+        for (view, live, tab) in [
+            ("bible", true, true),
+            ("bible", false, true),
+            ("worship", true, false),
+            ("timers", true, false),
+        ] {
+            let s = KeyScope {
+                focus: KeyFocus::Button,
+                ..scope(view, live, tab)
+            };
+            for key in [" ", "/", "Enter"] {
+                assert_eq!(global_key(s, key), GlobalKey::Nothing, "{view} {key:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn arrows_from_a_focused_button_still_step() {
+        let bible = KeyScope {
+            focus: KeyFocus::Button,
+            ..scope("bible", true, true)
+        };
+        assert_eq!(
+            global_key(bible, "ArrowRight"),
+            GlobalKey::ConsoleStep { forward: true }
+        );
+        let worship = KeyScope {
+            focus: KeyFocus::Button,
+            ..scope("worship", true, false)
+        };
+        assert_eq!(
+            global_key(worship, "ArrowLeft"),
+            GlobalKey::SongSlide { forward: false }
+        );
+    }
+
+    #[test]
+    fn an_open_modal_or_sheet_takes_no_key() {
+        for (view, live, tab) in [
+            ("bible", true, true),
+            ("worship", true, false),
+            ("timers", true, false),
+        ] {
+            let s = KeyScope {
+                overlay_open: true,
+                ..scope(view, live, tab)
+            };
+            for key in ["ArrowLeft", "ArrowRight", " ", "/"] {
+                assert_eq!(global_key(s, key), GlobalKey::Nothing, "{view} {key:?}");
+            }
         }
     }
 
