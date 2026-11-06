@@ -178,10 +178,12 @@ body.operator {
 }
 
 .operator__search-icon {
-  width: 1rem;
-  height: 1rem;
+  flex: none;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.6);
+  border: 1.5px solid rgba(255, 255, 255, 0.6);
   position: relative;
 }
 
@@ -208,11 +210,11 @@ body.operator {
 .operator__search-icon::after {
   content: "";
   position: absolute;
-  width: 0.55rem;
-  height: 0.15rem;
+  width: 6px;
+  height: 1.5px;
   background: rgba(255, 255, 255, 0.6);
-  top: 0.75rem;
-  left: 0.55rem;
+  top: 8.5px;
+  left: 6.5px;
   transform: rotate(45deg);
   border-radius: 999px;
 }
