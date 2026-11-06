@@ -374,9 +374,13 @@ for (const viewport of [
         page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]'),
       ).toHaveCSS("background-color", "rgb(59, 130, 246)");
 
+      // Nothing to select over an empty grid (#875).
+      await expect(page.locator('[data-role="bible-selection"]')).toHaveCount(0);
+
       // Look the verse up and send it: the grid holds it, the wall gets it.
       const shows = collectPosts(page, "/bible/trigger-slide");
       await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+      await expect(page.locator('[data-role="bible-selection"]')).toBeVisible();
       await expect(page.locator('[data-role="slide-card"]').first()).toContainText(
         "Hebrejom 11:1 (SEB)",
       );

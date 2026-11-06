@@ -45,8 +45,15 @@ tab read: no selected book / chapter / verse, no `classic_loads` / `console_take
   data attributes stay for the specs). All in the `body.operator:not([data-shell="phone"])` block
   at the end of `styles/bible_console.css`; `bible-console.spec.ts` pins sizes and order at
   1280×720 and 1920×1080.
+- **The page frame = the Piesne one** (#875, `bible.css` end, never `operator_frame.css`, which
+  leaves Biblia alone): the left column 360 px + a 1 px `border-right` at x = 0, no card border /
+  radius / padding (the tabs get 8 px like the mockup's `.lists`), the work area flush beside it,
+  the verse on the wall at the bottom 360 × 202.5 (stage_preview.css; under 1025 px the column is
+  301 px and the preview 300 × 168.75, the Piesne mirror's rule). Pinned in
+  `operator-stage-preview-layout.spec.ts`.
 - **Multi-select + add to a presentation** (`SelectionControls`) sit in the slide grid's toolbar
-  (`bible_slides.rs`, `[data-role="bible-selection"]`), desktop Live tab only (spec section 7.1).
+  (`bible_slides.rs`, `[data-role="bible-selection"]`), desktop Live tab only (spec section 7.1),
+  and only while the grid holds slides.
 - **Reproducing on the live dev server:** `http://10.77.8.134:8080/ui/operator/bible`,
   `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and shared
   across full translations; `slk-mil` is partial (Gospels only).

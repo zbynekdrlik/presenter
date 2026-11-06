@@ -30,8 +30,13 @@ pub fn BibleSlidesColumn() -> impl IntoView {
                 </Show>
                 <SlideColumnsControl />
                 // Multi-select + add to a prepared presentation, over the grid
-                // they act on (spec section 7.1: desktop only, until #851).
-                <Show when=move || !phone.get() && bible_tab.with(|t| t == "live")>
+                // they act on (spec section 7.1: desktop only, until #851); not
+                // over an empty grid, where there is nothing to select (#875).
+                <Show when=move || {
+                    !phone.get()
+                        && bible_tab.with(|t| t == "live")
+                        && bs.slides.with(|slides| !slides.is_empty())
+                }>
                     <div class="bible__selection" data-role="bible-selection">
                         <SelectionControls />
                     </div>

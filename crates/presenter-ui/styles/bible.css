@@ -706,3 +706,76 @@ body.operator.operator--bible .operator__panel--bible {
   align-items: center;
   color: #93c5fd;
 }
+
+/* ── Desktop frame = mockup v3 section 3 (#875, owner 2026-11-06) ──
+   The same frame operator_frame.css draws for Piesne: the left column 360 px
+   at x = 0 plus its 1 px line (361 px), flush, no card border / radius /
+   margins; the work area flush beside it; the verse on the wall at the
+   column's bottom, its full width at 16:9 (360 × 202.5, stage_preview.css).
+   Under 1025 px the column is 300 px (+ the line) and the preview
+   300 × 168.75, like the Piesne mirror's rule. */
+body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible {
+  grid-template-columns: 361px minmax(0, 1fr);
+  background: #0f172a;
+}
+body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible {
+  width: 361px;
+  box-sizing: border-box;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-right: 1px solid #334155;
+  border-radius: 0;
+  background: #0f172a;
+  box-shadow: none;
+}
+body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible .operator__catalog-top {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  padding: 8px;
+}
+body.operator:not([data-shell="phone"]) .operator__catalog > .operator__stage-preview--bible {
+  width: 360px;
+  margin: 0;
+  border-radius: 0;
+  background: #000;
+}
+/* The verse on the wall as the mockup's `.stagepv`: white, centred. */
+body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operator__bible-preview {
+  align-items: center;
+  padding: 0 24px;
+  text-align: center;
+}
+body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operator__bible-preview-text {
+  font-size: 16px;
+  line-height: 1.3;
+  color: #ffffff;
+}
+body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operator__bible-preview-ref {
+  justify-content: center;
+  color: #ffffff;
+  font-size: 13px;
+  font-style: normal;
+}
+body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible .operator__slides-column {
+  padding: 8px 12px 10px;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  background: #0f172a;
+  box-shadow: none;
+  min-width: 0;
+}
+@media (max-width: 1024px) {
+  body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible {
+    grid-template-columns: 301px minmax(0, 1fr);
+  }
+  body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bible {
+    width: 301px;
+  }
+  body.operator:not([data-shell="phone"]) .operator__catalog > .operator__stage-preview--bible {
+    width: 300px;
+  }
+}

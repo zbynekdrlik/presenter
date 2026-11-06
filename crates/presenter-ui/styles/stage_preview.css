@@ -105,10 +105,10 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__c
   z-index: 1;
 }
 
-/* The Biblia column is a 320 px grid track (border-box): 318 px inside its
-   border → 16:9. */
+/* The Biblia column is the Piesne frame too (bible.css, #875 mockup v3):
+   360 px inside its 1 px line → 360 × 202.5, 300 × 168.75 under 1025 px. */
 .operator__catalog > .operator__stage-preview--bible {
-  height: 179px;
+  height: 202.5px;
   background: #101828;
 }
 
@@ -174,7 +174,8 @@ body.operator.operator--bible:not([data-shell="phone"]) .operator__catalog--bibl
 
 /* A narrower lists column (operator.css: 260 px under 1025 px) = 300 px. */
 @media (max-width: 1024px) {
-  .operator__catalog > .operator__stage-preview--worship {
+  .operator__catalog > .operator__stage-preview--worship,
+  .operator__catalog > .operator__stage-preview--bible {
     height: 168.75px;
   }
   .operator__stage-preview--worship .operator__stage-iframe {
