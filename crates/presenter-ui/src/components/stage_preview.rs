@@ -112,7 +112,7 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                 stage_snapshot.set(None);
                 active_bible_broadcast.set(None);
                 toast_variant.set("info".to_string());
-                toast_message.set(Some("Slide outputs cleared".to_string()));
+                toast_message.set(Some("Stena vymazaná".to_string()));
             });
         }
     };
@@ -193,7 +193,7 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                     <iframe
                         class="operator__stage-iframe"
                         src="/stage?preview=1"
-                        title="Live stage preview"
+                        title="Náhľad pódia naživo"
                         tabindex="-1"
                         aria-hidden="true"
                         scrolling="no"
@@ -240,7 +240,7 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                         }
                         None => {
                             leptos::prelude::view! {
-                                <span class="operator__bible-preview-empty">"No active passage"</span>
+                                <span class="operator__bible-preview-empty">"Na stene nie je verš"</span>
                             }.into_any()
                         }
                     }
@@ -263,15 +263,13 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                     data-state=move || {
                         if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) { "on" } else { "off" }
                     }
+                    aria-pressed=move || {
+                        if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) { "true" } else { "false" }
+                    }
+                    title="Ableton: zapnutý, keď je tlačidlo zvýraznené"
                     on:click=on_ableset_enable
                 >
-                    {move || {
-                        if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) {
-                            "Ableton ON"
-                        } else {
-                            "Ableton OFF"
-                        }
-                    }}
+                    "Ableton"
                 </button>
                 <button
                     type="button"
@@ -280,15 +278,13 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                     data-state=move || {
                         if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) { "on" } else { "off" }
                     }
+                    aria-pressed=move || {
+                        if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) { "true" } else { "false" }
+                    }
+                    title="Sledovať pódium: zapnuté, keď je tlačidlo zvýraznené"
                     on:click=on_ableset_follow
                 >
-                    {move || {
-                        if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) {
-                            "Follow ON"
-                        } else {
-                            "Follow OFF"
-                        }
-                    }}
+                    "Sledovať pódium"
                 </button>
             </div>
             <button
@@ -313,8 +309,8 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                     let issues = conns.iter().filter(|c| c.status != presenter_core::StageClientStatus::Connected).count();
                     issues.to_string()
                 }
-                aria-label="Stage display health"
-                title="Stage displays"
+                aria-label="Pódiové obrazovky: pripojené / s problémom"
+                title="Pódiové obrazovky"
                 on:click=on_reset_baseline
             >
                 <span data-role="stage-monitor-connected" class="operator__stage-monitor-count operator__stage-monitor-count--connected">
@@ -335,7 +331,8 @@ pub fn StagePreview(place: PreviewPlace) -> impl IntoView {
                 type="button"
                 class="operator__clear-button"
                 data-role="clear-slide"
-                aria-label="Clear live outputs"
+                aria-label="Vymazať stenu"
+                title="Vymazať stenu"
                 on:click=on_clear
             >
                 "\u{1f9f9}"

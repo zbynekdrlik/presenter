@@ -116,7 +116,7 @@ async function openOperator(browser: Browser, viewport = PHONE_390) {
 const onWall = async () =>
   (await json<{ output?: { mainText?: string } | null; mainText?: string } | null>("/bible/active-slide"));
 
-test("a tap previews the stored text, ZOBRAZIŤ and ĎALŠÍ walk the prepared order", async ({ browser }) => {
+test("a tap previews the stored text, Zobraziť and Ďalší walk the prepared order", async ({ browser }) => {
   const id = await sermon("Viera", [1, 2]);
   const before = await sermonOf(id);
   await cutFirstWord(id, before.items[0]);
@@ -147,14 +147,14 @@ test("a tap previews the stored text, ZOBRAZIŤ and ĎALŠÍ walk the prepared o
   expect(resolved, "the stored slide, never the whole verse").toEqual([]);
 
   await role(page, "console-show").click();
-  await expect(role(page, "console-show")).toContainText("ĎALŠÍ:");
+  await expect(role(page, "console-show")).toContainText("Ďalší:");
   await expect(role(page, "console-preview-main")).toHaveText(stored.slides[1].mainText);
   await expect(rows.nth(1)).toHaveAttribute("aria-pressed", "true");
   expect(triggers).toEqual([`/bible/presentations/${id}/slides/${stored.slides[0].id}/trigger`]);
   expect(JSON.stringify(await onWall())).toContain(stored.slides[0].mainText.slice(0, 30));
 
   await role(page, "console-show").click();
-  await expect(role(page, "console-show")).toHaveText("KONIEC KÁZNE");
+  await expect(role(page, "console-show")).toHaveText("Koniec kázne");
   expect(triggers).toHaveLength(2);
   expect(JSON.stringify(await onWall())).toContain(stored.slides[1].mainText.slice(0, 30));
 
@@ -179,7 +179,7 @@ test("typing hides the section and leaves the sermon, an emptied field brings it
   await context.close();
 });
 
-test("a load from the old inputs lets go of the sermon: ZOBRAZIŤ can never play it", async ({ browser }) => {
+test("a load from the old inputs lets go of the sermon: Zobraziť can never play it", async ({ browser }) => {
   await sermon("Staré polia", [1]);
   const { context, page, errors } = await openOperator(browser, { viewport: { width: 1280, height: 800 } } as never);
   await role(page, "console-prepared-row").click();

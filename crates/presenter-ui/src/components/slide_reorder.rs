@@ -40,7 +40,7 @@ pub(super) fn render_song_bubble(ctx: AppContext, op: OperatorState) -> impl Int
                 data-role="slides-song-bubble"
                 data-presentation-id=pres_id
                 draggable="true"
-                title="Drag into a playlist"
+                title="Pretiahni do playlistu"
                 on:dragstart=move |ev: web_sys::DragEvent| {
                     if let Some(dt) = ev.data_transfer() {
                         let _ = dt.set_data("text/plain", &pres_id_drag);

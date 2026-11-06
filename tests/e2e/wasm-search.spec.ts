@@ -80,7 +80,7 @@ test.describe("WASM Operator Search", () => {
           results &&
           (results.querySelectorAll('[data-role="search-result-item"]').length >
             0 ||
-            results.textContent?.includes("No results"))
+            results.textContent?.includes("Nič sa nenašlo"))
         );
       },
       { timeout: 10_000 },
@@ -191,7 +191,7 @@ test.describe("WASM Operator Search", () => {
           results &&
           (results.querySelectorAll('[data-role="search-result-item"]').length >
             0 ||
-            results.textContent?.includes("No results"))
+            results.textContent?.includes("Nič sa nenašlo"))
         );
       },
       { timeout: 5_000 },
@@ -207,7 +207,7 @@ test.describe("WASM Operator Search", () => {
           results &&
           (results.querySelectorAll('[data-role="search-result-item"]').length >
             0 ||
-            results.textContent?.includes("No results"))
+            results.textContent?.includes("Nič sa nenašlo"))
         );
       },
       { timeout: 10_000 },
@@ -321,7 +321,7 @@ test.describe("WASM Operator Search", () => {
           results &&
           (results.querySelectorAll('[data-role="search-result-item"]').length >
             0 ||
-            results.textContent?.includes("No results"))
+            results.textContent?.includes("Nič sa nenašlo"))
         );
       },
       { timeout: 10_000 },

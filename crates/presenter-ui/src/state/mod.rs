@@ -191,7 +191,7 @@ impl AppContext {
             stage_text_mode: RwSignal::new(StageTextMode::default()),
             timers: RwSignal::new(None),
             broadcast_live: RwSignal::new(false),
-            context_title: RwSignal::new("Presentations".to_string()),
+            context_title: RwSignal::new("Piesne v knižnici".to_string()),
             stage_connections: RwSignal::new(Vec::new()),
             stage_monitor_baseline: RwSignal::new(load_baseline_from_storage()),
             toast_message: RwSignal::new(None),

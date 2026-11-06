@@ -21,11 +21,11 @@ pub fn ClearBroadcastButton() -> impl IntoView {
                 Ok(()) => {
                     active_broadcast.set(None);
                     toast_variant.set("success".to_string());
-                    toast_message.set(Some("Broadcast cleared".to_string()));
+                    toast_message.set(Some("Verš zo steny zmazaný".to_string()));
                 }
                 Err(e) => {
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Clear failed: {e}")));
+                    toast_message.set(Some(format!("Vymazanie zlyhalo: {e}")));
                 }
             }
         });
@@ -38,7 +38,7 @@ pub fn ClearBroadcastButton() -> impl IntoView {
             data-role="clear-broadcast"
             on:click=on_clear
             style="margin-top: 4px;"
-        >"Clear broadcast"</button>
+        >"Vymazať verš zo steny"</button>
     }
 }
 
@@ -59,7 +59,7 @@ pub fn LoadedPassagesHistory() -> impl IntoView {
             } else {
                 Some(view! {
                     <div class="bible__history" data-role="bible-history">
-                        <h4 style="margin:8px 0 4px;font-size:0.85em;opacity:0.7;">"Recent passages"</h4>
+                        <h4 style="margin:8px 0 4px;font-size:0.85em;opacity:0.7;">"Naposledy zobrazené"</h4>
                         {items.into_iter().map(|entry| {
                             let label = entry.label.clone();
                             let book_code = entry.book_code.clone();
@@ -126,14 +126,14 @@ pub fn SelectionControls() -> impl IntoView {
 
     view! {
         <span data-role="selection-count" class="operator__slides-count">
-            {move || format!("{} selected", selected_count())}
+            {move || format!("Vybrané: {}", selected_count())}
         </span>
         <button
             type="button"
             class="operator__list-action"
             data-role="select-all-slides"
             on:click=on_select_all
-        >"Select all"</button>
+        >"Vybrať všetko"</button>
         <AddToPresentationButtons />
     }
 }
@@ -173,12 +173,12 @@ fn AddToPresentationButtons() -> impl IntoView {
         let ctx = ctx.clone();
         move |_| {
             let Some(inputs) = collect_selected_inputs(&bs) else {
-                ctx.show_toast("No slides selected", "error");
+                ctx.show_toast("Nie je vybraná žiadna snímka", "error");
                 return;
             };
             // Prompt user for presentation name
             let window = crate::utils::window::window();
-            let name = match window.prompt_with_message("Presentation name:") {
+            let name = match window.prompt_with_message("Názov prezentácie:") {
                 Ok(Some(n)) if !n.trim().is_empty() => n.trim().to_string(),
                 _ => return, // User cancelled or entered empty name
             };
@@ -192,7 +192,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                     Ok(d) => d,
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Failed to create: {e}")));
+                        toast_message.set(Some(format!("Vytvorenie zlyhalo: {e}")));
                         return;
                     }
                 };
@@ -201,7 +201,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                     Ok(_) => {
                         toast_variant.set("success".to_string());
                         toast_message.set(Some(format!(
-                            "Added {} slide(s) to new presentation",
+                            "Pridané snímky do novej prezentácie: {}",
                             inputs.len()
                         )));
                         selected_ids.set(std::collections::HashSet::new());
@@ -212,7 +212,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Failed to add slides: {e}")));
+                        toast_message.set(Some(format!("Pridanie snímok zlyhalo: {e}")));
                     }
                 }
             });
@@ -225,7 +225,7 @@ fn AddToPresentationButtons() -> impl IntoView {
             class="operator__list-action operator__list-action--primary"
             data-role="presentation-add"
             on:click=on_add_new
-        >"+ New presentation"</button>
+        >"+ Nová prezentácia"</button>
         <div class="bible__add-pres-list">
             {move || {
                 let pres_list = presentations.get();
@@ -239,7 +239,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                         let ctx = ctx.clone();
                         let on_click = move |_| {
                             let Some(inputs) = collect_selected_inputs(&bs) else {
-                                ctx.show_toast("No slides selected", "error");
+                                ctx.show_toast("Nie je vybraná žiadna snímka", "error");
                                 return;
                             };
                             let pres_id = pres_id.clone();
@@ -252,7 +252,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                                     Ok(_) => {
                                         toast_variant.set("success".to_string());
                                         toast_message.set(Some(format!(
-                                            "Added {} slide(s)",
+                                            "Pridané snímky: {}",
                                             inputs.len()
                                         )));
                                         selected_ids.set(std::collections::HashSet::new());
@@ -262,7 +262,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                                     }
                                     Err(e) => {
                                         toast_variant.set("error".to_string());
-                                        toast_message.set(Some(format!("Failed: {e}")));
+                                        toast_message.set(Some(format!("Zlyhalo: {e}")));
                                     }
                                 }
                             });

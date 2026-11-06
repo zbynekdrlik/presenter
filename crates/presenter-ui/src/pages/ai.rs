@@ -101,7 +101,7 @@ pub fn AiPage() -> impl IntoView {
             match send_message_sse(&text, messages, tool_progress, error, connected).await {
                 Ok(()) => {}
                 Err(e) => {
-                    error.set(Some(format!("Failed to get AI response: {e}")));
+                    error.set(Some(format!("AI neodpovedala: {e}")));
                 }
             }
             loading.set(false);
@@ -196,7 +196,7 @@ pub fn AiPage() -> impl IntoView {
             match ai_api::update_settings(&update).await {
                 Ok(()) => {
                     toast_variant.set("success".to_string());
-                    toast.set(Some("AI settings saved".to_string()));
+                    toast.set(Some("Nastavenie AI uložené".to_string()));
                     // Reflect a saved apiUrl/model change in the connection
                     // dot immediately, without waiting for the next poll.
                     if let Ok(status) = ai_api::check_status().await {
@@ -205,7 +205,7 @@ pub fn AiPage() -> impl IntoView {
                 }
                 Err(e) => {
                     toast_variant.set("error".to_string());
-                    toast.set(Some(format!("Failed to save: {e}")));
+                    toast.set(Some(format!("Uloženie zlyhalo: {e}")));
                 }
             }
         });
@@ -219,12 +219,12 @@ pub fn AiPage() -> impl IntoView {
         <div class="ai-chat" data-role="ai-chat">
             <div class="ai-chat__header">
                 <div class="ai-chat__header-left">
-                    <h2 class="ai-chat__title">"AI Assistant"</h2>
+                    <h2 class="ai-chat__title">"AI asistent"</h2>
                     <span
                         class="ai-chat__status"
                         data-connected=move || if connected.get() { "true" } else { "false" }
                         on:click=on_check_status
-                        title="Click to check connection"
+                        title="Kliknutím overíš pripojenie"
                     ></span>
                 </div>
                 <div class="ai-chat__header-right">
@@ -233,7 +233,8 @@ pub fn AiPage() -> impl IntoView {
                         class="ai-chat__btn ai-chat__btn--settings"
                         data-role="ai-settings-toggle"
                         on:click=toggle_settings
-                        title="Settings"
+                        title="Nastavenie"
+                        aria-label="Nastavenie"
                     >
                         {"\u{2699}"}
                     </button>
@@ -242,9 +243,9 @@ pub fn AiPage() -> impl IntoView {
                         class="ai-chat__btn ai-chat__btn--clear"
                         data-role="ai-clear"
                         on:click=on_clear
-                        title="Clear conversation"
+                        title="Vymazať rozhovor"
                     >
-                        "Clear"
+                        "Vymazať"
                     </button>
                 </div>
             </div>
@@ -272,7 +273,7 @@ pub fn AiPage() -> impl IntoView {
                     on:submit=move |ev| ev.prevent_default()
                 >
                     <div class="ai-chat__settings-field">
-                        <label>"API URL"</label>
+                        <label>"Adresa API"</label>
                         <input
                             type="text"
                             data-role="ai-api-url"
@@ -283,12 +284,12 @@ pub fn AiPage() -> impl IntoView {
                         />
                     </div>
                     <div class="ai-chat__settings-field">
-                        <label>"API Key"</label>
+                        <label>"Kľúč API"</label>
                         <input
                             type="password"
                             data-role="ai-api-key"
                             autocomplete="off"
-                            placeholder=move || if api_key_set.get() { "••••••••" } else { "optional" }
+                            placeholder=move || if api_key_set.get() { "••••••••" } else { "nepovinné" }
                             prop:value=move || api_key.get()
                             on:input=move |ev| api_key.set(event_target_value(&ev))
                         />
@@ -310,7 +311,7 @@ pub fn AiPage() -> impl IntoView {
                         data-role="ai-save-settings"
                         on:click=on_save_settings
                     >
-                        "Save Settings"
+                        "Uložiť nastavenie"
                     </button>
                 </form>
             </div>
@@ -322,8 +323,8 @@ pub fn AiPage() -> impl IntoView {
                     if msgs.is_empty() {
                         view! {
                             <div class="ai-chat__empty">
-                                <p>"Paste the pastor's message here and AI will create presentations automatically."</p>
-                                <p class="ai-chat__empty-hint">"Supports Bible references (e.g. \u{017D}id 4:13 SEB), titles (Nazov:), and plain text."</p>
+                                <p>"Vlož sem text od pastora a AI z neho sama pripraví prezentácie."</p>
+                                <p class="ai-chat__empty-hint">"Rozumie odkazom na Bibliu (napr. \u{017D}id 4:13 SEB), nadpisom (Nazov:) aj obyčajnému textu."</p>
                             </div>
                         }.into_any()
                     } else {
@@ -370,7 +371,7 @@ pub fn AiPage() -> impl IntoView {
                     view! {
                         <div class="ai-chat__loading" data-role="ai-loading">
                             <span class="ai-chat__loading-dots">"..."</span>
-                            " AI is working"
+                            " AI pracuje"
                             {if !progress.is_empty() {
                                 view! {
                                     <div class="ai-chat__tool-progress">
@@ -414,7 +415,7 @@ pub fn AiPage() -> impl IntoView {
                 <textarea
                     class="ai-chat__textarea"
                     data-role="ai-input"
-                    placeholder="Type a message or paste pastor's text..."
+                    placeholder="Napíš správu alebo vlož text od pastora…"
                     rows="3"
                     prop:value=move || input_text.get()
                     on:input=move |ev| input_text.set(event_target_value(&ev))
@@ -429,7 +430,7 @@ pub fn AiPage() -> impl IntoView {
                     on:click=on_send_click
                     prop:disabled=move || loading.get() || input_text.get().trim().is_empty()
                 >
-                    "Send"
+                    "Odoslať"
                 </button>
             </div>
         </div>
@@ -583,8 +584,8 @@ fn process_sse_event(
         }
         "error" => {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
-                let msg = val["message"].as_str().unwrap_or("Unknown error");
-                error.set(Some(format!("AI error: {msg}")));
+                let msg = val["message"].as_str().unwrap_or("neznáma chyba");
+                error.set(Some(format!("Chyba AI: {msg}")));
             }
             // A chat error might mean the AI backend went down mid-session —
             // re-check status so the connection dot reacts immediately instead

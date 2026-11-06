@@ -230,7 +230,7 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
 
     await expect(
       page.locator('[data-role="slide-selection-count"]'),
-    ).toHaveText("2 selected");
+    ).toHaveText("Vybrané: 2");
     await expect(page.locator(`[data-slide-id="${slideIds[0]}"]`)).toHaveClass(
       /operator__slide-card--selected/,
     );
@@ -252,7 +252,7 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
 
     await expect(
       page.locator('[data-role="slide-selection-count"]'),
-    ).toHaveText("4 selected");
+    ).toHaveText("Vybrané: 4");
   });
 
   test("copy + paste at start, a true middle gap, and the end", async ({
@@ -588,7 +588,7 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     await checkboxFor(page, idsB[0]).click();
     await expect(
       page.locator('[data-role="slide-selection-count"]'),
-    ).toHaveText("1 selected");
+    ).toHaveText("Vybrané: 1");
 
     // B's slide list must be COMPLETELY untouched by A's late paste result —
     // never A's returned slides painted onto B.
@@ -673,7 +673,7 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     await checkboxFor(page, idsB[0]).click();
     await expect(
       page.locator('[data-role="slide-selection-count"]'),
-    ).toHaveText("1 selected");
+    ).toHaveText("Vybrané: 1");
 
     // B must be COMPLETELY untouched — never A's stale 409 refetch (or any
     // recovery UI) painted onto B; and the clipboard recovery must have
@@ -782,7 +782,7 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     await checkboxFor(page, idsB[0]).click();
     await expect(
       page.locator('[data-role="slide-selection-count"]'),
-    ).toHaveText("1 selected");
+    ).toHaveText("Vybrané: 1");
 
     // B must be COMPLETELY untouched by A's stale recovery refetch, and no
     // misleading "refreshed" toast for a presentation nobody is looking at.
@@ -1118,7 +1118,7 @@ test.describe("WASM Operator Slide Multi-Select (#554)", () => {
     await checkboxFor(page, idsB[1]).click();
     await expect(
       page.locator('[data-role="slide-selection-count"]'),
-    ).toHaveText("2 selected");
+    ).toHaveText("Vybrané: 2");
 
     // B's chooser must still be armed — A's late success must not have
     // touched it.

@@ -75,7 +75,7 @@ pub fn PresentationList() -> impl IntoView {
             if has_playlist {
                 // When playlist is active, prompt for separator name
                 let name = crate::utils::window::window()
-                    .prompt_with_message("Separator name:")
+                    .prompt_with_message("Názov oddeľovača:")
                     .ok()
                     .flatten()
                     .unwrap_or_default();
@@ -149,12 +149,12 @@ pub fn PresentationList() -> impl IntoView {
                     <button
                         type="button"
                         data-role="presentation-create"
-                        aria-label="Add presentation or separator"
+                        aria-label="Pridať pieseň alebo oddeľovač"
                         title=move || {
                             if ctx.selected_playlist_id.get().is_some() {
-                                "Add separator to playlist"
+                                "Pridať oddeľovač do playlistu"
                             } else {
-                                "Add presentation"
+                                "Pridať pieseň"
                             }
                         }
                         on:click=on_create
@@ -200,7 +200,7 @@ pub fn PresentationList() -> impl IntoView {
                                         on:dragleave=on_dragleave
                                         on:drop=on_drop
                                     >
-                                        "Playlist is empty. Drag songs from a library or add a separator."
+                                        "Playlist je prázdny. Pretiahni sem piesne z knižnice alebo pridaj oddeľovač."
                                     </li>
                                 }.into_any();
                             }
@@ -329,7 +329,7 @@ pub fn PresentationList() -> impl IntoView {
                                                 }
                                             >
                                                 <span>{sep_name}</span>
-                                                <span class="operator__presentation-meta">"Separator"</span>
+                                                <span class="operator__presentation-meta">"Oddeľovač"</span>
                                                 {is_edit.then(|| {
                                                     let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
                                                     let playlist_id_remove = playlist_id.clone();
@@ -344,7 +344,7 @@ pub fn PresentationList() -> impl IntoView {
                                                                     ev.stop_propagation();
                                                                     // Rename separator via prompt
                                                                     let new_name = crate::utils::window::window()
-                                                                        .prompt_with_message("Rename separator:")
+                                                                        .prompt_with_message("Premenovať oddeľovač:")
                                                                         .ok().flatten().unwrap_or_default();
                                                                     if new_name.trim().is_empty() { return; }
                                                                     let entry_id = entry_id_rename.clone();
@@ -663,9 +663,9 @@ pub fn PresentationList() -> impl IntoView {
 
                     if presentations.is_empty() {
                         let msg = if ctx.selected_library_id.get().is_some() {
-                            "No presentations in this library."
+                            "V tejto knižnici nie sú piesne."
                         } else {
-                            "Select a library or playlist to view presentations."
+                            "Vyber knižnicu alebo playlist."
                         };
                         return view! {
                             <li class="empty">{msg}</li>

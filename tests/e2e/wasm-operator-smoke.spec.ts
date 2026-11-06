@@ -54,12 +54,12 @@ test.describe("WASM Operator Smoke Tests", () => {
       () => {
         const list = document.querySelector('[data-role="library-list"]');
         if (!list) return false;
-        const loading = list.textContent?.includes("Loading");
+        const loading = list.textContent?.includes("Načítavam");
         const hasItems =
           list.querySelectorAll('[data-role="library-item"]').length > 0;
         const hasEmptyMessage =
-          list.textContent?.includes("No libraries") ||
-          list.textContent?.includes("Star libraries");
+          list.textContent?.includes("Žiadne knižnice") ||
+          list.textContent?.includes("Obľúbené knižnice");
         return !loading && (hasItems || hasEmptyMessage);
       },
       { timeout: 30_000 },
@@ -90,7 +90,7 @@ test.describe("WASM Operator Smoke Tests", () => {
         return (
           presentations.querySelectorAll('[data-role="presentation-item"]')
             .length > 0 ||
-          presentations.textContent?.includes("No presentations")
+          presentations.textContent?.includes("nie sú piesne")
         );
       },
       { timeout: 15_000 },
@@ -123,10 +123,10 @@ test.describe("WASM Operator Smoke Tests", () => {
       () => {
         const slides = document.querySelector('[data-role="slides"]');
         if (!slides) return false;
-        // Either has slide cards or shows "Select a presentation" message
+        // Either has slide cards or shows the "Vyber pieseň vľavo." message
         return (
           slides.querySelectorAll("[data-slide-id]").length > 0 ||
-          slides.textContent?.includes("Select a presentation")
+          slides.textContent?.includes("Vyber pieseň vľavo.")
         );
       },
       { timeout: 15_000 },
@@ -148,7 +148,7 @@ test.describe("WASM Operator Smoke Tests", () => {
     if ((await modeToggle.count()) === 0) {
       // Fallback: click by text
       const toggleButton = page.locator(
-        `button:has-text("${targetMode === "edit" ? "Edit" : "Live"}")`,
+        `button:has-text("${targetMode === "edit" ? "Úprava" : "Naživo"}")`,
       );
       if ((await toggleButton.count()) > 0) {
         await toggleButton.first().click();
@@ -233,7 +233,7 @@ test.describe("WASM Operator Smoke Tests", () => {
     await page.waitForFunction(
       () => {
         const list = document.querySelector('[data-role="library-list"]');
-        return list && !list.textContent?.includes("Loading");
+        return list && !list.textContent?.includes("Načítavam");
       },
       { timeout: 10_000 },
     );

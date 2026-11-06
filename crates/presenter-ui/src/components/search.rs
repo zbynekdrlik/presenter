@@ -186,23 +186,23 @@ pub fn SearchResults() -> impl IntoView {
 
                     if searching {
                         return view! {
-                            <div class="operator__search-loading">"Searching\u{2026}"</div>
+                            <div class="operator__search-loading">"Hľadám\u{2026}"</div>
                         }.into_any();
                     }
                     if results.is_empty() && has_searched {
                         return view! {
-                            <div class="operator__search-empty">"No results found."</div>
+                            <div class="operator__search-empty">"Nič sa nenašlo."</div>
                         }.into_any();
                     }
                     if results.is_empty() {
                         return view! {
-                            <div class="operator__search-empty">"Type to search\u{2026}"</div>
+                            <div class="operator__search-empty">"Začni písať\u{2026}"</div>
                         }.into_any();
                     }
 
                     view! {
                         <section class="operator__search-group" data-kind="bible">
-                            <h3>"Bible verses"</h3>
+                            <h3>"Verše v Biblii"</h3>
                             {results.into_iter().map(|hit| {
                                 let ref_label = hit.reference.to_human_readable();
                                 let text_preview = {
@@ -266,10 +266,10 @@ pub fn SearchResults() -> impl IntoView {
                     // Render library/song search results
                     let results = ctx.search_results.get();
                     if results.is_empty() && ctx.search_loading.get() {
-                        return view! { <div class="operator__search-loading">"Searching..."</div> }.into_any();
+                        return view! { <div class="operator__search-loading">"Hľadám\u{2026}"</div> }.into_any();
                     }
                     if results.is_empty() {
-                        return view! { <div class="operator__search-empty">"No results"</div> }.into_any();
+                        return view! { <div class="operator__search-empty">"Nič sa nenašlo"</div> }.into_any();
                     }
 
                     // Group results by kind: Libraries, Presentations
@@ -339,13 +339,13 @@ pub fn SearchResults() -> impl IntoView {
                         <>
                             {(!libraries.is_empty()).then(|| view! {
                                 <section class="operator__search-group" data-kind="library">
-                                    <h3>"Libraries"</h3>
+                                    <h3>"Knižnice"</h3>
                                     {libraries.into_iter().map(render_result).collect_view()}
                                 </section>
                             })}
                             {(!presentations.is_empty()).then(|| view! {
                                 <section class="operator__search-group" data-kind="presentation">
-                                    <h3>"Presentations"</h3>
+                                    <h3>"Piesne"</h3>
                                     {presentations.into_iter().map(render_result).collect_view()}
                                 </section>
                             })}

@@ -248,7 +248,6 @@ body.operator {
 .operator__search-group h3 {
   margin: 0 0 0.35rem 0;
   font-size: 0.75rem;
-  text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--operator-muted);
 }
@@ -415,7 +414,6 @@ body.operator {
 
 .operator__stage-layout-label {
   font-size: 0.65rem;
-  text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
@@ -449,7 +447,6 @@ body.operator {
 .operator__view-nav {
   font-size: 0.7rem;
   letter-spacing: 0.16em;
-  text-transform: uppercase;
   color: #cbd5f5;
   opacity: 0.75;
 }
@@ -529,7 +526,6 @@ body.operator {
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--operator-muted);
-  text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
@@ -538,7 +534,6 @@ body.operator {
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--operator-muted);
-  text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
@@ -1518,7 +1513,6 @@ body.operator[data-mode="live"] .operator__slide-handle {
   align-items: center;
   gap: 0.35rem;
   font-size: 0.75rem;
-  text-transform: uppercase;
   letter-spacing: 0.08em;
   background: rgba(59, 124, 255, 0.16);
   color: var(--operator-accent-dark);
@@ -1548,7 +1542,6 @@ body.operator[data-mode="live"] .operator__slide-handle {
   align-items: center;
   gap: 0.25rem;
   font-size: 0.7rem;
-  text-transform: uppercase;
   letter-spacing: 0.06em;
   background: rgba(14, 165, 233, 0.16);
   color: #0369a1;
@@ -3201,7 +3194,6 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   border-radius: 6px;
   background: rgba(148, 163, 184, 0.25);
   color: var(--operator-muted);
-  text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .operator__slide-selection {
@@ -3258,4 +3250,42 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
 .operator__slide-insert-bar:hover {
   background: rgba(59, 124, 255, 0.16);
   border-color: rgba(59, 124, 255, 0.7);
+}
+
+/* ── #875 H3: one control size on every operator page (desktop) ──
+   The smallest button, select and field is 40 px tall; the main actions
+   (show on the wall, clear the wall) 48 px. `:where()` keeps the base rule at
+   the specificity of a bare `button`, so a component that asks for MORE (the
+   verse console's 44 / 48 px) still wins. Not here: the 40 px header row
+   (header.css, 32 px controls inside it), the controls lying ON the stage
+   preview picture (H2, stage_preview.css), Nastavenia (H4) and the phone
+   shell (phone_shell.css: 44 px). */
+:where(body.operator:not([data-shell="phone"]) .operator__main > section:not([data-view-panel="settings"])) button,
+:where(body.operator:not([data-shell="phone"]) .operator__main > section:not([data-view-panel="settings"])) select,
+:where(body.operator:not([data-shell="phone"]) .operator__main > section:not([data-view-panel="settings"])) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]) {
+  min-height: 40px;
+  box-sizing: border-box;
+}
+body.operator:not([data-shell="phone"]) .operator__main .operator__stage-preview button {
+  min-height: 0;
+}
+body.operator:not([data-shell="phone"]) .operator__main [data-role="console-show"],
+body.operator:not([data-shell="phone"]) .operator__main [data-role="console-preview-show"],
+body.operator:not([data-shell="phone"]) .operator__main [data-role="console-clear-live"],
+body.operator:not([data-shell="phone"]) .operator__main [data-role="clear-broadcast"],
+body.operator:not([data-shell="phone"]) .operator__main [data-role="slide-trigger"] {
+  min-height: 48px;
+}
+
+/* Ableton / Sledovať pódium: one label, the state is the look (#875 H3).
+   On = filled accent, off = outline with dimmed text. */
+body.operator .operator__stage-toggle[data-state="on"] {
+  background: #2563eb;
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+body.operator .operator__stage-toggle[data-state="off"] {
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: rgba(226, 232, 240, 0.6);
 }

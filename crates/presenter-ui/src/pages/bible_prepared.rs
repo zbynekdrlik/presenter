@@ -254,11 +254,11 @@ pub(super) fn BibleSettingsTab() -> impl IntoView {
                 match bible::update_preferences(&draft).await {
                     Ok(()) => {
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Preferences saved".to_string()));
+                        toast_message.set(Some("Nastavenie uložené".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Save failed: {e}")));
+                        toast_message.set(Some(format!("Uloženie zlyhalo: {e}")));
                     }
                 }
             });
@@ -273,7 +273,7 @@ pub(super) fn BibleSettingsTab() -> impl IntoView {
         >
             <div class="operator__form-group">
                 <label class="operator__field">
-                    <span>"Character limit"</span>
+                    <span>"Limit znakov na snímku"</span>
                     <input
                         type="number"
                         data-role="char-limit"
@@ -288,7 +288,7 @@ pub(super) fn BibleSettingsTab() -> impl IntoView {
                     class="operator__list-action operator__list-action--primary"
                     data-role="save-preferences"
                     on:click=on_save
-                >"Save preferences"</button>
+                >"Uložiť nastavenie"</button>
             </div>
         </div>
     }

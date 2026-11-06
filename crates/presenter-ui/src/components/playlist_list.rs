@@ -62,13 +62,13 @@ pub fn PlaylistList() -> impl IntoView {
     view! {
         <section class="operator__group operator__group--playlists">
             <header class="operator__group-header">
-                <h2>"Playlists"</h2>
+                <h2>"Playlisty"</h2>
                 <div class="operator__group-controls">
                     <button
                         type="button"
                         class="operator__group-count"
                         data-role="playlist-more"
-                        aria-label="Show all playlists"
+                        aria-label="Zobraziť všetky playlisty"
                         on:click=on_more
                     >
                         {move || {
@@ -79,8 +79,8 @@ pub fn PlaylistList() -> impl IntoView {
                     <button
                         type="button"
                         data-role="playlist-create"
-                        aria-label="Create playlist"
-                        title="Create playlist"
+                        aria-label="Nový playlist"
+                        title="Nový playlist"
                         on:click=on_create
                     >"+"</button>
                 </div>
@@ -93,7 +93,7 @@ pub fn PlaylistList() -> impl IntoView {
                     if playlists.is_empty() {
                         return view! {
                             <li class="operator__favorites-empty">
-                                "No playlists yet. Create one to build a run sheet."
+                                "Zatiaľ žiadny playlist. Vytvor si poradie bohoslužby."
                             </li>
                         }.into_any();
                     }
@@ -259,7 +259,7 @@ pub fn PlaylistList() -> impl IntoView {
                                                 class="operator__list-action operator__list-action--icon operator__list-action--menu"
                                                 data-action="playlist-edit"
                                                 data-playlist-id=id_for_edit
-                                                aria-label="Edit playlist"
+                                                aria-label="Upraviť playlist"
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
                                                     op_for_edit.modal_target_id.set(Some(id_for_modal.clone()));

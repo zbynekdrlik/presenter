@@ -211,7 +211,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
         <div class="operator__reference-grid">
             <label class="operator__field">
                 <span>
-                    "Chapter"
+                    "Kapitola"
                     {move || chapter_max().map(|n| view! {
                         <span class="operator__field-max" data-role="chapter-max">{format!("/ {n}")}</span>
                     })}
@@ -229,7 +229,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
             </label>
             <label class="operator__field">
                 <span>
-                    "Verse start"
+                    "Od verša"
                     {move || verse_max().map(|n| view! {
                         <span class="operator__field-max" data-role="verse-max">{format!("/ {n}")}</span>
                     })}
@@ -247,7 +247,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
             </label>
             <label class="operator__field">
                 <span>
-                    "Verse end"
+                    "Po verš"
                     {move || verse_max().map(|n| view! {
                         <span class="operator__field-max" data-role="verse-end-max">{format!("/ {n}")}</span>
                     })}
@@ -259,7 +259,7 @@ pub(super) fn ReferenceInputs() -> impl IntoView {
                     max=move || verse_max().map(|n| n.to_string())
                     node_ref=refs.verse_end
                     prop:value=move || verse_end_signal.get().map(|v| v.to_string()).unwrap_or_default()
-                    placeholder="All"
+                    placeholder="všetky"
                     on:change=on_verse_end
                     on:keydown=on_verse_end_keydown
                 />

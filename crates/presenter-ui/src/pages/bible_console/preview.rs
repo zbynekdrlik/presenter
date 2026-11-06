@@ -98,7 +98,7 @@ pub(super) fn ConsolePreview(console: Console) -> impl IntoView {
                         move |_| show(c, ctx.clone())
                     }
                 >
-                    "ZOBRAZIŤ"
+                    "Zobraziť"
                 </button>
             </Show>
         </section>

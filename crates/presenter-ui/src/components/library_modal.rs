@@ -127,11 +127,11 @@ pub fn LibraryModals() -> impl IntoView {
                 match result {
                     Ok(()) => {
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Library saved".to_string()));
+                        toast_message.set(Some("Knižnica uložená".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Error: {e}")));
+                        toast_message.set(Some(format!("Chyba: {e}")));
                     }
                 }
             });
@@ -150,7 +150,7 @@ pub fn LibraryModals() -> impl IntoView {
                 .map(|l| l.name.clone())
                 .unwrap_or_default();
 
-            if !crate::components::modal::confirm(&format!("Delete library \"{lib_name}\"?")) {
+            if !crate::components::modal::confirm(&format!("Zmazať knižnicu „{lib_name}“?")) {
                 return;
             }
 
@@ -171,7 +171,7 @@ pub fn LibraryModals() -> impl IntoView {
                     body.dataset().delete("modalOpen");
                 }
                 toast_variant.set("success".to_string());
-                toast_message.set(Some("Library deleted".to_string()));
+                toast_message.set(Some("Knižnica zmazaná".to_string()));
             });
         }
     };
@@ -242,12 +242,12 @@ pub fn LibraryModals() -> impl IntoView {
         >
             <div class="operator__library-modal-panel">
                 <header class="operator__library-modal-header">
-                    <h3>"All Libraries"</h3>
+                    <h3>"Všetky knižnice"</h3>
                     <button
                         type="button"
                         class="operator__library-modal-close"
                         data-role="library-modal-close"
-                        aria-label="Close"
+                        aria-label="Zavrieť"
                         on:click=close_list_btn
                     >{"\u{00D7}"}</button>
                 </header>
@@ -318,12 +318,12 @@ pub fn LibraryModals() -> impl IntoView {
                 >
                     <header class="operator__library-edit-header">
                         <h3 data-role="library-edit-title">
-                            {move || if edit_mode() == "create" { "Create Library" } else { "Edit Library" }}
+                            {move || if edit_mode() == "create" { "Nová knižnica" } else { "Upraviť knižnicu" }}
                         </h3>
                     </header>
                     <div class="operator__library-edit-body">
                         <label>
-                            <span>"Library name"</span>
+                            <span>"Názov knižnice"</span>
                             <input
                                 type="text"
                                 data-role="library-edit-name"
@@ -344,7 +344,7 @@ pub fn LibraryModals() -> impl IntoView {
                                     favorite_value.set(checkbox_checked(&ev));
                                 }
                             />
-                            <span>"Show in dashboard"</span>
+                            <span>"Zobraziť v zozname vľavo"</span>
                         </label>
                     </div>
                     <footer class="operator__library-edit-footer">
@@ -355,14 +355,14 @@ pub fn LibraryModals() -> impl IntoView {
                             style:display=move || if edit_mode() == "edit" { "inline-block" } else { "none" }
                             prop:disabled=is_submitting
                             on:click=on_delete
-                        >"Delete library"</button>
+                        >"Zmazať knižnicu"</button>
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="library-edit-cancel"
                                 on:click=on_cancel
-                            >"Cancel"</button>
+                            >"Zrušiť"</button>
                             <button type="submit" data-role="library-edit-save"
                                 prop:disabled=is_submitting
-                            >"Save changes"</button>
+                            >"Uložiť"</button>
                         </div>
                     </footer>
                 </form>

@@ -103,11 +103,11 @@ pub fn PresentationModals() -> impl IntoView {
                 match result {
                     Ok(()) => {
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Presentation renamed".to_string()));
+                        toast_message.set(Some("Pieseň premenovaná".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Error: {e}")));
+                        toast_message.set(Some(format!("Chyba: {e}")));
                     }
                 }
             });
@@ -126,8 +126,7 @@ pub fn PresentationModals() -> impl IntoView {
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
 
-            if !crate::components::modal::confirm(&format!("Delete presentation \"{pres_name}\"?"))
-            {
+            if !crate::components::modal::confirm(&format!("Zmazať pieseň „{pres_name}“?")) {
                 return;
             }
 
@@ -167,7 +166,7 @@ pub fn PresentationModals() -> impl IntoView {
                     body.dataset().delete("modalOpen");
                 }
                 toast_variant.set("success".to_string());
-                toast_message.set(Some("Presentation deleted".to_string()));
+                toast_message.set(Some("Pieseň zmazaná".to_string()));
             });
         }
     };
@@ -199,8 +198,9 @@ pub fn PresentationModals() -> impl IntoView {
             if target_id.is_empty() || lib_id.is_empty() {
                 // Never silently no-op — say why nothing happened.
                 ctx.toast_variant.set("error".to_string());
-                ctx.toast_message
-                    .set(Some("No target library available".to_string()));
+                ctx.toast_message.set(Some(
+                    "Nie je kam kopírovať: žiadna iná knižnica".to_string(),
+                ));
                 return;
             }
             op.submitting.set(true);
@@ -238,11 +238,12 @@ pub fn PresentationModals() -> impl IntoView {
                 match result {
                     Ok(detail) => {
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some(format!("Copied to \"{}\"", detail.library_name)));
+                        toast_message
+                            .set(Some(format!("Skopírované do „{}“", detail.library_name)));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Copy error: {e}")));
+                        toast_message.set(Some(format!("Kopírovanie zlyhalo: {e}")));
                     }
                 }
             });
@@ -273,7 +274,7 @@ pub fn PresentationModals() -> impl IntoView {
             };
             let name = create_name.get_untracked().trim().to_string();
             let name = if name.is_empty() {
-                "New Presentation".to_string()
+                "Nová pieseň".to_string()
             } else {
                 name
             };
@@ -305,11 +306,11 @@ pub fn PresentationModals() -> impl IntoView {
                         }
 
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Presentation created".to_string()));
+                        toast_message.set(Some("Pieseň vytvorená".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Error: {e}")));
+                        toast_message.set(Some(format!("Chyba: {e}")));
                     }
                 }
 
@@ -345,7 +346,7 @@ pub fn PresentationModals() -> impl IntoView {
             // existing rename flow after creation).
             let name = crate::utils::song_parser::extract_title(&text)
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "Untitled".to_string());
+                .unwrap_or_else(|| "Bez názvu".to_string());
 
             // Run the full pipeline.
             let slides = crate::utils::song_parser::parse_song_text(&text);
@@ -384,11 +385,11 @@ pub fn PresentationModals() -> impl IntoView {
                         }
 
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Presentation created from paste".to_string()));
+                        toast_message.set(Some("Pieseň vytvorená z vloženého textu".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Error: {e}")));
+                        toast_message.set(Some(format!("Chyba: {e}")));
                     }
                 }
 
@@ -476,11 +477,11 @@ pub fn PresentationModals() -> impl IntoView {
                         }
 
                         toast_variant.set("success".to_string());
-                        toast_message.set(Some("Presentation imported".to_string()));
+                        toast_message.set(Some("Pieseň naimportovaná".to_string()));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Import error: {e}")));
+                        toast_message.set(Some(format!("Import zlyhal: {e}")));
                     }
                 }
 
@@ -529,11 +530,11 @@ pub fn PresentationModals() -> impl IntoView {
                     on:submit=on_edit_save
                 >
                     <header class="operator__library-edit-header">
-                        <h3 data-role="presentation-edit-title">"Rename Presentation"</h3>
+                        <h3 data-role="presentation-edit-title">"Premenovať pieseň"</h3>
                     </header>
                     <div class="operator__library-edit-body">
                         <label>
-                            <span data-role="presentation-edit-label">"Presentation name"</span>
+                            <span data-role="presentation-edit-label">"Názov piesne"</span>
                             <input
                                 type="text"
                                 data-role="presentation-edit-name"
@@ -548,7 +549,7 @@ pub fn PresentationModals() -> impl IntoView {
                         // #570: copy this presentation into another library.
                         <div class="operator__presentation-copy-row" data-role="presentation-copy-row">
                             <label>
-                                <span data-role="presentation-copy-label">"Copy to library"</span>
+                                <span data-role="presentation-copy-label">"Kopírovať do knižnice"</span>
                                 <select
                                     data-role="presentation-copy-target"
                                     prop:value=move || copy_target.get()
@@ -569,7 +570,7 @@ pub fn PresentationModals() -> impl IntoView {
                                 data-role="presentation-copy-confirm"
                                 prop:disabled=is_submitting
                                 on:click=on_copy
-                            >"Copy"</button>
+                            >"Kopírovať"</button>
                         </div>
                     </div>
                     <footer class="operator__library-edit-footer">
@@ -579,14 +580,14 @@ pub fn PresentationModals() -> impl IntoView {
                             data-role="presentation-edit-delete"
                             prop:disabled=is_submitting
                             on:click=on_edit_delete
-                        >"Delete presentation"</button>
+                        >"Zmazať pieseň"</button>
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="presentation-edit-cancel"
                                 on:click=on_edit_cancel
-                            >"Cancel"</button>
+                            >"Zrušiť"</button>
                             <button type="submit" data-role="presentation-edit-save"
                                 prop:disabled=is_submitting
-                            >"Save changes"</button>
+                            >"Uložiť"</button>
                         </div>
                     </footer>
                 </form>
@@ -601,17 +602,17 @@ pub fn PresentationModals() -> impl IntoView {
             <div class="operator__library-edit-panel">
                 <div class="operator__library-edit-form" data-role="presentation-create-form">
                     <header class="operator__library-edit-header">
-                        <h3>"Create Presentation"</h3>
+                        <h3>"Nová pieseň"</h3>
                     </header>
                     <div class="operator__library-edit-body">
                         <label style:display=move || if create_step.get() == "paste" { "none" } else { "block" }>
-                            <span>"Presentation name"</span>
+                            <span>"Názov piesne"</span>
                             <input
                                 type="text"
                                 data-role="presentation-create-name"
                                 autocomplete="off"
                                 maxlength="160"
-                                placeholder="New Presentation"
+                                placeholder="Nová pieseň"
                                 prop:value=move || create_name.get()
                                 on:input=move |ev| create_name.set(event_target_value(&ev))
                             />
@@ -625,20 +626,20 @@ pub fn PresentationModals() -> impl IntoView {
                                 prop:disabled=is_submitting
                                 on:click=on_create_blank
                             >
-                                <span class="operator__create-option-label">"Blank"</span>
-                                <span class="operator__create-option-desc">"Empty presentation"</span>
+                                <span class="operator__create-option-label">"Prázdna"</span>
+                                <span class="operator__create-option-desc">"Prázdna pieseň"</span>
                             </button>
                             <button type="button" class="operator__create-option" data-role="presentation-create-paste"
                                 on:click=move |_| create_step.set("paste".to_string())
                             >
-                                <span class="operator__create-option-label">"Paste"</span>
-                                <span class="operator__create-option-desc">"Paste song text"</span>
+                                <span class="operator__create-option-label">"Vložiť text"</span>
+                                <span class="operator__create-option-desc">"Vlož text piesne"</span>
                             </button>
                             <button type="button" class="operator__create-option" data-role="presentation-create-import"
                                 on:click=move |_| create_step.set("import".to_string())
                             >
                                 <span class="operator__create-option-label">"Import"</span>
-                                <span class="operator__create-option-desc">".pro file"</span>
+                                <span class="operator__create-option-desc">".pro súbor"</span>
                             </button>
                         </div>
 
@@ -649,18 +650,18 @@ pub fn PresentationModals() -> impl IntoView {
                             <textarea
                                 data-role="presentation-create-paste-text"
                                 rows="10"
-                                placeholder="Paste song text here..."
+                                placeholder="Sem vlož text piesne…"
                                 prop:value=move || paste_text.get()
                                 on:input=move |ev| paste_text.set(event_target_value(&ev))
                             ></textarea>
                             <div class="operator__presentation-create-sub-actions">
                                 <button type="button" data-role="presentation-create-paste-back"
                                     on:click=move |_| create_step.set("options".to_string())
-                                >"Back"</button>
+                                >"Späť"</button>
                                 <button type="button" data-role="presentation-create-paste-confirm"
                                     prop:disabled=is_submitting
                                     on:click=on_paste_confirm
-                                >"Create"</button>
+                                >"Vytvoriť"</button>
                             </div>
                         </div>
 
@@ -672,7 +673,7 @@ pub fn PresentationModals() -> impl IntoView {
                             <div class="operator__presentation-create-sub-actions">
                                 <button type="button" data-role="presentation-create-import-back"
                                     on:click=move |_| create_step.set("options".to_string())
-                                >"Back"</button>
+                                >"Späť"</button>
                                 <button type="button" data-role="presentation-create-import-confirm"
                                     prop:disabled=is_submitting
                                     on:click=on_import_confirm
@@ -684,7 +685,7 @@ pub fn PresentationModals() -> impl IntoView {
                         <div class="operator__library-edit-actions">
                             <button type="button" data-role="presentation-create-cancel"
                                 on:click=on_create_cancel
-                            >"Cancel"</button>
+                            >"Zrušiť"</button>
                         </div>
                     </footer>
                 </div>

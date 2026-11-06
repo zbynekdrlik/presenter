@@ -253,7 +253,7 @@ test.describe("WASM Operator Playlist Operations", () => {
     await page.waitForFunction(
       () => {
         const title = document.querySelector('[data-role="context-title"]');
-        return title && title.textContent !== "Presentations";
+        return title && title.textContent !== "Piesne v knižnici";
       },
       { timeout: 10_000 },
     );

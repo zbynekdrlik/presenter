@@ -70,12 +70,12 @@ pub fn SlideColumnsControl() -> impl IntoView {
         <div
             class="operator__slide-columns"
             data-role="slide-columns-control"
-            title="Slides per row (remembered in this browser)"
+            title="Snímok v riadku (pamätá si to tento prehliadač)"
         >
             <button
                 type="button"
                 data-role="slide-columns-decrease"
-                aria-label="Fewer slides per row"
+                aria-label="Menej snímok v riadku"
                 on:click=move |_| change(-1)
             >
                 "\u{2212}"
@@ -86,7 +86,7 @@ pub fn SlideColumnsControl() -> impl IntoView {
             <button
                 type="button"
                 data-role="slide-columns-increase"
-                aria-label="More slides per row"
+                aria-label="Viac snímok v riadku"
                 on:click=move |_| change(1)
             >
                 "+"

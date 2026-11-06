@@ -85,14 +85,14 @@ fn run_search_insert(
                 Ok(updated) => {
                     selected_playlist.set(Some(updated));
                     toast_variant.set("success".to_string());
-                    toast_message.set(Some("Added presentation to playlist".to_string()));
+                    toast_message.set(Some("Pieseň pridaná do playlistu".to_string()));
                     if let Ok(pls) = crate::api::playlists::list_playlists().await {
                         playlists.set(pls);
                     }
                 }
                 Err(e) => {
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Error: {e}")));
+                    toast_message.set(Some(format!("Chyba: {e}")));
                 }
             }
         }
@@ -130,7 +130,7 @@ pub(super) fn handle_search_drop(
 
     let Some(presentation_id) = presentation_id else {
         toast_variant.set("error".to_string());
-        toast_message.set(Some("Drag payload missing presentation id".to_string()));
+        toast_message.set(Some("Pretiahnutiu chýba pieseň".to_string()));
         return;
     };
 
@@ -181,7 +181,7 @@ pub(super) fn handle_search_drop_at_fixed(
 
     let Some(presentation_id) = presentation_id else {
         toast_variant.set("error".to_string());
-        toast_message.set(Some("Drag payload missing presentation id".to_string()));
+        toast_message.set(Some("Pretiahnutiu chýba pieseň".to_string()));
         return;
     };
 

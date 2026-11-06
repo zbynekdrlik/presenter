@@ -193,13 +193,13 @@ test.describe("WASM Operator Modals", () => {
       { timeout: 5_000 },
     );
 
-    // The modal must be in "create" mode: title says "Create Library" and
-    // there is no "Delete library" button (nothing exists yet to delete).
+    // The modal must be in "create" mode: title says "Nová knižnica" and
+    // there is no "Zmazať knižnicu" button (nothing exists yet to delete).
     await expect(
       page.locator('[data-role="library-edit-modal"]'),
     ).toHaveAttribute("data-mode", "create");
     await expect(page.locator('[data-role="library-edit-title"]')).toHaveText(
-      "Create Library",
+      "Nová knižnica",
     );
     await expect(
       page.locator('[data-role="library-edit-delete"]'),
@@ -220,7 +220,7 @@ test.describe("WASM Operator Modals", () => {
 
     // Toast must show success, not "Error: HTTP 404: Not Found".
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /saved|success/i,
+      /uložen/i,
       { timeout: 5_000 },
     );
 
@@ -282,7 +282,7 @@ test.describe("WASM Operator Modals", () => {
     );
 
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /saved|success/i,
+      /uložen/i,
       { timeout: 5_000 },
     );
 
@@ -426,7 +426,7 @@ test.describe("WASM Operator Modals", () => {
     );
 
     await expect(page.locator('[data-role="toast"]')).toContainText(
-      /saved|success/i,
+      /uložen/i,
       { timeout: 5_000 },
     );
 

@@ -247,7 +247,7 @@ test("NLT API down: the SEB slides still load and a toast says the NLT is unavai
   await expect(toast).toContainText("NLT nedostupné", { timeout: 15_000 });
   // The degraded-load warning, not the failed-load toast.
   await expect(toast).toContainText("sekundárny preklad vynechaný");
-  await expect(toast).not.toContainText("Failed to load passage");
+  await expect(toast).not.toContainText("Verše sa nenačítali");
   const card = page.locator('[data-role="slide-card"]').first();
   await expect(card.locator(".operator__slide-reference").first()).toHaveText(
     /1:4-6 \(SEB\)$/,
@@ -289,7 +289,7 @@ test("NLT API down with NLT as main: the load toast carries the server's reason"
   );
 
   await expect(page.locator('[data-role="toast"]')).toContainText(
-    "Failed to load passage: HTTP 502: NLT nedostupné",
+    "Verše sa nenačítali: HTTP 502: NLT nedostupné",
     { timeout: 15_000 },
   );
   expect(nltRequests.some((query) => query.get("ref") === "1Jn.1.7-9")).toBe(

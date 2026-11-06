@@ -55,11 +55,16 @@ pub fn StageLayoutSelect(#[prop(optional)] confirm: bool) -> impl IntoView {
     };
 
     view! {
-        <div class="operator__stage-layout" aria-label="Stage display mode">
+        <div class="operator__stage-layout" aria-label="Rozloženie na pódiových obrazovkách">
             <label class="operator__stage-layout-label" for="stage-layout-select">
-                "Stage Output"
+                "Rozloženie na pódiových obrazovkách"
             </label>
-            <select id="stage-layout-select" data-role="stage-layout-select" on:change=on_change>
+            <select
+                id="stage-layout-select"
+                data-role="stage-layout-select"
+                title="Rozloženie na pódiových obrazovkách"
+                on:change=on_change
+            >
                 {move || {
                     layouts
                         .get()

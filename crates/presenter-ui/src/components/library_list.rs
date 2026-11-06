@@ -34,7 +34,7 @@ pub fn LibraryList() -> impl IntoView {
                 Err(e) => {
                     // Show error toast on API failure
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Failed to load presentations: {e}")));
+                    toast_message.set(Some(format!("Piesne sa nenačítali: {e}")));
                 }
             }
             is_loading_presentations.set(false);
@@ -59,13 +59,13 @@ pub fn LibraryList() -> impl IntoView {
     view! {
         <section class="operator__group operator__group--libraries">
             <header class="operator__group-header">
-                <h2>"Libraries"</h2>
+                <h2>"Knižnice"</h2>
                 <div class="operator__group-controls">
                     <button
                         type="button"
                         class="operator__group-count"
                         data-role="library-more"
-                        aria-label="Show all libraries"
+                        aria-label="Zobraziť všetky knižnice"
                         on:click=on_more
                     >
                         {move || {
@@ -76,8 +76,8 @@ pub fn LibraryList() -> impl IntoView {
                     <button
                         type="button"
                         data-role="library-create"
-                        aria-label="Create library"
-                        title="Create library"
+                        aria-label="Nová knižnica"
+                        title="Nová knižnica"
                         on:click=on_create
                     >"+"</button>
                 </div>
@@ -92,7 +92,7 @@ pub fn LibraryList() -> impl IntoView {
                     if libs.is_empty() && !ctx.libraries_loaded.get() {
                         return view! {
                             <li class="operator__favorites-empty">
-                                "Loading libraries..."
+                                "Načítavam knižnice…"
                             </li>
                         }.into_any();
                     }
@@ -100,7 +100,7 @@ pub fn LibraryList() -> impl IntoView {
                     if libs.is_empty() {
                         return view! {
                             <li class="operator__favorites-empty">
-                                "No libraries found."
+                                "Žiadne knižnice."
                             </li>
                         }.into_any();
                     }
@@ -123,7 +123,7 @@ pub fn LibraryList() -> impl IntoView {
                     if visible.is_empty() {
                         return view! {
                             <li class="operator__favorites-empty">
-                                "Star libraries in settings to keep them handy."
+                                "Obľúbené knižnice si označ hviezdičkou v Nastaveniach."
                             </li>
                         }.into_any();
                     }
@@ -169,7 +169,7 @@ pub fn LibraryList() -> impl IntoView {
                                                 class="operator__list-action operator__list-action--icon operator__list-action--menu"
                                                 data-action="library-edit"
                                                 data-library-id=id_for_edit
-                                                aria-label="Edit library"
+                                                aria-label="Upraviť knižnicu"
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
                                                     op_for_edit.modal_target_id.set(Some(id_for_modal.clone()));
