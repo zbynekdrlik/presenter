@@ -308,8 +308,8 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__l
 /* The ⋮ menu inside the row's right end; the count moves left for it. */
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-actions {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 2px;
+  right: 2px;
   opacity: 0;
   transition: opacity 0.12s ease;
 }
@@ -327,8 +327,8 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__l
 }
 
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list-action--menu {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   min-height: 0;
   padding: 0;
   border-radius: 6px;
@@ -709,6 +709,15 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active
   border: 2px solid var(--frame-live);
   background: var(--frame-live-soft);
   box-shadow: none;
+}
+
+/* A slide checked for copy / cut keeps its blue ring (#602 defect 1): the
+   flat card rule above must not erase operator.css's selected look. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship.operator__slide-card--selected {
+  border-color: var(--frame-blue);
+  box-shadow:
+    0 0 0 2px rgba(59, 124, 255, 0.45),
+    inset 0 0 0 9999px rgba(59, 124, 255, 0.12);
 }
 
 body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag {
