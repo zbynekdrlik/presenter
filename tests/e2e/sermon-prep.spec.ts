@@ -441,11 +441,11 @@ test("a sermon opened on its own leads back to the verses (owner, 2026-11-06)", 
   await page.goto(`${baseURL}/ui/study?view=sermon&id=${id}`);
   await expect(role(page, "sermon-title")).toHaveText("Späť k veršom");
   await expect(role(page, "history-back")).toHaveAttribute("aria-disabled", "true");
-  await expect(role(page, "study-sermons")).toHaveCount(0);
   await role(page, "study-bible").tap();
   await expect(page.locator('[data-role="study-chapter"]')).toHaveAttribute("data-loaded-for", "slk-seb:HEB.11");
   await expect(field(page)).toBeVisible();
-  // The reader offers the sermons again, and the list offers the verses.
+  // Biblia belongs to the sermon views only; the list offers it too.
+  await expect(role(page, "study-bible")).toHaveCount(0);
   await role(page, "study-sermons").tap();
   await expect(role(page, "sermon-list")).toHaveAttribute("data-state", "ready");
   await role(page, "study-bible").tap();
