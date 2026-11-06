@@ -737,6 +737,42 @@ test("desktop: Enter on an empty field leaves the typing after it alone", async 
   }
 });
 
+test("desktop: Space on a focused button presses that button, the window keys leave it alone (#850 B2d review)", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await openConsole(browser, { viewport: { width: 1280, height: 720 } });
+  try {
+    const clears = collectPosts(page, "/bible/clear");
+    const field = page.locator('[data-role="console-field"]');
+    await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
+    await showButton(page).click();
+    const clearLive = page.locator('[data-role="console-clear-live"]');
+    await expect(clearLive).toBeVisible();
+
+    // Zhasnúť with the keyboard: the wall clears, the focus does not jump.
+    await clearLive.focus();
+    await page.keyboard.press("Space");
+    await expect.poll(() => clears.length).toBe(1);
+    await expect(page.locator('[data-role="console-on-air"]')).toHaveText("Na stene: nič");
+    await expect(field).not.toBeFocused();
+
+    // A translation button: Space picks it and keeps the focus; "/" does nothing.
+    const roh = page.locator(
+      '[data-role="console-translation"][data-kind="main"][data-translation="slk-roh"]',
+    );
+    await roh.focus();
+    await page.keyboard.press("Space");
+    await expect(roh).toHaveAttribute("aria-pressed", "true");
+    await expect(roh).toBeFocused();
+    await page.keyboard.press("/");
+    await expect(roh).toBeFocused();
+    await expect(field).toHaveValue("zid 11 1");
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
 test("desktop: a translation switch re-resolves the console's verse in the grid", async ({
   browser,
 }) => {
