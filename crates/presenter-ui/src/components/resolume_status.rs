@@ -285,6 +285,13 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_for_an_error_without_a_known_cause_does_not_repeat_the_word() {
+        let text = chip_tooltip(&dto("error", Some(30)));
+        assert!(text.contains("Nedostupné"), "{text}");
+        assert!(!text.contains("Nedostupné — nedostupné"), "{text}");
+    }
+
+    #[test]
     fn tooltip_opens_with_the_full_host_label() {
         // The visible chip text ellipsizes past 12ch — the tooltip is where
         // a long name stays fully readable, so it must lead with the label.
