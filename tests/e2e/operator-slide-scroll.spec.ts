@@ -188,7 +188,10 @@ test("wheel: large delta is capped at one row per event", async ({ page }) => {
       ".operator__slide-card",
     ) as HTMLElement | null;
     const cardHeight = cardEl ? cardEl.getBoundingClientRect().height : 0;
-    const expectedStep = cardHeight > 0 ? cardHeight + 14.4 : 120;
+    // One row = a card + the grid's REAL row gap (the CSS gap changed with
+    // the mockup v3 look; a hard-coded gap made each notch drift).
+    const rowGap = parseFloat(getComputedStyle(c).rowGap) || 0;
+    const expectedStep = cardHeight > 0 ? cardHeight + rowGap : 120;
 
     const before = c.scrollTop;
     c.dispatchEvent(
