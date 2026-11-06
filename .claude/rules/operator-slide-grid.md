@@ -55,6 +55,12 @@ paths:
   STENE". Edit mode keeps the header on top. The stepper sits in the work
   area's top row with its "Snímok v riadku" label (desktop only, 32 px
   buttons; the phone keeps 44 px and no label).
+  "NA STENE" shows in Live mode only: in Edit mode it wrapped the card's
+  buttons onto a second line, so every AbleSet step grew the stage slide's row
+  48 px and the list jumped under the caret. One slide per row
+  (`body[data-slide-columns-single]`) drops the 16:9 minimum: a full-width
+  card was taller than the list, so Follow could never show the stage slide
+  whole.
 - **Anything that assumes 3 columns is now wrong.** The #271 next-row lookahead
   (`slide_list_scroll::columns_per_row`) reads the grid's computed
   `grid-template-columns` (`state::slide_columns::track_count`); the

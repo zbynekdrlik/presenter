@@ -11,6 +11,7 @@ mod compare;
 mod crossrefs;
 mod favourites;
 mod field;
+mod field_recent;
 mod header;
 mod history;
 mod long_press;

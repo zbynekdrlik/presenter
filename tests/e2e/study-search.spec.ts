@@ -102,6 +102,55 @@ test("a wrong book is fixed in the field; another chapter empties it (owner, 202
   await finish(opened);
 });
 
+test("✕ clears the field and ▾ fills it from the earlier searches (owner, 2026-11-06)", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=GEN.1", "slk-seb:GEN.1");
+  const { page } = opened;
+  const recent = page.locator('[data-role="study-field-recent"]');
+  const items = page.locator('[data-role="study-recent-item"]');
+  // Nothing searched yet: the list says so.
+  await recent.tap();
+  await expect(field(page)).toBeFocused();
+  await expect(page.locator('[data-role="study-recent-empty"]')).toBeVisible();
+  await recent.tap();
+  await expect(page.locator('[data-role="study-recent"]')).toHaveCount(0);
+
+  await field(page).fill("2 kor 5");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:2CO.5");
+  await field(page).tap();
+  await field(page).fill("ján 3");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:JHN.3");
+
+  // ✕ empties the field and keeps it ready for typing.
+  await page.locator('[data-role="study-field-clear"]').tap();
+  await expect(field(page)).toHaveValue("");
+  await expect(field(page)).toBeFocused();
+
+  // ▾ lists both, newest first; a pick fills the field without opening it.
+  await recent.tap();
+  await expect(recent).toHaveAttribute("aria-expanded", "true");
+  await expect(items).toHaveText(["ján 3", "2 kor 5"]);
+  await assertMinTapTarget(recent, 44);
+  await assertMinTapTarget(items.first(), 44);
+  await assertNoHorizontalOverflow(page);
+  await items.nth(1).tap();
+  await expect(field(page)).toHaveValue("2 kor 5");
+  await expect(field(page)).toBeFocused();
+  await expect(page.locator('[data-role="study-recent"]')).toHaveCount(0);
+  await expectChapter(page, "slk-seb:JHN.3");
+  await field(page).press("Enter");
+  await expectChapter(page, "slk-seb:2CO.5");
+
+  // The list belongs to this browser and survives a reload; the reopened
+  // search moved to the top instead of appearing twice.
+  await page.reload();
+  await expectChapter(page, "slk-seb:2CO.5");
+  await recent.tap();
+  await expect(items).toHaveText(["2 kor 5", "ján 3"]);
+  await finish(opened);
+});
+
 test("a verse deep in a chapter is scrolled into view", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;

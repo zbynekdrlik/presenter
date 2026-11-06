@@ -6,25 +6,32 @@
 use leptos::html::Input;
 use leptos::prelude::*;
 
+use super::field_recent::{load_recent, RecentButton, RecentList};
 use super::scroll::ScrollPlan;
 use super::{nav, Study};
 use crate::state::bible_console::{ConsoleRow, RowTarget};
+use crate::state::session;
 use crate::state::study::{
     chapter_grid, preview_target, suggest, suggest_unresolved, ChapterGrid, FieldEnter, StudyRoute,
     StudySuggest, StudyTarget, StudyView,
 };
+use crate::state::study_recent::{remember, serialize, RECENT_KEY};
 use crate::state::study_word::{StrongsOffer, SCOPE_ALL};
 
 #[derive(Clone, Copy)]
-struct Field {
+pub(super) struct Field {
     s: Study,
     input: RwSignal<String>,
     focused: RwSignal<bool>,
-    element: NodeRef<Input>,
+    pub(super) element: NodeRef<Input>,
     /// The chapter the field's reference opened: while it is read (in any
     /// translation) the text stays, so a slip is fixed in place (owner,
     /// 2026-11-06: "2kor" could not be corrected to "1kor").
     opened: StoredValue<Option<(String, u16)>>,
+    /// The earlier searches, newest first, and whether the ▾ list shows them
+    /// (owner, 2026-11-06).
+    pub(super) recent: RwSignal<Vec<String>>,
+    pub(super) recent_open: RwSignal<bool>,
 }
 
 /// What the field shows depends on where the page is.
@@ -42,7 +49,15 @@ impl Field {
         }
     }
 
-    fn open(self, target: StudyTarget) {
+    /// `text` goes to the top of the earlier searches.
+    fn remember(self, text: &str) {
+        let next = self.recent.with_untracked(|list| remember(list, text));
+        session::set_persistent(RECENT_KEY, &serialize(&next));
+        self.recent.set(next);
+    }
+
+    /// Open a passage; `text` is how it is kept among the earlier searches.
+    fn open(self, target: StudyTarget, text: &str) {
         let Some(code) = self
             .s
             .route
@@ -57,6 +72,7 @@ impl Field {
             .map_or(ScrollPlan::Top, |(start, _)| ScrollPlan::Verse(start));
         self.opened
             .set_value(Some((target.book.clone(), target.chapter)));
+        self.remember(text);
         self.leave();
         nav::go(self.s, route, plan);
     }
@@ -69,6 +85,7 @@ impl Field {
         else {
             return;
         };
+        self.remember(text);
         self.leave();
         nav::go(self.s, StudyRoute::search(&code, text), ScrollPlan::Top);
     }
@@ -78,13 +95,14 @@ impl Field {
             .s
             .route
             .with_untracked(|route| route.translation.clone());
+        self.remember(number);
         self.input.set(String::new());
         self.leave();
         let route = StudyRoute::strongs(translation, number, SCOPE_ALL);
         nav::go(self.s, route, ScrollPlan::Top);
     }
 
-    fn complete(self, text: &str) {
+    pub(super) fn complete(self, text: &str) {
         self.input.set(text.to_string());
         if let Some(element) = self.element.get_untracked() {
             let _ = element.focus();
@@ -100,6 +118,8 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         focused: RwSignal::new(false),
         element: NodeRef::new(),
         opened: StoredValue::new(None),
+        recent: RwSignal::new(load_recent()),
+        recent_open: RwSignal::new(false),
     };
     let suggestions = Memo::new(move |_| {
         let input = f.input.get();
@@ -156,8 +176,9 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
         "Enter" => {
             ev.prevent_default();
+            f.recent_open.set(false);
             match suggestions.get_untracked().enter() {
-                Some(FieldEnter::Open(target)) => f.open(target),
+                Some(FieldEnter::Open(target)) => f.open(target, &f.input.get_untracked()),
                 Some(FieldEnter::Strongs(number)) => f.open_number(&number),
                 Some(FieldEnter::Search(text)) => f.search(&text),
                 None => {}
@@ -165,7 +186,9 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         }
         "Escape" => {
             ev.prevent_default();
-            if f.input.with_untracked(String::is_empty) {
+            if f.recent_open.get_untracked() {
+                f.recent_open.set(false);
+            } else if f.input.with_untracked(String::is_empty) {
                 f.leave();
             } else {
                 f.input.set(String::new());
@@ -175,7 +198,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     };
 
     view! {
-        <div class="study-field">
+        <div class="study-field" data-recent-open=move || f.recent_open.get().to_string()>
             <input
                 type="text"
                 class="study-field__input"
@@ -188,10 +211,16 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                 autocomplete="off"
                 spellcheck="false"
                 prop:value=move || f.input.get()
-                on:input=move |ev| f.input.set(event_target_value(&ev))
+                on:input=move |ev| {
+                    f.recent_open.set(false);
+                    f.input.set(event_target_value(&ev));
+                }
                 on:keydown=on_keydown
                 on:focus=move |_| f.focused.set(true)
-                on:blur=move |_| f.focused.set(false)
+                on:blur=move |_| {
+                    f.focused.set(false);
+                    f.recent_open.set(false);
+                }
             />
             <Show when=move || f.input.with(|text| !text.is_empty())>
                 <button
@@ -205,7 +234,11 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                     "\u{2715}"
                 </button>
             </Show>
-            <Show when=move || f.focused.get()>
+            <RecentButton f=f />
+            <Show when=move || f.focused.get() && f.recent_open.get()>
+                <RecentList f=f />
+            </Show>
+            <Show when=move || f.focused.get() && !f.recent_open.get()>
                 <Suggestions f=f suggestions=suggestions />
             </Show>
         </div>
@@ -372,9 +405,9 @@ fn NumberChip(f: Field, offer: StrongsOffer) -> impl IntoView {
     }
 }
 
-fn tap(f: Field, target: &RowTarget) {
+fn tap(f: Field, target: &RowTarget, label: &str) {
     match target {
-        RowTarget::Preview(preview) => f.open(preview_target(preview)),
+        RowTarget::Preview(preview) => f.open(preview_target(preview), label),
         RowTarget::Complete(text) => f.complete(text),
     }
 }
@@ -382,13 +415,14 @@ fn tap(f: Field, target: &RowTarget) {
 #[component]
 fn Row(f: Field, row: ConsoleRow) -> impl IntoView {
     let target = row.target.clone();
+    let label = row.label.clone();
     view! {
         <button
             type="button"
             class="study-row"
             data-role="study-row"
             data-kind=row.kind
-            on:click=move |_| tap(f, &target)
+            on:click=move |_| tap(f, &target, &label)
         >
             <span class="study-row__label">{row.label.clone()}</span>
             {(!row.detail.is_empty())
@@ -400,13 +434,14 @@ fn Row(f: Field, row: ConsoleRow) -> impl IntoView {
 #[component]
 fn Chip(f: Field, row: ConsoleRow) -> impl IntoView {
     let target = row.target.clone();
+    let label = row.label.clone();
     view! {
         <button
             type="button"
             class="study-chip"
             data-role="study-chip"
             data-kind=row.kind
-            on:click=move |_| tap(f, &target)
+            on:click=move |_| tap(f, &target, &label)
         >
             {row.label.clone()}
         </button>
@@ -416,6 +451,7 @@ fn Chip(f: Field, row: ConsoleRow) -> impl IntoView {
 #[component]
 fn Chapters(f: Field, grid: ChapterGrid) -> impl IntoView {
     let code = grid.code.clone();
+    let name = grid.name.clone();
     view! {
         <p class="study-suggest__label" data-role="study-grid-title">{grid.name.clone()}</p>
         <div class="study-grid" data-role="study-chapter-grid" data-book-code=grid.code.clone()>
@@ -425,6 +461,7 @@ fn Chapters(f: Field, grid: ChapterGrid) -> impl IntoView {
                 .map(|chapter| {
                     let chapter = *chapter;
                     let book = code.clone();
+                    let text = format!("{name} {chapter}");
                     view! {
                         <button
                             type="button"
@@ -432,11 +469,14 @@ fn Chapters(f: Field, grid: ChapterGrid) -> impl IntoView {
                             data-role="study-chapter-cell"
                             data-chapter=chapter
                             on:click=move |_| {
-                                f.open(StudyTarget {
-                                    book: book.clone(),
-                                    chapter,
-                                    verses: None,
-                                })
+                                f.open(
+                                    StudyTarget {
+                                        book: book.clone(),
+                                        chapter,
+                                        verses: None,
+                                    },
+                                    &text,
+                                )
                             }
                         >
                             {chapter}

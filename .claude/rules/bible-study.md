@@ -57,6 +57,8 @@ preparation (the sermon views are in `sermon-prep.md`).
   highlighted verse while it shows, else `verse_in_view`. `verse_in_view` reads 2 px below the
   landing gap (`SLACK_PX`): a landed verse sits at the gap and the verse before ends there plus a
   fraction of a pixel, so without the slack every switch stepped one verse back (20 → 16 in seven).
+  `land` rounds its whole-pixel scroll step DOWN (`scroll_step`): rounding 412.53 up left the verse
+  0.47 px above the reader's top and failed the `>= 0` E2E bound on CI only.
 - **Its own app:** manifest + icons under `/ui/study/` (open book, `study_icons/`, not the tablet's
   "B"), `<link rel=manifest crossorigin="use-credentials">`: a cookie-less manifest fetch behind
   Cloudflare Access (`prsnv.newlevel.media`) gets the login page and Android offers no install. Dev2
@@ -77,6 +79,11 @@ preparation (the sermon views are in `sermon-prep.md`).
   translation, the typed text stays so "2kor 5" is fixed to "1kor 5" in place (owner, 2026-11-06);
   another chapter, view or Back empties it (not while the field has focus). One `FieldPlace` effect
   owns the field's text for both this and the search query.
+- **✕ and ▾ in the field** (owner, 2026-11-06): ✕ clears and keeps the focus; ▾
+  (`field_recent.rs`) lists this browser's earlier searches (`state::study_recent`, localStorage
+  `studyRecent`, 12, newest first, case/space duplicates move to the top). What is kept: the typed
+  text on Enter, a row's label, "Book N" for a chapter cell, the Strong's number, the search words.
+  A pick only FILLS the field (Enter opens it); typing, a blur or Escape closes the list.
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.
