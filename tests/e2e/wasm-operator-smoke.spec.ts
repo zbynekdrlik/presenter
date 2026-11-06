@@ -204,8 +204,9 @@ test.describe("WASM Operator Smoke Tests", () => {
       document.body.setAttribute("data-mode", "live");
     });
 
-    // Click somewhere to ensure no input is focused
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    // Nothing focused. (10, 10) is no longer a neutral spot: since #875 H1
+    // it is the Piesne button, and Space on a focused button presses it.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     // Press space
     await page.keyboard.press("Space");
