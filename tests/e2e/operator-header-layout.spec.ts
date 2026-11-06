@@ -2,8 +2,8 @@
  * Operator header layout E2E (#875 H1, mockup v3).
  *
  * The desktop header is ONE row, at most 44 px high, at every desktop width:
- * Piesne, Biblia, the Stránky / Obrazovky / Pripojenia menus, the search,
- * Stage Output, Live/Edit and ⚙. No control lies over another, nothing runs
+ * Piesne, Biblia, the Stránky / Obrazovky / Pripojenia menus, the search (not
+ * on Biblia since #850 B2c), Stage Output, Live/Edit and ⚙. No control lies over another, nothing runs
  * off the right edge. The menus overlay the page (the header never grows),
  * only one is open at a time, and Escape, a press outside and picking an item
  * close them. A Resolume host that is down turns the closed Pripojenia button
@@ -107,6 +107,9 @@ for (const path of ["/ui/operator", "/ui/bible", "/ui/operator/timers"]) {
     attachConsoleErrorCollector(page, errors);
     await openOperator(page, path);
     await expect(headerMenu(page, "connections").toggle).toBeVisible();
+    await expect(page.locator('[data-role="global-search-query"]')).toHaveCount(
+      path === "/ui/bible" ? 0 : 1,
+    );
 
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: 900 });
@@ -115,8 +118,9 @@ for (const path of ["/ui/operator", "/ui/bible", "/ui/operator/timers"]) {
       const facts = await rowFacts(page);
       expect(facts.height, where).toBeLessThanOrEqual(44);
       expect(facts.outside, where).toEqual([]);
-      // Piesne, Biblia, three menus, the search, a select, Live, Edit, ⚙.
-      expect(facts.controls, where).toBeGreaterThanOrEqual(10);
+      // Piesne, Biblia, three menus, the search, a select, Live, Edit, ⚙;
+      // Biblia has no search since #850 B2c (the verse console searches).
+      expect(facts.controls, where).toBeGreaterThanOrEqual(path === "/ui/bible" ? 9 : 10);
       expect(facts.pageWidth, where).toBeLessThanOrEqual(width);
     }
 

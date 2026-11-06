@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 
 use crate::api::bible;
-use crate::state::bible::{BibleState, SelectedBook};
+use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
 // ---------------------------------------------------------------------------
@@ -39,72 +39,6 @@ pub fn ClearBroadcastButton() -> impl IntoView {
             on:click=on_clear
             style="margin-top: 4px;"
         >"Vymazať verš zo steny"</button>
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Loaded passages history
-// ---------------------------------------------------------------------------
-
-#[component]
-pub fn LoadedPassagesHistory() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let history = bs.loaded_passages_history;
-
-    view! {
-        {move || {
-            let items = history.get();
-            if items.is_empty() {
-                None
-            } else {
-                Some(view! {
-                    <div class="bible__history" data-role="bible-history">
-                        <h4 style="margin:8px 0 4px;font-size:0.85em;opacity:0.7;">"Naposledy zobrazené"</h4>
-                        {items.into_iter().map(|entry| {
-                            let label = entry.label.clone();
-                            let book_code = entry.book_code.clone();
-                            let book_number = entry.book_number;
-                            let chapter = entry.chapter;
-                            let verse_start = entry.verse_start;
-                            let verse_end = entry.verse_end;
-                            let translation_code = entry.translation_code.clone();
-                            let bs = bs.clone();
-
-                            let on_click = move |_| {
-                                let books = bs.books.get_untracked();
-                                if let Some(found_book) = books.iter().find(|b| b.code == book_code) {
-                                    let verse_counts: Vec<u16> = found_book.chapters.iter().map(|c| c.verse_count).collect();
-                                    bs.selected_book.set(Some(SelectedBook {
-                                        book: found_book.book.clone(),
-                                        code: found_book.code.clone(),
-                                        number: book_number,
-                                        chapter_count: found_book.chapters.len() as u16,
-                                        verse_counts,
-                                    }));
-                                }
-                                bs.selected_chapter.set(chapter);
-                                bs.verse_start.set(verse_start);
-                                bs.verse_end.set(verse_end);
-                                if bs.selected_translation.get_untracked().as_ref() != Some(&translation_code) {
-                                    bs.selected_translation.set(Some(translation_code.clone()));
-                                }
-                            };
-
-                            view! {
-                                <button
-                                    type="button"
-                                    class="bible__history-item"
-                                    data-role="bible-history-item"
-                                    on:click=on_click
-                                >
-                                    {label}
-                                </button>
-                            }
-                        }).collect_view()}
-                    </div>
-                })
-            }
-        }}
     }
 }
 

@@ -177,7 +177,7 @@ test("operator Settings costs no request until it opens, then stays mounted", as
 
   await page.goto(new URL("/ui/operator/bible", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
     "data-books-translation",
     /.+/,
   );

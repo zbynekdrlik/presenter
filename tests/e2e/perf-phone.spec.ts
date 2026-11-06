@@ -32,7 +32,9 @@ test("@perf-phone a cold console is usable within the budget and a keystroke sho
     await page.locator('[data-role="console-field"]').waitFor({ state: "visible", timeout: 30_000 });
     // Not `expect(...)`: its retries wait 100, 250, 500, 1000 ms, so the number
     // could land up to 500 ms after the list was ready (S8, 3040 to 3502 ms here).
-    await page.waitForSelector('[data-role="book-list"][data-books-translation]:not([data-books-translation=""])', {
+    // The settle marker sits on the console since #850 B2c (on the book list
+    // before); the attribute alone matches both builds.
+    await page.waitForSelector('[data-books-translation]:not([data-books-translation=""])', {
       state: "attached",
       timeout: 30_000,
     });

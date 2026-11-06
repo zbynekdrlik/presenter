@@ -7,12 +7,6 @@
   gap: 8px;
 }
 
-.bible__classic {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
 /* ── On-air strip ── */
 .console-on-air {
   display: flex;
@@ -58,17 +52,11 @@
   cursor: pointer;
 }
 
-/* ── Translation bar (phone; the desktop keeps its selects until B2c) ── */
+/* ── Translation bar (phone and desktop since B2c) ── */
 .console-translations {
-  display: none;
+  display: flex;
   flex-direction: column;
   gap: 6px;
-}
-body.operator[data-shell="phone"] .console-translations {
-  display: flex;
-}
-body.operator[data-shell="phone"] .bible__translation-row {
-  display: none;
 }
 .console-translations__row {
   display: flex;
@@ -317,9 +305,6 @@ body.operator[data-shell="phone"] .bible__translation-row {
 }
 
 /* ── Phone shell: the console IS the Bible Live tab ── */
-body.operator[data-shell="phone"] .bible__classic {
-  display: none;
-}
 body.operator.operator--bible[data-shell="phone"][data-bible-tab="live"]
   .operator__panel--bible
   .operator__slides-column {
@@ -414,4 +399,175 @@ body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   font-size: 15px;
   font-weight: 600;
   color: #e2e8f0;
+}
+
+/* ── Desktop: mockup v3 section 3 "Biblia v rovnakom ramci" (#875, #850 B2c) ──
+   Top to bottom: the sub-tabs (34 px segmented), the on-air strip (spec
+   section 7.1: Zhaslnut must stay reachable; one compact line), the field
+   (52 px, 18 px text, 2 px border, blue while focused), "Hlavny preklad" + a
+   row of 36 px buttons (on = filled blue), "Druhy preklad" + its row starting
+   with "ziadny" (on = #1e3a5f + blue border), then 48 / 1fr / 48 for
+   previous / show / next. What only exists while typing (rows, hints, the
+   text search) and the prepared sermons come after it; the slide grid on the
+   right is the preview, so the phone's preview card is not drawn here. */
+body.operator:not([data-shell="phone"]) .bible__tab-nav {
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 0;
+  border-radius: 10px;
+  background: #1e293b;
+}
+body.operator:not([data-shell="phone"]) .bible__tab-nav button {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+body.operator:not([data-shell="phone"]) .bible__tab-nav button[data-active="true"] {
+  background: #273449;
+  color: #ffffff;
+  box-shadow: none;
+}
+body.operator:not([data-shell="phone"]) .bible__tab-panel[data-visible="true"] {
+  gap: 6px;
+}
+body.operator:not([data-shell="phone"]) .console {
+  gap: 6px;
+}
+body.operator:not([data-shell="phone"]) .console-on-air {
+  order: 0;
+  min-height: 48px;
+  padding: 0 0 0 2px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+}
+body.operator:not([data-shell="phone"]) .console-on-air[data-live="true"] {
+  padding-left: 10px;
+  border-left: 3px solid #dc2626;
+  border-radius: 0;
+  background: transparent;
+}
+body.operator:not([data-shell="phone"]) .console-on-air__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.operator:not([data-shell="phone"]) .console-field {
+  order: 1;
+}
+body.operator:not([data-shell="phone"]) .console-field__input {
+  height: 52px;
+  min-height: 52px;
+  padding: 0 52px 0 14px;
+  border: 2px solid #334155;
+  border-radius: 12px;
+  background: #1e293b;
+  color: #ffffff;
+  font-size: 18px;
+}
+body.operator:not([data-shell="phone"]) .console-field__input:focus {
+  border-color: #3b82f6;
+}
+body.operator:not([data-shell="phone"]) .console-field__clear {
+  top: 2px;
+  right: 2px;
+  width: 48px;
+  height: 48px;
+  min-height: 48px;
+}
+body.operator:not([data-shell="phone"]) .console-translations {
+  order: 2;
+}
+body.operator:not([data-shell="phone"]) .console-translations__row {
+  gap: 6px;
+}
+body.operator:not([data-shell="phone"]) .console-translations__label {
+  order: -2;
+  flex: 1 1 100%;
+  width: auto;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+body.operator:not([data-shell="phone"]) .console-translation {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+}
+body.operator:not([data-shell="phone"]) .console-translation[aria-pressed="true"] {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+body.operator:not([data-shell="phone"]) .console-translation[data-kind="secondary"][data-translation=""] {
+  order: -1;
+}
+body.operator:not([data-shell="phone"]) .console-translation[data-kind="secondary"][aria-pressed="true"] {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #cfe2ff;
+}
+body.operator:not([data-shell="phone"]) .console-error {
+  order: 3;
+}
+body.operator:not([data-shell="phone"]) .console-bar {
+  order: 3;
+  position: static;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 0;
+  background: transparent;
+}
+body.operator:not([data-shell="phone"]) .console-bar__step {
+  min-width: 0;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 16px;
+}
+body.operator:not([data-shell="phone"]) .console-bar__step-label {
+  display: none;
+}
+body.operator:not([data-shell="phone"]) .console-bar__show {
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+body.operator:not([data-shell="phone"]) .console-results {
+  order: 4;
+}
+body.operator:not([data-shell="phone"]) .console-text-results {
+  order: 5;
+}
+body.operator:not([data-shell="phone"]) .console-prepared {
+  order: 6;
+}
+body.operator:not([data-shell="phone"]) .console-preview {
+  display: none;
+}
+
+/* Multi-select + add to a presentation, in the slide grid's toolbar. */
+.bible__selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.bible__selection .bible__add-pres-list {
+  flex-direction: row;
+  flex-wrap: wrap;
+  max-height: 5.5rem;
 }

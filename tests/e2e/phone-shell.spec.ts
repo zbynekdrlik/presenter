@@ -143,7 +143,7 @@ for (const [name, profile] of [
   });
 }
 
-test("a phone keeps Clear on Piesne and the verse search on Biblia", async ({ browser }) => {
+test("a phone keeps Clear on Piesne; on Biblia the console field is the verse search", async ({ browser }) => {
   const { context, page, errors } = await open(browser, PHONE_390, "/ui/operator");
   try {
     const cleared = page.waitForRequest(
@@ -154,17 +154,23 @@ test("a phone keeps Clear on Piesne and the verse search on Biblia", async ({ br
 
     await page.goto("/ui/operator/bible");
     await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-    const field = page.locator('[data-role="global-search-query"]');
+    // #850 B2c: no header search on Biblia; words typed into the console
+    // search the main translation's text.
+    await expect(page.locator('[data-role="global-search-query"]')).toHaveCount(0);
+    const field = page.locator('[data-role="console-field"]');
     await expect(field).toBeVisible();
-
-    // The results open under the search row, across the phone's full width.
-    await field.fill("love");
-    const results = page.locator('[data-role="global-search-results"]');
-    await expect(results).toBeVisible();
-    const fieldBox = await field.boundingBox();
-    const resultsBox = await results.boundingBox();
-    expect(resultsBox!.y).toBeGreaterThanOrEqual(fieldBox!.y + fieldBox!.height);
-    expect(resultsBox!.width).toBeGreaterThanOrEqual(PHONE_390.viewport.width - 24);
+    await page
+      .locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]')
+      .tap();
+    await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+      "data-books-translation",
+      "slk-seb",
+    );
+    await field.fill("viera je zárukou");
+    const hit = page.locator('[data-role="console-text-search"]').first();
+    await expect(hit).toBeVisible();
+    await expect(hit).toHaveAttribute("data-book-code", "HEB");
+    await assertNoHorizontalOverflow(page);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
@@ -243,38 +249,6 @@ test("a phone on Piesne never mounts the stage-preview iframe (no second app)", 
   try {
     await expect(page.locator("body")).toHaveAttribute("data-view", "worship");
     await expect(page.locator('[data-role="stage-preview-frame"]')).toHaveCount(0);
-    expect(errors).toEqual([]);
-  } finally {
-    await context.close();
-  }
-});
-
-// #850 B2a-2: on a phone the console replaced these inputs; the desktop keeps
-// them (and this fallback) until B2c.
-test("desktop: the old Find-book filter reads 'zid' as Hebrejom (resolver fallback)", async ({
-  browser,
-}) => {
-  const { context, page, errors } = await open(
-    browser,
-    { viewport: { width: 1280, height: 800 } },
-    "/ui/operator/bible",
-  );
-  try {
-    const main = page.locator('[data-role="main-translation"]');
-    await main.selectOption("slk-seb");
-    const bookList = page.locator('[data-role="book-list"]');
-    await expect(bookList).toHaveAttribute("data-books-translation", "slk-seb");
-    const filter = page.locator('[data-role="book-filter"]');
-    await filter.fill("zid");
-    const items = bookList.locator('[data-role="book-item"]');
-    await expect(items).toHaveCount(1);
-    await expect(items).toHaveAttribute("data-book-code", "HEB");
-    await filter.press("Enter");
-    await expect(bookList.locator('[data-role="book-item"][data-active="true"]')).toHaveAttribute(
-      "data-book-code",
-      "HEB",
-    );
-    await assertNoHorizontalOverflow(page);
     expect(errors).toEqual([]);
   } finally {
     await context.close();

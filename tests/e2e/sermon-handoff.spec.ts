@@ -108,7 +108,7 @@ async function openOperator(browser: Browser, viewport = PHONE_390) {
   attachConsoleErrorCollector(page, errors);
   await page.goto("/ui/operator/bible");
   await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached", timeout: 30_000 });
-  await expect(role(page, "book-list")).toHaveAttribute("data-books-translation", "slk-seb");
+  await expect(role(page, "bible-console")).toHaveAttribute("data-books-translation", "slk-seb");
   await expect(role(page, "console-field")).toBeVisible();
   return { context, page, errors };
 }
@@ -175,22 +175,6 @@ test("typing hides the section and leaves the sermon, an emptied field brings it
   await role(page, "console-field").fill("");
   await expect(role(page, "console-prepared")).toBeVisible();
   await expect(role(page, "console-prepared-row")).toHaveAttribute("aria-pressed", "false");
-  expect(errors).toEqual([]);
-  await context.close();
-});
-
-test("a load from the old inputs lets go of the sermon: Zobraziť can never play it", async ({ browser }) => {
-  await sermon("Staré polia", [1]);
-  const { context, page, errors } = await openOperator(browser, { viewport: { width: 1280, height: 800 } } as never);
-  await role(page, "console-prepared-row").click();
-  await expect(role(page, "bible-console")).toHaveAttribute("data-preview-ready", "true");
-  await role(page, "book-filter").fill("Rimanom");
-  await role(page, "book-item").first().click();
-  await role(page, "load-button").click();
-  await expect(role(page, "slide-card").first()).toContainText("Rimanom 1:1");
-  await expect(role(page, "console-prepared-row")).toHaveAttribute("aria-pressed", "false");
-  await expect(role(page, "bible-console")).toHaveAttribute("data-preview-state", "empty");
-  await expect(role(page, "console-show")).toBeDisabled();
   expect(errors).toEqual([]);
   await context.close();
 });

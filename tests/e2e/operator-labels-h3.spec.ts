@@ -7,8 +7,10 @@
  *     (data — library, song and book names, layout names — is not a label);
  *   - every button, select and field is at least 40 px tall, except the header row
  *     (its controls fit the 40 px row), the controls lying ON the stage preview
- *     picture (H2) and the dense Piesne rows + work-area top row of mockup v3
- *     (`MOCKUP_DENSE`); the main actions (show on the wall, clear the wall) are 48 px.
+ *     picture (H2), the dense Piesne rows + work-area top row of mockup v3 and
+ *     the two Biblia rows section 3 draws smaller (34 px sub-tabs, 36 px
+ *     translation buttons, #850 B2c) — `MOCKUP_DENSE`; the main actions (show on
+ *     the wall, clear the wall) are 48 px.
  * The Stage Text select (API layouts only) offers Originál / Preklad / Oboje.
  *
  * Also asserts zero browser console errors/warnings per
@@ -84,7 +86,6 @@ const DATA = [
   '[data-role="library-list"]',
   '[data-role="playlist-list"]',
   '[data-role="presentation-list"]',
-  '[data-role="book-list"]',
   '[data-role="slides"]',
   '[data-role="context-title"]',
   '[data-role="slides-song-bubble"]',
@@ -143,14 +144,20 @@ function englishIn(texts: string[]): string[] {
 
 /** Where the approved mockup v3 draws smaller controls than 40 px (#875,
  *  owner 2026-11-06): the Piesne list rows (30 px) with their "+" / ⋯ (26 px)
- *  and ⋮ menus, and the work area's top row (32 px: the song title row with
- *  "+ Snímka" and the "Snímok v riadku" stepper, the same stepper on Biblia).
- *  operator-mockup-v3.spec.ts pins those sizes. */
+ *  and ⋮ menus, the work area's top row (32 px: the song title row with
+ *  "+ Snímka" and the "Snímok v riadku" stepper, the same stepper on Biblia),
+ *  and Biblia's 34 px sub-tabs + 36 px translation buttons (section 3, #850
+ *  B2c). operator-mockup-v3.spec.ts and bible-console.spec.ts pin those sizes;
+ *  here each area keeps its own floor, so a control shrinking below it still
+ *  fails. Desktop only. */
 const MOCKUP_DENSE: { selector: string; min: number }[] = [
   { selector: 'body:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group', min: 26 },
   { selector: 'body:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-bottom', min: 26 },
   { selector: 'body:not([data-shell="phone"]) .operator__worktop', min: 32 },
   { selector: 'body:not([data-shell="phone"]) .operator__slide-columns', min: 32 },
+  { selector: 'body:not([data-shell="phone"]) [data-role="bible-tab"]', min: 34 },
+  { selector: 'body:not([data-shell="phone"]) [data-role="console-translation"]', min: 36 },
+  { selector: 'body:not([data-shell="phone"]) [data-role="console-translation-more"]', min: 36 },
 ];
 
 /** Visible buttons / selects / fields below `min` px, outside the header row,
@@ -262,15 +269,17 @@ for (const viewport of VIEWPORTS) {
     await expect(tab("live")).toHaveText("Naživo");
     await expect(tab("prepared")).toHaveText("Pripravené");
     await expect(tab("settings")).toHaveText("Nastavenie");
-    await expect(page.locator(".bible__translation-row span", { hasText: "Hlavný preklad" })).toBeVisible();
-    await expect(page.locator(".bible__translation-row span", { hasText: "Druhý preklad" })).toBeVisible();
-    await expect(page.locator('[data-role="secondary-translation"] option[value=""]')).toHaveText("žiadny");
-    await expect(page.locator('[data-role="book-filter"]')).toHaveAttribute("placeholder", "Začni písať názov knihy");
-    await expect(page.locator("label.operator__field > span", { hasText: /^Kniha$/ })).toBeVisible();
-    await expect(page.locator('[data-role="global-search-query"]')).toHaveAttribute(
-      "placeholder",
-      "Hľadať verše v Biblii",
-    );
+    await expect(page.locator(".console-translations__label", { hasText: "Hlavný preklad" })).toBeVisible();
+    await expect(page.locator(".console-translations__label", { hasText: "Druhý preklad" })).toBeVisible();
+    await expect(
+      page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation=""]'),
+    ).toHaveText("žiadny");
+    await expect(page.locator('[data-role="console-field"]')).toHaveAttribute("placeholder", "Odkaz alebo slová\u2026");
+    // #850 B2c: the console replaced the header verse search on Biblia.
+    await expect(page.locator('[data-role="global-search-query"]')).toHaveCount(0);
+    // The mockup-sized rows (exempt from the 40 px rule) keep the mockup's sizes.
+    expect(await heightOf(page, '[data-role="bible-tab"]')).toBeGreaterThanOrEqual(33.5);
+    expect(await heightOf(page, '[data-role="console-translation"]')).toBeGreaterThanOrEqual(35.5);
 
     expect(await uppercaseElements(page)).toEqual([]);
     expect(englishIn(await labelTexts(page, DATA))).toEqual([]);

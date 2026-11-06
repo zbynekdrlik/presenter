@@ -3,6 +3,7 @@ use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
 use crate::components::slide_columns::SlideColumnsControl;
+use crate::pages::bible_controls::SelectionControls;
 use crate::pages::bible_prepared_sermon::{active_sermon_badge, SermonSlides};
 use crate::state::bible::{slide_char_count, BibleState};
 use crate::state::AppContext;
@@ -16,6 +17,7 @@ pub fn BibleSlidesColumn() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let bible_tab = bs.bible_tab;
     let sermon = active_sermon_badge(&bs);
+    let phone = use_ctx!(AppContext).phone_shell;
 
     view! {
         <section
@@ -27,6 +29,13 @@ pub fn BibleSlidesColumn() -> impl IntoView {
                     <AddEmptySlideButton />
                 </Show>
                 <SlideColumnsControl />
+                // Multi-select + add to a prepared presentation, over the grid
+                // they act on (spec section 7.1: desktop only, until #851).
+                <Show when=move || !phone.get() && bible_tab.with(|t| t == "live")>
+                    <div class="bible__selection" data-role="bible-selection">
+                        <SelectionControls />
+                    </div>
+                </Show>
             </div>
             <div class="operator__slides" data-role="slides">
                 {move || {

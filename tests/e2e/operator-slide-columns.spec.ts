@@ -10,6 +10,7 @@ import { test, expect, type Browser, type Page } from "@playwright/test";
 import {
   deriveTestConfig,
   refreshDevData,
+  selectPassage,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -181,19 +182,15 @@ test("8 per row: Bible cards stay readable with no horizontal overflow", async (
   }
   await expect(control(page).locator('[data-role="slide-columns-value"]')).toHaveText("8");
 
-  const main = page.locator('[data-role="main-translation"]');
-  await expect(main.locator('option[value="slk-seb"]')).toHaveCount(1, {
-    timeout: 15_000,
-  });
-  await main.selectOption("slk-seb");
-  await expect(page.locator('[data-role="book-list"]')).toHaveAttribute(
+  await page
+    .locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]')
+    .click();
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
     "data-books-translation",
     "slk-seb",
   );
-  await page.locator('[data-role="book-item"][data-book-code="1JN"]').click();
-  await page.locator('[data-role="load-button"]').click();
+  await selectPassage(page, "1jn 1");
   const cards = page.locator('[data-role="slide-card"]');
-  await expect(cards.first()).toBeVisible({ timeout: 15_000 });
   await expectColumns(page, 8);
 
   const overflow = await page.evaluate(() =>
