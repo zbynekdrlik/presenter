@@ -107,9 +107,12 @@ impl StudyHistory {
     /// Whether the run of entries right behind the current one, all of this
     /// label, holds a row for it.
     pub fn has_row_behind(&self, label: &str) -> bool {
-        self.entries[..self.offset()]
-            .last()
-            .is_some_and(|entry| entry.label == label && entry.listed)
+        self.entries
+            .iter()
+            .take(self.offset())
+            .rev()
+            .take_while(|entry| entry.label == label)
+            .any(|entry| entry.listed)
     }
 
     /// Whether the current entry is a row of the long-press list.
