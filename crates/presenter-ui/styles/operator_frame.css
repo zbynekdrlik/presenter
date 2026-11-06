@@ -27,6 +27,12 @@
   display: none;
 }
 
+/* The phone's song heading stays the open library / playlist name alone
+   ("Piesne v knižnici" only while nothing is open), as before #875 v3. */
+body.operator[data-shell="phone"] .operator__presentations-context:not([hidden]) + .operator__presentations-kind {
+  display: none;
+}
+
 body.operator:not([data-shell="phone"]) {
   --frame-bg: #0f172a;
   --frame-panel: #1e293b;

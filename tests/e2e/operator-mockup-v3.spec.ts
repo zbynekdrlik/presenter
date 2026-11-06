@@ -177,7 +177,10 @@ for (const viewport of VIEWPORTS) {
     near(libraryRow.height, 30, "library row height");
     const libraryButton = await look(page, '[data-role="library-item"][data-active="true"]');
     expect(libraryButton.fontSize).toBe("13px");
-    expect(libraryButton.background).toBe("rgb(29, 58, 95)");
+    // Polled: rows fade their background (operator.css transition).
+    await expect
+      .poll(async () => (await look(page, '[data-role="library-item"][data-active="true"]')).background)
+      .toBe("rgb(29, 58, 95)");
     expect(libraryButton.boxShadow).toContain("inset");
     expect(libraryButton.boxShadow).toContain("3px 0px 0px");
     const count = await look(page, '[data-role="library-item"] [data-role="library-count"]');
@@ -196,7 +199,9 @@ for (const viewport of VIEWPORTS) {
     near(second!.y - first!.y, 34, "30 px rows, 4 px apart");
     const song = await look(page, '[data-role="presentation-item"].is-active');
     expect(song.fontSize).toBe("13px");
-    expect(song.background).toBe("rgb(29, 58, 95)");
+    await expect
+      .poll(async () => (await look(page, '[data-role="presentation-item"].is-active')).background)
+      .toBe("rgb(29, 58, 95)");
 
     // The work area's top row: the song title and "Snímok v riadku − N +".
     const title = await look(page, '.operator__worktop [data-role="slides-song-bubble"]');
@@ -219,7 +224,9 @@ for (const viewport of VIEWPORTS) {
     // Slides: 16:9 cards; the one on the wall red with "NA STENE".
     const live = await look(page, '[data-role="slides"] article.is-active');
     expect(live.borderTop).toBe("2px solid");
-    expect(await page.locator('[data-role="slides"] article.is-active').evaluate((el) => getComputedStyle(el).borderTopColor)).toBe(RED);
+    await expect
+      .poll(() => page.locator('[data-role="slides"] article.is-active').evaluate((el) => getComputedStyle(el).borderTopColor))
+      .toBe(RED);
     await expect(page.locator('[data-role="slides"] article.is-active [data-role="slide-live-tag"]')).toBeVisible();
     await expect(page.locator('[data-role="slides"] article.is-active [data-role="slide-live-tag"]')).toHaveText("NA STENE");
     await expect(page.locator('[data-role="slides"] article:not(.is-active) [data-role="slide-live-tag"]').first()).toBeHidden();
@@ -283,7 +290,12 @@ test("the phone keeps its own lists and slides", async ({ browser }) => {
   await expect(page.locator("body")).toHaveAttribute("data-shell", "phone");
   await expect(page.locator(".operator__group-count-value").first()).toBeVisible();
   await expect(page.locator(".operator__group-more-icon").first()).toBeHidden();
+  await expect(page.locator(".operator__presentations-kind")).toHaveText("Piesne v knižnici");
   await page.locator('[data-role="library-item"]').first().tap();
+  // The heading is the library's name alone, with the count beside it.
+  await expect(page.locator('[data-role="context-title"]')).toBeVisible();
+  await expect(page.locator(".operator__presentations-kind")).toBeHidden();
+  await expect(page.locator('[data-role="presentation-count"]')).toBeVisible();
   // Open a song the way a session restore does (on a phone the song list
   // lies under the slides, worship-touch.spec.ts).
   const songId = await page.locator('[data-role="presentation-item"]').first().getAttribute("data-presentation-id");
