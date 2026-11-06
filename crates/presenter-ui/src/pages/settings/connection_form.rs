@@ -30,13 +30,13 @@ pub(super) fn validate_connection(
 ) -> Result<ConnectionFields, &'static str> {
     let label = label.trim();
     if label.is_empty() {
-        return Err("Label cannot be empty.");
+        return Err("Zadaj názov.");
     }
     let host = host.trim();
     if host.is_empty() {
-        return Err("Host cannot be empty.");
+        return Err("Zadaj adresu.");
     }
-    let port = parse_port_in_range(port).ok_or("Port must be between 1 and 65535.")?;
+    let port = parse_port_in_range(port).ok_or("Port musí byť od 1 do 65535.")?;
     Ok(ConnectionFields {
         label: label.to_string(),
         host: host.to_string(),
@@ -72,9 +72,9 @@ pub(super) fn validate_draft(values: &DraftValues) -> Result<Submission, &'stati
 
 /// The connection cards' tooltip of an Edit / "+ Add" button locked by unsaved
 /// changes (every card's [`EditorSpec`] names its own; these two are the connection cards').
-pub(super) const UNSAVED_TITLE: &str = "Save or cancel the open editor first";
+pub(super) const UNSAVED_TITLE: &str = "Najprv ulož alebo zruš otvorenú úpravu";
 /// The connection cards' tooltip of a button locked by a save in flight.
-pub(super) const SAVING_TITLE: &str = "Wait until the save has finished";
+pub(super) const SAVING_TITLE: &str = "Počkaj, kým sa uloženie dokončí";
 
 /// What differs between the Resolume and the Android connection form.
 #[derive(Clone, Copy, Debug)]
@@ -164,7 +164,7 @@ impl EditorForm for ConnectionForm {
         view! {
             <div class="settings__form-row settings__form-row--connection">
                 <label>
-                    <span>"Label"</span>
+                    <span>"Názov"</span>
                     <input type="text" node_ref=first data-role=role("label")
                         placeholder=self.spec.label_placeholder required
                         aria-required="true"
@@ -174,7 +174,7 @@ impl EditorForm for ConnectionForm {
                         on:input=move |ev| self.label.set(event_target_value(&ev)) />
                 </label>
                 <label>
-                    <span>"Hostname or DNS"</span>
+                    <span>"Adresa (názov alebo IP)"</span>
                     <input type="text" data-role=role("host") placeholder=self.spec.host_placeholder required
                         aria-required="true"
                         aria-describedby=spec.message_id
@@ -203,7 +203,7 @@ impl EditorForm for ConnectionForm {
                 <input type="checkbox" data-role=format!("{}-enabled", spec.role)
                     prop:checked=move || self.enabled.get()
                     on:change=move |ev| self.enabled.set(event_target_checked(&ev)) />
-                <span>"Enabled"</span>
+                <span>"Zapnuté"</span>
             </label>
         }
         .into_any()
@@ -231,14 +231,8 @@ mod tests {
 
     #[test]
     fn a_blank_label_or_host_is_rejected_in_field_order() {
-        assert_eq!(
-            validate_connection("   ", "", "x"),
-            Err("Label cannot be empty.")
-        );
-        assert_eq!(
-            validate_connection("Main", "  ", "x"),
-            Err("Host cannot be empty.")
-        );
+        assert_eq!(validate_connection("   ", "", "x"), Err("Zadaj názov."));
+        assert_eq!(validate_connection("Main", "  ", "x"), Err("Zadaj adresu."));
     }
 
     #[test]
@@ -247,7 +241,7 @@ mod tests {
         for port in ["99999", "0", "", "80x"] {
             assert_eq!(
                 validate_connection("Main", "resolume.lan", port),
-                Err("Port must be between 1 and 65535."),
+                Err("Port musí byť od 1 do 65535."),
                 "port {port:?}"
             );
         }

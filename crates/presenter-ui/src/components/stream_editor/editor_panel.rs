@@ -25,7 +25,7 @@ pub fn EditorPanel(ctx: StreamEditorCtx) -> impl IntoView {
                 </h2>
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--ghost"
+                    class="ui-button"
                     data-role="stream-panel-close"
                     on:click=move |_| ctx.request_close_panel()
                 >
@@ -74,7 +74,7 @@ fn AddElementButton(
     view! {
         <button
             type="button"
-            class="stream-editor__btn stream-editor__btn--primary"
+            class="ui-button ui-button--primary"
             data-role=role
             on:click=move |_| {
                 if let Some(scene_id) = ctx.selected_scene.get_untracked() {
@@ -113,7 +113,7 @@ fn ElementRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
             <div class="stream-editor__element-actions">
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--ghost"
+                    class="ui-button"
                     data-role="stream-element-up"
                     title="Vyššie v poradí"
                     on:click=move |_| ctx.move_element(id, true)
@@ -122,7 +122,7 @@ fn ElementRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 </button>
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--ghost"
+                    class="ui-button"
                     data-role="stream-element-down"
                     title="Nižšie v poradí"
                     on:click=move |_| ctx.move_element(id, false)
@@ -131,7 +131,7 @@ fn ElementRow(ctx: StreamEditorCtx, id: i64) -> impl IntoView {
                 </button>
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--danger"
+                    class="ui-button ui-button--danger"
                     data-role="stream-element-delete"
                     on:click=move |_| ctx.delete_element(id)
                 >

@@ -121,16 +121,16 @@ test("the settings card shows the source's status badge", async ({
   );
 
   if (ndiAvailable) {
-    await expect(badge).toHaveText("Not found on the network", {
+    await expect(badge).toHaveText("Nie je v sieti", {
       timeout: 30_000,
     });
     await expect(badge).toHaveAttribute("data-state", "not-found");
     // The sentence that would have ended the PP outage in a minute.
-    await expect(hint).toContainText("not on the network", { timeout: 30_000 });
+    await expect(hint).toContainText("nie je v sieti", { timeout: 30_000 });
     // And what IS on the air, right there, to compare the mapped name against.
     await expect(page.locator('[data-role="ndi-discovered"]')).toHaveCount(1);
   } else {
-    await expect(badge).toHaveText("NDI unavailable", { timeout: 30_000 });
+    await expect(badge).toHaveText("NDI nedostupné", { timeout: 30_000 });
     await expect(badge).toHaveAttribute("data-state", "unknown");
     // Nothing can be discovered without the SDK, so the "on the network now" line must
     // not be there claiming an empty network.
@@ -142,7 +142,7 @@ test("the settings card shows the source's status badge", async ({
   // Unavailable" on every load until the first poll landed.
   const headerBadge = page.locator('[data-role="ndi-header-badge"]');
   await expect(headerBadge).toHaveText(
-    ndiAvailable ? "NDI Available" : "NDI Unavailable",
+    ndiAvailable ? "NDI dostupné" : "NDI nedostupné",
     { timeout: 30_000 },
   );
 
@@ -167,9 +167,12 @@ test("the row's active state follows the server, not this tab's own actions", as
   const row = page.locator(
     `[data-role="video-source-row"][data-source-id="${source.id}"]`,
   );
-  await expect(row.locator(".settings__btn--activate")).toBeVisible({
+  // #875 H4: one "Aktívny" toggle; its state is data-state + aria-pressed.
+  const toggle = row.locator('[data-role="video-source-active"]');
+  await expect(toggle).toHaveAttribute("data-state", "off", {
     timeout: 30_000,
   });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
 
   // Activate OUT OF BAND — as another operator's tab or Companion would. A source whose
   // broadcaster is silent still ACTIVATES (#448), with or without the NDI SDK, so this is
@@ -187,8 +190,9 @@ test("the row's active state follows the server, not this tab's own actions", as
   expect(entry.isActive, "the server considers the source active").toBe(true);
 
   // No reload, no click in this tab: the 5s poll alone must bring the row in line.
-  await expect(row.locator(".settings__btn--active")).toBeVisible({
+  await expect(toggle).toHaveAttribute("data-state", "on", {
     timeout: 30_000,
   });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(row.locator(".settings__source-dot--active")).toHaveCount(1);
 });

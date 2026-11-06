@@ -38,15 +38,45 @@ pub(super) fn resolume_warning(
         return Some(HostWarning::Error(format!("⚠ {err}")));
     }
     let failures = status.consecutive_failures;
-    let plural = if failures == 1 { "" } else { "s" };
+    let noun = failures_noun(failures);
     let since = status
         .error_since
         .as_deref()
-        .map(|s| format!(" since {}", format_timestamp(s)))
+        .map(|s| format!(" od {}", format_timestamp(s)))
         .unwrap_or_default();
     Some(HostWarning::Retrying(format!(
-        "⚠ Retrying… ({failures} failure{plural}{since})"
+        "⚠ Skúšam znova… ({failures} {noun}{since})"
     )))
+}
+
+/// Slovak plural of "zlyhanie": 1 zlyhanie, 2–4 zlyhania, 0 / 5+ zlyhaní.
+fn failures_noun(count: u32) -> &'static str {
+    match count {
+        1 => "zlyhanie",
+        2..=4 => "zlyhania",
+        _ => "zlyhaní",
+    }
+}
+
+/// The Slovak badge text of a connection / tracker state (#875 H4). The state
+/// itself stays the server's token (`data-state`, the CSS modifier); only the
+/// text the operator reads is translated. An unknown token is shown as it came,
+/// capitalised, rather than hidden.
+pub(super) fn state_label(state: &str) -> String {
+    let label = match state.to_lowercase().replace(' ', "-").as_str() {
+        "connected" => "Pripojené",
+        "connecting" => "Pripája sa",
+        "launching" => "Spúšťa sa",
+        "running" => "Beží",
+        "not-ready" => "Nepripravené",
+        "error" => "Chyba",
+        "disabled" => "Vypnuté",
+        "enabled" => "Zapnuté",
+        "tracking" => "Sleduje",
+        "listening" => "Počúva",
+        _ => return capitalize(state),
+    };
+    label.to_string()
 }
 
 /// The last response time, or a dash before the first answer.
@@ -66,20 +96,20 @@ pub(super) fn android_state(
         .map(|s| s.state.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or(fallback);
-    (raw.to_lowercase().replace(' ', "-"), capitalize(raw))
+    (raw.to_lowercase().replace(' ', "-"), state_label(raw))
 }
 
 /// `Last attempt … · Last success …` — a dash for an event that never happened.
 pub(super) fn android_attempts(status: Option<&AndroidStatusDto>) -> String {
     let attempt = timestamp_or_dash(status.and_then(|s| s.last_attempt.as_deref()));
     let success = timestamp_or_dash(status.and_then(|s| s.last_success.as_deref()));
-    format!("Last attempt {attempt} · Last success {success}")
+    format!("Posledný pokus {attempt} · Posledný úspech {success}")
 }
 
 /// The muted bookkeeping line under a row: `Updated … · Created …`.
 pub(super) fn updated_created(updated_at: &str, created_at: &str) -> String {
     format!(
-        "Updated {} · Created {}",
+        "Upravené {} · Vytvorené {}",
         format_timestamp(updated_at),
         format_timestamp(created_at)
     )
@@ -135,18 +165,18 @@ mod tests {
     fn a_failing_connection_says_how_often_it_retried() {
         assert_eq!(
             resolume_warning(Some(&resolume("error", Some("refused"), 3)), true),
-            Some(HostWarning::Retrying("⚠ Retrying… (3 failures)".into()))
+            Some(HostWarning::Retrying("⚠ Skúšam znova… (3 zlyhania)".into()))
         );
         assert_eq!(
             resolume_warning(Some(&resolume("error", Some("refused"), 1)), true),
-            Some(HostWarning::Retrying("⚠ Retrying… (1 failure)".into()))
+            Some(HostWarning::Retrying("⚠ Skúšam znova… (1 zlyhanie)".into()))
         );
         let mut since = resolume("error", Some("refused"), 2);
         since.error_since = Some("raw-since".into());
         assert_eq!(
             resolume_warning(Some(&since), true),
             Some(HostWarning::Retrying(
-                "⚠ Retrying… (2 failures since raw-since)".into()
+                "⚠ Skúšam znova… (2 zlyhania od raw-since)".into()
             ))
         );
     }
@@ -174,35 +204,65 @@ mod tests {
     fn android_badge_normalises_the_server_state() {
         assert_eq!(
             android_state(Some(&android("running")), true),
-            ("running".to_string(), "Running".to_string())
+            ("running".to_string(), "Beží".to_string())
         );
         assert_eq!(
             android_state(Some(&android("Not Ready")), true),
-            ("not-ready".to_string(), "Not Ready".to_string())
+            ("not-ready".to_string(), "Nepripravené".to_string())
         );
         assert_eq!(
             android_state(Some(&android("")), false),
-            ("disabled".to_string(), "Disabled".to_string())
+            ("disabled".to_string(), "Vypnuté".to_string())
         );
         assert_eq!(
             android_state(None, true),
-            ("connecting".to_string(), "Connecting".to_string())
+            ("connecting".to_string(), "Pripája sa".to_string())
         );
     }
 
     #[test]
     fn android_attempts_dash_out_missing_events() {
-        assert_eq!(android_attempts(None), "Last attempt — · Last success —");
+        assert_eq!(
+            android_attempts(None),
+            "Posledný pokus — · Posledný úspech —"
+        );
         let mut status = android("running");
         status.last_attempt = Some("raw-attempt".into());
         assert_eq!(
             android_attempts(Some(&status)),
-            "Last attempt raw-attempt · Last success —"
+            "Posledný pokus raw-attempt · Posledný úspech —"
         );
     }
 
     #[test]
     fn updated_and_created_share_one_line() {
-        assert_eq!(updated_created("u", "c"), "Updated u · Created c");
+        assert_eq!(updated_created("u", "c"), "Upravené u · Vytvorené c");
+    }
+
+    #[test]
+    fn five_failures_take_the_genitive_plural() {
+        assert_eq!(
+            resolume_warning(Some(&resolume("error", Some("refused"), 5)), true),
+            Some(HostWarning::Retrying("⚠ Skúšam znova… (5 zlyhaní)".into()))
+        );
+    }
+
+    #[test]
+    fn every_known_state_reads_slovak_and_an_unknown_one_stays_as_sent() {
+        for (state, label) in [
+            ("connected", "Pripojené"),
+            ("Connecting", "Pripája sa"),
+            ("launching", "Spúšťa sa"),
+            ("running", "Beží"),
+            ("Not Ready", "Nepripravené"),
+            ("error", "Chyba"),
+            ("disabled", "Vypnuté"),
+            ("enabled", "Zapnuté"),
+            ("tracking", "Sleduje"),
+            ("listening", "Počúva"),
+        ] {
+            assert_eq!(state_label(state), label, "{state}");
+        }
+        assert_eq!(state_label("rebooting"), "Rebooting");
     }
 }

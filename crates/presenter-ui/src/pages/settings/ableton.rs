@@ -2,7 +2,8 @@
 
 use leptos::prelude::*;
 
-use super::{capitalize, format_timestamp, parse_port_in_range, ToastHandle, STATUS_REFRESH_MS};
+use super::row_status::state_label;
+use super::{format_timestamp, parse_port_in_range, ToastHandle, STATUS_REFRESH_MS};
 use crate::api::settings::{self, OscStatusDto};
 use presenter_core::{AbleSetSettingsDraft, AbleSetStatusSnapshot, OscSettingsDraft, VelocityMode};
 
@@ -68,7 +69,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
         let prefix = song_prefix_length.get_untracked().max(1);
         busy.set(true);
         form_state.set("loading".to_string());
-        form_status.set("Saving Ableton settings…".to_string());
+        form_status.set("Ukladám nastavenia Abletonu…".to_string());
         leptos::task::spawn_local(async move {
             let ableset_draft = AbleSetSettingsDraft {
                 enabled: want_enabled,
@@ -99,8 +100,8 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                     osc_port.set(cfg.osc_port.to_string());
                     song_prefix_length.set(cfg.song_prefix_length);
                     form_state.set("success".to_string());
-                    form_status.set("Ableton settings saved.".to_string());
-                    toast.show("Ableton settings saved.", "success");
+                    form_status.set("Nastavenia Abletonu sú uložené.".to_string());
+                    toast.show("Nastavenia Abletonu sú uložené.", "success");
                     if let Ok(status) = settings::get_ableset_status().await {
                         ableset_status.set(Some(status));
                     }
@@ -110,8 +111,8 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                 }
                 Err(err) => {
                     form_state.set("error".to_string());
-                    form_status.set(format!("Failed to update Ableton settings. {err}"));
-                    toast.show("Unable to update Ableton settings.", "error");
+                    form_status.set(format!("Nastavenia Abletonu sa nepodarilo uložiť. {err}"));
+                    toast.show("Nastavenia Abletonu sa nepodarilo uložiť.", "error");
                 }
             }
             busy.set(false);
@@ -149,8 +150,8 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
         <section class="settings__card">
             <header class="settings__card-header">
                 <div>
-                    <h2>"Ableton Control"</h2>
-                    <p>"Configure AbleSet tracking and Presenter's OSC listener."</p>
+                    <h2>"Ovládanie z Abletonu"</h2>
+                    <p>"Sledovanie AbleSetu a príjem OSC v Presenteri."</p>
                 </div>
             </header>
             <form class="settings__form" data-role="ableset-form" autocomplete="off"
@@ -161,12 +162,12 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                         <input type="checkbox" data-role="ableset-enabled"
                             prop:checked=move || enabled.get()
                             on:change=move |ev| enabled.set(event_target_checked(&ev)) />
-                        <span>"Enable Ableton automation"</span>
+                        <span>"Zapnúť automatiku z Abletonu"</span>
                     </label>
                 </div>
                 <div class="settings__form-row settings__form-row--port-middle">
                     <label>
-                        <span>"AbleSet Host"</span>
+                        <span>"Adresa AbleSetu"</span>
                         <input type="text" data-role="ableset-host" required
                             aria-required="true"
                             aria-describedby="ableton-form-status"
@@ -175,7 +176,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                             on:input=move |ev| host.set(event_target_value(&ev)) />
                     </label>
                     <label class="settings__form-control--small">
-                        <span>"HTTP Port"</span>
+                        <span>"Port HTTP"</span>
                         <input type="number" data-role="ableset-http-port" min="1" max="65535" required
                             aria-required="true"
                             aria-describedby="ableton-form-status"
@@ -184,7 +185,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                             on:input=move |ev| http_port.set(event_target_value(&ev)) />
                     </label>
                     <label>
-                        <span>"Library Name"</span>
+                        <span>"Názov knižnice"</span>
                         <input type="text" data-role="ableset-library" required
                             aria-required="true"
                             aria-describedby="ableton-form-status"
@@ -195,7 +196,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                 </div>
                 <div class="settings__form-row settings__form-row--single">
                     <label class="settings__form-control--small">
-                        <span>"OSC Listener Port"</span>
+                        <span>"Port pre OSC"</span>
                         <input type="number" data-role="osc-port" min="1" max="65535" required
                             aria-required="true"
                             aria-describedby="ableton-form-status"
@@ -205,8 +206,8 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                     </label>
                 </div>
                 <div class="settings__form-actions">
-                    <button type="submit" class="settings__button settings__button--primary"
-                        data-role="ableset-submit" prop:disabled=move || busy.get()>"Save AbleSet Settings"</button>
+                    <button type="submit" class="ui-button ui-button--primary"
+                        data-role="ableset-submit" prop:disabled=move || busy.get()>"Uložiť"</button>
                 </div>
                 <p id="ableton-form-status" class="settings__form-status" data-role="ableset-form-status" data-state=move || form_state.get()>
                     {move || form_status.get()}
@@ -215,11 +216,11 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
             <div class="settings__status-panel">
                 <span class=move || format!("settings__status settings__status--{}", ableset_state_label())
                     data-role="ableset-status-indicator" data-state=ableset_state_label>
-                    {move || capitalize(ableset_state_label())}
+                    {move || state_label(ableset_state_label())}
                 </span>
                 <dl class="settings__status-list">
                     <div>
-                        <dt>"Current song"</dt>
+                        <dt>"Aktuálna pieseň"</dt>
                         <dd data-role="ableset-status-song">
                             {move || ableset_status.get()
                                 .and_then(|s| s.last_song.map(|song| song.name))
@@ -228,7 +229,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                         </dd>
                     </div>
                     <div>
-                        <dt>"Last update"</dt>
+                        <dt>"Posledná zmena"</dt>
                         <dd data-role="ableset-status-updated">
                             {move || ableset_status.get()
                                 .and_then(|s| s.last_song.and_then(|song| song.last_seen_at))
@@ -246,11 +247,11 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
             <div class="settings__status-panel">
                 <span class=move || format!("settings__status settings__status--{}", osc_state_label())
                     data-role="osc-status-indicator" data-state=osc_state_label>
-                    {move || capitalize(osc_state_label())}
+                    {move || state_label(osc_state_label())}
                 </span>
                 <dl class="settings__status-list">
                     <div>
-                        <dt>"Last event"</dt>
+                        <dt>"Posledná udalosť"</dt>
                         <dd data-role="osc-status-last-message">
                             {move || osc_status.get()
                                 .and_then(|s| s.last_message_at)
@@ -259,15 +260,15 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                         </dd>
                     </div>
                     <div>
-                        <dt>"Last note"</dt>
+                        <dt>"Posledná nota"</dt>
                         <dd data-role="osc-status-last-note">
                             {move || {
                                 let status = osc_status.get();
                                 match status.as_ref().and_then(|s| s.last_note) {
                                     Some(note) => {
                                         match status.as_ref().and_then(|s| s.last_velocity) {
-                                            Some(vel) => format!("note {note} (vel {vel})"),
-                                            None => format!("note {note}"),
+                                            Some(vel) => format!("nota {note} (sila {vel})"),
+                                            None => format!("nota {note}"),
                                         }
                                     }
                                     None => "—".to_string(),

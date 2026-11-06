@@ -56,7 +56,7 @@ pub(crate) fn port_drift_note(configured_port: u16, active_port: Option<u16>) ->
 /// #808: shown under the missing-clips line. Presenter re-reads the Arena
 /// composition only on connect, recovery, a stale id or this button.
 pub(crate) const MISSING_CLIPS_HINT: &str =
-    "Po úprave klipov v Arene: Nastavenia \u{2192} Refresh mapping";
+    "Po úprave klipov v Arene: Nastavenia \u{2192} Načítať klipy";
 
 /// The full tooltip text (native `title` attribute — no custom popover
 /// needed for this MVP): the host's FULL label first (the visible chip text

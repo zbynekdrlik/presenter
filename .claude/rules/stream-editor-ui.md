@@ -3,6 +3,9 @@ paths:
   - "crates/presenter-ui/src/pages/stream_editor.rs"
   - "crates/presenter-ui/src/components/stream_editor/**"
   - "tests/e2e/stream-editor*.spec.ts"
+  - "crates/presenter-ui/styles/controls.css"
+  - "crates/presenter-ui/styles/stream_editor.css"
+  - "tests/e2e/operator-labels-h4.spec.ts"
 ---
 
 # Stream-graphics WASM operator editor (`/ui/stream`, #713, epic #718)
@@ -13,6 +16,32 @@ rename/reorder). Element CRUD + property panel = #714; preview iframe + assets =
 #715. The companion OUTPUT page `/stream/{slug}` is a SEPARATE lane
 (`components/stream/**`, `pages/stream_output.rs`, `ws/stream.rs`) — do NOT edit
 those from an editor ticket.
+
+## One top row, shared controls, Slovak copy (#875 H4)
+- The page header is ONE `.ui-topbar` row (`styles/controls.css`, the operator header's look,
+  `data-role="stream-editor-header"`): „Stream", `OutputSelect`, `OutputManage` (the OBS address
+  + Nový výstup / Premenovať / Zmazať výstup as `.ui-topbar__button`), `EditorTabs` (the tabs are
+  `.ui-topbar__tab`) and `← Operátor` (`stream-editor-back`) + the version. No description line,
+  no second / third row. At 1280 px everything fits (the OBS input gives way, `width: 0;
+  flex: 1`); narrower windows wrap between groups. The name form and the delete question are
+  `.ui-topbar__panel`s under the row (absolute, the row's full width), so the row never grows;
+  their controls are 40 px.
+- Buttons are `.ui-button` (`--primary` / `--danger` / `--quiet`); there is no
+  `stream-editor__btn` any more. State buttons are `.ui-toggle` with ONE label and
+  `data-state` + `aria-pressed`: a base scene's and an overlay's „Naživo" (`stream-activate`,
+  `stream-overlay-toggle`), the preview's „Naživo" (`stream-preview-live-toggle`, `data-live`
+  kept), the text alignment (`stream-ts-align-*`, `data-active` kept, `aria-label` because they
+  are icons). The scene card keeps `data-active` (specs read it).
+- Fields take the shared look (controls.css); `stream_editor.css` only sizes / places them. The
+  palette is the operator's (`#0f172a` page, `#1e293b` panels, `#334155` borders).
+- Desktop size: the 40 px rule in controls.css covers `.stream-editor` minus its `.ui-topbar`.
+  Exempt: the canvas overlay's outlines and resize handles (divs, a pointer gesture surface, not
+  buttons) and native checkboxes / radios / colour / file inputs.
+- Copy: „Prekryvné scény" / „Základné scény" (were Overlay / Base), scene count `element_count_text`
+  (1 prvok / 2–4 prvky / 5+ prvkov), image fit „Celý obrázok / Vyplniť (orezať) / Roztiahnuť",
+  „Číslo obrázka" (was Asset ID). Font style names (Bold, Light…) are DATA from the font files.
+- `operator-labels-h4.spec.ts` pins it at 1280×720 and 1920×1080 (every tab, a scene with a
+  countdown element, the output name panel).
 
 ## def + events reconciliation (the client model)
 Two signals: `def: RwSignal<Option<StreamOutputDef>>` (full config) and
@@ -373,7 +402,7 @@ matches only that exact path, not `/outputs/{slug}/…`.
     Prehrať button.
   - Both editor previews share `editor_preview::{preview_base, post_to_frame}`.
 - Phone width:
-  - the header and the tab bar `flex-wrap`;
+  - the top row `flex-wrap`s (between its groups);
   - the font `<input type=file>` gets `max-width:100%` (its ~300 px intrinsic width overflowed
     320 px);
   - at ≤480 px `.stream-editor__panel` / `__preview` drop their 20rem `min-width`.
@@ -522,8 +551,8 @@ cut starts at `STREAM_DEFAULT_FADE_MS`.
   shell and answers 200 for any slug, so only the def endpoint proves a delete.
 - CSS: a long output name must shrink the header select (`max-width:100%; min-width:0` on
   `__header-nav`, `__output-select` and its `select`; measured 74 px overflow at 360 px without),
-  and the confirmation body wraps anywhere. The base `.stream-editor__btn:hover` rules skip
-  `:disabled`, so a disabled / busy button never lights up.
+  and the confirmation body wraps anywhere. The shared `:hover` rules skip `:disabled`
+  (controls.css), so a disabled / busy button never lights up.
 - **Live check on SNV/PP: never press „Zmazať" on a real output** — deleting prod data needs the
   owner. Check the disabled `stream` button + tooltip, open the confirmation on a throwaway
   output the owner named, then Zrušiť.

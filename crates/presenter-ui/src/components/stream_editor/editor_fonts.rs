@@ -93,7 +93,7 @@ pub fn FontPanel(ctx: StreamEditorCtx) -> impl IntoView {
                 />
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--primary"
+                    class="ui-button ui-button--primary"
                     data-role="stream-font-upload-btn"
                     on:click=on_upload
                 >
@@ -146,7 +146,7 @@ pub fn FontPanel(ctx: StreamEditorCtx) -> impl IntoView {
                                 </span>
                                 <button
                                     type="button"
-                                    class="stream-editor__btn stream-editor__btn--danger"
+                                    class="ui-button ui-button--danger"
                                     data-role="stream-font-delete"
                                     on:click=move |_| ctx.delete_font(id)
                                 >

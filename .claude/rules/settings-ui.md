@@ -5,6 +5,8 @@ paths:
   - "crates/presenter-ui/styles/settings_lists.css"
   - "tests/e2e/settings*.spec.ts"
   - "tests/e2e/operator-settings-native.spec.ts"
+  - "crates/presenter-ui/styles/controls.css"
+  - "tests/e2e/operator-labels-h4.spec.ts"
 ---
 
 # Settings tab — form CSS system + inline list editor (#819)
@@ -35,6 +37,28 @@ No spec selects any of them. The status / badge / source-dot modifiers are built
 code (`format!("settings__status--{}")`, string literals) — grep for the stem
 before calling one dead.
 
+## Shared controls, Slovak copy (#875 H4)
+
+- Buttons are the shared `.ui-button` (`--primary` Save / Add, `--danger` Delete, `--quiet`
+  Cancel) and state buttons the shared `.ui-toggle` (`styles/controls.css`, one label, the state
+  is `data-state="on|off"` + `aria-pressed`: the video source's „Aktívny", `video-source-active`).
+  Fields take the shared look from controls.css; `settings.css` only lays them out. There is no
+  `settings__button` / `settings__btn` any more — never bring a per-page button look back. The
+  one button with its own look is the discovered-NDI chip (`settings__discovered-name`, data).
+- Desktop size: the ONE 40 px rule in controls.css covers the operator panel (no settings
+  exclusion since H4) and the standalone `body.settings .settings-layout`.
+- Every label is Slovak, sentence case, no `text-transform: uppercase` (badge labels, editor
+  titles and status badges lost theirs). The copy lives where it did: a card's `CardText`, the
+  form's labels, `row_status.rs`. A server state token stays the `data-state` / CSS modifier;
+  its TEXT is `row_status::state_label` (connected → Pripojené, disabled → Vypnuté, running →
+  Beží, …; an unknown token is shown capitalised). Slovak plurals: `failures_noun` (1 zlyhanie /
+  2–4 zlyhania / 5+ zlyhaní), `mapping_refreshed_message` (chýba 1 klip / chýbajú 2–4 klipy /
+  chýba 5 klipov). Server text (an error tail, `HTTP 500: …`, adb / pipeline errors), host
+  labels and addresses, NDI names and the clip-name tokens stay as they come.
+- The Resolume button is „Načítať klipy" (`host-refresh-mapping`); the card hint and the
+  operator chip's `MISSING_CLIPS_HINT` name it the same way.
+- `operator-labels-h4.spec.ts` pins all of it (operator panel + standalone page).
+
 List rows, status badges and the inline editor live in `settings_lists.css` (split
 so neither file passes 800 lines). Both files must stay listed in
 `crates/presenter-ui/index.html`, settings_lists.css right after settings.css. A new
@@ -43,8 +67,8 @@ status state needs its `.settings__status--<state>` colour there.
 ## Row text contrast — at least 4.5:1, measured on the row background
 
 The row background is `#334155`. Secondary text (`.settings__list-aside`,
-`.settings__list-meta--muted`) and the row's ghost buttons are `#cbd5e1` at
-0.8rem or more (7.0:1). The old `#94a3b8` is only 4.0:1 there. A disabled row is
+`.settings__list-meta--muted`) is `#cbd5e1` at 0.8rem or more (7.0:1); the shared
+`.ui-button` text is `#e2e8f0` (8.0:1), `--danger` `#fca5a5` (5.6:1). The old `#94a3b8` is only 4.0:1 there. A disabled row is
 dimmed with a darker dashed card (`#263346`), never with `opacity`: the old 0.75
 faded the secondary text (3.0:1), the warning (3.9:1) and the status badges
 (3.6–4.5:1) below 4.5:1, while only the label stayed readable. Before adding a
@@ -83,8 +107,8 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
   - It is numbered by `list_sync::ResponseOrder`, so a poll sent before a save and
     landing after the save's reload is dropped instead of reverting the row.
   - It calls `forget_missing`. When the open editor's row was deleted elsewhere,
-    the editor closes, the toast `CardText.removed_elsewhere` ("This connection
-    was removed elsewhere.") says why, and focus goes to "+ Add" (once the save
+    the editor closes, the toast `CardText.removed_elsewhere` („Toto pripojenie
+    medzitým niekto odstránil.") says why, and focus goes to "+ Add" (once the save
     settles, if one of that row is in flight).
 - Save flow (`ListCard::save`): `begin_save` (no editor / busy / invalid → `None`),
   `mark_saving`, request, on success reload the list, THEN `finish_save`. A failed
@@ -190,8 +214,8 @@ same lock, so a locked trigger can never open the editor:
   never land on a different editor.
 - **`unsaved`** — the draft differs from what the editor was opened with (the
   `dirty` Memo: the form's current `Values` != `loaded`, every field). Every OTHER trigger is locked, with the card's
-  `EditorSpec.unsaved_title` ("Save or cancel the open editor first" on the
-  connection cards). Typing the stored value back unlocks again.
+  `EditorSpec.unsaved_title` („Najprv ulož alebo zruš otvorenú úpravu", the same on
+  every card). Typing the stored value back unlocks again.
 - **`open`** — the trigger's own editor is already open ("+ Add" while adding).
 - A clean editor locks nothing: Edit on another row switches in one click.
 
@@ -253,9 +277,11 @@ by `CardItem::key`) with unit tests for this.
   width otherwise counts towards the card's minimum width (the NDI name input made
   the page 404 px on a 360 px phone). The clip-name legend stacks to one column
   at ≤ 840 px (its 160 px name column alone made the page 393 px).
-- The header has `gap: 16px`, a minimum title–nav gap at every width. At ≤ 480 px
-  only its side padding drops to 20 px (`padding-inline`); the 24 px top / bottom
-  padding stays. The header nav is `flex-wrap: wrap` + `white-space: nowrap`.
+- The standalone header is the operator top bar's look since H4 (`#0b1222`, ≥ 40 px,
+  `padding: 6px 16px`, title „Nastavenia" 15 px, no description line). It has `gap: 16px`,
+  a minimum title–nav gap at every width. At ≤ 480 px only its side padding drops to 12 px
+  (`padding-inline`); the top / bottom padding stays. The header nav is `flex-wrap: wrap` +
+  `white-space: nowrap`.
 - Every row text that can carry a long unbroken token needs `overflow-wrap:
   anywhere` (`.settings__list-meta`, `-aside`, `.settings__host-addr`). The Android
   warning names `PRESENTER_ANDROID_STAGE_URL` (27 chars). That alone set the row's
@@ -263,8 +289,8 @@ by `CardItem::key`) with unit tests for this.
   It reproduces only with seeded rows, as in CI, never with an empty DB.
 - Video Sources rows (`.settings__source-item`) wrap: `flex-wrap: wrap`, and the
   info column is `flex: 1 1 160px; min-width: 0`. A not-found row on ONE line
-  (name, hint, the nowrap badge "Not found on the network", Activate, Delete) is
-  about 510 px. Measured on prod v0.4.304: SNV 589/320, PP 427/320. CI seeds no
+  (name, hint, the nowrap badge „Nie je v sieti", Aktívny, Odstrániť) was
+  about 510 px with the old English copy. Measured on prod v0.4.304: SNV 589/320, PP 427/320. CI seeds no
   not-found row, so the guard for it is in `ndi-source-status.spec.ts` (synthetic
   NDI lane). After a release, also check the standalone page on BOTH prod sites at
   320 px. Real data catches what seeded data cannot.
@@ -297,5 +323,5 @@ by `CardItem::key`) with unit tests for this.
 
 Every toast's timer restarts on each message: the operator `Toast` owns its own, settings and the
 stream editor call `toast::hide_after_last_message` once where the signals are made. Never a
-`Timeout…forget()` per call. On prod, "Scan" on the video sources card is a read-only way to raise a
-settings toast (it only GETs the status).
+`Timeout…forget()` per call. On prod, „Hľadať" (the old "Scan") on the video sources card is a read-only way to
+raise a settings toast (it only GETs the status).

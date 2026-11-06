@@ -40,25 +40,24 @@ body.settings {
     sans-serif;
 }
 
+/* #875 H4: the operator top bar's look (controls.css `.ui-topbar`): a dark,
+   compact row with the page name and the way back. */
 .settings__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 24px 40px;
-  background: #1e293b;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+  min-height: 40px;
+  padding: 6px 16px;
+  box-sizing: border-box;
+  background: #0b1222;
+  border-bottom: 1px solid #334155;
 }
 
 .settings__header-title h1 {
   margin: 0;
-  font-size: 1.75rem;
+  font-size: 15px;
   font-weight: 600;
-}
-
-.settings__header-title p {
-  margin: 8px 0 0;
-  color: #94a3b8;
 }
 
 /* "← Back to hub" and the version label, side by side with a gap (they rendered
@@ -146,8 +145,6 @@ body.settings {
 
 .settings__badge-label {
   font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   color: #94a3b8;
 }
 
@@ -210,29 +207,14 @@ body.settings {
   color: #cbd5e1;
 }
 
+/* The field LOOK is the shared one (controls.css, #875 H4); a form row only
+   lays its fields out. */
 .settings__form-row input[type="text"],
 .settings__form-row input[type="number"],
 .settings__form-row select {
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 8px;
-  font-size: 0.95rem;
   font-weight: 400;
-  background: #1e293b;
-  color: #f8fafc;
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.settings__form-row input:focus,
-.settings__form-row select:focus {
-  outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
 }
 
 /* A port-sized field in a generic grid row: stays narrow, left-aligned. */
@@ -257,7 +239,7 @@ body.settings {
   flex-direction: row;
   align-items: center;
   gap: 8px;
-  min-height: 37px;
+  min-height: 40px;
   font-size: 0.9rem;
   color: #f8fafc;
 }
@@ -275,70 +257,6 @@ body.settings {
   gap: 8px;
   align-items: center;
   justify-content: flex-start;
-}
-
-.settings__button {
-  flex: 0 0 auto;
-  width: auto;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  padding: 8px 14px;
-  line-height: 1.25;
-  cursor: pointer;
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
-}
-
-.settings__button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
-/* An Edit / "+ Add" locked by the open editor's unsaved changes is not waiting on
-   anything — it needs the operator to Save or Cancel first (#819). */
-.settings__button[data-lock="unsaved"]:disabled,
-.settings__button[data-lock="open"]:disabled {
-  cursor: not-allowed;
-}
-
-.settings__button--primary {
-  background: #4f46e5;
-  color: #ffffff;
-  box-shadow: 0 6px 14px rgba(79, 70, 229, 0.22);
-}
-
-.settings__button--primary:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(79, 70, 229, 0.26);
-}
-
-.settings__button--ghost {
-  background: transparent;
-  color: #94a3b8;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-}
-
-.settings__button--ghost:hover {
-  background: rgba(148, 163, 184, 0.15);
-}
-
-.settings__button--danger {
-  background: #dc2626;
-  color: #ffffff;
-  box-shadow: 0 6px 14px rgba(220, 38, 38, 0.25);
-}
-
-.settings__button--danger:hover {
-  transform: translateY(-1px);
-}
-
-/* Smaller row-action buttons (Test / Edit / Delete …). */
-.settings__button--small {
-  padding: 5px 10px;
-  font-size: 0.82rem;
 }
 
 .settings__form-status {
@@ -480,10 +398,10 @@ body.in-iframe.settings .settings__card {
 }
 
 @media (max-width: 480px) {
-  /* Phone: the header's 40 px side padding leaves the nav too little room; the
-     24 px top / bottom padding stays. */
+  /* Phone: a narrower side padding leaves the nav more room; the top / bottom
+     padding stays. */
   .settings__header {
-    padding-inline: 20px;
+    padding-inline: 12px;
   }
 }
 
@@ -539,45 +457,9 @@ body.in-iframe.settings .settings__card {
   font-size: 0.8rem;
   color: #94a3b8;
 }
-.settings__btn {
-  border: none;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 0.85rem;
-  cursor: pointer;
-  font-weight: 600;
-}
-.settings__btn--active {
-  background: #22c55e;
-  color: #000;
-}
-.settings__btn--activate {
-  background: rgba(255, 255, 255, 0.1);
-  color: #94a3b8;
-}
-.settings__btn--activate:hover {
-  background: rgba(255, 255, 255, 0.2);
-  color: #e2e8f0;
-}
-.settings__btn--delete {
-  background: transparent;
-  color: #ef4444;
-}
-.settings__btn--delete:hover {
-  background: rgba(239, 68, 68, 0.1);
-}
-.settings__btn--scan {
-  background: rgba(255, 255, 255, 0.1);
-  color: #94a3b8;
-}
-.settings__btn--add {
-  background: #3b82f6;
-  color: white;
-  padding: 8px 14px;
+/* "+ Pridať zdroj" keeps its natural width in the column form (#875 H4). */
+.settings__add-source {
   align-self: flex-start;
-}
-.settings__btn--add:hover {
-  background: #2563eb;
 }
 /* The NDI-name field: caption above the input + Scan button. Its own class —
    it used to restyle the shared `.settings__form-row` globally (#819). */
@@ -590,18 +472,6 @@ body.in-iframe.settings .settings__card {
   font-size: 0.85rem;
   color: #cbd5e1;
   font-weight: 600;
-}
-.settings__input {
-  background: #1e293b;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: #f8fafc;
-  font-size: 0.95rem;
-}
-.settings__input:focus {
-  outline: none;
-  border-color: #3b82f6;
 }
 .settings__ndi-select {
   display: flex;

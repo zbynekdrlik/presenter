@@ -100,7 +100,7 @@ pub fn TrashCard(toast: ToastHandle) -> impl IntoView {
                                         </span>
                                     </div>
                                     <button
-                                        class="settings__btn"
+                                        class="ui-button"
                                         data-role="restore-btn"
                                         on:click=move |_| restore(id.clone())
                                     >
@@ -147,7 +147,7 @@ pub fn TrashCard(toast: ToastHandle) -> impl IntoView {
                                         </span>
                                     </div>
                                     <button
-                                        class="settings__btn"
+                                        class="ui-button"
                                         data-role="restore-library-btn"
                                         on:click=move |_| restore_library(id.clone())
                                     >

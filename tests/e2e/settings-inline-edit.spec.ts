@@ -246,7 +246,7 @@ test('#819 Resolume: Edit opens in the clicked row, Cancel restores, Save persis
     await page.fill('[data-role="host-label"]', savedLabel);
     await page.fill('[data-role="host-port"]', '8095');
     await page.click('[data-role="host-submit"]');
-    await waitForToast(page, 'Updated Resolume connection.');
+    await waitForToast(page, 'Pripojenie Resolume je uložené.');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
     await expect(editA).toBeFocused();
     await expect(rowA.locator('.settings__host-label')).toHaveText(savedLabel);
@@ -300,7 +300,7 @@ test('#819 Resolume: a status poll updates the row in place and never resets an 
     mock.setOnline(false);
     await expect.poll(apiState, { timeout: 30_000 }).toBe('error');
     await expect(badge).toHaveAttribute('data-state', 'error', { timeout: 20_000 });
-    await expect(row.locator('[data-role="host-error-detail"]')).toContainText('Retrying');
+    await expect(row.locator('[data-role="host-error-detail"]')).toContainText('Skúšam znova');
     expect(await tag()).toBe('kept');
 
     // 2) A status change while the row is being edited keeps the editor and the draft.
@@ -372,7 +372,7 @@ test('#819 "+ Add connection" opens the editor at the top of the list; the draft
     await newItem.locator('[data-role="host-port"]').fill('8097');
     await newItem.locator('[data-role="host-enabled"]').uncheck();
     await newItem.locator('[data-role="host-submit"]').click();
-    await waitForToast(page, 'Added Resolume connection.');
+    await waitForToast(page, 'Pripojenie Resolume je pridané.');
     await expect(page.locator('[data-role="host-new-item"]')).toHaveCount(0);
     await expect(page.locator('[data-role="host-add"]')).toBeEnabled();
 
@@ -447,7 +447,7 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     await page.fill('[data-role="android-host"]', 'tv-saved.invalid');
     await page.fill('[data-role="android-port"]', '5566');
     await page.click('[data-role="android-submit"]');
-    await waitForToast(page, 'Saved Android stage display.');
+    await waitForToast(page, 'Obrazovka je uložená.');
     await expect(page.locator('[data-role="android-editor"]')).toHaveCount(0);
     await expect(row.locator('.settings__host-label')).toHaveText(savedLabel);
     const saved = await androidDisplay(page, display.id);
@@ -481,7 +481,7 @@ test('#819 Android: inline edit in the row (Cancel restores, Save persists) and 
     await newItem.locator('[data-role="android-host"]').fill('tv-added.invalid');
     await newItem.locator('[data-role="android-enabled"]').uncheck();
     await newItem.locator('[data-role="android-submit"]').click();
-    await waitForToast(page, 'Added Android stage display.');
+    await waitForToast(page, 'Obrazovka je pridaná.');
     await expect(page.locator('[data-role="android-new-item"]')).toHaveCount(0);
     const added = (await listVia<AndroidDisplay>(page, ANDROID_DISPLAYS)).find(
       (d) => d.label === addedLabel,
@@ -633,7 +633,7 @@ test('#819 a status poll sent before a save but answered after it never reverts 
 
     await row.locator('[data-role="host-submit"]').click();
     // The success toast is shown after the save's reload was applied.
-    await waitForToast(page, 'Updated Resolume connection.');
+    await waitForToast(page, 'Pripojenie Resolume je uložené.');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
     await expect(row.locator('.settings__host-label')).toHaveText(savedLabel);
 
@@ -700,7 +700,7 @@ test('#819 a row deleted elsewhere while edited: the editor closes, a toast says
 
     // The card's next poll no longer lists it: the editor closes and says why,
     // instead of silently throwing the typed change away.
-    await waitForToast(page, 'This connection was removed elsewhere.');
+    await waitForToast(page, 'Toto pripojenie medzitým niekto odstránil.');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
     await expect(row).toHaveCount(0);
     // Focus does not fall back to <body>: it lands on "+ Add connection", unlocked.
@@ -764,7 +764,7 @@ test('#819 while a save is in flight every Edit and "+ Add" is locked and Escape
     await expect(label).toHaveValue(savedLabel);
 
     release.resolve();
-    await waitForToast(page, 'Updated Resolume connection.');
+    await waitForToast(page, 'Pripojenie Resolume je uložené.');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0);
     await expect(rowA.locator('.settings__host-label')).toHaveText(savedLabel);
     for (const trigger of [editB, add]) {
@@ -804,7 +804,7 @@ test('#819 unsaved changes lock the other rows\' Edit and "+ Add" until they are
     for (const trigger of [editB, add]) {
       await expect(trigger).toBeDisabled();
       await expect(trigger).toHaveAttribute('data-lock', 'unsaved');
-      await expect(trigger).toHaveAttribute('title', 'Save or cancel the open editor first');
+      await expect(trigger).toHaveAttribute('title', 'Najprv ulož alebo zruš otvorenú úpravu');
     }
 
     // Typing the stored value back is no change any more.
@@ -876,7 +876,7 @@ test('#819 a row deleted elsewhere during its own save: focus reaches "+ Add" on
     // The next poll closes the editor even though its save is still in flight…
     const toast = page.locator('[data-role="settings-toast"]');
     await expect(page.locator('[data-role="host-editor"]')).toHaveCount(0, { timeout: 20_000 });
-    await expect(toast).toHaveText('This connection was removed elsewhere.');
+    await expect(toast).toHaveText('Toto pripojenie medzitým niekto odstránil.');
     // …while "+ Add" stays locked by that save, so it cannot take focus yet.
     const add = page.locator('[data-role="host-add"]');
     await expect(add).toHaveAttribute('data-lock', 'saving');
@@ -886,7 +886,7 @@ test('#819 a row deleted elsewhere during its own save: focus reaches "+ Add" on
     // the lock lifts, and the focus request still lands on "+ Add" — it was not used
     // up on the disabled button.
     release.resolve();
-    await expect(toast).toHaveText(/^Unable to save connection\./);
+    await expect(toast).toHaveText(/^Pripojenie sa nepodarilo uložiť\./);
     await expect(add).toBeEnabled();
     await expect(add).toBeFocused();
   } finally {

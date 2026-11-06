@@ -123,7 +123,7 @@ test("a mapped NDI name that is not on the network is reported as not found @vid
   const badge = page.locator(
     `[data-role="video-source-status"][data-source-id="${ghost.id}"]`,
   );
-  await expect(badge).toHaveText("Not found on the network", { timeout: 30_000 });
+  await expect(badge).toHaveText("Nie je v sieti", { timeout: 30_000 });
   await expect(badge).toHaveAttribute("data-state", "not-found");
 
   const hint = page.locator(
@@ -167,7 +167,7 @@ test("a mapped NDI name that IS broadcasting goes Live @video-codec @synthetic-n
     `[data-role="video-source-status"][data-source-id="${source.id}"]`,
   );
   // Pipeline start (up to ~8s) + one 5s status poll, with margin.
-  await expect(badge).toHaveText("Live", { timeout: 40_000 });
+  await expect(badge).toHaveText("Naživo", { timeout: 40_000 });
   await expect(badge).toHaveAttribute("data-state", "live");
 
   // A working source needs no instructions.

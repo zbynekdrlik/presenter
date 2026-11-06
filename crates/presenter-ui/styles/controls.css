@@ -1,0 +1,283 @@
+/* ── Shared controls (#875 H4, mockup v1 "Jeden vzhľad prvkov") ──
+   ONE look for a button, a state toggle, a field and a select on every
+   operator surface: the operator pages, Nastavenia (embedded and the
+   standalone /ui/settings) and the Stream editor (/ui/stream), its Menovky
+   list included. A page never restyles these classes; it only places them
+   (margins, flex, width). Colours are the operator tokens from operator.css
+   (`:root`), so the three pages read as one app.
+
+   - `.ui-button` (+ `--primary` / `--danger` / `--quiet` / `--icon`)
+   - `.ui-toggle` — ONE label, the state is `data-state="on|off"` +
+     `aria-pressed` and the look (on = filled accent), as H3's Ableton /
+     Sledovať pódium
+   - `.ui-topbar` (+ `__title`, `__tab`, `__button`) — the 40 px top row of a
+     page that has no operator header (the Stream editor), the operator
+     header's look (header.css): 32 px controls inside the 40 px row
+   - fields: every text / number / url field, select and textarea inside
+     `.settings-layout`, `.stream-editor` or the operator's Menovky
+     (`.nameplates-view`, the same plate list as the editor's)
+
+   Sizes: the ONE desktop rule at the end gives every button, select and field
+   at least 40 px (H3's rule, extended here from the operator pages to
+   Nastavenia and the Stream editor). The phone shell keeps its own sizes
+   (phone_shell.css). */
+
+.ui-button,
+.ui-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.12);
+  /* #cbd5e1: 7.0:1 on a settings row (#334155), the #819 contrast floor. */
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25;
+  /* A long label wraps on a narrow screen instead of widening the page
+     (a 320 px phone, #875 H4): a button in a flex row may shrink (the default
+     `flex: 0 1 auto`), and only shrinks once the row runs out of room. */
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.ui-button:hover:not(:disabled),
+.ui-toggle:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.55);
+  color: #f8fafc;
+}
+
+.ui-button:focus-visible,
+.ui-toggle:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.7);
+  outline-offset: 2px;
+}
+
+.ui-button:disabled,
+.ui-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* A button waiting on a request in flight (settings: a save). */
+.ui-button[data-lock="saving"]:disabled {
+  cursor: wait;
+}
+
+.ui-button--primary {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ui-button--primary:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+
+.ui-button--danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.45);
+  /* 5.6:1 on #334155, 6.6:1 on #1e293b. */
+  color: #fca5a5;
+}
+
+.ui-button--danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(248, 113, 113, 0.7);
+  color: #fecaca;
+}
+
+/* A secondary action next to a primary one (Zrušiť, Skryť): no fill. */
+.ui-button--quiet {
+  background: transparent;
+  color: #cbd5e1;
+}
+
+.ui-button--icon {
+  min-width: 40px;
+  padding-inline: 0.5rem;
+}
+
+/* State toggle: one label, the state is the look. */
+.ui-toggle[data-state="on"] {
+  background: #2563eb;
+  border-color: #60a5fa;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ui-toggle[data-state="off"] {
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #cbd5e1;
+}
+
+/* ── Fields ── */
+
+:where(.settings-layout, .stream-editor, .nameplates-view)
+  :is(input[type="text"], input[type="number"], input[type="url"], input[type="search"], input:not([type]), select, textarea) {
+  box-sizing: border-box;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: #0f172a;
+  color: #f8fafc;
+  font: inherit;
+  font-size: 0.9rem;
+  min-width: 0;
+}
+
+:where(.settings-layout, .stream-editor, .nameplates-view)
+  :is(input[type="text"], input[type="number"], input[type="url"], input[type="search"], input:not([type]), select, textarea):focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+
+:where(.settings-layout, .stream-editor, .nameplates-view)
+  :is(input, select, textarea):disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ── Top bar (a page without the operator header: the Stream editor) ── */
+
+.ui-topbar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  background: #0b1222;
+  border-bottom: 1px solid #334155;
+}
+
+.ui-topbar__title {
+  margin: 0 6px 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ui-topbar__tab,
+.ui-topbar__button {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ui-topbar__tab:hover,
+.ui-topbar__button:hover:not(:disabled) {
+  background: #1e293b;
+  color: #ffffff;
+}
+
+.ui-topbar__tab[data-active="true"] {
+  background: #273449;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 #3b82f6;
+}
+
+.ui-topbar__button {
+  border-color: #334155;
+  font-size: 13px;
+}
+
+.ui-topbar__button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ui-topbar__button--danger {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.ui-topbar :is(input, select) {
+  height: 32px;
+  padding-block: 0;
+  font-size: 13px;
+}
+
+/* A form or a question a top-bar button opens (the Stream editor's output
+   name form, its delete confirmation): a panel under the row, the full width
+   of the bar, over the page — the row itself never grows (the operator
+   header's menus do the same, header.css). Its controls are full size. */
+.ui-topbar__panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 8px;
+  right: 8px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #1e293b;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.ui-topbar .ui-topbar__panel :is(input, select) {
+  height: auto;
+  min-height: 40px;
+  font-size: 0.9rem;
+}
+
+.ui-topbar__panel :is(button, .ui-button) {
+  min-height: 40px;
+}
+
+/* ── One control size (#875 H3, extended in H4) ──
+   The smallest button, select and field is 40 px tall on a desktop, on every
+   operator page, in Nastavenia (embedded and standalone) and in the Stream
+   editor; the main actions (show on the wall, clear the wall) are 48 px.
+   `:where()` keeps the rule at the specificity of a bare `button`, so a
+   component that asks for MORE (the verse console's 44 / 48 px, the operator
+   Menovky's 44 px) still wins. Not here: the operator header row (header.css,
+   32 px controls in its 40 px row) and the Stream editor's top bar (the same
+   look, `.ui-topbar`), the controls lying ON the stage preview picture (H2,
+   stage_preview.css) and the phone shell (phone_shell.css: 44 px). The
+   standalone /ui/settings and /ui/stream have no phone shell: their 40 px
+   hold at every width. */
+:where(body.operator:not([data-shell="phone"]) .operator__main > section) button,
+:where(body.operator:not([data-shell="phone"]) .operator__main > section) select,
+:where(body.operator:not([data-shell="phone"]) .operator__main > section) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+:where(body.settings .settings-layout, .stream-editor > :not(.ui-topbar)) button,
+:where(body.settings .settings-layout, .stream-editor > :not(.ui-topbar)) select,
+:where(body.settings .settings-layout, .stream-editor > :not(.ui-topbar)) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]) {
+  min-height: 40px;
+  box-sizing: border-box;
+}

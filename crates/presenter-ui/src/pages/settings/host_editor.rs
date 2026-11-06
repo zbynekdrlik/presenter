@@ -545,11 +545,11 @@ where
             <div class="settings__form-row settings__form-row--inline">
                 {lead}
                 <div class="settings__form-actions">
-                    <button type="submit" class="settings__button settings__button--primary"
+                    <button type="submit" class="ui-button ui-button--primary"
                         data-role=role("submit") prop:disabled=move || status.busy.get()>
                         {submit_text}
                     </button>
-                    <button type="button" class="settings__button settings__button--ghost"
+                    <button type="button" class="ui-button ui-button--quiet"
                         data-role=role("cancel") prop:disabled=move || status.busy.get()
                         on:click=move |_| editor.cancel()>{spec.cancel_text}</button>
                 </div>
@@ -694,11 +694,11 @@ mod tests {
         role: "host",
         message_id: "resolume-form-status",
         message_role: "form-status",
-        new_title: "New Resolume connection",
-        new_submit: "Add connection",
-        edit_title: "Edit Resolume connection",
-        save_text: "Save",
-        cancel_text: "Cancel",
+        new_title: "Nové pripojenie Resolume",
+        new_submit: "Pridať pripojenie",
+        edit_title: "Upraviť pripojenie Resolume",
+        save_text: "Uložiť",
+        cancel_text: "Zrušiť",
         unsaved_title: UNSAVED_TITLE,
         saving_title: SAVING_TITLE,
     };
@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn a_lock_says_why_on_the_button() {
         assert_eq!(TriggerLock::Unsaved.title(&SPEC), Some(UNSAVED_TITLE));
-        assert_eq!(UNSAVED_TITLE, "Save or cancel the open editor first");
+        assert_eq!(UNSAVED_TITLE, "Najprv ulož alebo zruš otvorenú úpravu");
         assert_eq!(TriggerLock::Saving.title(&SPEC), Some(SAVING_TITLE));
         assert_eq!(TriggerLock::Open.title(&SPEC), None);
         assert_eq!(TriggerLock::Saving.data_lock(), "saving");

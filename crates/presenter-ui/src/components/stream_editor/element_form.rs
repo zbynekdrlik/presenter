@@ -191,7 +191,7 @@ pub fn ElementForm(ctx: StreamEditorCtx) -> impl IntoView {
                 </Show>
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--primary"
+                    class="ui-button ui-button--primary"
                     data-role="stream-prop-save"
                     data-dirty=move || crate::utils::dom_attr::bool_attr(dirty())
                     on:click=move |_| {
@@ -279,7 +279,7 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
     view! {
         <div class="stream-editor__kind-fields" data-role="stream-image-fields">
             <label class="stream-editor__field">
-                <span>"Asset ID"</span>
+                <span>"Číslo obrázka"</span>
                 <input type="number" min="1" step="1" data-role="stream-image-asset-id"
                     prop:value=asset_id
                     on:input=move |ev| {
@@ -308,9 +308,9 @@ fn ImageFields(draft: RwSignal<StreamElementProps>, ctx: StreamEditorCtx) -> imp
                         });
                     }
                 >
-                    <option value="contain">"Contain"</option>
-                    <option value="cover">"Cover"</option>
-                    <option value="stretch">"Stretch"</option>
+                    <option value="contain">"Celý obrázok"</option>
+                    <option value="cover">"Vyplniť (orezať)"</option>
+                    <option value="stretch">"Roztiahnuť"</option>
                 </select>
             </label>
             // Opacity edited as an integer PERCENT, buffered + committed on blur

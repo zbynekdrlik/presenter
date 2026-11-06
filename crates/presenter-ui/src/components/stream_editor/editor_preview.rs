@@ -64,14 +64,24 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
         <section class="stream-editor__preview" data-role="stream-preview">
             <header class="stream-editor__preview-head">
                 <h2 class="stream-editor__section-title">"Náhľad"</h2>
+                // #875 H4: ONE label, the state is the look (`ui-toggle`):
+                // on = the preview shows the live output, off = the scene being
+                // edited (with the unsaved draft).
                 <button
                     type="button"
-                    class="stream-editor__btn stream-editor__btn--ghost"
+                    class="ui-toggle"
                     data-role="stream-preview-live-toggle"
                     data-live=move || if live.get() { "true" } else { "false" }
+                    data-state=move || if live.get() { "on" } else { "off" }
+                    aria-pressed=move || live.get().to_string()
+                    title=move || if live.get() {
+                        "Náhľad ukazuje výstup naživo — kliknutím ukážeš upravovanú scénu"
+                    } else {
+                        "Náhľad ukazuje upravovanú scénu — kliknutím ukážeš výstup naživo"
+                    }
                     on:click=move |_| live.update(|v| *v = !*v)
                 >
-                    {move || if live.get() { "Naživo" } else { "Vybraná scéna" }}
+                    "Naživo"
                 </button>
             </header>
             <div class="stream-editor__preview-box">
