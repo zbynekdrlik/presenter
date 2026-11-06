@@ -764,9 +764,11 @@ test("desktop: Space on a focused button presses that button, the window keys le
     await page.keyboard.press("Space");
     await expect(roh).toHaveAttribute("aria-pressed", "true");
     await expect(roh).toBeFocused();
+    // The show emptied the field (Ďalší waits for one tap); "/" types nothing.
+    const before = await field.inputValue();
     await page.keyboard.press("/");
     await expect(roh).toBeFocused();
-    await expect(field).toHaveValue("zid 11 1");
+    await expect(field).toHaveValue(before);
     expect(errors).toEqual([]);
   } finally {
     await context.close();
