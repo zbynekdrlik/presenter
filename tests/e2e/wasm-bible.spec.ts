@@ -1226,7 +1226,7 @@ test.describe("WASM Operator Bible Tests", () => {
   // Two-column layout
   // -----------------------------------------------------------------------
 
-  test("two-column layout renders catalog and slides side-by-side at 320px", async ({
+  test("two-column layout renders catalog and slides side-by-side at 361px (mockup v3 frame, #875)", async ({
     page,
   }) => {
     await navigateToBible(page);
@@ -1245,8 +1245,9 @@ test.describe("WASM Operator Bible Tests", () => {
     await expect(catalog).toBeVisible();
     await expect(slidesColumn).toBeVisible();
 
+    // The Piesne frame: a 360 px column + its 1 px line (#875 mockup v3).
     await assertTwoColumnLayout(bp, catalog, slidesColumn, {
-      expectedLeftWidth: 320,
+      expectedLeftWidth: 361,
     });
   });
 
