@@ -78,7 +78,7 @@ async function openFaith(page: Page): Promise<void> {
   await expect(role(page, "word-sheet-lemma")).toHaveText("πίστις");
 }
 
-test("a word opens its entry and touches neither the verse nor the scroll", async ({ browser }) => {
+test("a word opens its entry, highlights its verse and leaves the scroll alone", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
   const { page } = opened;
   await expect(word(page, 1, 2)).toHaveText("faith");
@@ -92,7 +92,9 @@ test("a word opens its entry and touches neither the verse nor the scroll", asyn
   await expect(role(page, "word-sheet-definition")).toHaveText("persuasion, i.e. credence");
   await expect(role(page, "word-sheet-kjv")).toContainText("V KJV: assurance, belief");
   await expect(word(page, 1, 2)).toHaveAttribute("data-active", "true");
-  await expect(verse(page, 1)).toHaveAttribute("data-selected", "false");
+  // A tap on a word marks its verse too (owner, 2026-11-06: a tap shows which
+  // verse is in focus); the verse actions still stay closed.
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
   await expect(role(page, "verse-actions")).toHaveCount(0);
   await assertNoHorizontalOverflow(page);
   await assertMinTapTarget(role(page, "word-sheet-occurrences"), 44);

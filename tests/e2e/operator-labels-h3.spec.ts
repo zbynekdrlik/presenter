@@ -275,8 +275,9 @@ for (const viewport of VIEWPORTS) {
       page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation=""]'),
     ).toHaveText("žiadny");
     await expect(page.locator('[data-role="console-field"]')).toHaveAttribute("placeholder", "Odkaz alebo slová\u2026");
-    // #850 B2c: the console replaced the header verse search on Biblia.
-    await expect(page.locator('[data-role="global-search-query"]')).toHaveCount(0);
+    // The desktop header keeps its song search on Biblia (mockup v3, #875);
+    // the console is the only verse search (#850 B2c).
+    await expect(page.locator('[data-role="global-search-query"]')).toHaveCount(1);
     // The mockup-sized rows (exempt from the 40 px rule) keep the mockup's sizes.
     expect(await heightOf(page, '[data-role="bible-tab"]')).toBeGreaterThanOrEqual(33.5);
     expect(await heightOf(page, '[data-role="console-translation"]')).toBeGreaterThanOrEqual(35.5);

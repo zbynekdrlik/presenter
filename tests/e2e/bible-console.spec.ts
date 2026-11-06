@@ -311,7 +311,7 @@ for (const viewport of [
     const { context, page, errors } = await openConsole(browser, { viewport });
     try {
       await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
-      // #850 B2c: no old inputs, no selects, no header verse search.
+      // #850 B2c: no old inputs, no selects.
       for (const role of [
         "book-filter",
         "book-list",
@@ -321,10 +321,12 @@ for (const viewport of [
         "load-button",
         "main-translation",
         "secondary-translation",
-        "global-search-query",
       ]) {
         await expect(page.locator(`[data-role="${role}"]`), role).toHaveCount(0);
       }
+      // The desktop header keeps its SONG search on Biblia (mockup v3, #875);
+      // verses are searched only in the console.
+      await expect(page.locator('[data-role="global-search-query"]')).toHaveCount(1);
       // The field has the focus on arrival (spec section 7.1 item 2).
       const field = page.locator('[data-role="console-field"]');
       await expect(field).toBeFocused();
