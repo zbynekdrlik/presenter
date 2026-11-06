@@ -134,12 +134,36 @@ pub fn SlideList() -> impl IntoView {
 
     view! {
         <section class="operator__slides-column">
-            <div class="operator__slides-toolbar operator__slides-toolbar--minimal">
+            // #875 mockup v3: on a desktop this row is the work area's top —
+            // the song title (bold, draggable into a playlist), "+ snímka"
+            // and "Snímok v riadku − N +". The phone keeps its sticky bubble
+            // and the floating "+" over the slides.
+            <div class="operator__slides-toolbar operator__slides-toolbar--minimal operator__worktop">
+                {render_song_bubble(ctx.clone(), op.clone(), false)}
+                <Show
+                    when=move || {
+                        !ctx.phone_shell.get() && ctx.selected_presentation.with(|p| p.is_some())
+                    }
+                    fallback=|| ()
+                >
+                    <button
+                        type="button"
+                        class="operator__worktop-add"
+                        data-role="add-slide"
+                        title="Pridať snímku"
+                        aria-label="Pridať snímku"
+                        on:click=add_slide
+                    >
+                        "+ Snímka"
+                    </button>
+                </Show>
                 <SlideColumnsControl />
             </div>
             <div class="operator__slides-area">
                 <Show
-                    when=move || ctx.selected_presentation.with(|p| p.is_some())
+                    when=move || {
+                        ctx.phone_shell.get() && ctx.selected_presentation.with(|p| p.is_some())
+                    }
                     fallback=|| ()
                 >
                     <button
@@ -204,7 +228,7 @@ pub fn SlideList() -> impl IntoView {
                     // real grid item that reserves its own row means no
                     // slide card is ever laid out underneath it, regardless
                     // of scroll position.
-                    {render_song_bubble(ctx.clone(), op_bubble.clone())}
+                    {render_song_bubble(ctx.clone(), op_bubble.clone(), true)}
                     {
                     // Clone op + ctx inside the block so we can use them in
                     // nested closures (#554 needs the whole ctx per card).
@@ -554,6 +578,13 @@ pub fn SlideList() -> impl IntoView {
                                             </Show>
                                         }
                                     }
+                                    // #875 mockup v3: "… · NA STENE" in the caption of
+                                    // the slide on the wall; shown by the card's
+                                    // `is-active` class (CSS), so a stage change
+                                    // re-renders nothing here.
+                                    <span class="operator__slide-live-tag" data-role="slide-live-tag">
+                                        "NA STENE"
+                                    </span>
                                     // #515: per-slide stage-layout marker —
                                     // selector in edit mode, badge in live mode.
                                     <crate::components::slide_stage_layout_picker::SlideStageLayoutControl

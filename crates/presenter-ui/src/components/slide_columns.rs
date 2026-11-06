@@ -72,6 +72,8 @@ pub fn SlideColumnsControl() -> impl IntoView {
             data-role="slide-columns-control"
             title="Snímok v riadku (pamätá si to tento prehliadač)"
         >
+            // #875 mockup v3: the label beside the stepper (desktop only).
+            <span class="operator__slide-columns-label">"Snímok v riadku"</span>
             <button
                 type="button"
                 data-role="slide-columns-decrease"

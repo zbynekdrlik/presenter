@@ -46,6 +46,14 @@ paths:
 - **Readable at 8.** 6+ per row sets `body[data-slide-columns-dense="true"]`
   (tighter cards, smaller type, `overflow-wrap: anywhere`) and grid children
   have `min-width: 0` — nothing may widen the grid past its container.
+- **Desktop card look = mockup v3 (#875, `styles/operator_frame.css`).** Live
+  cards are `aspect-ratio: 16 / 9` as a MINIMUM (never `overflow: hidden` or a
+  fixed height: at 6–8 per row the text must grow the card, not be cut), 10 px
+  radius, 1 px border, text top left, the header reordered under the text as
+  the 11 px caption; the slide on the wall is `.is-active` = 2 px red + "NA
+  STENE". Edit mode keeps the header on top. The stepper sits in the work
+  area's top row with its "Snímok v riadku" label (desktop only, 32 px
+  buttons; the phone keeps 44 px and no label).
 - **Anything that assumes 3 columns is now wrong.** The #271 next-row lookahead
   (`slide_list_scroll::columns_per_row`) reads the grid's computed
   `grid-template-columns` (`state::slide_columns::track_count`); the

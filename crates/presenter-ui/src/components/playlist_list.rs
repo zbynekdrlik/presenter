@@ -69,12 +69,14 @@ pub fn PlaylistList() -> impl IntoView {
                         class="operator__group-count"
                         data-role="playlist-more"
                         aria-label="Zobraziť všetky playlisty"
+                        title=move || format!("Všetky playlisty ({})", ctx.playlists.get().len())
                         on:click=on_more
                     >
-                        {move || {
-                            let total = ctx.playlists.get().len();
-                            total.to_string()
-                        }}
+                        // #875: a phone shows the count, a desktop the ⋯ (mockup v3).
+                        <span class="operator__group-count-value">
+                            {move || ctx.playlists.get().len().to_string()}
+                        </span>
+                        <span class="operator__group-more-icon" aria-hidden="true">"\u{22ef}"</span>
                     </button>
                     <button
                         type="button"
