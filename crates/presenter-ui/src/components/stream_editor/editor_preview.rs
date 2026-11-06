@@ -63,7 +63,11 @@ pub fn EditorPreview(ctx: StreamEditorCtx) -> impl IntoView {
     view! {
         <section class="stream-editor__preview" data-role="stream-preview">
             <header class="stream-editor__preview-head">
-                <h2 class="stream-editor__section-title">"Náhľad"</h2>
+                // The title names what the picture shows, so the off state
+                // never reads as "live" from the toggle's label alone.
+                <h2 class="stream-editor__section-title" data-role="stream-preview-title">
+                    {move || if live.get() { "Náhľad — naživo" } else { "Náhľad — upravovaná scéna" }}
+                </h2>
                 // #875 H4: ONE label, the state is the look (`ui-toggle`):
                 // on = the preview shows the live output, off = the scene being
                 // edited (with the unsaved draft).

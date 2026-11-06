@@ -378,7 +378,17 @@ for (const viewport of VIEWPORTS) {
     const left = page.locator('[data-role="stream-ts-align-left"]').first();
     await expect(left).toHaveAttribute("aria-label", "Zarovnať vľavo");
     await expect(left).toHaveAttribute("data-state", /^(on|off)$/);
-    await expect(page.locator('[data-role="stream-preview-live-toggle"]')).toHaveText("Naživo");
+    const liveToggle = page.locator('[data-role="stream-preview-live-toggle"]');
+    const previewTitle = page.locator('[data-role="stream-preview-title"]');
+    await expect(liveToggle).toHaveText("Naživo");
+    // The title says what the picture shows, in both states.
+    await expect(liveToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(previewTitle).toHaveText("Náhľad — upravovaná scéna");
+    await liveToggle.click();
+    await expect(liveToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(previewTitle).toHaveText("Náhľad — naživo");
+    await liveToggle.click();
+    await expect(previewTitle).toHaveText("Náhľad — upravovaná scéna");
 
     for (const tab of ["scenes", "nameplates", "fonts"]) {
       await page.locator(`[data-role="stream-editor-tab"][data-tab="${tab}"]`).click();
