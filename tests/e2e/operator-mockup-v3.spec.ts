@@ -477,3 +477,35 @@ test("the header search matches the mockup: a small lens, ✕ only over text", a
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("search results open under the header and leave the field and ✕ free", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  await page.locator('[data-role="library-item"]').first().click();
+  const song = (await page.locator('[data-role="presentation-item"]').first().innerText()).trim();
+  const query = page.locator('[data-role="global-search-query"]');
+  await query.fill(song);
+  const row = page.locator('[data-role="search-result-item"]').first();
+  await expect(row).toBeVisible();
+
+  const panel = await page.locator('[data-role="global-search-results"]').boundingBox();
+  const header = await page.locator(".operator__header").boundingBox();
+  expect(panel!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
+
+  // The title and its library read as two words, not one.
+  const title = await row.locator(".operator__search-result-title").boundingBox();
+  const meta = await row.locator(".operator__search-result-meta").boundingBox();
+  expect(meta!.x - (title!.x + title!.width)).toBeGreaterThanOrEqual(6);
+
+  // Real clicks with the list open: the field keeps its caret, ✕ empties it.
+  await query.click({ timeout: 3_000 });
+  await page.locator('[data-role="global-search-clear"]').click({ timeout: 3_000 });
+  await expect(query).toHaveValue("");
+  await expect(page.locator('[data-role="global-search-results"]')).toHaveAttribute("data-visible", "false");
+  expect(errors).toEqual([]);
+  await context.close();
+});
