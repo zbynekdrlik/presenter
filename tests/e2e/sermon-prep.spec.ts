@@ -431,3 +431,25 @@ test("a new sermon gets its date; a deleted one leaves the list and the device",
   expect(active).toBeNull();
   await finish(opened);
 });
+
+test("a sermon opened on its own leads back to the verses (owner, 2026-11-06)", async ({ browser }) => {
+  // The reader was here before: Biblia must land on that place, not a default.
+  const id = await newSermon("Späť k veršom");
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  // A reopened tab: the history starts on the sermon, so ◀ has nowhere to go.
+  await page.goto(`${baseURL}/ui/study?view=sermon&id=${id}`);
+  await expect(role(page, "sermon-title")).toHaveText("Späť k veršom");
+  await expect(role(page, "history-back")).toHaveAttribute("aria-disabled", "true");
+  await expect(role(page, "study-sermons")).toHaveCount(0);
+  await role(page, "study-bible").tap();
+  await expect(page.locator('[data-role="study-chapter"]')).toHaveAttribute("data-loaded-for", "slk-seb:HEB.11");
+  await expect(field(page)).toBeVisible();
+  // The reader offers the sermons again, and the list offers the verses.
+  await role(page, "study-sermons").tap();
+  await expect(role(page, "sermon-list")).toHaveAttribute("data-state", "ready");
+  await role(page, "study-bible").tap();
+  await expect(page.locator('[data-role="study-chapter"]')).toHaveAttribute("data-loaded-for", "slk-seb:HEB.11");
+  await assertNoHorizontalOverflow(page);
+  await finish(opened);
+});
