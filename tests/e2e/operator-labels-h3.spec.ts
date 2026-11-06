@@ -221,7 +221,7 @@ for (const viewport of VIEWPORTS) {
     await expect(worship.locator('[data-role="slides"] .empty')).toHaveText("Vyber pieseň vľavo.");
     await expect(page.locator('[data-role="global-search-query"]')).toHaveAttribute(
       "placeholder",
-      "Hľadať knižnice, piesne, slajdy",
+      "Hľadať pieseň alebo text",
     );
     await expect(page.locator('[data-role="mode-toggle"][data-mode="live"]')).toHaveText("Naživo");
     await expect(page.locator('[data-role="mode-toggle"][data-mode="edit"]')).toHaveText("Úprava");
