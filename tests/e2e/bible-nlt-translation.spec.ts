@@ -13,9 +13,9 @@
  *   no footnote) and the English reference `1 John 1:1-3 (NLT)` (#824).
  * - SEB main + NLT secondary while the API fails → the SEB slides still load,
  *   without the English line, and a toast says "NLT nedostupné".
- * The NLT is never offered as the main translation (the console's bar, #850
- * B2c); the server's RemoteBibleError mapping is pinned by its own tests
- * (`router/app_error_from_anyhow_tests.rs`).
+ * - NLT is never offered as main (#850 B2c); a browser that stored it keeps
+ *   its chip, and while the API fails the console's toast carries the
+ *   server's "NLT nedostupné" message (not just "Bad Gateway").
  */
 
 import { test, expect, type ConsoleMessage, type Page } from "@playwright/test";
@@ -263,3 +263,44 @@ test("NLT API down: the SEB slides still load and a toast says the NLT is unavai
   expect(consoleMessages).toEqual([]);
 });
 
+test("a stored NLT main with the API down: the preview's toast carries the server's reason", async ({
+  page,
+}) => {
+  // NLT is never offered as main (#850 B2c), but a browser that stored it
+  // before keeps its chip (#701). The 502 of /bible/resolve is the point of
+  // this test; Chrome logs exactly that one failed load.
+  const failedLoads: string[] = [];
+  const consoleMessages = collectConsoleMessages(page, (msg) => {
+    const is502 =
+      msg.type() === "error" &&
+      msg.text().includes("status of 502") &&
+      msg.location().url.endsWith("/bible/resolve");
+    if (is502) failedLoads.push(msg.text());
+    return is502;
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem("presenter:bibleMainTranslation", JSON.stringify("eng-nlt"));
+  });
+  await openBible(page);
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+    "data-books-translation",
+    "eng-nlt",
+  );
+  await expect(translationButton(page, "main", "eng-nlt")).toHaveAttribute("aria-pressed", "true");
+
+  const answered = page.waitForResponse((res) => new URL(res.url()).pathname === "/bible/resolve");
+  await page.locator('[data-role="console-field"]').fill("1jn 1:7-9");
+  expect((await answered).status()).toBe(502);
+  await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute(
+    "data-preview-state",
+    "error",
+  );
+  await expect(page.locator('[data-role="toast"]')).toContainText(
+    "Náhľad sa nenačítal: HTTP 502: NLT nedostupné",
+    { timeout: 15_000 },
+  );
+  expect(nltRequests.some((query) => query.get("ref") === "1Jn.1.7-9")).toBe(true);
+  expect(failedLoads).toHaveLength(1);
+
+  expect(consoleMessages).toEqual([]);
+});
