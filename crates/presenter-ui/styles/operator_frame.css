@@ -625,6 +625,14 @@ body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card-
   justify-content: space-between;
 }
 
+/* One per row: a card as wide as the work area would be taller than the
+   list at 16:9, so the slide on the wall could never be shown whole (Follow
+   lands on it, operator-edit-autoscroll #271). It sizes to its text. */
+body.operator[data-mode="live"][data-slide-columns-single="true"]:not([data-shell="phone"]) .operator__slide-card--worship,
+body.operator[data-mode="live"][data-slide-columns-single="true"]:not([data-shell="phone"]) .operator__slide-card--bible {
+  aspect-ratio: auto;
+}
+
 body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-bodies {
   order: 1;
   flex: 1 1 auto;
@@ -733,7 +741,12 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship.operator_
     inset 0 0 0 9999px rgba(59, 124, 255, 0.12);
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag,
+/* "NA STENE" is the Live caption only: in Edit mode the header carries the
+   slide's buttons, and the tag wrapped them onto a second line, so the row
+   of the slide on the wall grew 48 px with every AbleSet step and the list
+   jumped under the operator's caret (operator-edit-autoscroll). The red
+   border still marks the slide there. */
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag,
 body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag {
   display: inline;
   font-size: 11px;
@@ -742,7 +755,7 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall 
   white-space: nowrap;
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag::before,
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag::before,
 body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag::before {
   content: "· ";
   font-weight: 400;

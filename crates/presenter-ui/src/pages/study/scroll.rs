@@ -85,14 +85,22 @@ fn verse_element(scroller: &web_sys::Element, verse: u16) -> Option<web_sys::Ele
     scroller.query_selector(&selector).ok().flatten()
 }
 
-/// Put the verse's top `offset` px below the reader's top.
+/// Put the verse's top `offset` px below the reader's top, never above it:
+/// the scroll offset is whole pixels while the layout is not, so the step is
+/// rounded down and the verse lands within one pixel below `offset`.
 fn land(scroller: &web_sys::HtmlElement, verse: u16, offset: f64) {
     if let Some(found) = verse_element(scroller, verse) {
         let distance = found.get_bounding_client_rect().top()
             - scroller.get_bounding_client_rect().top()
             - offset;
-        scroller.set_scroll_top(scroller.scroll_top() + distance.round() as i32);
+        scroller.set_scroll_top(scroller.scroll_top() + scroll_step(distance));
     }
+}
+
+/// The whole-pixel scroll step for a distance: rounded down, so the target
+/// ends at or just below the line, never a fraction above it.
+fn scroll_step(distance: f64) -> i32 {
+    distance.floor() as i32
 }
 
 /// The first of the verse bottoms (top to bottom) below `line`, by index.
@@ -198,7 +206,16 @@ pub(super) fn saved_verse(route: &StudyRoute) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{first_below, SLACK_PX, TOP_GAP_PX};
+    use super::{first_below, scroll_step, SLACK_PX, TOP_GAP_PX};
+
+    #[test]
+    fn a_landing_step_never_leaves_the_verse_above_its_line() {
+        // CI: the verse sat 0.47 px above the reader's top after a switch
+        // (rounding 412.53 up scrolled one pixel too far).
+        assert_eq!(scroll_step(412.53), 412);
+        assert_eq!(scroll_step(412.0), 412);
+        assert_eq!(scroll_step(-0.25), -1);
+    }
 
     #[test]
     fn a_landed_verse_stays_the_verse_in_view_despite_a_fraction_of_a_pixel() {
