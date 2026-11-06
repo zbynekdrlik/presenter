@@ -759,9 +759,11 @@ body.operator:not([data-shell="phone"]) .operator__stage-preview--bible .operato
   font-size: 13px;
   font-style: normal;
 }
+/* Flush like the Piesne work area: the title row and the grid carry their
+   own padding (operator_frame.css, `.operator__worktop` / `.operator__slides`). */
 body.operator.operator--bible:not([data-shell="phone"]) .operator__panel--bible .operator__slides-column {
-  padding: 8px 12px 10px;
-  gap: 10px;
+  padding: 0;
+  gap: 0;
   border: 0;
   border-radius: 0;
   background: #0f172a;

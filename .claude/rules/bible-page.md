@@ -45,15 +45,30 @@ tab read: no selected book / chapter / verse, no `classic_loads` / `console_take
   data attributes stay for the specs). All in the `body.operator:not([data-shell="phone"])` block
   at the end of `styles/bible_console.css`; `bible-console.spec.ts` pins sizes and order at
   1280×720 and 1920×1080.
-- **The page frame = the Piesne one** (#875, `bible.css` end, never `operator_frame.css`, which
-  leaves Biblia alone): the left column 360 px + a 1 px `border-right` at x = 0, no card border /
-  radius / padding (the tabs get 8 px like the mockup's `.lists`), the work area flush beside it,
-  the verse on the wall at the bottom 360 × 202.5 (stage_preview.css; under 1025 px the column is
-  301 px and the preview 300 × 168.75, the Piesne mirror's rule). Pinned in
+- **The page frame = the Piesne one** (#875, `bible.css` end): the left column 360 px + a 1 px
+  `border-right` at x = 0, no card border / radius / padding (the tabs get 8 px like the mockup's
+  `.lists`), the work area flush beside it (`.operator__slides-column` padding 0), the verse on the
+  wall at the bottom 360 × 202.5 (stage_preview.css; under 1025 px the column is 301 px and the
+  preview 300 × 168.75, the Piesne mirror's rule). Pinned in
   `operator-stage-preview-layout.spec.ts`.
-- **Multi-select + add to a presentation** (`SelectionControls`) sit in the slide grid's toolbar
+- **The work area = the Piesne one** (#875 mockup section 3, `operator-mockup-v3.spec.ts`
+  "Biblia work area"): the toolbar is an `.operator__worktop operator__worktop--bible` — the
+  title `[data-role=bible-worktop-title]` (Live: `state::bible_grid::passage_title`, "Ján 3:16-18
+  · SEB + KJV", the reference every live slide carries minus its "(SEB)", the secondary code only
+  when a slide has its text; Prepared: the open presentation's name), then "+ Snímka"
+  (`add-empty-slide`, `.operator__worktop-add`; desktop = Prepared tab only, the phone keeps its
+  "+"), the selection controls, the stepper. The cards share the Piesne rules in
+  `operator_frame.css` (selectors list `.operator__slide-card--bible` next to `--worship`), plus a
+  Biblia block there: the select zone (text top left, #828 counts floated top right) over the
+  trigger zone drawn as the caption `[data-role=slide-caption]` "1 · Ján 3:16"
+  (`slide_caption`, verses from the metadata) + `slide-live-tag` "NA STENE". The phone keeps
+  "▶ Ján 3:16-18 (SEB)" (`.operator__slide-trigger-ref`; the caption and tag are hidden there).
+  On the wall = `is_on_wall` (same main text + reference as `AppContext::active_bible_slide`) →
+  class `is-on-wall` + `data-on-wall`, never `is-active` (operator.css paints that blue on the
+  phone). The Live grid hides the reference footer on a desktop; a prepared card keeps it.
+- **Multi-select + add to a presentation** (`SelectionControls`) sit in the title row
   (`bible_slides.rs`, `[data-role="bible-selection"]`), desktop Live tab only (spec section 7.1),
-  and only while the grid holds slides.
+  and only while the grid holds slides; their buttons take the "+ Snímka" look.
 - **Reproducing on the live dev server:** `http://10.77.8.134:8080/ui/operator/bible`,
   `/bible/translations`, `/bible/books?translation=<code>`. Book codes are canonical and shared
   across full translations; `slk-mil` is partial (Gospels only).

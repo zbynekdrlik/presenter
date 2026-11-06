@@ -18,6 +18,12 @@
  *   - Naživo selected = red, Úprava selected = blue;
  *   - the preview pills are 26 px / 11 px (on = green border), the broom a
  *     32 px circle, the counter green 12 px.
+ * Biblia's work area (section "3 · Biblia v rovnakom rámci"): the title row
+ * "Ján 3:16-18 · SEB + KJV" bold 17 px with the 32 px stepper on the right and
+ * the selection controls in the "+ Snímka" look; 16:9 verse cards (growing,
+ * never cut) with the text top left and the caption "1 · Ján 3:16" grey 11 px
+ * at the bottom; after Zobraziť the card on the wall is red with "NA STENE",
+ * and a card's caption still puts it on the wall.
  * The phone shell keeps its own look (count bubble, no caption tag).
  *
  * Also asserts zero browser console errors/warnings per
@@ -31,6 +37,7 @@ import {
   openView,
   PHONE_390,
   refreshDevData,
+  selectPassage,
   startTestServer,
   stopServer,
   type ServerHandle,
@@ -209,13 +216,13 @@ for (const viewport of VIEWPORTS) {
     expect(title.fontWeight).toBe("700");
     const songName = (await songs.nth(0).locator("span").first().innerText()).trim();
     await expect(page.locator('.operator__worktop [data-role="slides-song-bubble"]')).toHaveText(songName);
-    const worktopControl = page.locator('.operator__worktop [data-role="slide-columns-control"]');
+    const worktopControl = page.locator(`${worship} .operator__worktop [data-role="slide-columns-control"]`);
     await expect(worktopControl.locator(".operator__slide-columns-label")).toHaveText("Snímok v riadku");
-    const label = await look(page, ".operator__worktop .operator__slide-columns");
+    const label = await look(page, `${worship} .operator__worktop .operator__slide-columns`);
     expect(label.fontSize).toBe("13px");
     expect(label.color).toBe("rgb(148, 163, 184)");
     for (const role of ["slide-columns-decrease", "slide-columns-increase"]) {
-      const button = await look(page, `.operator__worktop [data-role="${role}"]`);
+      const button = await look(page, `${worship} .operator__worktop [data-role="${role}"]`);
       near(button.width, 32, `${role} width`);
       near(button.height, 32, `${role} height`);
     }
@@ -275,6 +282,115 @@ for (const viewport of VIEWPORTS) {
     const counter = await look(page, '[data-role="stage-monitor"]');
     expect(counter.fontSize).toBe("12px");
     expect(counter.color).toBe("rgb(134, 239, 172)");
+
+    expect(errors).toEqual([]);
+  });
+
+  // Mockup section "3 · Biblia v rovnakom rámci": the same title row and
+  // cards as Piesne, the passage named with its translations.
+  test(`Biblia work area at ${size} is mockup v3`, async ({ page }) => {
+    const errors: string[] = [];
+    attachConsoleErrorCollector(page, errors);
+    await page.setViewportSize(viewport);
+    await page.goto(`${baseURL}/ui/operator/bible`);
+    await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+    await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
+    const root = page.locator('[data-bible-panel="live"] [data-role="bible-console"]');
+    await expect(root).toHaveAttribute("data-books-translation", /.+/, { timeout: 30_000 });
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]').click();
+    await expect(root).toHaveAttribute("data-books-translation", "slk-seb");
+    await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').click();
+    const bible = '[data-view-panel="bible"]';
+
+    // Empty: no title text, the empty line in the grid, no selection controls.
+    await expect(page.locator(`${bible} [data-role="bible-worktop-title"]`)).toHaveText("");
+    await expect(page.locator(`${bible} [data-role="slides"] .operator__slides-empty`)).toHaveText("Načítaj verše a zobrazia sa tu snímky.");
+    await expect(page.locator('[data-role="bible-selection"]')).toHaveCount(0);
+
+    await selectPassage(page, "jn 3:16-18");
+
+    // The title row: the passage + both translations bold 17 px, the stepper right.
+    const titleSel = `${bible} .operator__worktop [data-role="bible-worktop-title"]`;
+    await expect(page.locator(titleSel)).toHaveText("Ján 3:16-18 · SEB + KJV");
+    const title = await look(page, titleSel);
+    expect(title.fontSize).toBe("17px");
+    expect(title.fontWeight).toBe("700");
+    const control = page.locator(`${bible} .operator__worktop [data-role="slide-columns-control"]`);
+    await expect(control.locator(".operator__slide-columns-label")).toHaveText("Snímok v riadku");
+    const stepper = await look(page, `${bible} .operator__worktop .operator__slide-columns`);
+    expect(stepper.fontSize).toBe("13px");
+    expect(stepper.color).toBe("rgb(148, 163, 184)");
+    near(stepper.right, viewport.width - 12, "stepper at the row's right end");
+    for (const role of ["slide-columns-decrease", "slide-columns-increase"]) {
+      const button = await look(page, `${bible} .operator__worktop [data-role="${role}"]`);
+      near(button.width, 32, `${role} width`);
+      near(button.height, 32, `${role} height`);
+    }
+    expect(title.top, "title in the top row").toBeLessThan(stepper.bottom);
+    // The selection controls stay in the row, in the "+ Snímka" look.
+    const selectAll = await look(page, `${bible} .operator__worktop [data-role="select-all-slides"]`);
+    near(selectAll.height, 32, "Vybrať všetko height");
+    expect(selectAll.fontSize).toBe("13px");
+    await expect(page.locator(`${bible} .operator__worktop [data-role="presentation-add"]`)).toBeVisible();
+    // "+ Snímka" fills a prepared presentation: not offered on the Live tab.
+    await expect(page.locator(`${bible} [data-role="add-empty-slide"]`)).toHaveCount(0);
+
+    // The cards: 16:9 at least, 10 px radius, 1 px border, text top left,
+    // the caption "1 · Ján 3:16…" grey 11 px at the bottom.
+    const cards = page.locator(`${bible} [data-role="slide-card"]`);
+    const card = await look(page, `${bible} [data-role="slide-card"]`);
+    expect(card.borderTop).toBe("1px solid");
+    expect(card.borderRadius).toBe("10px");
+    expect(card.background).toBe("rgb(30, 41, 59)");
+    expect(card.height, "16:9 at least").toBeGreaterThanOrEqual((card.width * 9) / 16 - 1);
+    // A long slide grows instead of being cut: nothing spills out of a card,
+    // and its caption sits below its text.
+    for (let i = 0; i < (await cards.count()); i++) {
+      const fits = await cards.nth(i).evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const text = el.querySelector(".operator__slide-bodies")!.getBoundingClientRect();
+        const caption = el.querySelector('[data-role="slide-caption"]')!.getBoundingClientRect();
+        return {
+          inside: text.bottom <= box.bottom + 0.5 && caption.bottom <= box.bottom + 0.5,
+          below: caption.top >= text.bottom - 0.5,
+        };
+      });
+      expect(fits, `card ${i + 1} holds its text and caption`).toEqual({ inside: true, below: true });
+    }
+    const text = await look(page, `${bible} [data-role="slide-card"] .operator__slide-text--main`);
+    near(text.left, card.left + 12, "text inset 12 px from the left");
+    expect(text.top, "text at the top").toBeLessThan(card.top + 40);
+    expect(
+      await page.locator(`${bible} [data-role="slide-card"] .operator__slide-text--main`).first().evaluate((el) => getComputedStyle(el).textAlign),
+    ).toBe("left");
+    await expect(cards.first().locator('[data-role="slide-caption"]')).toHaveText(/^1 · Ján 3:16/);
+    const caption = await look(page, `${bible} [data-role="slide-card"] [data-role="slide-caption"]`);
+    expect(caption.fontSize).toBe("11px");
+    expect(caption.color).toBe("rgb(148, 163, 184)");
+    expect(caption.top, "caption at the bottom").toBeGreaterThan(card.top + card.height / 2);
+    // #828 counts stay on the card.
+    await expect(cards.first().locator('[data-role="slide-char-count"][data-field="main"]')).toBeVisible();
+    await expect(cards.first().locator('[data-role="slide-char-count"][data-field="translation"]')).toBeVisible();
+    await expect(cards.first().locator('[data-role="slide-live-tag"]')).toBeHidden();
+
+    // Zobraziť: the first card goes red with "NA STENE" in its caption.
+    await page.locator('[data-role="console-show"]').click();
+    await expect(cards.first()).toHaveAttribute("data-on-wall", "true");
+    await expect
+      .poll(() => cards.first().evaluate((el) => getComputedStyle(el).borderTopColor))
+      .toBe(RED);
+    const live = await look(page, `${bible} [data-role="slide-card"][data-on-wall="true"]`);
+    expect(live.borderTop).toBe("2px solid");
+    expect(live.background).toBe("rgb(59, 20, 24)");
+    await expect(cards.first().locator('[data-role="slide-live-tag"]')).toBeVisible();
+    await expect(cards.first().locator('[data-role="slide-live-tag"]')).toHaveText("NA STENE");
+    // The card's caption is still its trigger: the second card takes the wall.
+    if ((await cards.count()) > 1) {
+      await cards.nth(1).locator('[data-role="slide-trigger-zone"]').click();
+      await expect(cards.nth(1)).toHaveAttribute("data-on-wall", "true");
+      await expect(cards.first()).toHaveAttribute("data-on-wall", "false");
+      await expect(cards.first().locator('[data-role="slide-live-tag"]')).toBeHidden();
+    }
 
     expect(errors).toEqual([]);
   });

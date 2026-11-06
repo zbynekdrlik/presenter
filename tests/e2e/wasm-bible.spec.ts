@@ -390,16 +390,17 @@ test.describe("WASM Operator Bible Tests", () => {
     );
     await expect(mainText).toBeVisible();
 
-    // Main text should be centered and bold
+    // Desktop = the mockup v3 card (#875 section 3, like Piesne): the text
+    // top left in regular weight (the phone keeps its centred bold text).
     const textAlign = await mainText.evaluate(
       (el) => window.getComputedStyle(el).textAlign,
     );
-    expect(textAlign).toBe("center");
+    expect(textAlign).toBe("left");
 
     const fontWeight = await mainText.evaluate(
       (el) => window.getComputedStyle(el).fontWeight,
     );
-    expect(parseInt(fontWeight)).toBeGreaterThanOrEqual(600);
+    expect(parseInt(fontWeight)).toBe(400);
   });
 
   test("slide cards show reference footer when reference exists", async ({

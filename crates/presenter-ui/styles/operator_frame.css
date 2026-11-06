@@ -16,7 +16,8 @@
      Sledovať pills, broom and counter as drawn.
    Every rule is scoped to the desktop shell: the phone (`data-shell="phone"`,
    phone_shell.css) does not change. The Biblia left panel is NOT styled here
-   (bible.css / bible_console.css, #850 B2c). Linked after stage_preview.css,
+   (bible.css / bible_console.css, #850 B2c); its work area (mockup section 3)
+   shares the title row and card rules below. Linked after stage_preview.css,
    so it wins over operator.css, controls.css, header.css and stage_preview.css
    at equal specificity. */
 
@@ -599,12 +600,14 @@ body.operator:not([data-shell="phone"]) .operator__slide-columns-value {
 
 /* ── Slide cards (mockup `.slides` / `.slide`) ── */
 
-body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__slides {
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__slides,
+body.operator:not([data-shell="phone"]) .operator__panel--bible .operator__slides {
   padding: 10px 12px;
   gap: 10px;
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship {
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible {
   box-sizing: border-box;
   padding: 12px;
   gap: 6px;
@@ -616,7 +619,8 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship {
 
 /* Live: 16:9 at least (a long slide grows instead of being cut), the text top
    left, the caption at the bottom. */
-body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship {
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship,
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--bible {
   aspect-ratio: 16 / 9;
   justify-content: space-between;
 }
@@ -634,7 +638,8 @@ body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card-
   gap: 4px 6px;
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text {
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-text {
   padding: 0;
   text-align: left;
   font-size: 16px;
@@ -642,7 +647,8 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator
   line-height: 1.35;
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text--translation {
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship .operator__slide-text--translation,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-text--translation {
   margin-top: 2px;
   padding-top: 2px;
   font-size: 14px;
@@ -711,6 +717,13 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active
   box-shadow: none;
 }
 
+/* The Bible card on the wall: the same look (its padding sits on the zones). */
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall {
+  border: 2px solid var(--frame-live);
+  background: var(--frame-live-soft);
+  box-shadow: none;
+}
+
 /* A slide checked for copy / cut keeps its blue ring (#602 defect 1): the
    flat card rule above must not erase operator.css's selected look. */
 body.operator:not([data-shell="phone"]) .operator__slide-card--worship.operator__slide-card--selected {
@@ -720,7 +733,8 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship.operator_
     inset 0 0 0 9999px rgba(59, 124, 255, 0.12);
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag {
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag {
   display: inline;
   font-size: 11px;
   font-weight: 600;
@@ -728,7 +742,8 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active
   white-space: nowrap;
 }
 
-body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag::before {
+body.operator:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag::before,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag::before {
   content: "· ";
   font-weight: 400;
   color: var(--frame-muted);
@@ -744,8 +759,184 @@ body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operat
   padding: 7px;
 }
 
-body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--worship .operator__slide-text {
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--worship .operator__slide-text,
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--bible .operator__slide-text {
   font-size: 12px;
+}
+
+/* ── Biblia's work area (mockup section "3 · Biblia v rovnakom rámci"):
+   the same title row and cards as Piesne above; only what the Bible card's
+   own parts need is here. The card = the select zone (text, counts; a click
+   checks it for "Pridať do prezentácie") over the trigger zone, drawn as the
+   caption "1 · Ján 3:16 · NA STENE" (a click puts it on the wall). ── */
+
+/* The title row wraps the selection controls under the title when narrow. */
+body.operator:not([data-shell="phone"]) .operator__worktop--bible {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  row-gap: 6px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .operator__worktop-title {
+  min-width: 160px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .bible__selection {
+  flex: none;
+  gap: 6px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .bible__selection .operator__slides-count {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--frame-muted);
+  white-space: nowrap;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .bible__selection button {
+  height: 32px;
+  min-height: 0;
+  padding: 0 10px;
+  border: 1px solid var(--frame-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--frame-ink);
+  font-size: 13px;
+  font-weight: 400;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .bible__selection button:hover {
+  background: var(--frame-panel);
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .bible__add-pres-list {
+  gap: 6px;
+  max-height: 70px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__worktop--bible .operator__slide-columns {
+  margin-left: auto;
+}
+
+/* The empty grid's line, placed and coloured like Piesne's. */
+body.operator:not([data-shell="phone"]) .operator__panel--bible .operator__slides .operator__slides-empty {
+  margin: 0;
+  color: var(--frame-muted);
+  font-size: 0.9rem;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall {
+  padding: 0;
+  gap: 0;
+}
+
+/* No overflow / min-height clamp anywhere in the card: a long slide grows
+   past 16:9 instead of being cut (aspect-ratio keeps an auto min height).
+   A prepared / sermon card holds its text directly, without a select zone. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-select-zone,
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible > .operator__slide-bodies--bible {
+  order: 1;
+  flex: 1 0 auto;
+  padding: 12px 12px 4px;
+  border-radius: 9px 9px 0 0;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-select-zone:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+/* Text top left; the counts (#828) float at its top right. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-bodies--bible {
+  display: block;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-char-counts {
+  float: right;
+  margin: 1px 0 2px 8px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-text--main {
+  font-weight: 400;
+  color: var(--frame-ink);
+}
+
+/* The live grid's title names the passage and its translations, so the
+   references under the text go; a prepared card keeps them (its slides may
+   come from several passages). */
+body.operator[data-bible-tab="live"]:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-footer {
+  display: none;
+}
+
+/* The caption = the trigger zone at the card's bottom. */
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-trigger-zone {
+  order: 2;
+  flex: none;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 4px 12px 8px;
+  gap: 6px;
+  border: 0;
+  border-radius: 0 0 9px 9px;
+  background: transparent;
+  color: var(--frame-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-trigger-zone:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--frame-ink);
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-trigger-icon {
+  font-size: 8px;
+  color: var(--frame-blue);
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-trigger-ref {
+  display: none;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-trigger-zone {
+  padding-bottom: 7px;
+}
+
+/* A prepared card's drag handle sits in the caption row's right end (Live
+   mode; in Edit mode it stays the strip on top, the ✕ row takes the bottom). */
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--bible .bible__slide-handle {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 1;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--bible .bible__slide-handle ~ .operator__slide-trigger-zone {
+  padding-right: 36px;
+}
+
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--bible .operator__slide-select-zone,
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--bible > .operator__slide-bodies--bible {
+  padding: 8px 8px 2px;
+}
+
+body.operator:not([data-shell="phone"])[data-slide-columns-dense="true"] .operator__slide-card--bible .operator__slide-trigger-zone {
+  padding: 2px 8px 6px;
 }
 
 /* ── The other operator sections (Časovače, AI, Menovky): the same frame —

@@ -3,6 +3,7 @@ pub mod bible_console;
 pub mod bible_console_prepared;
 pub mod bible_console_search;
 pub mod bible_console_step;
+pub mod bible_grid;
 pub mod bible_translations;
 pub mod global_keys;
 pub mod interpreter;
