@@ -156,7 +156,7 @@ test.describe("Operator Control Buttons", () => {
     await expect(followButton).toHaveAttribute("data-state", "on", {
       timeout: 10_000,
     });
-    await expect(followButton).toHaveText("Sledovať pódium");
+    await expect(followButton).toHaveText("Sledovať");
     await expect(followButton).toHaveAttribute("aria-pressed", "true");
     // #875 mockup v3: on = green border + light green text on the preview
     // (the phone keeps the filled accent), so compare the whole look.
@@ -171,7 +171,7 @@ test.describe("Operator Control Buttons", () => {
     await expect(followButton).toHaveAttribute("data-state", "off", {
       timeout: 5_000,
     });
-    await expect(followButton).toHaveText("Sledovať pódium");
+    await expect(followButton).toHaveText("Sledovať");
     await expect(followButton).toHaveAttribute("aria-pressed", "false");
     // The text no longer says ON/OFF: the same button must LOOK different
     // in its two states.
@@ -189,7 +189,7 @@ test.describe("Operator Control Buttons", () => {
     await expect(followButton).toHaveAttribute("data-state", "on", {
       timeout: 5_000,
     });
-    await expect(followButton).toHaveText("Sledovať pódium");
+    await expect(followButton).toHaveText("Sledovať");
     await expect(followButton).toHaveAttribute("aria-pressed", "true");
 
     expect(filterRealErrors(consoleMessages)).toEqual([]);
