@@ -90,7 +90,11 @@ fn push_entry(s: Study, route: StudyRoute) {
 /// Change the current entry: a selection that grew, a translation found for a
 /// URL without one.
 pub(super) fn replace(s: Study, route: StudyRoute) {
-    let entry = entry(s, &route);
+    let mut entry = entry(s, &route);
+    // A closed sheet's step stays a step: a highlight on it is no second row.
+    if route.sheet.is_none() && s.route.with_untracked(|shown| shown.sheet.is_none()) {
+        entry.listed = s.history.with_untracked(StudyHistory::current_listed);
+    }
     replace_entry(s, route, entry);
 }
 

@@ -14,6 +14,7 @@ use crate::state::study_word::{WordPlace, KEY_NUMBERS};
 
 const WORD: &str = "[data-role=\"study-word\"]";
 const BADGE: &str = "[data-role=\"study-strongs-badge\"]";
+const NOTE: &str = "[data-role=\"study-note\"], [data-role=\"study-note-text\"]";
 
 /// The word an event landed on; on a badge, that badge's number.
 fn tapped_word(ev: &web_sys::Event) -> Option<WordPlace> {
@@ -28,6 +29,14 @@ fn tapped_word(ev: &web_sys::Event) -> Option<WordPlace> {
         verse: word.get_attribute("data-verse")?.parse().ok()?,
         token: word.get_attribute("data-token")?.parse().ok()?,
     })
+}
+
+/// A † or its opened text: a tap there belongs to the note, not to the verse.
+fn tapped_note(ev: &web_sys::Event) -> bool {
+    ev.target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        .and_then(|target| target.closest(NOTE).ok().flatten())
+        .is_some()
 }
 
 /// Text dragged over with a mouse: the click that ends it is no tap.
@@ -171,7 +180,7 @@ pub(super) fn VerseBody(
             .into_any()
     };
     let on_click = move |ev: web_sys::MouseEvent| {
-        if text_selected() {
+        if text_selected() || tapped_note(&ev) {
             return;
         }
         let word = tapped_word(&ev);

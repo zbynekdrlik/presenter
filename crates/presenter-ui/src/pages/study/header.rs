@@ -39,7 +39,11 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
             .with(|route| matches!(route.view, StudyView::Sermons | StudyView::Sermon { .. }))
     });
     let on_bible = move |_| {
-        let route = reading_route();
+        let mut route = reading_route();
+        // No place stored yet: the start route names no translation of its own.
+        if route.translation.is_none() {
+            route.translation = s.route.with_untracked(|shown| shown.translation.clone());
+        }
         let plan = saved_verse(&route).map_or(ScrollPlan::Top, ScrollPlan::Verse);
         nav::go(s, route, plan);
     };

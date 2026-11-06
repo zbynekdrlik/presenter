@@ -36,6 +36,14 @@ pub fn parse(stored: Option<&str>) -> Vec<String> {
             list.into_iter()
                 .map(|text| collapse(&text))
                 .filter(|text| !text.is_empty())
+                .fold(Vec::new(), |mut kept: Vec<String>, text| {
+                    let key = text.to_lowercase();
+                    if !kept.iter().any(|held| held.to_lowercase() == key) {
+                        kept.push(text);
+                    }
+                    kept
+                })
+                .into_iter()
                 .take(RECENT_LIMIT)
                 .collect()
         })

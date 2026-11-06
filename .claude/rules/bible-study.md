@@ -86,6 +86,10 @@ preparation (the sermon views are in `sermon-prep.md`).
   `studyRecent`, 12, newest first, case/space duplicates move to the top). What is kept: the typed
   text on Enter, a row's label, "Book N" for a chapter cell, the Strong's number, the search words.
   A pick only FILLS the field (Enter opens it); typing, a blur or Escape closes the list.
+- **A tap on a † is the note's** (`tapped_note`), never the verse's. **A chip tapped during a load**
+  keeps the waiting `ScrollPlan`: what is on screen is the chapter being left. **`nav::replace` keeps
+  `listed`** unless a sheet closes: a highlight on a closed sheet's step is no second row. **Whatever
+  opens a passage leaves its text in the field** (`Field::open`), a row's label or "Book N" too.
 - **The field shares the console's row builder** (`console_view`) and adds only the chapter grid and
   the text search (`state::study::suggest`; a word naming a book offers both, Enter opens the book). `Suggestions` shows while the field has focus and
   prevents `mousedown`'s default, or the blur removes a row before its `click`.

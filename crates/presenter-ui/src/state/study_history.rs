@@ -104,6 +104,13 @@ impl StudyHistory {
         }
     }
 
+    /// Whether the current entry is a row of the long-press list.
+    pub fn current_listed(&self) -> bool {
+        self.entries
+            .get(self.offset())
+            .is_none_or(|entry| entry.listed)
+    }
+
     /// The current entry's row, once the chapter's real book name is known.
     pub fn relabel(&mut self, label: String) {
         let offset = self.offset();
@@ -330,6 +337,14 @@ mod tests {
         history.relabel("Hebrejom 11 · SEB".to_string());
         history.push(place("c"));
         assert_eq!(history.back_list().len(), 1);
+    }
+
+    #[test]
+    fn current_listed_tells_a_place_from_a_step() {
+        let mut history = walked(&["a"]);
+        assert!(history.current_listed());
+        history.push(sheet("b"));
+        assert!(!history.current_listed());
     }
 
     #[test]

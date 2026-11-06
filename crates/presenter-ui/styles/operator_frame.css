@@ -23,6 +23,7 @@
 
 /* Bits that exist only for one shell. */
 .operator__slide-live-tag,
+.operator__slide-caption,
 .operator__slide-columns-label,
 .operator__group-more-icon {
   display: none;
@@ -747,7 +748,7 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--worship.operator_
    jumped under the operator's caret (operator-edit-autoscroll). The red
    border still marks the slide there. */
 body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--worship.is-active .operator__slide-live-tag,
-body.operator:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag {
+body.operator[data-mode="live"]:not([data-shell="phone"]) .operator__slide-card--bible.is-on-wall .operator__slide-live-tag {
   display: inline;
   font-size: 11px;
   font-weight: 600;
@@ -914,6 +915,7 @@ body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__
 }
 
 body.operator:not([data-shell="phone"]) .operator__slide-card--bible .operator__slide-caption {
+  display: inline;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

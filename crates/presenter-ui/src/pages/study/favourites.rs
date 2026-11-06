@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
 
 use super::long_press::LongPress;
+use super::reader::chapter_settled_untracked;
 use super::scroll::{self, ScrollPlan};
 use super::sheet::Sheet;
 use super::{nav, Study};
@@ -20,6 +21,9 @@ fn switch(s: Study, code: &str) {
     }
     route.translation = Some(code.to_string());
     let plan = match route.view {
+        // What is on screen during a load is the chapter being left: the
+        // landing already waiting for the new one stands.
+        StudyView::Reader { .. } if !chapter_settled_untracked(s) => s.scroll_plan.get_value(),
         StudyView::Reader { .. } => keep_in_place(s, route.verses.map(|(first, _)| first)),
         _ => ScrollPlan::Top,
     };

@@ -28,6 +28,9 @@ pub(super) struct Field {
     /// translation) the text stays, so a slip is fixed in place (owner,
     /// 2026-11-06: "2kor" could not be corrected to "1kor").
     opened: StoredValue<Option<(String, u16)>>,
+    /// The place moved on under the focus (system Back): the old reference
+    /// goes when the field is left, unless it was typed over.
+    left_behind: StoredValue<bool>,
     /// The earlier searches, newest first, and whether the ▾ list shows them
     /// (owner, 2026-11-06).
     pub(super) recent: RwSignal<Vec<String>>,
@@ -73,6 +76,7 @@ impl Field {
         self.opened
             .set_value(Some((target.book.clone(), target.chapter)));
         self.remember(text);
+        self.input.set(text.to_string());
         self.leave();
         nav::go(self.s, route, plan);
     }
@@ -118,6 +122,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
         focused: RwSignal::new(false),
         element: NodeRef::new(),
         opened: StoredValue::new(None),
+        left_behind: StoredValue::new(false),
         recent: RwSignal::new(load_recent()),
         recent_open: RwSignal::new(false),
     };
@@ -160,7 +165,9 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
             matches!(previous, Some(FieldPlace::Search(_))) || f.opened.with_value(Option::is_some);
         if !kept && held {
             f.opened.set_value(None);
-            if !f.focused.get_untracked() {
+            if f.focused.get_untracked() {
+                f.left_behind.set_value(true);
+            } else {
                 f.input.set(String::new());
             }
         }
@@ -213,6 +220,7 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                 prop:value=move || f.input.get()
                 on:input=move |ev| {
                     f.recent_open.set(false);
+                    f.left_behind.set_value(false);
                     f.input.set(event_target_value(&ev));
                 }
                 on:keydown=on_keydown
@@ -220,6 +228,10 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
                 on:blur=move |_| {
                     f.focused.set(false);
                     f.recent_open.set(false);
+                    if f.left_behind.get_value() {
+                        f.left_behind.set_value(false);
+                        f.input.set(String::new());
+                    }
                 }
             />
             <Show when=move || f.input.with(|text| !text.is_empty())>
