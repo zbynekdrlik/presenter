@@ -69,6 +69,11 @@
 }
 
 .study-head__title {
+  /* Gives way to the buttons on a narrow phone (the sermon views add Biblia). */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
   font-size: 18px;
   font-weight: 650;
@@ -77,6 +82,7 @@
 
 .study-head__actions {
   display: flex;
+  flex: none;
 }
 
 .study-icon {

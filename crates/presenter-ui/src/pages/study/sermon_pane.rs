@@ -16,8 +16,9 @@ use crate::state::study::{StudyRoute, StudyView, KEY_LAST};
 /// The width the sheets dock at too (`study.css`).
 const WIDE_QUERY: &str = "(min-width: 1024px)";
 
-/// Where a sermon opened on a wide screen reads: the last place.
-fn reading_route() -> StudyRoute {
+/// Where a sermon opened on a wide screen reads, and where the header's
+/// Biblia leads from the sermons: the last place.
+pub(super) fn reading_route() -> StudyRoute {
     session::get_persistent(KEY_LAST)
         .and_then(|url| StudyRoute::parse(url.split_once('?')?.1))
         .unwrap_or_else(start_route)

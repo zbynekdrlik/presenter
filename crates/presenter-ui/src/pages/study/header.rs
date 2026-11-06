@@ -1,12 +1,16 @@
 //! The 48 px header: ◀ ▶ step through the history, a long press on ◀ opens the
-//! list, Aa the text size, Kázne the sermon list.
+//! list, Aa the text size, Kázne the sermon list. The sermon views add Biblia,
+//! back to the last reading place: a tab reopened on a sermon has no history,
+//! and the field is not shown there (owner, 2026-11-06: "už sa neviem vrátiť k
+//! veršom").
 
 use leptos::prelude::*;
 
 use super::long_press::LongPress;
-use super::scroll::ScrollPlan;
+use super::scroll::{saved_verse, ScrollPlan};
+use super::sermon_pane::reading_route;
 use super::{nav, Study};
-use crate::state::study::{StudyRoute, StudySheet};
+use crate::state::study::{StudyRoute, StudySheet, StudyView};
 
 #[component]
 pub(super) fn StudyHeader(s: Study) -> impl IntoView {
@@ -30,6 +34,15 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
         let translation = s.route.with_untracked(|route| route.translation.clone());
         nav::go(s, StudyRoute::sermons(translation), ScrollPlan::Top);
     };
+    let on_sermon_view = Memo::new(move |_| {
+        s.route
+            .with(|route| matches!(route.view, StudyView::Sermons | StudyView::Sermon { .. }))
+    });
+    let on_bible = move |_| {
+        let route = reading_route();
+        let plan = saved_verse(&route).map_or(ScrollPlan::Top, ScrollPlan::Verse);
+        nav::go(s, route, plan);
+    };
     let on_press = move |ev: web_sys::PointerEvent| {
         if can_back.get_untracked() {
             press.begin(&ev, open_list);
@@ -40,6 +53,16 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
         <header class="study-head">
             <h1 class="study-head__title">"Štúdium"</h1>
             <div class="study-head__actions">
+                <Show when=move || on_sermon_view.get()>
+                    <button
+                        type="button"
+                        class="study-icon study-icon--text study-icon--wide"
+                        data-role="study-bible"
+                        on:click=on_bible
+                    >
+                        "Biblia"
+                    </button>
+                </Show>
                 <button
                     type="button"
                     class="study-icon study-icon--text study-icon--wide"
