@@ -14,6 +14,7 @@ use tracing::instrument;
 
 use super::super::AppError;
 use crate::state::bible_show_log::{client_device, BibleShowOrigin, BibleShowSource};
+use crate::state::bible_shown::ShownVerse;
 use crate::state::AppState;
 use presenter_core::{
     BiblePreferences, BiblePreferencesDraft, BiblePresentationId, BibleReference, BibleSlideId,
@@ -255,6 +256,12 @@ fn show_origin(
         device: None,
         client_ip: super::super::integrations::extract_client_ip(headers, peer),
     }
+}
+
+/// "Táto bohoslužba" (#850 B2d): the verses shown today, newest first.
+#[instrument(skip_all)]
+pub(crate) async fn get_shown_today(State(state): State<AppState>) -> Json<Vec<ShownVerse>> {
+    Json(state.shown_verses_today().await)
 }
 
 #[instrument(skip_all)]

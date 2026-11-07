@@ -148,6 +148,7 @@ pub fn build_router(state: AppState) -> Router {
             "/bible/active-slide",
             get(bible::broadcast::get_active_bible_slide_output),
         )
+        .route("/bible/shown-today", get(bible::broadcast::get_shown_today))
         .route(
             "/bible/trigger",
             post(bible::broadcast::trigger_bible_broadcast),

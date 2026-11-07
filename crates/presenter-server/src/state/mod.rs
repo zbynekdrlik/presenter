@@ -39,6 +39,7 @@ mod bible_labels;
 mod bible_lookup;
 mod bible_manager;
 pub(crate) mod bible_show_log;
+pub(crate) mod bible_shown;
 pub(crate) mod bible_source;
 mod broadcasting;
 mod cache_manager;

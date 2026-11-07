@@ -363,6 +363,23 @@ body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   overflow: visible;
 }
 
+/* "Táto bohoslužba" (#850 B2d) */
+.console-shown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.console-shown__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.console-chip[aria-pressed="true"] {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
 /* "Pripravené kazateľom" (#851 H1) */
 .console-prepared {
   display: flex;
@@ -386,7 +403,8 @@ body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   text-align: left;
 }
 
-.console-prepared__heading {
+.console-prepared__heading,
+.console-shown__heading {
   margin: 0;
   font-size: 13px;
   font-weight: 700;
@@ -552,8 +570,17 @@ body.operator:not([data-shell="phone"]) .console-results {
 body.operator:not([data-shell="phone"]) .console-text-results {
   order: 5;
 }
+body.operator:not([data-shell="phone"]) .console-shown,
 body.operator:not([data-shell="phone"]) .console-prepared {
-  order: 6;
+  order: 6; /* under the bar: a chip that appears after a show never moves Zobraziť */
+}
+body.operator:not([data-shell="phone"]) .console-shown__chips {
+  max-height: 124px;
+  overflow-y: auto;
+}
+body.operator:not([data-shell="phone"]) .console-shown .console-chip {
+  min-height: 36px;
+  font-size: 13px;
 }
 body.operator:not([data-shell="phone"]) .console-preview {
   display: none;

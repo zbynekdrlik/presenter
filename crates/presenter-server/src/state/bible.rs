@@ -658,6 +658,7 @@ impl AppState {
         origin: &BibleShowOrigin,
     ) {
         log_bible_show(origin, &output);
+        self.record_shown_verse(&broadcast, origin).await;
         {
             let mut guard = self.bible.slide_output.write().await;
             *guard = Some(output.clone());

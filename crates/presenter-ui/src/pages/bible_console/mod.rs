@@ -11,6 +11,7 @@ mod on_air;
 mod prepared;
 mod preview;
 mod results;
+mod shown_today;
 mod stepping;
 mod text_search;
 mod translation_bar;
@@ -39,6 +40,7 @@ use on_air::OnAirStrip;
 use prepared::PreparedSection;
 use preview::ConsolePreview;
 use results::ConsoleResults;
+use shown_today::ShownTodaySection;
 use text_search::TextSearch;
 use translation_bar::TranslationBar;
 
@@ -258,6 +260,7 @@ pub fn BibleConsole() -> impl IntoView {
             <ConsoleField console=console />
             <ConsoleResults console=console />
             <TextSearch console=console />
+            <ShownTodaySection console=console />
             <PreparedSection console=console />
             <ConsolePreview console=console />
             <ConsoleActions console=console />

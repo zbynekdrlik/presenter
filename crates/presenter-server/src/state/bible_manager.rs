@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use super::bible_shown::ShownToday;
 use crate::bible_remote::NltClient;
 use presenter_core::{BibleBroadcast, BibleSlideOutput};
 use tokio::sync::RwLock;
@@ -29,6 +30,8 @@ pub(crate) struct BibleManager {
     pub(crate) broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
     /// Single-source-of-truth Bible slide output.
     pub(crate) slide_output: Arc<RwLock<Option<BibleSlideOutput>>>,
+    /// #850 B2d: "Táto bohoslužba", the verses shown on the wall today.
+    pub(crate) shown_today: Arc<RwLock<ShownToday>>,
     /// #826: the NLT API client (with its in-memory verse cache), shared by
     /// every clone — see `state/bible_source.rs`.
     pub(crate) nlt: Arc<NltClient>,
@@ -45,6 +48,7 @@ impl BibleManager {
         Self {
             broadcast: Arc::new(RwLock::new(None)),
             slide_output: Arc::new(RwLock::new(None)),
+            shown_today: Arc::new(RwLock::new(ShownToday::default())),
             nlt: Arc::new(NltClient::from_env()),
             #[cfg(test)]
             ingestion_override: None,

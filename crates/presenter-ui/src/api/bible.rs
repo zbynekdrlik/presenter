@@ -151,6 +151,25 @@ pub async fn get_active_slide_output() -> Result<Option<BibleSlideOutput>, ApiEr
     get_json("/bible/active-slide").await
 }
 
+/// A verse shown on the wall today ("Táto bohoslužba", #850 B2d).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShownVerse {
+    pub label: String,
+    pub book: String,
+    pub book_code: String,
+    pub book_number: u16,
+    pub chapter: u16,
+    pub verse_start: u16,
+    pub verse_end: u16,
+    pub translation_code: String,
+}
+
+/// Today's shown verses, newest first. Server endpoint: GET /bible/shown-today
+pub async fn shown_today() -> Result<Vec<ShownVerse>, ApiError> {
+    get_json("/bible/shown-today").await
+}
+
 /// Clear the current Bible broadcast. Server endpoint: POST /bible/clear
 pub async fn clear_broadcast() -> Result<(), ApiError> {
     post_no_content("/bible/clear", &serde_json::json!({})).await
