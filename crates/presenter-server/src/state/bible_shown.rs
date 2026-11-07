@@ -30,12 +30,13 @@ pub(crate) struct ShownVerse {
 }
 
 impl ShownVerse {
-    /// `None` for a show the console could not bring back: no book code (a
-    /// placeholder reference), or a prepared slide. A prepared slide holds the
+    /// `None` for a show the console could not bring back: a book nobody knows
+    /// (a placeholder reference), or a sermon's slide. That one holds the
     /// preacher's cut, which a preview of the verse would lose, and it already
-    /// has its row under "Pripravené kazateľom".
+    /// has its row under "Pripravené kazateľom". Companion and the AI name only
+    /// the book, so the code comes from its name.
     fn of_show(broadcast: &BibleBroadcast, origin: &BibleShowOrigin) -> Option<Self> {
-        if matches!(origin.source, BibleShowSource::Prepared) {
+        if matches!(origin.source, BibleShowSource::Sermon) {
             return None;
         }
         let reference = &broadcast.passage.reference;
@@ -178,18 +179,33 @@ mod tests {
         let shown = ShownVerse::of_show(&broadcast(Some("PSA")), &origin).expect("a verse");
         assert_eq!(shown.label, "Žalm 23:1-2");
         assert_eq!(shown.book_code, "PSA");
+        assert_eq!(shown.book_number, 19);
         assert_eq!(shown.translation_code, "slk-seb");
         assert_eq!((shown.verse_start, shown.verse_end), (1, 2));
     }
 
     #[test]
-    fn a_prepared_slide_and_a_show_without_a_code_are_not_kept() {
-        let prepared = BibleShowOrigin::internal(BibleShowSource::Prepared);
-        assert_eq!(
-            ShownVerse::of_show(&broadcast(Some("PSA")), &prepared),
-            None
-        );
-        let console = BibleShowOrigin::internal(BibleShowSource::Console);
-        assert_eq!(ShownVerse::of_show(&broadcast(None), &console), None);
+    fn a_sermon_slide_is_not_kept_a_plain_presentation_slide_is() {
+        let sermon = BibleShowOrigin::internal(BibleShowSource::Sermon);
+        assert_eq!(ShownVerse::of_show(&broadcast(Some("PSA")), &sermon), None);
+        let plain = BibleShowOrigin::internal(BibleShowSource::Prepared);
+        assert!(ShownVerse::of_show(&broadcast(Some("PSA")), &plain).is_some());
+    }
+
+    #[test]
+    fn a_show_without_a_code_is_kept_by_its_book_name() {
+        // Companion and the AI name only the book.
+        let companion = BibleShowOrigin::internal(BibleShowSource::Companion);
+        let shown = ShownVerse::of_show(&broadcast(None), &companion).expect("a verse");
+        assert_eq!(shown.book_code, "PSA");
+        assert_eq!(shown.book_number, 19);
+    }
+
+    #[test]
+    fn a_book_nobody_knows_is_not_kept() {
+        let origin = BibleShowOrigin::internal(BibleShowSource::Api);
+        let mut unknown = broadcast(None);
+        unknown.passage.reference.book = "Neznáma kniha".to_string();
+        assert_eq!(ShownVerse::of_show(&unknown, &origin), None);
     }
 }

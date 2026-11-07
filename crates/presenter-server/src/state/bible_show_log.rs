@@ -11,6 +11,9 @@ pub enum BibleShowSource {
     Api,
     /// `POST /bible/presentations/{id}/slides/{slide_id}/trigger`.
     Prepared,
+    /// The same endpoint on a sermon's slide: logged as `prepared`, but its text
+    /// is the preacher's cut, so "Táto bohoslužba" leaves it out (#850 B2d).
+    Sermon,
     /// `POST /bible/trigger-slide` from the verse console (#850 B2a).
     Console,
     /// The legacy reference trigger `POST /bible/trigger` (#850 A2b).
@@ -25,7 +28,7 @@ impl BibleShowSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Api => "api",
-            Self::Prepared => "prepared",
+            Self::Prepared | Self::Sermon => "prepared",
             Self::Console => "console",
             Self::Trigger => "trigger",
             Self::Companion => "companion",

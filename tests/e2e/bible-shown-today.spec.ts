@@ -110,7 +110,8 @@ test("phone: a verse another device showed arrives; a tap previews and only Zobr
 
   // Another device's show reaches this phone without a reload, by the wall's event.
   const trigger = await request.post(new URL("/bible/trigger", baseURL).toString(), {
-    data: { translation: "slk-seb", book: "Hebrejom", bookCode: "HEB", bookNumber: 58, chapter: 12, verseStart: 1 },
+    // As Companion and the AI ask: the book's name, no code.
+    data: { translation: "slk-seb", book: "Hebrejom", chapter: 12, verseStart: 1 },
   });
   expect(trigger.ok()).toBeTruthy();
   await expect(chips(phone).first()).toHaveText("Hebrejom 12:1");
@@ -128,6 +129,10 @@ test("phone: a verse another device showed arrives; a tap previews and only Zobr
   await expect(root).toHaveAttribute("data-preview-reference", "Rimanom 8:28 (SEB)");
   await expect(rimanom).toHaveAttribute("aria-pressed", "true");
   expect(posts).toHaveLength(0);
+  // The preview comes before the list: a long list never hides what Zobraziť sends.
+  const preview = await phone.locator('[data-role="console-preview"]').boundingBox();
+  const list = await phone.locator('[data-role="console-shown"]').boundingBox();
+  expect(preview!.y).toBeLessThan(list!.y);
 
   await phone.locator('[data-role="console-show"]').tap();
   await expect(chips(phone).first()).toHaveText("Rimanom 8:28");
@@ -147,6 +152,52 @@ test("a chip follows a translation switch: the same verse in the new translation
   await chips(page).filter({ hasText: "Hebrejom 11:1" }).click();
   await expect(root).toHaveAttribute("data-preview-ready", "true");
   await expect(root).toHaveAttribute("data-preview-reference", "Hebrews 11:1 (KJV)");
+  expect(errors).toEqual([]);
+  await page.context().close();
+});
+
+test("a chip for a verse this translation lacks says so and keeps the preview", async ({ browser }) => {
+  const errors: string[] = [];
+  const page = await open(browser, { viewport: { width: 1280, height: 720 } }, errors);
+  await show(page, "mal 3 23", "Malachiáš 3:23 (SEB)");
+  await page.locator('.console-translation[data-kind="main"][data-translation="eng-kjv"]').click();
+  const root = page.locator('[data-role="bible-console"]');
+  await expect(root).toHaveAttribute("data-books-translation", "eng-kjv");
+  await page.locator('[data-role="console-field"]').fill("heb 11 1");
+  await expect(root).toHaveAttribute("data-preview-reference", "Hebrews 11:1 (KJV)");
+  await page.locator('[data-role="console-field"]').fill("");
+  await chips(page).filter({ hasText: "Rimanom 8:28" }).click();
+  await expect(root).toHaveAttribute("data-preview-reference", "Romans 8:28 (KJV)");
+  await chips(page).filter({ hasText: "Malachiáš 3:23" }).click();
+  await expect(page.locator('[data-role="toast"]')).toContainText("nemá");
+  await expect(root).toHaveAttribute("data-preview-reference", "Romans 8:28 (KJV)");
+  expect(errors).toEqual([]);
+  await page.context().close();
+});
+
+test("a tap on the chip of the verse being previewed goes back to its first part", async ({
+  browser,
+  request,
+}) => {
+  const errors: string[] = [];
+  const first = await open(browser, PHONE_390, errors);
+  await show(first, "mt 5 3-4", "Matúš 5:3-4 (SEB)");
+  await first.context().close();
+  const short = await request.put(new URL("/bible/preferences", baseURL).toString(), {
+    data: { mainTranslation: "slk-seb", characterLimit: 40 },
+  });
+  expect(short.ok()).toBeTruthy();
+
+  const page = await open(browser, PHONE_390, errors);
+  const preview = page.locator('[data-role="console-preview"]');
+  const chip = chips(page).filter({ hasText: "Matúš 5:3-4" });
+  await chip.tap();
+  await expect(preview).toHaveAttribute("data-slide-count", "2");
+  await expect(preview).toHaveAttribute("data-slide-index", "1");
+  await page.locator('[data-role="console-show"]').tap();
+  await expect(preview).toHaveAttribute("data-slide-index", "2");
+  await chip.tap();
+  await expect(preview).toHaveAttribute("data-slide-index", "1");
   expect(errors).toEqual([]);
   await page.context().close();
 });
