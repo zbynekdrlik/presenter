@@ -577,11 +577,11 @@ body.operator:not([data-shell="phone"]) .console-prepared {
   order: 7;
 }
 body.operator:not([data-shell="phone"]) .console-shown__chips {
-  max-height: 124px;
+  max-height: 132px;
   overflow-y: auto;
 }
 body.operator:not([data-shell="phone"]) .console-shown .console-chip {
-  min-height: 36px;
+  min-height: 40px;
   font-size: 13px;
 }
 body.operator:not([data-shell="phone"]) .console-preview {
