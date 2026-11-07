@@ -108,7 +108,8 @@ test("✕ clears the field and ▾ fills it from the earlier searches (owner, 20
   const { page } = opened;
   const recent = page.locator('[data-role="study-field-recent"]');
   const items = page.locator('[data-role="study-recent-item"]');
-  // Nothing searched yet: the list says so.
+  // Nothing searched yet: the list says so. ▾ shows with the focus (#913).
+  await field(page).tap();
   await recent.tap();
   await expect(field(page)).toBeFocused();
   await expect(page.locator('[data-role="study-recent-empty"]')).toBeVisible();
@@ -149,6 +150,7 @@ test("✕ clears the field and ▾ fills it from the earlier searches (owner, 20
   // search moved to the top instead of appearing twice.
   await page.reload();
   await expectChapter(page, "slk-seb:2CO.5");
+  await field(page).tap();
   await recent.tap();
   await expect(items).toHaveText(["2 kor 5", "ján 3"]);
   await finish(opened);

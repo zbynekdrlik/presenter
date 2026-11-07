@@ -229,9 +229,17 @@ for (const [name, profile] of [
     await assertMinTapTarget(page.locator('[data-role="study-fav"]'), 44);
     await assertNoHorizontalOverflow(page);
 
-    // Typing takes the whole row; leaving the field brings the chips back.
+    // The short field is one target: ▾ and ✕ come with the focus. A press near its
+    // right end used to open the earlier searches, and at 360 px ▾ reached its middle.
     const width = input?.width ?? 0;
-    await field(page).tap();
+    await expect(page.locator('[data-role="study-field-recent"]')).toBeHidden();
+    await expect(page.locator('[data-role="study-field-clear"]')).toBeHidden();
+    await field(page).tap({ position: { x: width * 0.85, y: 20 }, timeout: 5_000 });
+    await expect(field(page)).toBeFocused();
+    await expect(page.locator('[data-role="study-field-recent"]')).toBeVisible();
+    await expect(page.locator('[data-role="study-recent"]')).toHaveCount(0);
+
+    // Typing takes the whole row; leaving the field brings the chips back.
     await expect(page.locator('[data-role="study-favs"]')).toBeHidden();
     await expect.poll(async () => (await field(page).boundingBox())?.width ?? 0).toBeGreaterThan(width + 100);
     await page.locator('[data-role="study-field"]').blur();
