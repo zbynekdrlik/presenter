@@ -76,6 +76,16 @@ async function remembered(page: Page, kind: "main" | "secondary", code: string) 
     .toBe(JSON.stringify(code));
 }
 
+/** The answer to the preferences save carrying this value. */
+function savedPreferences(page: Page, field: string, value: string) {
+  return page.waitForResponse(
+    (r) =>
+      r.request().method() === "PUT" &&
+      new URL(r.url()).pathname === "/bible/preferences" &&
+      r.request().postDataJSON()?.[field] === value,
+  );
+}
+
 async function openBibleContext(
   browser: Browser,
 ): Promise<{ page: Page; close: () => Promise<void> }> {
@@ -101,10 +111,16 @@ test("primary + secondary translation selection persists across refresh", async 
   // broken, plus a concrete non-empty secondary.
   const before = await pressed(page, "main");
   const chosenMain = before === "slk-roh" ? "slk-sevp" : "slk-roh";
+  // Each click saves to the server: a reload that cuts a save off warns in the
+  // console, so the next step waits for its answer (run 42324272437).
+  const mainSaved = savedPreferences(page, "mainTranslation", chosenMain);
   await button(page, "main", chosenMain).click();
   await remembered(page, "main", chosenMain);
+  await mainSaved;
+  const secondarySaved = savedPreferences(page, "secondaryTranslation", "eng-kjv");
   await button(page, "secondary", "eng-kjv").click();
   await remembered(page, "secondary", "eng-kjv");
+  await secondarySaved;
   await expect(button(page, "main", chosenMain)).toHaveAttribute("aria-pressed", "true");
   await expect(button(page, "secondary", "eng-kjv")).toHaveAttribute("aria-pressed", "true");
 
