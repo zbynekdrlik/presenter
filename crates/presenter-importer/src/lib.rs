@@ -187,8 +187,27 @@ impl<'a> ProPresenterImporter<'a> {
 #[instrument(fields(file = %path.display()))]
 pub fn load_presentation_from_path(path: &Path) -> Result<Presentation> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    load_presentation_from_bytes(&bytes)
+    let mut raw = proto::Presentation::decode(bytes.as_slice())
+        .context("failed to decode ProPresenter protobuf data")
+        .with_context(|| format!("failed to load presentation from {}", path.display()))?;
+    if !is_usable_title(&raw.name) {
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            tracing::info!(title = %raw.name, file_name = stem, "title replaced by the file name");
+            raw.name = stem.to_string();
+        }
+    }
+    presentation_from_proto(&raw)
+        .with_context(|| format!("failed to convert presentation {}", raw.name.trim()))
         .with_context(|| format!("failed to load presentation from {}", path.display()))
+}
+
+/// False for what a conversion or a copy left in a `.pro` file's title (#875):
+/// nothing, half a tag (`Verse 1]`), or a file name (`Song-1.pro`). ProPresenter
+/// itself names a song after its file, so these never show there.
+fn is_usable_title(title: &str) -> bool {
+    let title = title.trim();
+    let half_a_tag = title.contains(']') && !title.contains('[');
+    !title.is_empty() && !half_a_tag && !title.to_lowercase().ends_with(".pro")
 }
 
 /// Parses a ProPresenter `.pro` file from raw bytes into the domain model.
