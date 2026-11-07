@@ -69,6 +69,10 @@ test("the Bible Tablet on a phone: the list takes the screen, a pick opens the s
   expect(await offScreen(page, ".tablet-header")).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
   expect(await smallTargets(page, "body.tablet")).toEqual([]);
+  // The close button sits above the list, not on its first row.
+  const close = (await page.locator('[data-role="sidebar-close"]').boundingBox())!;
+  const firstRow = (await page.locator('[data-role="presentation-button"]').first().boundingBox())!;
+  expect(close.y + close.height).toBeLessThanOrEqual(firstRow.y);
 
   await page.locator('[data-role="presentation-button"]', { hasText: name }).click();
   await expect
@@ -97,9 +101,29 @@ test("a tablet held wide keeps its sidebar next to the slides", async ({ page })
 test("the Stream editor on a phone: 44 px targets and checkboxes a finger can hit", async ({ page }) => {
   const errors: string[] = [];
   attachConsoleErrorCollector(page, errors);
+  // A fresh database has no scenes: without them the cards are not under test.
+  const stamp = Date.now();
+  for (const kind of ["base", "overlay"]) {
+    const scene = await page.request.post(new URL("/stream/api/outputs/stream/scenes", baseURL).toString(), {
+      data: { name: `Telefón ${kind} ${stamp}`, kind },
+    });
+    expect(scene.ok()).toBeTruthy();
+  }
   await page.goto(new URL("/ui/stream", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]');
   await expect(page.locator('[data-role="stream-output-select"]')).toBeVisible();
+  await expect(page.locator('[data-role="stream-scene"]')).toHaveCount(2);
+
+  // A card takes the width of its list: no empty third of the screen beside it.
+  const narrowCards = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('[data-role="stream-scene"]')]
+      .map((el) => ({
+        card: el.getBoundingClientRect().width,
+        list: el.parentElement!.getBoundingClientRect().width,
+      }))
+      .filter((w) => w.card < w.list - 0.5),
+  );
+  expect(narrowCards).toEqual([]);
   expect(await smallTargets(page, "body")).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 
