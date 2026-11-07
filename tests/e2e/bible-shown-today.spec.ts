@@ -207,3 +207,55 @@ test("a tap on the chip of the verse being previewed goes back to its first part
   expect(errors).toEqual([]);
   await page.context().close();
 });
+
+test("a chip tapped during a show changes nothing: the show still moves on from its verse", async ({ browser }) => {
+  const errors: string[] = [];
+  const page = await open(browser, { viewport: { width: 1280, height: 720 } }, errors);
+  const root = page.locator('[data-role="bible-console"]');
+  await show(page, "zid 13 1", "Hebrejom 13:1 (SEB)");
+  await expect(root).toHaveAttribute("data-preview-reference", "Hebrejom 13:2 (SEB)");
+
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/bible/trigger-slide", async (route) => {
+    await held;
+    await route.continue();
+  });
+  const answered = page.waitForResponse("**/bible/trigger-slide");
+  await page.locator('[data-role="console-show"]').click();
+  await chips(page).filter({ hasText: "Rimanom 8:28" }).click();
+  await expect(root).toHaveAttribute("data-preview-reference", "Hebrejom 13:2 (SEB)");
+  release();
+  await answered;
+  await expect(root).toHaveAttribute("data-preview-reference", "Hebrejom 13:3 (SEB)");
+  expect(errors).toEqual([]);
+  await page.context().close();
+});
+
+test("a chip tapped while the books load is a pick, not a missing verse", async ({ browser }) => {
+  const errors: string[] = [];
+  const context = await browser.newContext({ ...PHONE_390, baseURL });
+  const page = await context.newPage();
+  attachConsoleErrorCollector(page, errors);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/bible/console-start**", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto("/ui/operator/bible");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  const chip = chips(page).filter({ hasText: "Rimanom 8:28" });
+  await chip.tap();
+  await expect(page.locator('[data-role="toast"]')).not.toHaveAttribute("data-visible", "true");
+  release();
+  const root = page.locator('[data-role="bible-console"]');
+  await expect(root).toHaveAttribute("data-preview-ready", "true");
+  await expect(root).toHaveAttribute("data-preview-reference", "Rimanom 8:28 (SEB)");
+  expect(errors).toEqual([]);
+  await context.close();
+});
