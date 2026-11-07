@@ -233,7 +233,12 @@ pub(crate) async fn trigger_presentation_slide(
         verse_end,
     };
 
-    let origin = show_origin(BibleShowSource::Prepared, &headers, connect_info);
+    let source = if presentation.sermon_date.is_some() {
+        BibleShowSource::Sermon
+    } else {
+        BibleShowSource::Prepared
+    };
+    let origin = show_origin(source, &headers, connect_info);
     state
         .trigger_bible_slide_output(output.clone(), reference_metadata, origin)
         .await;

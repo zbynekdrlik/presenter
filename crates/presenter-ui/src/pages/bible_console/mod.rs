@@ -260,9 +260,9 @@ pub fn BibleConsole() -> impl IntoView {
             <ConsoleField console=console />
             <ConsoleResults console=console />
             <TextSearch console=console />
-            <ShownTodaySection console=console />
             <PreparedSection console=console />
             <ConsolePreview console=console />
+            <ShownTodaySection console=console />
             <ConsoleActions console=console />
         </section>
     }

@@ -7,9 +7,10 @@
 use leptos::prelude::*;
 
 use super::prepared::local_date_signal;
-use super::{Console, Picked};
+use super::{Console, Picked, Preview};
 use crate::api::bible::{self as api, ShownVerse};
 use crate::state::bible_console_shown::shown_target;
+use crate::state::bible_console_step::rebase;
 use crate::state::AppContext;
 
 #[component]
@@ -68,7 +69,14 @@ fn shown_chip(c: Console, verse: ShownVerse) -> impl IntoView {
             })
     });
     let translation = verse.translation_code;
+    let label = verse.label.clone();
+    let ctx = use_ctx!(AppContext);
     let on_tap = move |_| {
+        // Nothing to preview in this translation: the preview stays, and says why.
+        if c.structure.with_untracked(|s| rebase(&target, s)).is_none() {
+            ctx.show_toast(&format!("Tento preklad verš {label} nemá"), "error");
+            return;
+        }
         c.prepared.set(None);
         c.after_show.set(false);
         c.at_end.set(false);
@@ -77,6 +85,18 @@ fn shown_chip(c: Console, verse: ShownVerse) -> impl IntoView {
             main: Some(translation.clone()),
             target: target.clone(),
         }));
+        // The verse being previewed keeps its key: back to its first part.
+        let key = c.target_key.get_untracked();
+        c.preview.update(|p| {
+            if let Preview::Ready {
+                key: loaded, index, ..
+            } = p
+            {
+                if key.as_deref() == Some(loaded.as_str()) {
+                    *index = 0;
+                }
+            }
+        });
     };
     view! {
         <button

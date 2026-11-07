@@ -180,7 +180,7 @@
   font-size: 0.85rem;
   cursor: pointer;
 }
-.console-chip[aria-pressed="true"] {
+.console-shown .console-chip[aria-pressed="true"] {
   outline: 1.5px solid #3b82f6;
 }
 .console-hint {
@@ -570,9 +570,11 @@ body.operator:not([data-shell="phone"]) .console-results {
 body.operator:not([data-shell="phone"]) .console-text-results {
   order: 5;
 }
-body.operator:not([data-shell="phone"]) .console-shown,
-body.operator:not([data-shell="phone"]) .console-prepared {
+body.operator:not([data-shell="phone"]) .console-shown {
   order: 6; /* under the bar: a chip that appears after a show never moves Zobraziť */
+}
+body.operator:not([data-shell="phone"]) .console-prepared {
+  order: 7;
 }
 body.operator:not([data-shell="phone"]) .console-shown__chips {
   max-height: 124px;

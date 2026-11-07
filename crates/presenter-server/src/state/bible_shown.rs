@@ -8,6 +8,7 @@ use presenter_core::BibleBroadcast;
 use serde::Serialize;
 
 use super::bible_show_log::{BibleShowOrigin, BibleShowSource};
+use super::bible_source::canonical_book;
 use super::sermons::local_today;
 use super::AppState;
 
@@ -40,11 +41,12 @@ impl ShownVerse {
             return None;
         }
         let reference = &broadcast.passage.reference;
+        let book = canonical_book(&reference.book, reference.book_code.as_deref())?;
         Some(Self {
             label: reference.to_human_readable(),
             book: reference.book.clone(),
-            book_code: reference.book_code.clone()?,
-            book_number: reference.book_number.unwrap_or(0),
+            book_code: book.code.to_string(),
+            book_number: book.number,
             chapter: reference.chapter,
             verse_start: reference.verse_start,
             verse_end: reference.verse_end,
