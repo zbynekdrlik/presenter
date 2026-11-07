@@ -815,3 +815,27 @@ html[data-stream-editor="true"] {
         min-width: 0;
     }
 }
+
+/* #850 spec §14: a finger on the editor. The desktop's 32 and 40 px stay for a mouse. */
+@media (max-width: 720px), (pointer: coarse) {
+  .ui-topbar__tab,
+  .ui-topbar__button,
+  .stream-editor button,
+  .stream-editor select,
+  .stream-editor a,
+  .stream-editor input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]) {
+    min-height: 44px;
+  }
+
+  .stream-editor label:has(> input[type="checkbox"]) {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+  }
+
+  .stream-editor input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
+}

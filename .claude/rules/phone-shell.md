@@ -94,3 +94,8 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 - **Stage Output from a phone** = `StageLayoutSelect confirm=true`: the change waits for
   "Prepnúť"; the select keeps showing the layout on air. The desktop header switches at once. A
   refused POST puts the select back.
+
+## The Bible Tablet and the Stream editor on a phone (#850 spec §14)
+
+- `/ui/tablet` up to 720 px: the list and the slides take the screen in turn (`.is-collapsed`), the header wraps.
+- 44 px targets on `(max-width: 720px), (pointer: coarse)` in `tablet.css` and `stream_editor.css`; the editor's desktop sizes stay for a mouse. `tests/e2e/phone-secondary-pages.spec.ts`.

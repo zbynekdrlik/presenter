@@ -503,3 +503,56 @@ body.tablet {
   font-size: 13px;
   opacity: 0.8;
 }
+
+/* #850 spec §14, a phone: the list and the slides take the screen in turn
+   (a pick closes the list, the back button brings it back) and the header
+   wraps instead of running off. Last, so it beats the base rules above. */
+@media (max-width: 720px) {
+  .tablet-sidebar {
+    width: 100%;
+  }
+
+  .tablet-sidebar:not(.is-collapsed) ~ .tablet-main {
+    display: none;
+  }
+
+  .tablet-header {
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+  }
+
+  .tablet-header h1 {
+    white-space: nowrap;
+  }
+
+  .tablet-header__actions {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .tablet-scale {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .tablet-scale input[type="range"] {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+}
+
+/* A finger on any size of screen. */
+@media (max-width: 720px), (pointer: coarse) {
+  .tablet-clear-btn,
+  .tablet-button,
+  .tablet-back-button {
+    min-height: 44px;
+  }
+
+  body.tablet [data-role="info-button"],
+  .tablet-sidebar__close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

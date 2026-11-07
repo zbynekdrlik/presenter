@@ -107,8 +107,10 @@ pub(crate) fn should_escalate_reload(
 
 /// How long a stage page waits without a frame before its last-resort reload,
 /// after `fruitless_reloads` reloads in a row that brought none (#850 §14).
-pub(crate) fn backed_off_reload_ms(base_ms: f64, _fruitless_reloads: u32) -> f64 {
-    base_ms
+pub(crate) fn backed_off_reload_ms(base_ms: f64, fruitless_reloads: u32) -> f64 {
+    const LONGEST_WAIT_MS: f64 = 15.0 * 60_000.0;
+    let doubled = base_ms * 2f64.powi(fruitless_reloads.min(16) as i32);
+    doubled.min(LONGEST_WAIT_MS.max(base_ms))
 }
 
 /// POST-AWAIT last-resort reload decision (#417): after the detached `/healthz`
