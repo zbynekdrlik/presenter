@@ -1030,16 +1030,18 @@
   opacity: 1;
 }
 
-/* A phone's row is short: until the field has the focus it leaves the room for
-   the text in it, then it takes the whole row. A sibling rule, not :has(), and
-   the input's own focus: a tapped chip must not hide the chips. */
+/* A phone's row is short: until the field has the focus it is one target, with
+   no ✕ or ▾ over it (at 360 px ▾ reached its middle), then it takes the whole
+   row. A sibling rule, not :has(), and the input's own focus: a tapped chip
+   must not hide the chips. */
 @media (max-width: 932px) {
-  .study-field[data-focused="false"] .study-field__clear {
+  .study-field[data-focused="false"] .study-field__clear,
+  .study-field[data-focused="false"] .study-field__recent {
     display: none;
   }
 
   .study-field[data-focused="false"] .study-field__input {
-    padding: 0 36px 0 10px;
+    padding: 0 10px;
   }
 
   .study-field[data-focused="true"] + .study-favs {

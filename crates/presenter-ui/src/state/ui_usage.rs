@@ -36,6 +36,9 @@ struct Row<'a> {
 struct Pending {
     counts: BTreeMap<Control, u32>,
     timer: Option<Timeout>,
+    /// The leave listeners are on: they come with the first press, so a screen
+    /// nobody presses (a stage display) holds none.
+    leave_listening: bool,
 }
 
 thread_local! {
@@ -76,6 +79,9 @@ fn count(control: Control) {
     PENDING.with(|pending| {
         let mut pending = pending.borrow_mut();
         *pending.counts.entry(control).or_default() += 1;
+        if !std::mem::replace(&mut pending.leave_listening, true) {
+            install_leave_listeners();
+        }
         if pending.timer.is_none() {
             pending.timer = Some(Timeout::new(SEND_AFTER_MS, send_now));
         }
@@ -109,10 +115,7 @@ fn shell_name(shell: Option<&str>) -> &'static str {
 /// Once, at the app's start. Before the page's own handlers (capture), so a
 /// control that removes itself is still counted.
 pub fn install() {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Some(document) = window.document() else {
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
     };
     let on_click = Closure::<dyn FnMut(web_sys::Event)>::new(|ev: web_sys::Event| {
@@ -126,8 +129,16 @@ pub fn install() {
         true,
     );
     on_click.forget();
+}
 
-    // A phone leaves without closing anything: a hidden page may never run again.
+/// A phone leaves without closing anything: a hidden page may never run again.
+fn install_leave_listeners() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        return;
+    };
     let on_leave = Closure::<dyn FnMut()>::new(|| {
         let hidden = web_sys::window()
             .and_then(|window| window.document())

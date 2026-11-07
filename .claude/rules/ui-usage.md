@@ -17,5 +17,5 @@ Owner, 2026-11-07: "mas mat inmplementovany zber pouzivania gui aby si sa spravn
 - **The phone comes first** (owner, same day): the phone rows decide, then the desktop follows.
 - **Few counts decide nothing.** Say how many there are. The owner's own words beat a thin count. The SNV request log (`journalctl -u presenter`, user agent + URI) adds what a request shows: which translations a chapter was read in, for example.
 - **What is counted:** one document click listener (capture) in `state/ui_usage.rs` takes the nearest `[data-role]`, so a control needs a `data-role` to count. Page, shell, role and a count leave the browser, never text. So a `data-role` never holds user text, and the server's `is_name` drops a row that does. Scrolling and typing are not counted.
-- **Sent by `sendBeacon`** after 10 s, on `pagehide` and when the page goes hidden, so the body is `text/plain`. `/ui/usage` is a quiet path in the request log.
+- **Sent by `sendBeacon`** after 10 s, on `pagehide` and when the page goes hidden, so the body is `text/plain`. The leave listeners come with the first press: a stage display nobody presses holds none, and `stage-ndi-*` specs count its listeners exactly. `/ui/usage` is a quiet path in the request log.
 - **Stored per day** in `ui_usage`, site-local (no sync, PP keeps its own), kept 400 days.
