@@ -99,3 +99,7 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 
 - `/ui/tablet` up to 720 px: the list and the slides take the screen in turn (`.is-collapsed`), the header wraps.
 - 44 px targets on `(max-width: 720px), (pointer: coarse)` in `tablet.css` and `stream_editor.css`; the editor's desktop sizes stay for a mouse. `tests/e2e/phone-secondary-pages.spec.ts`.
+
+## A phone-size check on a fresh database misses seeded content (#850 §14)
+
+The E2E server starts with no stream scenes and no tablet presentations. A "no target under 44 px" sweep over an empty page passes without seeing a single card: seed the content through the REST routes and assert it rendered (`toHaveCount`) before measuring. Also compare a control's box with its neighbours, not only its size: the tablet's close button reached 44 px and landed on the list's first row.
