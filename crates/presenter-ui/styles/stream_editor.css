@@ -816,6 +816,15 @@ html[data-stream-editor="true"] {
     }
 }
 
+/* #850 spec §14: on a phone a scene card takes the width of its list. */
+@media (max-width: 720px) {
+  .stream-editor__scene--base,
+  .stream-editor__scene--overlay {
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
 /* #850 spec §14: a finger on the editor. The desktop's 32 and 40 px stay for a mouse. */
 @media (max-width: 720px), (pointer: coarse) {
   .ui-topbar__tab,

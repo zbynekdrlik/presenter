@@ -555,4 +555,11 @@ body.tablet {
     min-width: 44px;
     min-height: 44px;
   }
+
+  /* The list starts below the 44 px close button, whatever the sidebar's padding. */
+  .tablet-sidebar__close + .tablet-panel h2 {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
 }
