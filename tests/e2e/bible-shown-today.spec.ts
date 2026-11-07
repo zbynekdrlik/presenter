@@ -152,6 +152,12 @@ test("a chip follows a translation switch: the same verse in the new translation
   await chips(page).filter({ hasText: "Hebrejom 11:1" }).click();
   await expect(root).toHaveAttribute("data-preview-ready", "true");
   await expect(root).toHaveAttribute("data-preview-reference", "Hebrews 11:1 (KJV)");
+
+  // Shown again in this translation: still one chip, with this translation's name.
+  const before = await chips(page).count();
+  await page.locator('[data-role="console-show"]').click();
+  await expect(chips(page).first()).toHaveText("Hebrews 11:1");
+  await expect(chips(page)).toHaveCount(before);
   expect(errors).toEqual([]);
   await page.context().close();
 });

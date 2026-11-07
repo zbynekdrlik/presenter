@@ -154,6 +154,17 @@ mod tests {
     }
 
     #[test]
+    fn the_same_verse_in_another_translation_is_one_entry() {
+        let mut list = ShownToday::default();
+        list.record(day(8), verse(1));
+        let mut english = verse(1);
+        english.label = "Psalms 23:1".to_string();
+        english.translation_code = "eng-kjv".to_string();
+        list.record(day(8), english);
+        assert_eq!(labels(&list.read(day(8))), ["Psalms 23:1"]);
+    }
+
+    #[test]
     fn the_oldest_goes_past_twenty() {
         let mut list = ShownToday::default();
         for n in 1..=21 {
