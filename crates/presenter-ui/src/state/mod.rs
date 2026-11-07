@@ -24,6 +24,7 @@ pub mod study_history;
 pub mod study_recent;
 pub mod study_word;
 pub mod tablet;
+pub mod ui_usage;
 pub mod view_nav;
 
 use leptos::prelude::*;

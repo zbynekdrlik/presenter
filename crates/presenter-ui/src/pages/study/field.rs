@@ -209,13 +209,20 @@ pub(super) fn StudyField(s: Study) -> impl IntoView {
     };
 
     view! {
-        <div class="study-field" data-recent-open=move || f.recent_open.get().to_string()>
+        <div
+            class="study-field"
+            data-focused=move || f.focused.get().to_string()
+            data-recent-open=move || f.recent_open.get().to_string()
+        >
             <input
                 type="text"
                 class="study-field__input"
                 data-role="study-field"
                 node_ref=f.element
-                placeholder="Odkaz, slová alebo G26\u{2026}"
+                placeholder=move || {
+                    // A phone's field is short until it has the focus.
+                    if f.focused.get() { "Odkaz, slová alebo G26\u{2026}" } else { "Hľadať" }
+                }
                 aria-label="Odkaz, slová alebo Strongovo číslo"
                 enterkeyhint="search"
                 autocapitalize="off"

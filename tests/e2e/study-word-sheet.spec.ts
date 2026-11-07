@@ -523,8 +523,8 @@ test("a tablet docks the sheet beside the text", async ({ browser }) => {
 test("the field opens a number first, and keeps the passage for g 26", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
-  await expect(field(page)).toHaveAttribute("placeholder", "Odkaz, slová alebo G26…");
   await field(page).tap();
+  await expect(field(page)).toHaveAttribute("placeholder", "Odkaz, slová alebo G26…");
   await field(page).fill("G26");
   await expect(role(page, "study-strongs")).toContainText("G26");
   await expect(role(page, "study-row").first()).toContainText("Genezis 26");

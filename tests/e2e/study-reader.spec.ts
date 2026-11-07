@@ -37,6 +37,10 @@ test.describe.configure({ timeout: 180_000 });
 
 const CHAPTER_READ = /\/bible\/study\/chapter\?/;
 
+interface UsageRead {
+  rows: { page: string; shell: string; role: string; count: number }[];
+}
+
 let serverHandle: ServerHandle | undefined;
 let baseURL = "";
 
@@ -214,6 +218,8 @@ for (const [name, profile] of [
     expect(chapterNumber).not.toBeNull();
     expect((chapterNumber?.x ?? 0) + (chapterNumber?.width ?? 0)).toBeLessThanOrEqual(sermons?.x ?? 0);
 
+    await expect(field(page)).toHaveAttribute("placeholder", "Hľadať");
+    expect(await field(page).evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     const input = await field(page).boundingBox();
     const chip = await favourite(page, "slk-seb").boundingBox();
     const scroller = await page.locator('[data-role="study-scroll"]').boundingBox();
@@ -561,5 +567,27 @@ test("a switch during a load leaves that load's landing alone", async ({ browser
   await expect
     .poll(() => page.locator('[data-role="study-scroll"]').evaluate((el) => el.scrollTop))
     .toBe(0);
+  await finish(opened);
+});
+
+test("a press is counted for the phone without any text of the page (#913)", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  const before = (await (await page.request.get("/ui/usage?days=7")).json()) as UsageRead;
+  const pressesOf = (read: UsageRead, role: string): number =>
+    read.rows.find((row) => row.page === "/ui/study" && row.shell === "phone" && row.role === role)?.count ?? 0;
+
+  await favourite(page, "eng-kjv").tap();
+  await expectChapter(page, "eng-kjv:HEB.11");
+  await favourite(page, "slk-seb").tap();
+  await expectChapter(page, "slk-seb:HEB.11");
+  const sent = page.waitForRequest((request) => request.url().endsWith("/ui/usage") && request.method() === "POST");
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  const batch = (await sent).postData() ?? "";
+  expect(batch).not.toContain("KJV");
+
+  await expect
+    .poll(async () => pressesOf((await (await page.request.get("/ui/usage?days=7")).json()) as UsageRead, "study-fav"))
+    .toBe(pressesOf(before, "study-fav") + 2);
   await finish(opened);
 });

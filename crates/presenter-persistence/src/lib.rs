@@ -31,6 +31,6 @@ pub use repository::{
     sync_should_apply, DatabaseSettings, NewInterpreterTip, NewSermon, NewStreamAsset,
     NewStreamFont, Repository, RepositoryError, SermonItemRecord, SermonRecord, SermonSnapshot,
     SermonSummary, SermonWrite, StrongsVerse, SyncApplyOutcome, SyncLibraryManifestRow,
-    SyncManifestRow, SyncPresentation, TrashedLibrary, TrashedPresentation, PRUNE_HORIZON,
-    SERMON_CONFLICT, SERMON_NOT_FOUND,
+    SyncManifestRow, SyncPresentation, TrashedLibrary, TrashedPresentation, UiUsageCount,
+    PRUNE_HORIZON, SERMON_CONFLICT, SERMON_NOT_FOUND,
 };

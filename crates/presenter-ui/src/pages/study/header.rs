@@ -1,5 +1,6 @@
-//! The 48 px header: ◀ ▶ step through the history, a long press on ◀ opens the
-//! list, Aa the text size, Kázne the sermon list. The sermon views add Biblia,
+//! The 48 px header: the chapter on screen, always in sight (owner, 2026-11-07,
+//! #913), ◀ ▶ step through the history, a long press on ◀ opens the list, Aa the
+//! text size, Kázne the sermon list. The sermon views add Biblia,
 //! back to the last reading place: a tab reopened on a sermon has no history,
 //! and the field is not shown there (owner, 2026-11-06: "už sa neviem vrátiť k
 //! veršom").
@@ -9,7 +10,7 @@ use leptos::prelude::*;
 use super::long_press::LongPress;
 use super::scroll::{saved_verse, ScrollPlan};
 use super::sermon_pane::reading_route;
-use super::{nav, Study};
+use super::{nav, Chapter, Study};
 use crate::state::study::{StudyRoute, StudySheet, StudyView};
 
 #[component]
@@ -53,9 +54,32 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
         }
     };
 
+    // What the text on screen is, so it moves with the text, not before it.
+    let place = Memo::new(move |_| {
+        let reading = s
+            .route
+            .with(|route| matches!(route.view, StudyView::Reader { .. }));
+        s.chapter.with(|chapter| match chapter {
+            Chapter::Ready(place, text) if reading => Some((text.book.clone(), place.chapter)),
+            _ => None,
+        })
+    });
+
     view! {
         <header class="study-head">
-            <h1 class="study-head__title">"Štúdium"</h1>
+            <h1 class="study-head__title" data-role="study-place">
+                {move || match place.get() {
+                    Some((book, chapter)) => {
+                        view! {
+                            <span class="study-head__book">{book}</span>
+                            " "
+                            <span class="study-head__chapter">{chapter}</span>
+                        }
+                            .into_any()
+                    }
+                    None => "Štúdium".into_any(),
+                }}
+            </h1>
             <div class="study-head__actions">
                 <Show when=move || on_sermon_view.get()>
                     <button

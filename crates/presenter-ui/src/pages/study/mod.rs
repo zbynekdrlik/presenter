@@ -689,10 +689,12 @@ pub fn StudyPage() -> impl IntoView {
         >
             <StudyHeader s=s />
             <Show when=field_view>
-                <StudyField s=s />
-            </Show>
-            <Show when=bible_view>
-                <Favourites s=s />
+                <div class="study-tools">
+                    <StudyField s=s />
+                    <Show when=bible_view>
+                        <Favourites s=s />
+                    </Show>
+                </div>
             </Show>
             {move || {
                 s.translations_failed

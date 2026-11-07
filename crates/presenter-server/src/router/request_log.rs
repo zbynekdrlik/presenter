@@ -141,9 +141,11 @@ fn answers_a_silent_whep_poll<B>(response: &Response<B>) -> bool {
 
 /// Polls and assets repeated every few seconds by every open operator tab and
 /// stage display, whatever the method: the resolume / AI status and `/healthz`
-/// polls, the NDI clock and client-stats posts, and the WASM bundle files.
+/// polls, the NDI clock and client-stats posts, the GUI's press counters and the
+/// WASM bundle files.
 pub(super) fn is_quiet_path(path: &str) -> bool {
-    const POLLS: [&str; 5] = [
+    const POLLS: [&str; 6] = [
+        "/ui/usage",
         "/healthz",
         "/ai/status",
         "/integrations/resolume/status",
