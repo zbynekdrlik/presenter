@@ -29,6 +29,8 @@ fn App() -> impl IntoView {
         let _ = body.set_attribute("data-wasm-ready", "true");
     }
 
+    state::ui_usage::install();
+
     // Client-side routing based on pathname
     let page_view = move || {
         let p = pathname.as_str();

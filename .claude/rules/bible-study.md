@@ -51,8 +51,10 @@ preparation (the sermon views are in `sermon-prep.md`).
   verse is ignored anywhere else, and a link's `v=` wins over it (a reload keeps the place).
 - **A tap on a verse's text highlights it** (`reader::on_text_tap`, `v=<n>` by `nav::replace`, no
   history entry; a second tap lets go; with the verse sheet open it grows the selection like the
-  number; a KJV word tap highlights AND opens the word sheet, `VerseBody`'s `on_tap` runs first).
+  number; with Čísla on a KJV word tap highlights AND opens the word sheet, `VerseBody`'s `on_tap` runs first; with Čísla off a word is plain text, #913).
   Owner 2026-11-06: "aby bolo jasné, na ktorý sa fokusujem".
+- **The header names the chapter on screen** (`study-place`, #913): `Chapter::Ready` in the reader, else "Štúdium". A long book gives way, its chapter never.
+- **The field and the chips share one row** (`.study-tools`, #913). Up to 932 px the field leaves room while it has no focus (✕ and ▾ hidden, so the whole field is one target: at 360 px ▾ reached its middle and `tap()` hung to the 180 s limit on CI's slightly wider chips only), and with focus takes the row (`data-focused` + a sibling rule, not `:focus-within`: a tapped chip takes the focus too). `.study-suggest` still starts at 100 px.
 - **A translation switch keeps the eye's verse at its screen offset** (`ScrollPlan::VerseAt`): the
   highlighted verse while it shows, else `verse_in_view`. `verse_in_view` reads 2 px below the
   landing gap (`SLACK_PX`): a landed verse sits at the gap and the verse before ends there plus a

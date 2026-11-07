@@ -16,8 +16,12 @@ const WORD: &str = "[data-role=\"study-word\"]";
 const BADGE: &str = "[data-role=\"study-strongs-badge\"]";
 const NOTE: &str = "[data-role=\"study-note\"], [data-role=\"study-note-text\"]";
 
-/// The word an event landed on; on a badge, that badge's number.
-fn tapped_word(ev: &web_sys::Event) -> Option<WordPlace> {
+/// The word an event landed on; on a badge, that badge's number. With Čísla
+/// off there is none: a word is plain text then (owner, 2026-11-07, #913).
+fn tapped_word(s: Study, ev: &web_sys::Event) -> Option<WordPlace> {
+    if !s.numbers.get_untracked() {
+        return None;
+    }
     let target = ev.target()?.dyn_into::<web_sys::Element>().ok()?;
     let word = target.closest(WORD).ok()??;
     let badge = target.closest(BADGE).ok()?;
@@ -82,8 +86,8 @@ fn word_view(
         <span
             class="study-word"
             data-role="study-word"
-            role="button"
-            tabindex="0"
+            role=numbers.then_some("button")
+            tabindex=numbers.then_some("0")
             data-strongs=segment.strongs.first().cloned()
             data-verse=verse
             data-token=token
@@ -183,7 +187,7 @@ pub(super) fn VerseBody(
         if text_selected() || tapped_note(&ev) {
             return;
         }
-        let word = tapped_word(&ev);
+        let word = tapped_word(s, &ev);
         if let Some(on_tap) = on_tap {
             on_tap.run(word.is_some());
         }
@@ -196,7 +200,7 @@ pub(super) fn VerseBody(
         if !matches!(ev.key().as_str(), "Enter" | " ") {
             return;
         }
-        if let Some(word) = tapped_word(&ev) {
+        if let Some(word) = tapped_word(s, &ev) {
             ev.prevent_default();
             word_sheet::open(s, word);
         }

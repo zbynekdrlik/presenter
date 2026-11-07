@@ -28,6 +28,7 @@ mod sync;
 mod tablet_pwa;
 mod timers;
 mod ui_routes;
+mod ui_usage;
 mod wasm_ui;
 use crate::state::AppState;
 use axum::{
@@ -449,6 +450,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(study_pwa::routes())
         // #852: šepkár tips for the interpreter (/interpreter/tips*).
         .merge(interpreter_tips::router())
+        .merge(ui_usage::router())
         // #852 C1a: listening microphones + the VBAN receiver status.
         .merge(listen::router())
         // Stream-graphics REST API (/stream/api/*) — epic #718 PR-3 (#707).

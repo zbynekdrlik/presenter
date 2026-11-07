@@ -37,6 +37,10 @@ test.describe.configure({ timeout: 180_000 });
 
 const CHAPTER_READ = /\/bible\/study\/chapter\?/;
 
+interface UsageRead {
+  rows: { page: string; shell: string; role: string; count: number }[];
+}
+
 let serverHandle: ServerHandle | undefined;
 let baseURL = "";
 
@@ -147,9 +151,10 @@ test("the highlighted verse stays where it was on screen across a switch", async
   await finish(opened);
 });
 
-test("a tap on a KJV word highlights its verse and opens the word", async ({ browser }) => {
+test("with Čísla on a tap on a KJV word highlights its verse and opens the word", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=eng-kjv&p=HEB.11", "eng-kjv:HEB.11");
   const { page } = opened;
+  await page.locator('[data-role="study-numbers"]').tap();
   await verse(page, 1).locator('[data-role="study-word"]').first().tap();
   await expect(page.locator('[data-role="word-sheet"]')).toBeVisible();
   await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
@@ -158,6 +163,90 @@ test("a tap on a KJV word highlights its verse and opens the word", async ({ bro
   await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
   await finish(opened);
 });
+
+test("with Čísla off a word is plain text: a tap only highlights its verse (#913)", async ({ browser }) => {
+  // Owner, 2026-11-07: the entry opening with the numbers off "je to veľmi znervózňujúce".
+  const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=eng-kjv&p=HEB.11", "eng-kjv:HEB.11");
+  const { page } = opened;
+  const word = verse(page, 1).locator('[data-role="study-word"]').first();
+  await expect(page.locator('[data-role="study-numbers"]')).toHaveAttribute("aria-pressed", "false");
+  await expect(word).not.toHaveAttribute("role", "button");
+  await expect(word).not.toHaveAttribute("tabindex", "0");
+
+  await word.tap();
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "true");
+  await expect(page.locator('[data-role="word-sheet"]')).toHaveCount(0);
+  await expect(page).not.toHaveURL(/[?&]w=/);
+  await word.tap();
+  await expect(verse(page, 1)).toHaveAttribute("data-selected", "false");
+  await expect(page.locator('[data-role="word-sheet"]')).toHaveCount(0);
+  await finish(opened);
+});
+
+test("the header always names the chapter on screen (#913)", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  const place = page.locator('[data-role="study-place"]');
+  await expect(place).toHaveText("Hebrejom 11");
+  await scrollToVerse(page, 20);
+  await expect(page.locator('[data-role="study-title"]')).not.toBeInViewport();
+  await expect(place).toBeInViewport();
+  await expect(place).toHaveText("Hebrejom 11");
+
+  await page.locator(nextChapter).tap();
+  await expectChapter(page, "slk-seb:HEB.12");
+  await expect(place).toHaveText("Hebrejom 12");
+  await favourite(page, "eng-kjv").tap();
+  await expectChapter(page, "eng-kjv:HEB.12");
+  await expect(place).toHaveText("Hebrews 12");
+
+  await page.locator('[data-role="study-sermons"]').tap();
+  await expect(place).toHaveText("Štúdium");
+  await finish(opened);
+});
+
+for (const [name, profile] of [
+  ["360", PHONE_360],
+  ["390", PHONE_390],
+] as const) {
+  test(`${name} px: a long book keeps its chapter, the field and chips share a row (#913)`, async ({ browser }) => {
+    const opened = await openStudy(browser, baseURL, profile, "/ui/study?t=slk-seb&p=REV.22", "slk-seb:REV.22");
+    const { page } = opened;
+    // The chapter number never gives way to a long book name.
+    const chapterNumber = await page.locator(".study-head__chapter").boundingBox();
+    const sermons = await page.locator('[data-role="study-sermons"]').boundingBox();
+    expect(chapterNumber).not.toBeNull();
+    expect((chapterNumber?.x ?? 0) + (chapterNumber?.width ?? 0)).toBeLessThanOrEqual(sermons?.x ?? 0);
+
+    await expect(field(page)).toHaveAttribute("placeholder", "Hľadať");
+    expect(await field(page).evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    const input = await field(page).boundingBox();
+    const chip = await favourite(page, "slk-seb").boundingBox();
+    const scroller = await page.locator('[data-role="study-scroll"]').boundingBox();
+    expect(chip?.y ?? 0).toBeLessThan((input?.y ?? 0) + (input?.height ?? 0));
+    expect(input?.y ?? 0).toBeLessThan((chip?.y ?? 0) + (chip?.height ?? 0));
+    expect(scroller?.y ?? 999).toBeLessThanOrEqual(110);
+    await assertMinTapTarget(page.locator('[data-role="study-fav"]'), 44);
+    await assertNoHorizontalOverflow(page);
+
+    // The short field is one target: ▾ and ✕ come with the focus. A press near its
+    // right end used to open the earlier searches, and at 360 px ▾ reached its middle.
+    const width = input?.width ?? 0;
+    await expect(page.locator('[data-role="study-field-recent"]')).toBeHidden();
+    await expect(page.locator('[data-role="study-field-clear"]')).toBeHidden();
+    await field(page).tap({ position: { x: width * 0.85, y: 20 }, timeout: 5_000 });
+    await expect(field(page)).toBeFocused();
+    await expect(page.locator('[data-role="study-field-recent"]')).toBeVisible();
+    await expect(page.locator('[data-role="study-recent"]')).toHaveCount(0);
+
+    // Typing takes the whole row; leaving the field brings the chips back.
+    await expect(page.locator('[data-role="study-favs"]')).toBeHidden();
+    await expect.poll(async () => (await field(page).boundingBox())?.width ?? 0).toBeGreaterThan(width + 100);
+    await page.locator('[data-role="study-field"]').blur();
+    await expect(page.locator('[data-role="study-favs"]')).toBeVisible();
+    await finish(opened);
+  });
+}
 
 test("the bar turns chapters over book boundaries, with a URL for each", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=MAT.27", "slk-seb:MAT.27");
@@ -486,5 +575,27 @@ test("a switch during a load leaves that load's landing alone", async ({ browser
   await expect
     .poll(() => page.locator('[data-role="study-scroll"]').evaluate((el) => el.scrollTop))
     .toBe(0);
+  await finish(opened);
+});
+
+test("a press is counted for the phone without any text of the page (#913)", async ({ browser }) => {
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  const before = (await (await page.request.get("/ui/usage?days=7")).json()) as UsageRead;
+  const pressesOf = (read: UsageRead, role: string): number =>
+    read.rows.find((row) => row.page === "/ui/study" && row.shell === "phone" && row.role === role)?.count ?? 0;
+
+  await favourite(page, "eng-kjv").tap();
+  await expectChapter(page, "eng-kjv:HEB.11");
+  await favourite(page, "slk-seb").tap();
+  await expectChapter(page, "slk-seb:HEB.11");
+  const sent = page.waitForRequest((request) => request.url().endsWith("/ui/usage") && request.method() === "POST");
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  const batch = (await sent).postData() ?? "";
+  expect(batch).not.toContain("KJV");
+
+  await expect
+    .poll(async () => pressesOf((await (await page.request.get("/ui/usage?days=7")).json()) as UsageRead, "study-fav"))
+    .toBe(pressesOf(before, "study-fav") + 2);
   await finish(opened);
 });

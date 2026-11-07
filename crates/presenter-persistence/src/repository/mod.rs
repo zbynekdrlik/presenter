@@ -55,6 +55,7 @@ mod sync_tests;
 mod sync_trash_tests;
 #[cfg(test)]
 mod tests;
+mod ui_usage;
 mod util;
 mod video_source;
 #[cfg(test)]
@@ -71,6 +72,7 @@ pub use stream_assets::NewStreamAsset;
 pub use stream_fonts::NewStreamFont;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};
 pub use sync_apply::{sync_should_apply, SyncApplyOutcome, PRUNE_HORIZON};
+pub use ui_usage::UiUsageCount;
 // #584: exposed so the server crate can `downcast_ref` a repository refusal
 // to its typed variant instead of matching on the `Display` string.
 pub use util::RepositoryError;

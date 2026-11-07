@@ -70,14 +70,26 @@
 
 .study-head__title {
   /* Gives way to the buttons on a narrow phone (the sermon views add Biblia). */
+  display: flex;
+  gap: 0.3em;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   margin: 0;
   font-size: 18px;
   font-weight: 650;
   letter-spacing: 0.01em;
+}
+
+/* A long book gives way, its chapter never: that is what the reader looks up. */
+.study-head__book {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.study-head__chapter {
+  flex: none;
 }
 
 .study-head__actions {
@@ -119,10 +131,19 @@
 
 /* Field + suggestions ------------------------------------------------------ */
 
+/* The field and the translations share a row (#913). */
+.study-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 8px;
+}
+
 .study-field {
   position: relative;
-  flex: none;
-  margin: 2px 12px 8px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .study-field__input {
@@ -136,6 +157,7 @@
   color: var(--study-ink);
   font: inherit;
   font-size: 17px;
+  text-overflow: ellipsis;
   outline: none;
 }
 
@@ -287,20 +309,19 @@
 .study-favs {
   flex: none;
   display: flex;
-  gap: 6px;
-  padding: 0 12px 8px;
+  gap: 4px;
 }
 
 .study-fav {
-  flex: 1 1 0;
+  flex: none;
   min-width: 44px;
-  min-height: 44px;
-  padding: 0 4px;
+  min-height: 46px;
+  padding: 0 3px;
   border: 1px solid var(--study-line);
   border-radius: 11px;
   background: var(--study-panel);
   color: var(--study-ink);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   -webkit-touch-callout: none;
@@ -1009,6 +1030,33 @@
   opacity: 1;
 }
 
+/* A phone's row is short: until the field has the focus it is one target, with
+   no ✕ or ▾ over it (at 360 px ▾ reached its middle), then it takes the whole
+   row. A sibling rule, not :has(), and the input's own focus: a tapped chip
+   must not hide the chips. */
+@media (max-width: 932px) {
+  .study-field[data-focused="false"] .study-field__clear,
+  .study-field[data-focused="false"] .study-field__recent {
+    display: none;
+  }
+
+  .study-field[data-focused="false"] .study-field__input {
+    padding: 0 10px;
+  }
+
+  .study-field[data-focused="true"] + .study-favs {
+    display: none;
+  }
+}
+
+/* Wider than a phone in portrait: the chips have room again. */
+@media (min-width: 560px) {
+  .study-fav {
+    min-width: 58px;
+    font-size: 15px;
+  }
+}
+
 /* A phone on its side: one row up top, or the text gets 30 % of the screen. */
 @media (orientation: landscape) and (min-width: 560px) {
   body[data-shell="phone"] .study {
@@ -1025,7 +1073,11 @@
   }
 
   body[data-shell="phone"] .study-head__title {
-    display: none;
+    max-width: 120px;
+  }
+
+  body[data-shell="phone"] .study-tools {
+    display: contents;
   }
 
   body[data-shell="phone"] .study-field {
@@ -1042,8 +1094,7 @@
   }
 
   body[data-shell="phone"] .study-fav {
-    flex: none;
-    width: 58px;
+    min-width: 48px;
   }
 
   body[data-shell="phone"] .study-error--strip,
@@ -1080,23 +1131,10 @@
 /* The reader's width on anything wider than a phone. */
 @media (min-width: 769px) {
   .study-head,
-  .study-field,
-  .study-favs {
+  .study-tools {
     width: 100%;
     max-width: 744px;
     margin-inline: auto;
-  }
-
-  .study-field {
-    padding-inline: 12px;
-  }
-
-  .study-field__clear {
-    right: 57px;
-  }
-
-  .study-field__recent {
-    right: 13px;
   }
 
   .study-bar {
@@ -1479,6 +1517,9 @@
 
 .study-word {
   border-radius: 3px;
+}
+
+.study-word[role="button"] {
   cursor: pointer;
 }
 
