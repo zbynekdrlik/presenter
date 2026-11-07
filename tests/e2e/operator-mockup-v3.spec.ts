@@ -518,10 +518,11 @@ test("the search field has one ✕: the browser's own clear button stays hidden"
   const query = page.locator('[data-role="global-search-query"]');
   await query.fill("milost");
   await expect(page.locator('[data-role="global-search-clear"]')).toBeVisible();
-  const native = await query.evaluate(
-    (input) => getComputedStyle(input, "::-webkit-search-cancel-button").display,
-  );
-  expect(native).toBe("none");
+  // Computed style cannot read this pseudo-element: a click where the browser
+  // draws its button would empty the field.
+  const box = await query.boundingBox();
+  await page.mouse.click(box!.x + box!.width - 8, box!.y + box!.height / 2);
+  await expect(query).toHaveValue("milost");
   await context.close();
 });
 
