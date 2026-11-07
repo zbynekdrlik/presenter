@@ -150,7 +150,10 @@ pub fn SearchResults() -> impl IntoView {
     let op_visible = op.clone();
     let op_results = op.clone();
 
+    // The anchor is an in-flow row right under the header, so the panel follows
+    // the header wherever it is (the new-version banner pushes it down).
     view! {
+        <div class="operator__search-anchor">
         <div
             data-role="global-search-results"
             data-visible=move || {
@@ -251,6 +254,7 @@ pub fn SearchResults() -> impl IntoView {
                         </>
                     }.into_any()
             }}
+        </div>
         </div>
     }
 }
