@@ -123,7 +123,9 @@ test("✕ clears the field and ▾ fills it from the earlier searches (owner, 20
   await field(page).press("Enter");
   await expectChapter(page, "slk-seb:JHN.3");
 
-  // ✕ empties the field and keeps it ready for typing.
+  // ✕ empties the field and keeps it ready for typing. It shows with the focus:
+  // a phone's field shares its row with the chips until then (#913).
+  await field(page).tap();
   await page.locator('[data-role="study-field-clear"]').tap();
   await expect(field(page)).toHaveValue("");
   await expect(field(page)).toBeFocused();

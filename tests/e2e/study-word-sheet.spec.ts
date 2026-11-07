@@ -23,7 +23,7 @@ import {
   finish,
   gateRoute,
   landed,
-  openStudy,
+  openStudy as openPlainStudy,
   scrollToVerse,
   settled,
   verse,
@@ -48,6 +48,14 @@ test.afterAll(async () => {
 });
 
 const KJV_HEB = "/ui/study?t=eng-kjv&p=HEB.11";
+/** A word opens its sheet only with Čísla on (#913), so that is where this file starts. */
+const openStudy: typeof openPlainStudy = (browser, base, profile, path, loadedFor, prepare) =>
+  openPlainStudy(browser, base, profile, path, loadedFor, async (page) => {
+    await page.addInitScript(() =>
+      localStorage.setItem("presenter:study.strongsNumbers", JSON.stringify("1")),
+    );
+    await prepare?.(page);
+  });
 const sheet = (page: Page): Locator => page.locator('[data-role="word-sheet"]');
 const role = (page: Page, name: string): Locator => page.locator(`[data-role="${name}"]`);
 const word = (page: Page, number: number, token: number): Locator =>
@@ -81,7 +89,7 @@ async function openFaith(page: Page): Promise<void> {
 test("a word opens its entry, highlights its verse and leaves the scroll alone", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
   const { page } = opened;
-  await expect(word(page, 1, 2)).toHaveText("faith");
+  await expect(word(page, 1, 2)).toContainText("faith");
   await expect(word(page, 1, 2)).toHaveAttribute("role", "button");
   await expect(word(page, 1, 2)).toHaveAttribute("tabindex", "0");
   await openFaith(page);
@@ -133,7 +141,7 @@ test("closing the sheet leaves the reading position where it was", async ({ brow
 test("Čísla shows the numbers, survives a reload and a badge opens the same sheet", async ({
   browser,
 }) => {
-  const opened = await openStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
+  const opened = await openPlainStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
   const { page } = opened;
   const chip = role(page, "study-numbers");
   await expect(chip).toHaveAttribute("aria-pressed", "false");
@@ -564,7 +572,7 @@ test("notes, italics and headings render, the words of a note stay out of the li
 });
 
 test("a copy of a tagged verse stays the plain text", async ({ browser }) => {
-  const opened = await openStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
+  const opened = await openPlainStudy(browser, baseURL, PHONE_390, KJV_HEB, "eng-kjv:HEB.11");
   const { page, context } = opened;
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await role(page, "study-numbers").tap();
