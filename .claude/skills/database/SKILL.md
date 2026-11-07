@@ -94,6 +94,14 @@ To re-import source data (ProPresenter libraries, Bibles):
 3. Default mode (`--keep`) preserves existing data
 4. `--purge` mode replaces all libraries (WARNING: destroys playlists via FK cascade)
 
+## A song's name inside its `.pro` file can be junk (#875)
+
+ProPresenter names a song after its file, so the title inside the file never shows there. LIVING
+STONES' files carry conversion leftovers (`Verse 1]`), a few elsewhere a file name (`Song-1.pro`).
+`is_usable_title` in the importer falls back to the file name. SNV's `sync_id`s are name-based
+UUIDv5 from the #555 backfill, not the file's UUID, so a stored row maps to its file only by slide
+text, and that text sits in `worship_main` + `worship_translate` (LIVING STONES: mostly the latter).
+
 ## Testing a SQL secondary-sort tie-break — insert the LOSER first (#594 lesson)
 
 When testing that an `order_by_desc(SecondaryColumn)` tie-break actually matters (e.g.
