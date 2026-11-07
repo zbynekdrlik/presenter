@@ -19,7 +19,7 @@ const MAX_SHOWN: usize = 20;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ShownVerse {
-    /// `Hebrejom 11:1`, the list's identity.
+    /// `Hebrejom 11:1`, in the words of the translation it was shown in.
     pub(crate) label: String,
     pub(crate) book: String,
     pub(crate) book_code: String,
@@ -31,6 +31,13 @@ pub(crate) struct ShownVerse {
 }
 
 impl ShownVerse {
+    fn same_passage(&self, other: &Self) -> bool {
+        self.book_code == other.book_code
+            && self.chapter == other.chapter
+            && self.verse_start == other.verse_start
+            && self.verse_end == other.verse_end
+    }
+
     /// `None` for a show the console could not bring back: a book nobody knows
     /// (a placeholder reference), or a sermon's slide. That one holds the
     /// preacher's cut, which a preview of the verse would lose, and it already
@@ -55,7 +62,8 @@ impl ShownVerse {
     }
 }
 
-/// Newest first, one entry per label, at most [`MAX_SHOWN`], for one date.
+/// Newest first, one entry per passage (another translation's name for it is
+/// the same entry), at most [`MAX_SHOWN`], for one date.
 #[derive(Debug, Default)]
 pub(crate) struct ShownToday {
     date: Option<NaiveDate>,
@@ -68,7 +76,7 @@ impl ShownToday {
             self.date = Some(today);
             self.verses.clear();
         }
-        self.verses.retain(|held| held.label != verse.label);
+        self.verses.retain(|held| !held.same_passage(&verse));
         self.verses.insert(0, verse);
         self.verses.truncate(MAX_SHOWN);
     }

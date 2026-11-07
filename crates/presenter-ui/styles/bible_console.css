@@ -180,7 +180,7 @@
   font-size: 0.85rem;
   cursor: pointer;
 }
-.console-shown .console-chip[aria-pressed="true"] {
+.console-chip[aria-pressed="true"] {
   outline: 1.5px solid #3b82f6;
 }
 .console-hint {
@@ -375,7 +375,7 @@ body.operator.operator--bible[data-shell="phone"] .bible__tab-panel {
   flex-wrap: wrap;
   gap: 6px;
 }
-.console-chip[aria-pressed="true"] {
+.console-shown .console-chip[aria-pressed="true"] {
   background: #3b82f6;
   color: #ffffff;
 }

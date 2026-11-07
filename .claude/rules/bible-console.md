@@ -132,7 +132,7 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
 
 ## "Táto bohoslužba" (B2d, `pages/bible_console/shown_today.rs`, server `state/bible_shown.rs`)
 
-- Server list, in memory, shared by every device: max 20, one entry per label, a repeat moves up,
+- Server list, in memory, shared by every device: max 20, one entry per passage (code + chapter + verses, so another translation's name is the same entry), a repeat moves up,
   empty after the local date changes. `show_bible_on_wall` records it BEFORE publishing `BibleSlide`,
   because the console reads `GET /bible/shown-today` when `active_bible_slide` changes (so Companion,
   AI and another operator's shows arrive too). No `LiveEvent` carries it.
@@ -141,7 +141,7 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
   A plain presentation's slide is. Companion and the AI name only the book, so the code comes from
   `canonical_book`, never from the reference alone.
 - One chip per shown slide's verses and a list of 20 are accepted: the label says what was on the wall.
-  A chip for a verse the translation lacks toasts and keeps the preview. A tap on the previewed chip goes
+  A chip for a verse another translation lacks toasts and keeps the preview; a tap waits for a show on its way, like ◀ / ▶. A tap on the previewed chip goes
   back to part 1 (the key does not change, so the preview effect will not).
 - A chip is a `Picked` for the empty field with the entry's translation as `main`, so `rebase` renames
   it after a translation switch. A tap only previews. Hidden while empty and while the field has text.

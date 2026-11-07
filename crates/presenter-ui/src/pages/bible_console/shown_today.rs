@@ -48,7 +48,16 @@ pub(super) fn ShownTodaySection(console: Console) -> impl IntoView {
                 <div class="console-shown__chips">
                     <For
                         each=move || verses.get()
-                        key=|verse| format!("{}:{}", verse.label, verse.translation_code)
+                        key=|verse| {
+                            format!(
+                                "{}:{}:{}-{}:{}",
+                                verse.book_code,
+                                verse.chapter,
+                                verse.verse_start,
+                                verse.verse_end,
+                                verse.label,
+                            )
+                        }
                         children=move |verse| shown_chip(c, verse)
                     />
                 </div>
@@ -72,8 +81,16 @@ fn shown_chip(c: Console, verse: ShownVerse) -> impl IntoView {
     let label = verse.label.clone();
     let ctx = use_ctx!(AppContext);
     let on_tap = move |_| {
-        // Nothing to preview in this translation: the preview stays, and says why.
-        if c.structure.with_untracked(|s| rebase(&target, s)).is_none() {
+        // A show on its way moves on from the preview when it lands (as ◀ / ▶).
+        if c.showing.get_untracked() {
+            return;
+        }
+        // Another translation without this verse: the preview stays, and says
+        // why. In its own translation, or while the books load, the pick stands.
+        let foreign = c
+            .main
+            .with_untracked(|main| main.as_ref().is_some_and(|main| *main != translation));
+        if foreign && c.structure.with_untracked(|s| rebase(&target, s)).is_none() {
             ctx.show_toast(&format!("Tento preklad verš {label} nemá"), "error");
             return;
         }
