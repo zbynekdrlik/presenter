@@ -29,6 +29,9 @@ use super::ndi_session_stats;
 // this module's public surface (it owns the whep_url profile decision).
 pub(crate) use super::ndi_profile::profile_mode_is_compat;
 
+/// `sessionStorage` key of `ReloadEscalation::fruitless_reloads`.
+const FRUITLESS_RELOADS_KEY: &str = "ndiFruitlessReloads";
+
 /// PAGE-SESSION reload escalation state (#401), shared across EVERY reconnect
 /// cycle of a single stage page load. Unlike `FrameStats` (recreated per
 /// Watchdog / per WHEP session), this lives in `NdiVideo`'s effect for the
@@ -68,7 +71,9 @@ pub(crate) struct ReloadEscalation {
     /// `window.location.reload()`) deterministically without a 60s wait. The
     /// param is read ONCE here; production pages never carry it, so prod always
     /// uses the conservative 60s.
-    threshold_ms: f64,
+    base_threshold_ms: f64,
+    /// Reloads in a row that brought no frame (#850 §14), kept across a reload.
+    fruitless_reloads: Cell<u32>,
     /// TEST-ONLY (#422): when set (via `?ndiReloadSkipHealthz=1`), the
     /// last-resort reload bypasses the #410 `/healthz` gate and fires on the
     /// no-frames horizon alone. Prod pages never set it. Read ONCE.
@@ -85,7 +90,12 @@ impl ReloadEscalation {
             reloaded: Cell::new(false),
             check_in_flight: Cell::new(false),
             active: Cell::new(true),
-            threshold_ms: reload_threshold_ms_from_url(),
+            base_threshold_ms: reload_threshold_ms_from_url(),
+            fruitless_reloads: Cell::new(
+                crate::state::session::get(FRUITLESS_RELOADS_KEY)
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0),
+            ),
             skip_healthz_gate: super::ndi_reload_guard::reload_skip_healthz_from_url(),
         })
     }
@@ -95,6 +105,27 @@ impl ReloadEscalation {
     /// resumes decoding clears the escalation well before the threshold.
     pub(crate) fn note_decoded_frame(&self) {
         self.last_decoded_frame_at.set(now_ms());
+        if self.fruitless_reloads.replace(0) > 0 {
+            crate::state::session::remove(FRUITLESS_RELOADS_KEY);
+        }
+    }
+
+    /// The no-frames horizon of this page: longer after each reload that brought
+    /// no frame, because the counter outlives the reload in `sessionStorage`.
+    fn threshold_ms(&self) -> f64 {
+        super::ndi_reload_guard::backed_off_reload_ms(
+            self.base_threshold_ms,
+            self.fruitless_reloads.get(),
+        )
+    }
+
+    /// The reload itself, counted for the next page's horizon.
+    fn reload_page(&self) {
+        let count = self.fruitless_reloads.get().saturating_add(1);
+        crate::state::session::set(FRUITLESS_RELOADS_KEY, &count.to_string());
+        if let Some(window) = leptos::web_sys::window() {
+            let _ = window.location().reload();
+        }
     }
 
     /// PAGE-level teardown signal (#417): mark the page session as gone so any
@@ -119,7 +150,7 @@ impl ReloadEscalation {
             self.reloaded.get(),
             super::ndi_reload_guard::should_escalate_reload(
                 self.ms_since_last_decoded_frame(),
-                self.threshold_ms,
+                self.threshold_ms(),
             ),
             server_has_streaming,
         )
@@ -156,7 +187,7 @@ impl ReloadEscalation {
         }
         if !super::ndi_reload_guard::should_escalate_reload(
             self.ms_since_last_decoded_frame(),
-            self.threshold_ms,
+            self.threshold_ms(),
         ) {
             return false;
         }
@@ -172,9 +203,7 @@ impl ReloadEscalation {
                 "watchdog: no decoded frame for {:.0}ms — LAST-RESORT reload (healthz gate bypassed, test-only #422)",
                 self.ms_since_last_decoded_frame()
             );
-            if let Some(window) = leptos::web_sys::window() {
-                let _ = window.location().reload();
-            }
+            self.reload_page();
             return true;
         }
         // Horizon crossed. Don't spawn a second check while one is in flight.
@@ -197,7 +226,7 @@ impl ReloadEscalation {
                     && !escalation.reloaded.get()
                     && super::ndi_reload_guard::should_escalate_reload(
                         escalation.ms_since_last_decoded_frame(),
-                        escalation.threshold_ms,
+                        escalation.threshold_ms(),
                     )
                     && !super::ndi_reload_guard::should_reload_given_pipeline_state(has_streaming)
                 {
@@ -214,9 +243,7 @@ impl ReloadEscalation {
                 "watchdog: no decoded frame for {:.0}ms across reconnect attempts AND server has a streaming pipeline — LAST-RESORT full page reload (#401)",
                 escalation.ms_since_last_decoded_frame()
             );
-            if let Some(window) = leptos::web_sys::window() {
-                let _ = window.location().reload();
-            }
+            escalation.reload_page();
         });
         true
     }

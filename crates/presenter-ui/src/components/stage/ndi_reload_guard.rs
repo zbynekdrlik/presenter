@@ -105,6 +105,14 @@ pub(crate) fn should_escalate_reload(
     ms_since_last_decoded_frame > reload_threshold_ms
 }
 
+/// How long a stage page waits without a frame before its last-resort reload,
+/// after `fruitless_reloads` reloads in a row that brought none (#850 §14).
+pub(crate) fn backed_off_reload_ms(base_ms: f64, fruitless_reloads: u32) -> f64 {
+    const LONGEST_WAIT_MS: f64 = 15.0 * 60_000.0;
+    let doubled = base_ms * 2f64.powi(fruitless_reloads.min(16) as i32);
+    doubled.min(LONGEST_WAIT_MS.max(base_ms))
+}
+
 /// POST-AWAIT last-resort reload decision (#417): after the detached `/healthz`
 /// check resolves, should the task perform the `window.location().reload()`?
 /// All four gates must hold:
@@ -157,6 +165,26 @@ pub(crate) fn reload_skip_healthz_from_url() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn each_fruitless_reload_doubles_the_wait_up_to_a_quarter_of_an_hour() {
+        // A tunnel page that can never decode reloaded every 61 s for 1.5 h on
+        // 2026-10-12, a new NDI video session each time.
+        let waits: Vec<f64> = (0..7)
+            .map(|n| super::backed_off_reload_ms(60_000.0, n))
+            .collect();
+        assert_eq!(
+            waits,
+            [60_000.0, 120_000.0, 240_000.0, 480_000.0, 900_000.0, 900_000.0, 900_000.0]
+        );
+        assert_eq!(super::backed_off_reload_ms(60_000.0, u32::MAX), 900_000.0);
+    }
+
+    #[test]
+    fn a_short_test_horizon_backs_off_the_same_way() {
+        assert_eq!(super::backed_off_reload_ms(3_000.0, 0), 3_000.0);
+        assert_eq!(super::backed_off_reload_ms(3_000.0, 1), 6_000.0);
+    }
+
     use super::{
         healthz_body_has_streaming_pipeline, should_perform_post_await_reload,
         should_reload_given_pipeline_state,

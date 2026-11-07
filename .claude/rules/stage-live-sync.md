@@ -129,3 +129,7 @@ mounted Menovky view hears events through `LiveSink` (a handler it registers onc
 signal) and reloads when `connects` changes. E2E: `operator-live-resync.spec.ts` (a deaf
 `routeWebSocket` route, then `close({ code: 4000 })`; a route that forwards nothing is replaced
 within ~6 s).
+
+## The last-resort reload backs off (#850 spec §14)
+
+A page that can never decode (a tunnel, 2026-10-12) reloaded every 61 s, a new NDI video session each time, because a reload starts a new page. `ReloadEscalation` keeps `fruitless_reloads` in `sessionStorage`: 60 s, 2, 4, 8, then 15 min; the first decoded frame clears it. The reconnect loop runs meanwhile, so a TV still recovers without a reload.

@@ -187,8 +187,27 @@ impl<'a> ProPresenterImporter<'a> {
 #[instrument(fields(file = %path.display()))]
 pub fn load_presentation_from_path(path: &Path) -> Result<Presentation> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    load_presentation_from_bytes(&bytes)
+    let mut raw = proto::Presentation::decode(bytes.as_slice())
+        .context("failed to decode ProPresenter protobuf data")
+        .with_context(|| format!("failed to load presentation from {}", path.display()))?;
+    if !is_usable_title(&raw.name) {
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            tracing::info!(title = %raw.name, file_name = stem, "title replaced by the file name");
+            raw.name = stem.to_string();
+        }
+    }
+    presentation_from_proto(&raw)
+        .with_context(|| format!("failed to convert presentation {}", raw.name.trim()))
         .with_context(|| format!("failed to load presentation from {}", path.display()))
+}
+
+/// False for what a conversion or a copy left in a `.pro` file's title (#875):
+/// nothing, half a tag (`Verse 1]`), or a file name (`Song-1.pro`). ProPresenter
+/// itself names a song after its file, so these never show there.
+fn is_usable_title(title: &str) -> bool {
+    let title = title.trim();
+    let half_a_tag = title.contains(']') && !title.contains('[');
+    !title.is_empty() && !half_a_tag && !title.to_lowercase().ends_with(".pro")
 }
 
 /// Parses a ProPresenter `.pro` file from raw bytes into the domain model.
@@ -929,6 +948,71 @@ mod tests {
         assert_eq!(presentation.name, "Po Tebe Pane \u{17e}\u{ed}znim");
         // No presentation-level uuid in this fixture → no sync identity.
         assert_eq!(presentation.sync_id, None);
+    }
+
+    /// Writes a one-slide `.pro` called `file` with `title` inside, and loads it.
+    fn loaded_title(file: &str, title: &str) -> String {
+        let slide_type = proto::action::SlideType {
+            slide: Some(proto::action::slide_type::Slide::Presentation(
+                proto::PresentationSlide {
+                    base_slide: Some(proto::Slide::default()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let raw = proto::Presentation {
+            name: title.to_string(),
+            cues: vec![proto::Cue {
+                uuid: Some(proto::Uuid {
+                    string: "cue-1".into(),
+                }),
+                actions: vec![proto::Action {
+                    r#type: proto::action::ActionType::PresentationSlide as i32,
+                    action_type_data: Some(proto::action::ActionTypeData::Slide(slide_type)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(file);
+        std::fs::write(&path, prost::Message::encode_to_vec(&raw)).expect("write");
+        load_presentation_from_path(&path).expect("load").name
+    }
+
+    #[test]
+    fn a_title_left_over_from_a_conversion_gives_way_to_the_file_name() {
+        // 478 of LIVING STONES' 495 songs carry these inside the file (#875).
+        for title in ["Verse 1]", "Verse 11]", "Chorus 1]", "Verse 1a]", "  "] {
+            assert_eq!(
+                loaded_title("100. Nad v\u{161}etko si ty.pro", title),
+                "100. Nad v\u{161}etko si ty",
+                "title {title:?}"
+            );
+        }
+        // Five SNV songs carry a copied file's name as their title.
+        assert_eq!(
+            loaded_title("Kristoskro rat.pro", "Kristoskro rat-1.pro"),
+            "Kristoskro rat"
+        );
+    }
+
+    #[test]
+    fn the_file_name_takes_the_nfc_form_like_any_title() {
+        assert_eq!(
+            loaded_title("Pane z\u{30c}ijem.pro", "Verse 1]"),
+            "Pane \u{17e}ijem"
+        );
+    }
+
+    #[test]
+    fn a_real_title_stays_whatever_the_file_is_called() {
+        assert_eq!(
+            loaded_title("031.pro", "031 Len dobr\u{e9} a milos\u{165}"),
+            "031 Len dobr\u{e9} a milos\u{165}"
+        );
+        assert_eq!(loaded_title("x.pro", "Gospel [live]"), "Gospel [live]");
     }
 
     #[test]

@@ -693,6 +693,14 @@ test("stage performs LAST-RESORT page reload after prolonged video stall (synthe
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
 
+    // #850 §14: what each page load found in the back-off counter, logged where
+    // a reload cannot lose it.
+    await page.addInitScript(() => {
+      const seen = sessionStorage.getItem("presenter:ndiFruitlessReloads");
+      const log = sessionStorage.getItem("e2eFruitlessAtLoad") ?? "";
+      sessionStorage.setItem("e2eFruitlessAtLoad", `${log}|${seen ?? "none"}`);
+    });
+
     // Lower the reload horizon to ~3s so the escalation fires within the
     // pipeline-rebuild gap instead of after 60s. Production never sets this.
     const stageUrl = new URL("/stage", baseURL);
@@ -799,6 +807,18 @@ test("stage performs LAST-RESORT page reload after prolonged video stall (synthe
         },
       )
       .toBeGreaterThan(0);
+
+    // The reload counted itself for the next page; a decoded frame forgets it.
+    expect(
+      await page.evaluate(() => sessionStorage.getItem("e2eFruitlessAtLoad")),
+    ).toContain('|"1"');
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          sessionStorage.getItem("presenter:ndiFruitlessReloads"),
+        ),
+      )
+      .toBeNull();
 
     // This test DELIBERATELY kills the server NDI pipeline repeatedly, so the
     // browser logs transient "Failed to load resource … 503 (Service
