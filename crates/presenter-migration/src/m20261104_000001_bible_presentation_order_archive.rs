@@ -41,7 +41,7 @@ impl MigrationTrait for Migration {
 mod tests {
     use crate::{Migrator, MigratorTrait};
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
-    use sea_orm_migration::MigrationTrait;
+    use sea_orm_migration::{MigrationName, MigrationTrait};
 
     fn sql(text: &str) -> Statement {
         Statement::from_string(sea_orm::DatabaseBackend::Sqlite, text.to_string())
@@ -50,7 +50,12 @@ mod tests {
     #[tokio::test]
     async fn the_backfill_keeps_the_alphabetical_order_and_nothing_is_archived() {
         let db: DatabaseConnection = Database::connect("sqlite::memory:").await.unwrap();
-        let before_this = u32::try_from(Migrator::migrations().len() - 1).unwrap();
+        // By name: a later migration must not make this one run early.
+        let before_this = Migrator::migrations()
+            .iter()
+            .position(|migration| migration.name() == super::Migration.name())
+            .and_then(|index| u32::try_from(index).ok())
+            .unwrap();
         Migrator::up(&db, Some(before_this)).await.unwrap();
         for (id, name) in [
             ("c", "Kázeň 2"),
