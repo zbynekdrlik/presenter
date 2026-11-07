@@ -586,6 +586,9 @@ test("alternatives and fixes: 'jan 3 16' offers 1 Ján, 'zid 14' offers Hebrejom
       "1 Ján 3:16 (SEB)",
     );
     await expect(chip).toHaveAttribute("aria-pressed", "true");
+    // A chosen alternative is outlined; only "Táto bohoslužba" fills its chip.
+    await expect(chip).toHaveCSS("outline-style", "solid");
+    await expect(chip).toHaveCSS("background-color", "rgb(29, 58, 95)");
 
     const field = page.locator('[data-role="console-field"]');
     await field.fill("zid 14");

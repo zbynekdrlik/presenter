@@ -25,11 +25,9 @@ fn local_date() -> String {
         .unwrap_or_default()
 }
 
-/// Apply today's list: an older answer never replaces a newer one, and a pick
-/// moves with its slide or is let go with its sermon.
-pub(super) fn setup_prepared(c: Console) {
-    let version = use_ctx!(AppContext).bible_presentations_version;
-    let asked = StoredValue::new(0u64);
+/// The browser's local date, checked once a minute: a list "of today" reads
+/// itself again when it changes, on a page left open overnight too.
+pub(super) fn local_date_signal() -> RwSignal<String> {
     let date = RwSignal::new(local_date());
     if let Ok(check) = set_interval_with_handle(
         move || {
@@ -42,6 +40,15 @@ pub(super) fn setup_prepared(c: Console) {
     ) {
         on_cleanup(move || check.clear());
     }
+    date
+}
+
+/// Apply today's list: an older answer never replaces a newer one, and a pick
+/// moves with its slide or is let go with its sermon.
+pub(super) fn setup_prepared(c: Console) {
+    let version = use_ctx!(AppContext).bible_presentations_version;
+    let asked = StoredValue::new(0u64);
+    let date = local_date_signal();
     Effect::new(move |_| {
         version.track();
         date.track();

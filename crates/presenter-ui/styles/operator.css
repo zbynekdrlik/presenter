@@ -160,6 +160,11 @@ body.operator {
   outline: none;
 }
 
+/* Ours is the only clear button: Chromium draws its own in a search field. */
+.operator__search input::-webkit-search-cancel-button {
+  display: none;
+}
+
 .operator__search input::placeholder {
   color: rgba(255, 255, 255, 0.6);
 }
@@ -219,8 +224,16 @@ body.operator {
   border-radius: 999px;
 }
 
+.operator__search-anchor {
+  position: relative;
+  flex: none;
+  height: 0;
+  z-index: 20;
+}
+
 .operator__search-results {
-  position: fixed;
+  position: absolute;
+  top: 4px;
   left: 50%;
   transform: translateX(-50%);
   width: min(520px, 50vw);
@@ -255,9 +268,35 @@ body.operator {
 }
 
 .operator__search-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .operator__search-result:hover {
+    background: rgba(59, 124, 255, 0.12);
+  }
+}
+
+/* Margins, not flex gap: an iPad Air 2 (Safari 12) gets this shell. An empty
+   title (a library row) takes no room. */
+.operator__search-result-title:empty {
+  display: none;
+}
+
+.operator__search-result-title:not(:empty) + .operator__search-result-meta {
+  margin-left: 8px;
+}
+
+.operator__search-result-snippet:not(:empty) {
+  flex-basis: 100%;
+  margin-top: 2px;
 }
 
 .operator__search-result button {

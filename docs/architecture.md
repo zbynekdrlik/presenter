@@ -229,6 +229,7 @@ this split.
 | `/stream/{slug}`| Transparent OBS output page  |
 | `/live/ws`      | Live updates (timers, stage) |
 | `/companion/ws` | Bitfocus Companion control   |
+| `/bible/shown-today` | The verses shown on the wall today, newest first ("Táto bohoslužba", #850): max 20, empty after the date changes, in memory |
 | `/bible/lookup` | What a typed reference means against a translation (`q`, optional `translation`): passage, alternatives, hint, fix (#850) |
 | `/bible/sermons` | Sermons: list (with the server's `today` + default service date), create (#851) |
 | `/bible/sermons/today` | Today's sermons in full (operator console, tablet, part C) |

@@ -335,3 +335,10 @@ body.operator:not([data-shell="phone"]) .operator__settings-button[data-active="
   font-size: 11px;
   color: #94a3b8;
 }
+
+/* The results hang from the anchor under the header: from the window's top they
+   covered the field being typed in and its clear button. The height leaves room
+   for the header and the new-version banner. */
+body.operator:not([data-shell="phone"]) .operator__search-results {
+  max-height: min(420px, calc(100vh - 92px));
+}

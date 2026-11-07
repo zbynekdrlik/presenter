@@ -57,4 +57,4 @@
 ## Open Questions
 - Which UI stack best supports multi-display output on Windows/macOS?
 - How should we sync data between control machine and backup devices? Offline-first or cloud-first?
-- Do we need mobile remote control or limit to primary console?
+- Do we need mobile remote control or limit to primary console? Answered by #850: the operator runs on a phone.

@@ -129,3 +129,22 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
   (review of 65eab96c, a swallowed Space jumped to the field). Arrows still step from a focused
   button: after the desktop Enter the focus sits on Zobraziť. Pinned by `bible-console.spec.ts`
   (stage POST count unchanged on Biblia, one more on Piesne).
+
+## "Táto bohoslužba" (B2d, `pages/bible_console/shown_today.rs`, server `state/bible_shown.rs`)
+
+- Server list, in memory, shared by every device: max 20, one entry per passage (code + chapter + verses, so another translation's name is the same entry), a repeat moves up,
+  empty after the local date changes. `show_bible_on_wall` records it BEFORE publishing `BibleSlide`,
+  because the console reads `GET /bible/shown-today` when `active_bible_slide` changes (so Companion,
+  AI and another operator's shows arrive too). No `LiveEvent` carries it.
+- A sermon's slide is never recorded (`BibleShowSource::Sermon`, logged as `prepared`): its text is the
+  preacher's cut, a chip would preview the whole verse, and it has its row under "Pripravené kazateľom".
+  A plain presentation's slide is. Companion and the AI name only the book, so the code comes from
+  `canonical_book`, never from the reference alone.
+- One chip per shown slide's verses and a list of 20 are accepted: the label says what was on the wall.
+  A chip for a verse another translation lacks toasts and keeps the preview; a tap waits for a show on its way, like ◀ / ▶. A tap on the previewed chip goes
+  back to part 1 (the key does not change, so the preview effect will not).
+- A chip is a `Picked` for the empty field with the entry's translation as `main`, so `rebase` renames
+  it after a translation switch. A tap only previews. Hidden while empty and while the field has text.
+- Phone: mounted after the preview, a long list never hides what Zobraziť sends. Desktop: `order` under
+  the bar, so a chip appearing after a show never moves Zobraziť. The spec has
+  its own server because the list starts empty (`bible-shown-today.spec.ts`).

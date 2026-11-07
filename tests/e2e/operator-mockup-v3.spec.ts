@@ -477,3 +477,102 @@ test("the header search matches the mockup: a small lens, ✕ only over text", a
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("search results open under the header and leave the field and ✕ free", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, baseURL });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  await page.locator('[data-role="library-item"]').first().click();
+  const song = (await page.locator('[data-role="presentation-item"]').first().innerText()).trim();
+  const query = page.locator('[data-role="global-search-query"]');
+  await query.fill(song);
+  const row = page.locator('[data-role="search-result-item"]').first();
+  await expect(row).toBeVisible();
+
+  const panel = await page.locator('[data-role="global-search-results"]').boundingBox();
+  const header = await page.locator(".operator__header").boundingBox();
+  expect(panel!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
+
+  // The title and its library read as two words, not one.
+  const title = await row.locator(".operator__search-result-title").boundingBox();
+  const meta = await row.locator(".operator__search-result-meta").boundingBox();
+  expect(meta!.x - (title!.x + title!.width)).toBeGreaterThanOrEqual(6);
+
+  // Real clicks with the list open: the field keeps its caret, ✕ empties it.
+  await query.click({ timeout: 3_000 });
+  await page.locator('[data-role="global-search-clear"]').click({ timeout: 3_000 });
+  await expect(query).toHaveValue("");
+  await expect(page.locator('[data-role="global-search-results"]')).toHaveAttribute("data-visible", "false");
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
+test("the search field has one ✕: the browser's own clear button stays hidden", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, baseURL });
+  const page = await context.newPage();
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  const query = page.locator('[data-role="global-search-query"]');
+  await query.fill("milost");
+  await expect(page.locator('[data-role="global-search-clear"]')).toBeVisible();
+  // Computed style cannot read this pseudo-element: a click where the browser
+  // draws its button would empty the field.
+  const box = await query.boundingBox();
+  await page.mouse.click(box!.x + box!.width - 8, box!.y + box!.height / 2);
+  await expect(query).toHaveValue("milost");
+  await context.close();
+});
+
+test("search results stay under the header while the new-version banner pushes it down", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, baseURL });
+  const page = await context.newPage();
+  let newer = false;
+  await page.route("**/healthz", async (route) => {
+    const response = await route.fetch();
+    if (!newer) {
+      await route.fulfill({ response });
+      return;
+    }
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, version: `${body.version}-newer` } });
+  });
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  await page.waitForFunction(() => (window as any).__presenterVersionBaselineKnown?.() === true);
+  newer = true;
+  await expect(page.locator('[data-role="version-update-banner"]')).toBeVisible({ timeout: 30_000 });
+
+  await page.locator('[data-role="library-item"]').first().click();
+  const song = (await page.locator('[data-role="presentation-item"]').first().innerText()).trim();
+  const query = page.locator('[data-role="global-search-query"]');
+  await query.fill(song);
+  await expect(page.locator('[data-role="search-result-item"]').first()).toBeVisible();
+
+  const panel = await page.locator('[data-role="global-search-results"]').boundingBox();
+  const header = await page.locator(".operator__header").boundingBox();
+  expect(header!.y).toBeGreaterThan(0);
+  expect(panel!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
+  expect(panel!.y + panel!.height).toBeLessThanOrEqual(720);
+  await page.locator('[data-role="global-search-clear"]').click({ timeout: 3_000 });
+  await expect(query).toHaveValue("");
+  await context.close();
+});
+
+test("a library result has no gap where its song name would be", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, baseURL });
+  const page = await context.newPage();
+  await page.goto("/ui/operator");
+  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
+  const library = page.locator('[data-role="library-item"]').first();
+  const name = (await library.locator("button, span").first().innerText()).trim();
+  await page.locator('[data-role="global-search-query"]').fill(name);
+  const row = page.locator('[data-role="search-result-item"][data-kind="library"]').first();
+  await expect(row).toBeVisible();
+  const songRow = await row.boundingBox();
+  const meta = await row.locator(".operator__search-result-meta").boundingBox();
+  expect(meta!.x - songRow!.x).toBeLessThanOrEqual(6);
+  await context.close();
+});

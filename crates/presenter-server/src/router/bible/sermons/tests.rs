@@ -408,3 +408,52 @@ async fn upkeep_routes_answer_the_whole_sermon() {
         (json!([]), json!([]))
     );
 }
+
+/// #850 B2d: "Táto bohoslužba" leaves a sermon's slide out (its text is the
+/// preacher's cut, a chip would preview the whole verse) and keeps the slide
+/// of an ordinary presentation, whichever device showed it.
+#[tokio::test]
+async fn shown_today_keeps_a_plain_presentation_slide_but_never_a_sermons() {
+    let (app, id) = app_with_sermon().await;
+    let (_, sermon) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
+    let slide = sermon["slides"][0]["id"].as_str().expect("slide id");
+    let uri = format!("/bible/presentations/{id}/slides/{slide}/trigger");
+    let (status, _) = call(&app, "POST", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, shown) = call(&app, "GET", "/bible/shown-today", None, &[]).await;
+    assert_eq!(shown, json!([]));
+
+    let (_, plain) = call(
+        &app,
+        "POST",
+        "/bible/presentations",
+        Some(json!({ "name": "Obyčajná" })),
+        &[],
+    )
+    .await;
+    let plain_id = plain["id"].as_str().expect("presentation id");
+    let bible = json!({
+        "translationCode": "slk-seb", "book": "Hebrejom", "bookCode": "HEB", "bookNumber": 58,
+        "chapter": 11, "verses": [{ "start": 1, "end": 1 }],
+    });
+    let (status, appended) = call(
+        &app,
+        "POST",
+        &format!("/bible/presentations/{plain_id}/append"),
+        Some(json!({ "slides": [{
+            "bibleMain": HEB_11_1, "bibleTranslation": "",
+            "bibleMainReference": "Hebrejom 11:1 (SEB)",
+            "metadata": { "bible": bible },
+        }] })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{appended}");
+    let slide = appended["slides"][0]["id"].as_str().expect("slide id");
+    let uri = format!("/bible/presentations/{plain_id}/slides/{slide}/trigger");
+    let (status, _) = call(&app, "POST", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, shown) = call(&app, "GET", "/bible/shown-today", None, &[]).await;
+    assert_eq!(shown[0]["label"], "Hebrejom 11:1");
+    assert_eq!(shown[0]["bookCode"], "HEB");
+}

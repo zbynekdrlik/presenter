@@ -98,8 +98,11 @@ body.operator[data-shell="phone"]:not([data-view="worship"]):not([data-view="bib
   .operator__search {
   display: none;
 }
-/* Results in the page flow under the header, whatever its height: the desktop
-   panel is fixed at a one-row header and half the window wide. */
+/* Results in the page flow under the header: the desktop panel floats and is
+   half the window wide. */
+body.operator[data-shell="phone"] .operator__search-anchor {
+  display: contents;
+}
 body.operator[data-shell="phone"] .operator__search-results {
   position: static;
   transform: none;
