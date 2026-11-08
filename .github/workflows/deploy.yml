@@ -146,7 +146,7 @@ jobs:
         with:
           repository: zbynekdrlik/presenter-bibles
           # One pin for every workflow; bump them all in one commit (#859).
-          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ref: bd09a76899f0c29a18ac7a1a0fa6d3d284cf9398
           ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
           path: data/bibles-private
           persist-credentials: false
@@ -398,6 +398,10 @@ jobs:
             data/bibles-private/rohacek.bbl.mybible.zip \
             data/bibles-private/sevp.obohu.mybible.zip \
             data/bibles-private/milost.bbl.mybible.zip \
+            data/bibles-private/ampc.usfm.zip \
+            data/bibles-private/ssv.usfm.zip \
+            data/bibles-private/botek.usfm.zip \
+            data/bibles-private/csp.usfm.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
       - name: Sync ProPresenter libraries from git
@@ -769,6 +773,10 @@ jobs:
           export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
           export PRESENTER_BIBLE_SEVP=/opt/presenter/bibles/sevp.obohu.mybible.zip
           export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
+          export PRESENTER_BIBLE_AMPC=/opt/presenter/bibles/ampc.usfm.zip
+          export PRESENTER_BIBLE_SSV=/opt/presenter/bibles/ssv.usfm.zip
+          export PRESENTER_BIBLE_BOTEK=/opt/presenter/bibles/botek.usfm.zip
+          export PRESENTER_BIBLE_CSP=/opt/presenter/bibles/csp.usfm.zip
           /opt/presenter/ingest_bibles
           REMOTE_SCRIPT
 

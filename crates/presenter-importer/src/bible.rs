@@ -194,6 +194,7 @@ mod tests {
             },
             format: BibleSourceFormat::UsfmZip {
                 book_name_overrides: Default::default(),
+                names_from_header: false,
             },
         }
     }

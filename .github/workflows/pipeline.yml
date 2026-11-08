@@ -475,6 +475,12 @@ jobs:
           python3 -m unittest discover -s scripts/dev -p 'test_fetch_study_sources.py' -v
           python3 scripts/dev/fetch_study_sources.py --check
 
+      # The web-overlays -> USFM converter of the private modules (#911).
+      - name: Test the Bible module converter (#911)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/dev/bibles -p 'test_web_overlays_to_usfm.py' -v
+
       # Regression test for #802: the E2E harness (startTestServer,
       # refresh-dev-data.sh, the synthetic NDI sender) must never silently
       # fall back to a local `cargo run` — Tier-0 compiles in CI only. A
@@ -775,7 +781,7 @@ jobs:
         with:
           repository: zbynekdrlik/presenter-bibles
           # One pin for every workflow; bump them all in one commit (#859).
-          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ref: bd09a76899f0c29a18ac7a1a0fa6d3d284cf9398
           ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
           path: data/bibles-private
           persist-credentials: false
@@ -898,7 +904,7 @@ jobs:
         with:
           repository: zbynekdrlik/presenter-bibles
           # One pin for every workflow; bump them all in one commit (#859).
-          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ref: bd09a76899f0c29a18ac7a1a0fa6d3d284cf9398
           ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
           path: data/bibles-private
           persist-credentials: false
@@ -1066,7 +1072,7 @@ jobs:
         with:
           repository: zbynekdrlik/presenter-bibles
           # One pin for every workflow; bump them all in one commit (#859).
-          ref: 7a0e338ede080a118a90bdd9bb4379fea47f63f2
+          ref: bd09a76899f0c29a18ac7a1a0fa6d3d284cf9398
           ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
           path: data/bibles-private
           persist-credentials: false
@@ -1462,6 +1468,10 @@ jobs:
             data/bibles-private/rohacek.bbl.mybible.zip \
             data/bibles-private/sevp.obohu.mybible.zip \
             data/bibles-private/milost.bbl.mybible.zip \
+            data/bibles-private/ampc.usfm.zip \
+            data/bibles-private/ssv.usfm.zip \
+            data/bibles-private/botek.usfm.zip \
+            data/bibles-private/csp.usfm.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
       - name: Sync ProPresenter libraries from git
@@ -1497,6 +1507,10 @@ jobs:
           export PRESENTER_BIBLE_ROHACEK=/opt/presenter-dev/bibles/rohacek.bbl.mybible.zip
           export PRESENTER_BIBLE_SEVP=/opt/presenter-dev/bibles/sevp.obohu.mybible.zip
           export PRESENTER_BIBLE_MILOST=/opt/presenter-dev/bibles/milost.bbl.mybible.zip
+          export PRESENTER_BIBLE_AMPC=/opt/presenter-dev/bibles/ampc.usfm.zip
+          export PRESENTER_BIBLE_SSV=/opt/presenter-dev/bibles/ssv.usfm.zip
+          export PRESENTER_BIBLE_BOTEK=/opt/presenter-dev/bibles/botek.usfm.zip
+          export PRESENTER_BIBLE_CSP=/opt/presenter-dev/bibles/csp.usfm.zip
           /opt/presenter-dev/ingest_bibles
           REMOTE_SCRIPT
 
