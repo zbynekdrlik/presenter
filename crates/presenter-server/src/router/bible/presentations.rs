@@ -344,7 +344,9 @@ pub(crate) async fn delete_bible_presentation_slide(
             BiblePresentationId::from_uuid(pres_uuid),
             BibleSlideId::from_uuid(slide_uuid),
         )
-        .await?;
+        .await
+        // #917: a sermon item the console must not delete answers 422 with its reason.
+        .map_err(sermon_error)?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 

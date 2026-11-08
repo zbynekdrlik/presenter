@@ -1,8 +1,9 @@
 //! A sermon's slides edited from the operator console (#917): one kind of Bible
 //! presentation for the operator. A sermon's slides are generated from its items,
 //! so deleting a slide deletes the item that produced it, and a new slide order
-//! orders the items by where each item's first named slide stands. The slide
-//! text itself stays generated (`update_bible_slide` is still refused, `guard.rs`).
+//! orders the items by where each item's first named slide stands. A slide whose
+//! item has more slides or the pastor's cuts is not deleted here (422, Štúdium).
+//! The slide text itself stays generated (`update_bible_slide` is still refused, `guard.rs`).
 
 use std::collections::HashMap;
 
@@ -13,9 +14,11 @@ use uuid::Uuid;
 use super::super::AppState;
 use super::commit::SermonChange;
 use super::generate::stable_slide_id;
-use super::{SermonOp, SermonOrigin};
+use super::{SermonOp, SermonOrigin, SermonRefusal};
 
 const SLIDE_NOT_FOUND: &str = "slide not found in presentation";
+const KEEPS_THE_PASTORS_WORK: &str =
+    "Táto snímka patrí k položke kázne s úpravami alebo s viacerými snímkami — zmaž ju v Štúdiu";
 
 /// Which item generated each slide (the stable ids of `generate.rs`).
 fn owners(items: &[SermonItemRecord]) -> HashMap<BibleSlideId, Uuid> {
@@ -73,6 +76,15 @@ impl AppState {
         let item_id = *owners(&snapshot.items)
             .get(&slide_id)
             .ok_or(RepositoryError::NotFound(SLIDE_NOT_FOUND))?;
+        // The console sees one slide; never throw away more than that slide shows
+        // or the pastor's cuts and emphasis (review of #917).
+        if snapshot
+            .items
+            .iter()
+            .any(|item| item.id == item_id && (item.slide_count > 1 || !item.edits.0.is_empty()))
+        {
+            return Err(SermonRefusal::new(KEEPS_THE_PASTORS_WORK).into());
+        }
         self.delete_sermon_item(id, item_id, snapshot.sermon.revision, origin)
             .await?;
         self.sermon_presentation(id).await

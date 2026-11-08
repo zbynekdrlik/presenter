@@ -153,7 +153,9 @@ paths:
   `system()`: the server's own pass refuses to store a missing secondary line). The UI's
   `append_presentation_slides` uses `post_json_refusal`, toasts show `ApiError::user_text`.
 - **Delete / reorder a sermon's slides (#917, `slides.rs`):** `delete_bible_slide` on a sermon deletes
-  the ITEM that generated the slide (owner via `stable_slide_id`, unknown slide → 404);
+  the ITEM that generated the slide (owner via `stable_slide_id`, unknown slide → 404) — but only an
+  item with ONE slide and NO edits; otherwise `SermonRefusal` 422 "… zmaž ju v Štúdiu" (the console
+  sees one slide and must never throw away the pastor's cuts; the AI tool gets the same refusal);
   `reorder_bible_slides` orders the items by where each item's first named slide stands (unnamed
   items keep their order, an unchanged order writes nothing). Both are one sermon write.
 - **Sermon slide TEXT stays read-only on the presentation routes** (spec §8.2): `refuse_if_sermon`
