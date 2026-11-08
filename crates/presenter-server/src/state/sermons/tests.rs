@@ -13,7 +13,8 @@ use chrono::{Days, Utc};
 use presenter_core::bible::sermon::{ItemEdits, SourceVerse, VerseEdits};
 use presenter_core::bible::BibleIngestionBatch;
 use presenter_core::{
-    BiblePassage, BiblePreferences, BiblePresentationId, BibleReference, BibleTranslation,
+    BiblePassage, BiblePreferences, BiblePresentationId, BibleReference, BibleSlideId,
+    BibleTranslation,
 };
 use presenter_persistence::{NewSermon, SermonItemRecord, SermonRecord, SermonWrite};
 use std::time::Duration;
@@ -589,26 +590,20 @@ async fn sermon_slides_are_read_only_on_the_presentation_paths() {
         .slides;
     let slide_id = slides[0].slide.id;
 
-    // #917: append is no longer refused — it adds items (tests below).
-    let refusals = [
-        state.delete_bible_slide(id, slide_id).await.map(|_| ()),
-        state
-            .reorder_bible_slides(id, vec![slide_id])
-            .await
-            .map(|_| ()),
-        state
-            .update_bible_slide(
-                id,
-                slide_id,
-                "x".into(),
-                "y".into(),
-                String::new(),
-                String::new(),
-                None,
-            )
-            .await
-            .map(|_| ()),
-    ];
+    // #917: append, delete and reorder map to the items (tests below); a slide's
+    // text is still generated from its item.
+    let refusals = [state
+        .update_bible_slide(
+            id,
+            slide_id,
+            "x".into(),
+            "y".into(),
+            String::new(),
+            String::new(),
+            None,
+        )
+        .await
+        .map(|_| ())];
 
     for refused in refusals {
         let err = refused.expect_err("a sermon's slides are generated");
@@ -1287,4 +1282,86 @@ async fn a_slide_without_verses_is_refused_for_a_sermon_with_a_slovak_reason() {
         .expect("detail")
         .expect("sermon");
     assert!(detail.items.is_empty());
+}
+
+// ---- #917: delete / reorder a sermon's slides from the console = its items ----
+
+async fn two_item_sermon(state: &AppState) -> (BiblePresentationId, Vec<(Uuid, BibleSlideId)>) {
+    let id = stored_sermon(
+        state,
+        local_today(),
+        vec![item(1..=1, &[]), item(2..=3, &[])],
+    )
+    .await;
+    state.regenerate_future_sermons(local_today()).await;
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let firsts = detail
+        .items
+        .iter()
+        .map(|i| (i.record.id, i.slide_ids[0]))
+        .collect();
+    (id, firsts)
+}
+
+#[tokio::test]
+async fn deleting_a_sermon_slide_deletes_its_item() {
+    let state = hebrews().await;
+    let (id, items) = two_item_sermon(&state).await;
+    let before = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+
+    let presentation = state
+        .delete_bible_slide(id, items[1].1)
+        .await
+        .expect("the console deletes a sermon slide");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let left: Vec<Uuid> = detail.items.iter().map(|i| i.record.id).collect();
+    assert_eq!(left, vec![items[0].0]);
+    assert_eq!(detail.sermon.revision, before.sermon.revision + 1);
+    assert_eq!(presentation.slides.len(), detail.slides.len());
+}
+
+#[tokio::test]
+async fn reordering_sermon_slides_reorders_its_items() {
+    let state = hebrews().await;
+    let (id, items) = two_item_sermon(&state).await;
+
+    state
+        .reorder_bible_slides(id, vec![items[1].1, items[0].1])
+        .await
+        .expect("the console reorders a sermon");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let order: Vec<Uuid> = detail.items.iter().map(|i| i.record.id).collect();
+    assert_eq!(order, vec![items[1].0, items[0].0]);
+}
+
+#[tokio::test]
+async fn deleting_an_unknown_sermon_slide_is_not_found() {
+    let state = hebrews().await;
+    let (id, _) = two_item_sermon(&state).await;
+    let err = state
+        .delete_bible_slide(id, BibleSlideId::new())
+        .await
+        .expect_err("unknown slide");
+    assert!(matches!(
+        err.downcast_ref::<presenter_persistence::RepositoryError>(),
+        Some(presenter_persistence::RepositoryError::NotFound(_))
+    ));
 }

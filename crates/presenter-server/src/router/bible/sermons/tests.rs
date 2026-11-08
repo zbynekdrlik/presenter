@@ -242,21 +242,14 @@ async fn a_sermons_slides_refuse_the_presentation_slide_routes() {
         .expect("slide id")
         .to_string();
     let slide_uri = format!("/bible/presentations/{id}/slides/{slide_id}");
-    // #917: append is not refused any more — it adds items (test below).
-    let refused = [
-        (
-            "PATCH",
-            slide_uri.clone(),
-            Some(json!({ "bibleMain": "x", "bibleTranslation": "",
-                "bibleMainReference": "", "bibleTranslationReference": "" })),
-        ),
-        ("DELETE", slide_uri, None),
-        (
-            "POST",
-            format!("/bible/presentations/{id}/slides/reorder"),
-            Some(json!({ "slideIds": [slide_id] })),
-        ),
-    ];
+    // #917: append, delete and reorder map to the items (tests below); only the
+    // slide text stays generated.
+    let refused = [(
+        "PATCH",
+        slide_uri.clone(),
+        Some(json!({ "bibleMain": "x", "bibleTranslation": "",
+            "bibleMainReference": "", "bibleTranslationReference": "" })),
+    )];
 
     for (method, uri, body) in refused {
         let (status, answer) = call(&app, method, &uri, body, &[]).await;
@@ -503,4 +496,40 @@ async fn the_console_adds_verses_to_a_sermon_and_an_empty_slide_gets_a_reason() 
         refused["message"],
         "Do kázne sa pridávajú len verše z Biblie"
     );
+}
+
+#[tokio::test]
+async fn the_console_reorders_and_deletes_a_sermons_slides_through_its_items() {
+    let (app, id) = app_with_sermon().await;
+    // A second item (Heb 11:1 again — the fixture holds one verse).
+    let (_, current) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
+    let add = json!({ "expectedRevision": current["revision"], "translation": "slk-seb",
+        "bookCode": "HEB", "chapter": 11, "verseStart": 1, "verseEnd": 1 });
+    let uri = format!("/bible/sermons/{id}/items");
+    let (status, sermon) = call(&app, "POST", &uri, Some(add), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{sermon}");
+    let first = sermon["items"][0]["slideIds"][0]
+        .as_str()
+        .expect("slide")
+        .to_string();
+    let second = sermon["items"][1]["slideIds"][0]
+        .as_str()
+        .expect("slide")
+        .to_string();
+    let first_item = sermon["items"][0]["id"].clone();
+    let second_item = sermon["items"][1]["id"].clone();
+
+    let reorder = json!({ "slideIds": [second, first] });
+    let uri = format!("/bible/presentations/{id}/slides/reorder");
+    let (status, answer) = call(&app, "POST", &uri, Some(reorder), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (_, after) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
+    assert_eq!(after["items"][0]["id"], second_item);
+
+    let uri = format!("/bible/presentations/{id}/slides/{second}");
+    let (status, answer) = call(&app, "DELETE", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (_, after) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
+    assert_eq!(after["items"].as_array().expect("items").len(), 1);
+    assert_eq!(after["items"][0]["id"], first_item);
 }
