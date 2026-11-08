@@ -242,12 +242,8 @@ async fn a_sermons_slides_refuse_the_presentation_slide_routes() {
         .expect("slide id")
         .to_string();
     let slide_uri = format!("/bible/presentations/{id}/slides/{slide_id}");
+    // #917: append is not refused any more — it adds items (test below).
     let refused = [
-        (
-            "POST",
-            format!("/bible/presentations/{id}/append"),
-            Some(json!({ "slides": [{ "bibleMain": "x", "bibleTranslation": "" }] })),
-        ),
         (
             "PATCH",
             slide_uri.clone(),
@@ -456,4 +452,55 @@ async fn shown_today_keeps_a_plain_presentation_slide_but_never_a_sermons() {
     let (_, shown) = call(&app, "GET", "/bible/shown-today", None, &[]).await;
     assert_eq!(shown[0]["label"], "Hebrejom 11:1");
     assert_eq!(shown[0]["bookCode"], "HEB");
+}
+
+/// #917: the operator console adds verses to a sermon (they become items); a
+/// slide that is no verse is a 422 with the reason, never a bare 409.
+#[tokio::test]
+async fn the_console_adds_verses_to_a_sermon_and_an_empty_slide_gets_a_reason() {
+    let (app, id) = app_with_sermon().await;
+    let sermon_uri = format!("/bible/sermons/{id}");
+    let (_, before) = call(&app, "GET", &sermon_uri, None, &[]).await;
+    let items_before = before["items"].as_array().expect("items").len();
+    let bible = json!({
+        "translationCode": "slk-seb", "book": "Hebrejom", "bookCode": "HEB", "bookNumber": 58,
+        "chapter": 11, "verses": [{ "start": 1, "end": 1 }],
+    });
+    let append = format!("/bible/presentations/{id}/append");
+    let (status, appended) = call(
+        &app,
+        "POST",
+        &append,
+        Some(json!({ "slides": [{
+            "bibleMain": HEB_11_1, "bibleTranslation": "",
+            "bibleMainReference": "Hebrejom 11:1 (SEB)",
+            "metadata": { "bible": bible },
+        }] })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{appended}");
+    let (_, after) = call(&app, "GET", &sermon_uri, None, &[]).await;
+    assert_eq!(
+        after["items"].as_array().expect("items").len(),
+        items_before + 1
+    );
+    assert_eq!(
+        appended["slides"].as_array().expect("slides").len(),
+        after["slides"].as_array().expect("slides").len()
+    );
+
+    let (status, refused) = call(
+        &app,
+        "POST",
+        &append,
+        Some(json!({ "slides": [{ "bibleMain": "", "bibleTranslation": "" }] })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(
+        refused["message"],
+        "Do kázne sa pridávajú len verše z Biblie"
+    );
 }

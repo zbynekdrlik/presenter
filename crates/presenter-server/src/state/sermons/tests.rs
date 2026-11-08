@@ -589,11 +589,8 @@ async fn sermon_slides_are_read_only_on_the_presentation_paths() {
         .slides;
     let slide_id = slides[0].slide.id;
 
+    // #917: append is no longer refused — it adds items (tests below).
     let refusals = [
-        state
-            .append_bible_presentation_slides(id, Vec::new())
-            .await
-            .map(|_| ()),
         state.delete_bible_slide(id, slide_id).await.map(|_| ()),
         state
             .reorder_bible_slides(id, vec![slide_id])
@@ -1185,4 +1182,109 @@ async fn a_range_with_a_hole_in_the_translation_is_refused() {
         refusal(&err).as_deref(),
         Some("HEB 11:1-3 nie je celé v preklade GAP")
     );
+}
+
+// ---- #917: verses from the console become sermon items ----------------------
+
+/// A slide as the operator console sends it: Hebrews 11 in `translation`.
+fn console_slide(
+    translation: &str,
+    verses: &[(u16, u16)],
+) -> presenter_core::BiblePresentationSlide {
+    use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef};
+    presenter_core::BiblePresentationSlide {
+        id: presenter_core::BibleSlideId::new(),
+        order: 0,
+        main: presenter_core::SlideText::new("text").expect("text"),
+        main_reference: "Hebrejom 11 (SEB)".to_string(),
+        secondary: presenter_core::SlideText::new("").expect("empty"),
+        secondary_reference: String::new(),
+        metadata: Some(BibleSlideMetadata {
+            translation_code: translation.to_string(),
+            secondary_translation_code: None,
+            book: "Hebrejom".to_string(),
+            book_code: Some("HEB".to_string()),
+            book_number: Some(58),
+            chapter: 11,
+            verses: verses
+                .iter()
+                .map(|(start, end)| BibleSlideVerseRef::new(*start, *end))
+                .collect(),
+            main_reference_label: None,
+            translation_reference_label: None,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn console_verses_appended_to_a_sermon_become_one_item_per_passage() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=1, &[])]).await;
+    let before = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+
+    // One passage split over two slides (2, then 3) + the same verse in KJV.
+    let presentation = state
+        .append_bible_presentation_slides(
+            id,
+            vec![
+                console_slide("slk-seb", &[(2, 2)]),
+                console_slide("slk-seb", &[(3, 3)]),
+                console_slide("eng-kjv", &[(1, 1)]),
+            ],
+        )
+        .await
+        .expect("a sermon takes verses from the console");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let items: Vec<(String, u16, u16)> = detail
+        .items
+        .iter()
+        .map(|i| {
+            (
+                i.record.translation_code.clone(),
+                i.record.verse_start,
+                i.record.verse_end,
+            )
+        })
+        .collect();
+    assert_eq!(
+        items,
+        vec![
+            ("slk-seb".to_string(), 1, 1),
+            ("slk-seb".to_string(), 2, 3),
+            ("eng-kjv".to_string(), 1, 1),
+        ]
+    );
+    assert_eq!(detail.sermon.revision, before.sermon.revision + 1);
+    assert_eq!(presentation.slides.len(), detail.slides.len());
+    assert!(presentation.slides.len() > before.slides.len());
+}
+
+#[tokio::test]
+async fn a_slide_without_verses_is_refused_for_a_sermon_with_a_slovak_reason() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), Vec::new()).await;
+    let mut empty = console_slide("slk-seb", &[(1, 1)]);
+    empty.metadata = None;
+
+    let err = state
+        .append_bible_presentation_slides(id, vec![empty])
+        .await
+        .expect_err("an empty slide is no verse");
+    let refusal = err.downcast_ref::<SermonRefusal>().expect("422 refusal");
+    assert_eq!(refusal.0, "Do kázne sa pridávajú len verše z Biblie");
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert!(detail.items.is_empty());
 }
