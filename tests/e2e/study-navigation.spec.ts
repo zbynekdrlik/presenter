@@ -134,6 +134,7 @@ test("the sheet offers only what works today", async ({ browser }) => {
     "Pridať do kázne",
     "Porovnať",
     /^Odkazy \(\d+\)$/,
+    "Uložiť záložku",
     "Kopírovať",
   ]);
   await finish(opened);
