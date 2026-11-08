@@ -265,8 +265,23 @@ impl AppState {
         id: BiblePresentationId,
         new_slides: Vec<BiblePresentationSlide>,
     ) -> anyhow::Result<BiblePresentation> {
-        // #851 §8.2: a sermon's slides are generated from its items.
-        self.refuse_if_sermon(id).await?;
+        self.append_bible_presentation_slides_as(id, new_slides, &SermonOrigin::unattributed())
+            .await
+    }
+
+    /// Append slides; `origin` labels the write when the presentation is a
+    /// sermon. #917: one kind of presentation for the operator — a sermon takes
+    /// the verses too, as new items (its slides are generated from its items,
+    /// #851 §8.2), never as stored slides.
+    pub(crate) async fn append_bible_presentation_slides_as(
+        &self,
+        id: BiblePresentationId,
+        new_slides: Vec<BiblePresentationSlide>,
+        origin: &SermonOrigin,
+    ) -> anyhow::Result<BiblePresentation> {
+        if self.repository.is_sermon(id).await? {
+            return self.append_to_sermon(id, &new_slides, origin).await;
+        }
         // Note: empty slides are permitted — the operator UI's "add empty
         // slide" button intentionally creates placeholder slides that the
         // operator fills in by editing text in place.
@@ -288,7 +303,12 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_id: BibleSlideId,
     ) -> anyhow::Result<BiblePresentation> {
-        self.refuse_if_sermon(presentation_id).await?;
+        // #917: a sermon's slide is its item's — the item goes.
+        if self.repository.is_sermon(presentation_id).await? {
+            return self
+                .delete_sermon_slide(presentation_id, slide_id, &SermonOrigin::unattributed())
+                .await;
+        }
         let mut presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -325,7 +345,12 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_ids: Vec<BibleSlideId>,
     ) -> anyhow::Result<BiblePresentation> {
-        self.refuse_if_sermon(presentation_id).await?;
+        // #917: a sermon's slide order is its item order.
+        if self.repository.is_sermon(presentation_id).await? {
+            return self
+                .reorder_sermon_slides(presentation_id, &slide_ids, &SermonOrigin::unattributed())
+                .await;
+        }
         let presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)

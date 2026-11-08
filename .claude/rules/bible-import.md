@@ -46,6 +46,9 @@ paths:
   workflows only — E2E does not load them (translation lists and chip rows stay as the specs expect).
   web-overlays' `sep` is our SEVP (same text), skipped. The private repo needs the noreply commit
   email (GH007 rejects the box's own address).
+- **Post-deploy count (read-only):** verses live in `bible_passages` (`translation_code`, `book`,
+  `book_code`, `chapter`, `verse_start`) — no `bible_verses` table:
+  `SELECT translation_code, COUNT(*), COUNT(DISTINCT book_code) FROM bible_passages GROUP BY 1`.
 - **Local dev:** `git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private`
   (gitignored). `tests/e2e/support.ts` `refreshDevData` and the ai_eval recipe point there.
 - **A missing module fails loudly, never silently:** an unset `PRESENTER_BIBLE_*` skips that

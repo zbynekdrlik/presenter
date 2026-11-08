@@ -1,6 +1,7 @@
 ---
 paths:
   - ".github/workflows/deploy.yml"
+  - ".github/workflows/deploy-site.yml"
   - ".github/workflows/pipeline.yml"
   - ".github/workflows/release.yml"
   - ".github/workflows/import-data.yml"
@@ -63,3 +64,17 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   `persist-credentials: false`) and reads `data/bibles-private/<file>`; release.yml
   `build-release` (the public tarball) never checks it out. Enforced by
   `scripts/ci/check_public_bibles.py`; details in `.claude/rules/bible-import.md`.
+
+## One reusable site deploy (#918)
+
+- **deploy.yml only CALLS `deploy-site.yml` (`workflow_call`) once per site**: SNV (`hardware: true`,
+  `library_sync: true`), then PRBA on dev1 (`needs: [build, deploy]`, `hardware: false`,
+  `library_sync: false`). Every SNV path/port/service is an input (`/opt/presenter`, `80`,
+  `presenter`, `/etc/presenter`), so a step edit lands in `deploy-site.yml`, never deploy.yml.
+- `scripts/ci/test_deploy_site_workflow.py` pins SNV's exact 27-step list and PRBA's skips; the
+  shell guards `tests/ci/adb-install-set-e.test.sh` and `tests/deploy/deploy-config.test.sh` read
+  `deploy-site.yml` (a guard that greps deploy.yml for a step finds nothing since #918).
+- PRBA without the library sync must already hold its seeded DB (`require_seeded_db.sh`, seed:
+  `scripts/ops/seed_prba_from_snv.sh`, run once). Its tunnel is `cloudflared-prba.service` (never
+  `cloudflared service install` on dev1). A Cloudflare firewall rule blocks non-GET requests to
+  the device / AI / sync routes on `prba.newlevel.media` — dev1 sits on the SNV LAN.

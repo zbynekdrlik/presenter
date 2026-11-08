@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloudflare Tunnel for the PRBA Presenter (prba.newlevel.media, #918)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# The token (TUNNEL_TOKEN=...) is written by deploy-site.yml, 0600 root-only — never committed.
+EnvironmentFile=/etc/presenter-prba/cloudflared.env
+# deploy-site.yml rewrites this line to the host's cloudflared path.
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -7,10 +7,12 @@
 //! `presenter::bible::sermon` line is logged. Item text is a snapshot, so a
 //! Bible re-import never changes a sermon (spec §5.7).
 
+mod append;
 mod commit;
 mod generate;
 mod guard;
 mod maintain;
+mod slides;
 mod snapshot;
 mod view;
 mod write;
@@ -39,6 +41,15 @@ impl SermonOrigin {
         Self {
             author: None,
             client_ip: SYSTEM_CLIENT.to_string(),
+        }
+    }
+
+    /// A write with no person behind it that is still not the server's own
+    /// pass (the HTTP-less `append_bible_presentation_slides`: AI tools, eval).
+    pub(crate) fn unattributed() -> Self {
+        Self {
+            author: None,
+            client_ip: "-".to_string(),
         }
     }
 

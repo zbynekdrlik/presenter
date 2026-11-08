@@ -13,7 +13,8 @@ use chrono::{Days, Utc};
 use presenter_core::bible::sermon::{ItemEdits, SourceVerse, VerseEdits};
 use presenter_core::bible::BibleIngestionBatch;
 use presenter_core::{
-    BiblePassage, BiblePreferences, BiblePresentationId, BibleReference, BibleTranslation,
+    BiblePassage, BiblePreferences, BiblePresentationId, BibleReference, BibleSlideId,
+    BibleTranslation,
 };
 use presenter_persistence::{NewSermon, SermonItemRecord, SermonRecord, SermonWrite};
 use std::time::Duration;
@@ -589,29 +590,20 @@ async fn sermon_slides_are_read_only_on_the_presentation_paths() {
         .slides;
     let slide_id = slides[0].slide.id;
 
-    let refusals = [
-        state
-            .append_bible_presentation_slides(id, Vec::new())
-            .await
-            .map(|_| ()),
-        state.delete_bible_slide(id, slide_id).await.map(|_| ()),
-        state
-            .reorder_bible_slides(id, vec![slide_id])
-            .await
-            .map(|_| ()),
-        state
-            .update_bible_slide(
-                id,
-                slide_id,
-                "x".into(),
-                "y".into(),
-                String::new(),
-                String::new(),
-                None,
-            )
-            .await
-            .map(|_| ()),
-    ];
+    // #917: append, delete and reorder map to the items (tests below); a slide's
+    // text is still generated from its item.
+    let refusals = [state
+        .update_bible_slide(
+            id,
+            slide_id,
+            "x".into(),
+            "y".into(),
+            String::new(),
+            String::new(),
+            None,
+        )
+        .await
+        .map(|_| ())];
 
     for refused in refusals {
         let err = refused.expect_err("a sermon's slides are generated");
@@ -1185,4 +1177,220 @@ async fn a_range_with_a_hole_in_the_translation_is_refused() {
         refusal(&err).as_deref(),
         Some("HEB 11:1-3 nie je celé v preklade GAP")
     );
+}
+
+// ---- #917: verses from the console become sermon items ----------------------
+
+/// A slide as the operator console sends it: Hebrews 11 in `translation`.
+fn console_slide(
+    translation: &str,
+    verses: &[(u16, u16)],
+) -> presenter_core::BiblePresentationSlide {
+    use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef};
+    presenter_core::BiblePresentationSlide {
+        id: presenter_core::BibleSlideId::new(),
+        order: 0,
+        main: presenter_core::SlideText::new("text").expect("text"),
+        main_reference: "Hebrejom 11 (SEB)".to_string(),
+        secondary: presenter_core::SlideText::new("").expect("empty"),
+        secondary_reference: String::new(),
+        metadata: Some(BibleSlideMetadata {
+            translation_code: translation.to_string(),
+            secondary_translation_code: None,
+            book: "Hebrejom".to_string(),
+            book_code: Some("HEB".to_string()),
+            book_number: Some(58),
+            chapter: 11,
+            verses: verses
+                .iter()
+                .map(|(start, end)| BibleSlideVerseRef::new(*start, *end))
+                .collect(),
+            main_reference_label: None,
+            translation_reference_label: None,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn console_verses_appended_to_a_sermon_become_one_item_per_passage() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=1, &[])]).await;
+    let before = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+
+    // One passage split over two slides (2, then 3) + the same verse in KJV.
+    let presentation = state
+        .append_bible_presentation_slides(
+            id,
+            vec![
+                console_slide("slk-seb", &[(2, 2)]),
+                console_slide("slk-seb", &[(3, 3)]),
+                console_slide("eng-kjv", &[(1, 1)]),
+            ],
+        )
+        .await
+        .expect("a sermon takes verses from the console");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let items: Vec<(String, u16, u16)> = detail
+        .items
+        .iter()
+        .map(|i| {
+            (
+                i.record.translation_code.clone(),
+                i.record.verse_start,
+                i.record.verse_end,
+            )
+        })
+        .collect();
+    assert_eq!(
+        items,
+        vec![
+            ("slk-seb".to_string(), 1, 1),
+            ("slk-seb".to_string(), 2, 3),
+            ("eng-kjv".to_string(), 1, 1),
+        ]
+    );
+    assert_eq!(detail.sermon.revision, before.sermon.revision + 1);
+    assert_eq!(presentation.slides.len(), detail.slides.len());
+    assert!(presentation.slides.len() > before.slides.len());
+}
+
+#[tokio::test]
+async fn a_slide_without_verses_is_refused_for_a_sermon_with_a_slovak_reason() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), Vec::new()).await;
+    let mut empty = console_slide("slk-seb", &[(1, 1)]);
+    empty.metadata = None;
+
+    let err = state
+        .append_bible_presentation_slides(id, vec![empty])
+        .await
+        .expect_err("an empty slide is no verse");
+    let refusal = err.downcast_ref::<SermonRefusal>().expect("422 refusal");
+    assert_eq!(refusal.0, "Do kázne sa pridávajú len verše z Biblie");
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert!(detail.items.is_empty());
+}
+
+// ---- #917: delete / reorder a sermon's slides from the console = its items ----
+
+async fn two_item_sermon(state: &AppState) -> (BiblePresentationId, Vec<(Uuid, BibleSlideId)>) {
+    let id = stored_sermon(
+        state,
+        local_today(),
+        vec![item(1..=1, &[]), item(2..=3, &[])],
+    )
+    .await;
+    state.regenerate_future_sermons(local_today()).await;
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let firsts = detail
+        .items
+        .iter()
+        .map(|i| (i.record.id, i.slide_ids[0]))
+        .collect();
+    (id, firsts)
+}
+
+#[tokio::test]
+async fn deleting_a_sermon_slide_deletes_its_item() {
+    let state = hebrews().await;
+    let (id, items) = two_item_sermon(&state).await;
+    let before = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+
+    let presentation = state
+        .delete_bible_slide(id, items[1].1)
+        .await
+        .expect("the console deletes a sermon slide");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let left: Vec<Uuid> = detail.items.iter().map(|i| i.record.id).collect();
+    assert_eq!(left, vec![items[0].0]);
+    assert_eq!(detail.sermon.revision, before.sermon.revision + 1);
+    assert_eq!(presentation.slides.len(), detail.slides.len());
+}
+
+#[tokio::test]
+async fn reordering_sermon_slides_reorders_its_items() {
+    let state = hebrews().await;
+    let (id, items) = two_item_sermon(&state).await;
+
+    state
+        .reorder_bible_slides(id, vec![items[1].1, items[0].1])
+        .await
+        .expect("the console reorders a sermon");
+
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let order: Vec<Uuid> = detail.items.iter().map(|i| i.record.id).collect();
+    assert_eq!(order, vec![items[1].0, items[0].0]);
+}
+
+#[tokio::test]
+async fn deleting_an_unknown_sermon_slide_is_not_found() {
+    let state = hebrews().await;
+    let (id, _) = two_item_sermon(&state).await;
+    let err = state
+        .delete_bible_slide(id, BibleSlideId::new())
+        .await
+        .expect_err("unknown slide");
+    assert!(matches!(
+        err.downcast_ref::<presenter_persistence::RepositoryError>(),
+        Some(presenter_persistence::RepositoryError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_sermon_slide_whose_item_carries_the_pastors_cuts_is_not_deleted() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=1, &[(1, &[0])])]).await;
+    state.regenerate_future_sermons(local_today()).await;
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let slide_id = detail.items[0].slide_ids[0];
+
+    let err = state
+        .delete_bible_slide(id, slide_id)
+        .await
+        .expect_err("the pastor's cuts are not thrown away from the console");
+    let refusal = err.downcast_ref::<SermonRefusal>().expect("422 refusal");
+    assert_eq!(
+        refusal.0,
+        "Táto snímka patrí k položke kázne s úpravami alebo s viacerými snímkami — zmaž ju v Štúdiu"
+    );
+    let after = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert_eq!(after.items.len(), 1);
 }

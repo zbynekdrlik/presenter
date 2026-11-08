@@ -4,7 +4,7 @@
 //! `BibleSlideDto`/`bible_slide_to_dto` from the sibling `resolve` module.
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::NaiveDate;
 use presenter_core::slide::SlideMetadata;
@@ -16,6 +16,7 @@ use tracing::instrument;
 
 use super::super::AppError;
 use super::resolve::{bible_slide_to_dto, BibleSlideDto};
+use super::sermons::{origin, sermon_error, Peer};
 use crate::state::AppState;
 
 // Bible Presentations
@@ -297,6 +298,8 @@ pub(crate) async fn update_bible_slide(
 pub(crate) async fn append_bible_presentation_handler(
     State(state): State<AppState>,
     Path(id): Path<uuid::Uuid>,
+    headers: HeaderMap,
+    peer: Peer,
     Json(payload): Json<AppendBibleSlidesRequest>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     if payload.slides.is_empty() {
@@ -306,9 +309,17 @@ pub(crate) async fn append_bible_presentation_handler(
     for input in payload.slides {
         slides.push(request_slide_to_domain(input)?);
     }
+    // #917: a sermon takes the verses as items — its refusals (a slide without
+    // verses, the NLT, > 60 verses) answer 422 with the Slovak reason through the
+    // sermon routes' one mapping, labelled with the writer like a sermon write.
     let presentation = state
-        .append_bible_presentation_slides(BiblePresentationId::from_uuid(id), slides)
-        .await?;
+        .append_bible_presentation_slides_as(
+            BiblePresentationId::from_uuid(id),
+            slides,
+            &origin(&headers, peer),
+        )
+        .await
+        .map_err(sermon_error)?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 
@@ -333,7 +344,9 @@ pub(crate) async fn delete_bible_presentation_slide(
             BiblePresentationId::from_uuid(pres_uuid),
             BibleSlideId::from_uuid(slide_uuid),
         )
-        .await?;
+        .await
+        // #917: a sermon item the console must not delete answers 422 with its reason.
+        .map_err(sermon_error)?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 

@@ -53,7 +53,8 @@ not_hardcoding_stage_url() {
 }
 
 prod_deploy_writes_stage_url_dropin() {
-  grep -q 'stage-url.conf' "$REPO_ROOT/.github/workflows/deploy.yml"
+  # #918: the SNV deploy steps live in the reusable deploy-site.yml (deploy.yml calls it).
+  grep -q 'stage-url.conf' "$REPO_ROOT/.github/workflows/deploy-site.yml"
 }
 
 pp_release_writes_stage_url_dropin() {
@@ -290,11 +291,19 @@ deploy_deletes_the_registry_under_its_deploy_dir() {
     grep -qE 'rm -f +(\$\{\{ *env\.DEPLOY_DIR *\}\}|'"$dir"')/gstreamer-registry\.bin' "$wf"
 }
 
+# #918: SNV's deploy dir is an input deploy.yml passes to the reusable deploy-site.yml,
+# whose step deletes the registry under that input.
+snv_deploy_deletes_the_registry_under_opt_presenter() {
+  grep -qE '^ *deploy_dir: */opt/presenter *$' "$REPO_ROOT/.github/workflows/deploy.yml" &&
+    grep -qE 'rm -f +\$\{\{ *env\.DEPLOY_DIR *\}\}/gstreamer-registry\.bin' \
+      "$REPO_ROOT/.github/workflows/deploy-site.yml"
+}
+
 every_deploy_rebuilds_the_registry() {
   # Deleting the registry file is what guarantees the next start re-probes the plugins
   # against the CURRENT permissions/driver. Without it, #544 comes back the first time a
   # host's GPU access or driver changes.
-  deploy_deletes_the_registry_under_its_deploy_dir deploy.yml /opt/presenter &&
+  snv_deploy_deletes_the_registry_under_opt_presenter &&
     deploy_deletes_the_registry_under_its_deploy_dir release.yml /opt/presenter &&
     deploy_deletes_the_registry_under_its_deploy_dir pipeline.yml /opt/presenter-dev
 }
@@ -306,7 +315,7 @@ every_deploy_ships_the_gate_script() {
   # host, and the install that puts it in the deploy dir. Grepping the bare filename
   # would stay green with the scp deleted.
   local wf
-  for wf in deploy.yml release.yml pipeline.yml; do
+  for wf in deploy-site.yml release.yml pipeline.yml; do
     grep -qE 'scp .*wait-for-h264-encoder\.sh' "$REPO_ROOT/.github/workflows/$wf" || return 1
     grep -qE 'install .*wait-for-h264-encoder\.sh' "$REPO_ROOT/.github/workflows/$wf" || return 1
   done
