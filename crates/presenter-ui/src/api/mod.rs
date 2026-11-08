@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod bible;
+pub mod bookmarks;
 pub mod interpreter_tips;
 pub mod libraries;
 pub mod listen;

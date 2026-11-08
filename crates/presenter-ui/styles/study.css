@@ -964,6 +964,50 @@
   background: var(--study-panel);
 }
 
+/* Named bookmarks (#915): the name + place opens, the actions sit under it
+   (three 44 px buttons fit a 360 px sheet in one row). */
+.study-bookmark {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--study-line);
+}
+
+.study-bookmark__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.study-bookmark__actions .study-button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 8px;
+}
+
+.study-bookmark__rename,
+.study-bookmark__save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.study-bookmark__rename .study-input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.study-bookmark__save .study-input,
+.study-bookmark__save .study-button {
+  width: 100%;
+}
+
+.study-icon__svg {
+  display: block;
+}
+
 .study-sizes {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

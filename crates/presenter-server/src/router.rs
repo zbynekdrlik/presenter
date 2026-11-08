@@ -474,9 +474,10 @@ pub fn build_router(state: AppState) -> Router {
         // collides.
         .merge(stream_playback::routes())
         // #851: sermons + the Access identity (`/bible/sermons*`,
-        // `/bible/study/identity`); static `/today` wins over `/{id}`.
+        // `/bible/study/identity`); static `/today` wins over `/{id}`; #915 bookmarks.
         .merge(bible::sermons::routes())
-        .merge(bible::study::routes());
+        .merge(bible::study::routes())
+        .merge(bible::bookmarks::routes());
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
     request_log::with_request_log(router).with_state(state)
 }

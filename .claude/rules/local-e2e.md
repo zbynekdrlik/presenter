@@ -26,6 +26,9 @@ before the push (one CI cycle is ~25 min).
 - **Port 8091:** the mock-integrations build binds the embedded mock Resolume on
   127.0.0.1:8091, and so does the running `presenter-dev` service. Stop it for
   the run (`sudo systemctl stop presenter-dev`), start it again afterwards.
+  Each spec file's own server binds it too, so run locally with `--workers=1`:
+  with two workers the second server fails to bind and its file dies in `beforeAll`
+  (180 s timeout), which looks like a test failure (#915).
 - **Env:** the `PRESENTER_LIBRARY_ROOT` / `PRESENTER_BIBLE_*` variables of
   pipeline.yml's "Run Playwright tests" step (KJV from `data/bibles`, the others
   from `data/bibles-private`). Leave `CI` unset locally, or a failure retries.

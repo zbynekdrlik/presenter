@@ -5,7 +5,7 @@
 use leptos::prelude::*;
 
 use super::sheet::Sheet;
-use super::{add_to_sermon, compare, crossrefs, nav, Chapter, Study};
+use super::{add_to_sermon, bookmarks, compare, crossrefs, nav, Chapter, Study};
 use crate::api::sermons::SermonPassage;
 use crate::components::timer_panel::copy_to_clipboard;
 use crate::state::study::{copy_text, verse_reference};
@@ -15,6 +15,7 @@ enum VerseAction {
     AddToSermon,
     Compare,
     CrossRefs,
+    SaveBookmark,
     Copy,
 }
 
@@ -24,6 +25,7 @@ impl VerseAction {
             Self::AddToSermon => "Pridať do kázne".to_string(),
             Self::Compare => "Porovnať".to_string(),
             Self::CrossRefs => crossrefs::button_label(s),
+            Self::SaveBookmark => "Uložiť záložku".to_string(),
             Self::Copy => "Kopírovať".to_string(),
         }
     }
@@ -33,15 +35,17 @@ impl VerseAction {
             Self::AddToSermon => "verse-add-to-sermon",
             Self::Compare => "verse-compare",
             Self::CrossRefs => "verse-crossrefs",
+            Self::SaveBookmark => "verse-save-bookmark",
             Self::Copy => "verse-copy",
         }
     }
 }
 
-const VERSE_ACTIONS: [VerseAction; 4] = [
+const VERSE_ACTIONS: [VerseAction; 5] = [
     VerseAction::AddToSermon,
     VerseAction::Compare,
     VerseAction::CrossRefs,
+    VerseAction::SaveBookmark,
     VerseAction::Copy,
 ];
 
@@ -89,6 +93,7 @@ fn run(s: Study, action: VerseAction) {
         }
         VerseAction::Compare => compare::open_from_selection(s),
         VerseAction::CrossRefs => crossrefs::open(s),
+        VerseAction::SaveBookmark => bookmarks::open_save(s),
         VerseAction::Copy => {
             let Some((_, text)) = selection(s) else {
                 return;
