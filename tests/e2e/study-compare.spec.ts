@@ -16,7 +16,7 @@ import {
   TABLET_1180,
   type ServerHandle,
 } from "./support";
-import { dropDeliberateNlt503, expectChapter, finish, openStudy, verseNumber } from "./study-support";
+import { dropDeliberateNlt503, expectChapter, finish, openStudy, verse, verseNumber } from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -36,6 +36,7 @@ test.afterAll(async () => {
 });
 
 const compare = (page: Page): Locator => page.locator('[data-role="study-compare"]');
+const place = (page: Page): Locator => page.locator('[data-role="study-place"]');
 const row = (page: Page, code: string, verse: number): Locator =>
   page.locator(`[data-role="compare-row"][data-translation="${code}"][data-verse="${verse}"]`);
 
@@ -70,6 +71,37 @@ test("the bar opens a phone's verse across the favourites, each row labelled", a
   await page.goBack();
   await expectChapter(page, "slk-seb:HEB.11");
   dropDeliberateNlt503(opened);
+  await finish(opened);
+});
+
+// Owner, 2026-11-08 (#915): "ked dam porovnat neda sa prepnut spet do
+// neporovnavacieho modu". Compare opened with no history (a reopened app) had
+// no way back but a row's small translation label; the usage counters show the
+// bar's place text pressed instead.
+test("Čítať in the bar leaves compare for the reader at the verse, with no history too", async ({
+  browser,
+}) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    PHONE_390,
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.1&tt=slk-seb,eng-kjv",
+    null,
+  );
+  const { page } = opened;
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.1");
+  await page.locator('[data-role="compare-next"]').tap();
+  await expect(compare(page)).toHaveAttribute("data-loaded-for", "HEB.11.2");
+  await expect(place(page)).toHaveText("Hebrejom 11:2");
+
+  const read = page.locator('[data-role="compare-read"]');
+  await expect(read).toHaveText("Čítať");
+  await assertMinTapTarget(read, 44);
+  await read.tap();
+  await expectChapter(page, "slk-seb:HEB.11");
+  await expect(page).not.toHaveURL(/view=compare/);
+  await expect(verse(page, 2)).toHaveAttribute("data-selected", "true");
+  await expect(place(page)).toHaveText("Hebrejom 11");
   await finish(opened);
 });
 
@@ -137,10 +169,9 @@ test("the longest book name leaves the bar's buttons whole at 360 px", async ({ 
   );
   const { page } = opened;
   await expect(compare(page)).toHaveAttribute("data-loaded-for", "2TH.3.18");
-  const place = page.locator('[data-role="compare-place"]');
-  await expect(place).toHaveText("Druhýlist apoštola Pavla Tesalonickým 3:18");
-  await expect(place.locator(".study-compare__verse")).toBeInViewport({ ratio: 1 });
-  for (const role of ["compare-prev", "compare-next"]) {
+  await expect(place(page)).toHaveText("Druhýlist apoštola Pavla Tesalonickým 3:18");
+  await expect(place(page).locator(".study-head__chapter")).toBeInViewport({ ratio: 1 });
+  for (const role of ["compare-prev", "compare-read", "compare-next"]) {
     const button = page.locator(`[data-role="${role}"]`);
     await assertMinTapTarget(button, 44);
     await expect(button).toBeInViewport({ ratio: 1 });
@@ -149,7 +180,7 @@ test("the longest book name leaves the bar's buttons whole at 360 px", async ({ 
   await finish(opened);
 });
 
-test("the current row is equally tall across the columns and the bar names the book", async ({
+test("the current row is equally tall across the columns and the header names the place", async ({
   browser,
 }) => {
   const opened = await openStudy(
@@ -167,7 +198,7 @@ test("the current row is equally tall across the columns and the bar names the b
     ),
   );
   expect(new Set(heights).size, `row heights ${heights}`).toBe(1);
-  await expect(page.locator('[data-role="compare-place"]')).toHaveText("Hebrejom 11:5");
+  await expect(place(page)).toHaveText("Hebrejom 11:5");
   await finish(opened);
 });
 

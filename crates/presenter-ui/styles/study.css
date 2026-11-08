@@ -1420,25 +1420,6 @@
   grid-template-columns: minmax(44px, 1fr) minmax(0, auto) minmax(44px, 1fr);
 }
 
-.study-compare__nav {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  font-weight: 700;
-  white-space: pre;
-}
-
-.study-compare__book {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.study-compare__verse {
-  flex: none;
-}
-
 /* Cross-references (spec §6.7). */
 .study-crossrefs {
   display: flex;

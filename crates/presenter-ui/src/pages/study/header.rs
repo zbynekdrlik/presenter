@@ -10,7 +10,7 @@ use leptos::prelude::*;
 use super::long_press::LongPress;
 use super::scroll::{saved_verse, ScrollPlan};
 use super::sermon_pane::reading_route;
-use super::{nav, Chapter, Study};
+use super::{compare, nav, Chapter, Study};
 use crate::state::study::{StudyRoute, StudySheet, StudyView};
 
 #[component]
@@ -55,12 +55,21 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
     };
 
     // What the text on screen is, so it moves with the text, not before it.
+    // Compare names its verse there too: its bar holds Čítať (#915).
     let place = Memo::new(move |_| {
-        let reading = s
-            .route
-            .with(|route| matches!(route.view, StudyView::Reader { .. }));
+        let (reading, comparing) = s.route.with(|route| {
+            (
+                matches!(route.view, StudyView::Reader { .. }),
+                matches!(route.view, StudyView::Compare { .. }),
+            )
+        });
+        if comparing {
+            return compare::header_place(s);
+        }
         s.chapter.with(|chapter| match chapter {
-            Chapter::Ready(place, text) if reading => Some((text.book.clone(), place.chapter)),
+            Chapter::Ready(place, text) if reading => {
+                Some((text.book.clone(), place.chapter.to_string()))
+            }
             _ => None,
         })
     });

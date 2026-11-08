@@ -290,6 +290,11 @@ fn parse_usfm_document(
             continue;
         }
 
+        if let Some(name) = header_book_name(line, format, &book_name, current_chapter) {
+            book_name = Some(name);
+            continue;
+        }
+
         if let Some(rest) = line.strip_prefix("\\c ") {
             close_chapter(&mut current_builder, &mut headings);
             flush_current_passage(
@@ -358,6 +363,18 @@ fn parse_usfm_document(
     )?;
 
     Ok(passages)
+}
+
+/// A converted module names the book in `\h` (#911), before its first chapter.
+fn header_book_name(
+    line: &str,
+    format: &BibleSourceFormat,
+    book_name: &Option<String>,
+    chapter: Option<u16>,
+) -> Option<String> {
+    let rest = line.strip_prefix("\\h ")?;
+    (format.names_from_header() && book_name.is_some() && chapter.is_none())
+        .then(|| rest.trim().to_string())
 }
 
 /// A heading no verse follows (an epistle's subscription) stays with the last

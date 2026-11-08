@@ -37,6 +37,15 @@ paths:
   presenter-bibles, then bump the pinned SHA in EVERY workflow in ONE commit here** (reviewed
   like code; the new bytes reach SNV/PP with that release). The checker fails on a missing,
   short or branch `ref:` and on two different pins.
+- **Converted modules (#911): AMPC, SSV, Botek, ČSP** come from web-overlays JSON
+  (`filiphanes/web-overlays/static/bible/<id>/<abbr>.json`), turned into `<file>.usfm.zip` by
+  `scripts/dev/bibles/web_overlays_to_usfm.py` (deterministic zip; `\h` = the translation's own book
+  name, read only with `UsfmZip { names_from_header: true }`, the KJV keeps `false`; AMPC's files use
+  other names than its index → `FILE_ALIASES`; the deuterocanon is dropped). Codes `eng-ampc`,
+  `slk-ssv`, `slk-bot`, `ces-csp`, vars `PRESENTER_BIBLE_AMPC/SSV/BOTEK/CSP`, set in the three deploy
+  workflows only — E2E does not load them (translation lists and chip rows stay as the specs expect).
+  web-overlays' `sep` is our SEVP (same text), skipped. The private repo needs the noreply commit
+  email (GH007 rejects the box's own address).
 - **Local dev:** `git clone git@github.com:zbynekdrlik/presenter-bibles data/bibles-private`
   (gitignored). `tests/e2e/support.ts` `refreshDevData` and the ai_eval recipe point there.
 - **A missing module fails loudly, never silently:** an unset `PRESENTER_BIBLE_*` skips that

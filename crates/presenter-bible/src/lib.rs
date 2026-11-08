@@ -138,6 +138,9 @@ impl BibleContentProvider for HttpBibleContentProvider {
 pub enum BibleSourceFormat {
     UsfmZip {
         book_name_overrides: HashMap<String, String>,
+        /// The book's `\h` line names it (a converted module, #911); the
+        /// override and the English default are only the fallback.
+        names_from_header: bool,
     },
     MySwordSqlite {
         book_names: Vec<String>,
@@ -146,10 +149,21 @@ pub enum BibleSourceFormat {
 }
 
 impl BibleSourceFormat {
+    fn names_from_header(&self) -> bool {
+        matches!(
+            self,
+            BibleSourceFormat::UsfmZip {
+                names_from_header: true,
+                ..
+            }
+        )
+    }
+
     fn book_name(&self, code: &str) -> Option<String> {
         match self {
             BibleSourceFormat::UsfmZip {
                 book_name_overrides,
+                ..
             } => {
                 if let Some(name) = book_name_overrides.get(code) {
                     return Some(name.clone());
@@ -273,7 +287,46 @@ pub fn default_translation_specs() -> Vec<BibleTranslationSpec> {
         slovak_rohacek_spec(),
         slovak_evangelicky_spec(),
         slovak_milost_spec(),
+        converted_spec(
+            "eng-ampc",
+            "Amplified Bible, Classic Edition",
+            "en",
+            "AMPC",
+            "ampc",
+        ),
+        converted_spec("slk-ssv", "Katolícky preklad", "sk", "SSV", "ssv"),
+        converted_spec(
+            "slk-bot",
+            "Jeruzalemská Biblia (Botek)",
+            "sk",
+            "BOTEK",
+            "botek",
+        ),
+        converted_spec("ces-csp", "Český studijní překlad", "cs", "CSP", "csp"),
     ]
+}
+
+/// A module converted from web-overlays by `scripts/dev/bibles/web_overlays_to_usfm.py`
+/// (#911): a USFM zip whose `\h` lines carry the translation's own book names.
+fn converted_spec(
+    code: &str,
+    name: &str,
+    language: &str,
+    var: &str,
+    file: &str,
+) -> BibleTranslationSpec {
+    BibleTranslationSpec {
+        translation: BibleTranslation::new(code, name, language)
+            .with_source("local USFM file (web-overlays)"),
+        source: BibleSource::LocalFile {
+            env_var: format!("PRESENTER_BIBLE_{var}"),
+            hint: format!("/opt/presenter/bibles/{file}.usfm.zip"),
+        },
+        format: BibleSourceFormat::UsfmZip {
+            book_name_overrides: HashMap::new(),
+            names_from_header: true,
+        },
+    }
 }
 
 fn king_james_spec() -> BibleTranslationSpec {
@@ -290,6 +343,7 @@ fn king_james_spec() -> BibleTranslationSpec {
         },
         format: BibleSourceFormat::UsfmZip {
             book_name_overrides: overrides,
+            names_from_header: false,
         },
     }
 }
@@ -358,6 +412,7 @@ fn czech_b21_spec() -> BibleTranslationSpec {
         },
         format: BibleSourceFormat::UsfmZip {
             book_name_overrides: HashMap::new(),
+            names_from_header: false,
         },
     }
 }
@@ -722,6 +777,7 @@ mod tests {
             },
             format: BibleSourceFormat::UsfmZip {
                 book_name_overrides: HashMap::new(),
+                names_from_header: false,
             },
         };
 
@@ -736,6 +792,54 @@ mod tests {
         assert_eq!(passages[0].reference.verse_start, 16);
         assert_eq!(passages[0].text, "For God so loved the world");
         assert_eq!(passages[1].text, "that He gave");
+    }
+
+    fn zip_single(name: &str, bytes: Vec<u8>) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+            writer.finish().unwrap();
+        }
+        buffer
+    }
+
+    fn usfm_spec(names_from_header: bool) -> BibleTranslationSpec {
+        BibleTranslationSpec {
+            translation: sample_translation(),
+            source: BibleSource::Url {
+                url: "memory".to_string(),
+            },
+            format: BibleSourceFormat::UsfmZip {
+                book_name_overrides: HashMap::new(),
+                names_from_header,
+            },
+        }
+    }
+
+    /// A converted module (#911) names its books in `\h`; a book outside the
+    /// 66-book canon (SSV's Tobit) is left out.
+    #[tokio::test]
+    async fn a_converted_module_names_its_books_by_their_header() {
+        let content = "\\id JHN\n\\h Ján\n\\c 3\n\\v 16 Lebo tak Boh miloval svet\n\
+                       \\id TOB\n\\h Tobiáš\n\\c 1\n\\v 1 Kniha Tobiáša\n";
+        let archive = zip_single("BOOKS.usfm", content.as_bytes().to_vec());
+        let scraper = BibleScraper::new(StubProvider {
+            payload: archive.clone(),
+        });
+        let (batch, _) = scraper.scrape(&usfm_spec(true)).await.unwrap();
+        let passages = batch.passages();
+        assert_eq!(passages.len(), 1);
+        assert_eq!(passages[0].reference.book, "Ján");
+        assert_eq!(passages[0].text, "Lebo tak Boh miloval svet");
+
+        // The KJV keeps its English names: its `\h` is not read.
+        let scraper = BibleScraper::new(StubProvider { payload: archive });
+        let (batch, _) = scraper.scrape(&usfm_spec(false)).await.unwrap();
+        assert_eq!(batch.passages()[0].reference.book, "John");
     }
 
     #[tokio::test]
@@ -761,6 +865,7 @@ mod tests {
             },
             format: BibleSourceFormat::UsfmZip {
                 book_name_overrides: HashMap::new(),
+                names_from_header: false,
             },
         };
 
@@ -781,6 +886,9 @@ mod tests {
         assert!(codes.contains("slk-roh"));
         assert!(codes.contains("slk-sevp"));
         assert!(codes.contains("slk-mil"));
+        for code in ["eng-ampc", "slk-ssv", "slk-bot", "ces-csp"] {
+            assert!(codes.contains(code), "{code} (#911)");
+        }
     }
 
     #[tokio::test]

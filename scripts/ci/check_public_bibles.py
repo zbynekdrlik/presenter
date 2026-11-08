@@ -68,7 +68,16 @@ PRIVATE_REPO = "zbynekdrlik/presenter-bibles"
 # Public-domain modules that may stay in the public repo, relative to PUBLIC_DIR.
 PUBLIC_MODULES = frozenset({"kjv.usfm.zip"})
 PRIVATE_MARK = "bibles-private"
-PRIVATE_VARS = ("PRESENTER_BIBLE_SEB", "PRESENTER_BIBLE_ROHACEK", "PRESENTER_BIBLE_SEVP", "PRESENTER_BIBLE_MILOST")
+PRIVATE_VARS = (
+    "PRESENTER_BIBLE_SEB",
+    "PRESENTER_BIBLE_ROHACEK",
+    "PRESENTER_BIBLE_SEVP",
+    "PRESENTER_BIBLE_MILOST",
+    "PRESENTER_BIBLE_AMPC",
+    "PRESENTER_BIBLE_SSV",
+    "PRESENTER_BIBLE_BOTEK",
+    "PRESENTER_BIBLE_CSP",
+)
 GH_RELEASE_RE = re.compile(r"\bgh\s+release\s+(?:create|upload)\b")
 PIN_RE = re.compile(r"^[0-9a-f]{40}$")
 # `VAR=value` / `export VAR=value` in a run script, value up to the next blank.
