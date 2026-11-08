@@ -303,7 +303,12 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_id: BibleSlideId,
     ) -> anyhow::Result<BiblePresentation> {
-        self.refuse_if_sermon(presentation_id).await?;
+        // #917: a sermon's slide is its item's — the item goes.
+        if self.repository.is_sermon(presentation_id).await? {
+            return self
+                .delete_sermon_slide(presentation_id, slide_id, &SermonOrigin::unattributed())
+                .await;
+        }
         let mut presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)
@@ -340,7 +345,12 @@ impl AppState {
         presentation_id: BiblePresentationId,
         slide_ids: Vec<BibleSlideId>,
     ) -> anyhow::Result<BiblePresentation> {
-        self.refuse_if_sermon(presentation_id).await?;
+        // #917: a sermon's slide order is its item order.
+        if self.repository.is_sermon(presentation_id).await? {
+            return self
+                .reorder_sermon_slides(presentation_id, &slide_ids, &SermonOrigin::unattributed())
+                .await;
+        }
         let presentation = self
             .repository
             .fetch_bible_presentation(presentation_id)

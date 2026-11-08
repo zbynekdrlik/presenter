@@ -12,6 +12,7 @@ mod commit;
 mod generate;
 mod guard;
 mod maintain;
+mod slides;
 mod snapshot;
 mod view;
 mod write;
