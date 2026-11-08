@@ -484,6 +484,17 @@ impl ApiError {
     }
 }
 
+impl ApiError {
+    /// What a toast says about a failed `action` (#917): the server's own Slovak
+    /// reason when it refused, else "<action> zlyhalo: <error>".
+    pub fn user_text(&self, action: &str) -> String {
+        match self {
+            Self::Refused(_, message) => message.clone(),
+            other => format!("{action} zlyhalo: {other}"),
+        }
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -501,6 +512,21 @@ impl std::fmt::Display for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_shows_the_servers_reason_and_anything_else_the_action() {
+        let refused =
+            ApiError::Refused(422, "Do kázne sa pridávajú len verše z Biblie".to_string());
+        assert_eq!(
+            refused.user_text("Pridanie snímok"),
+            "Do kázne sa pridávajú len verše z Biblie"
+        );
+        let status = ApiError::Status(500, "boom".to_string());
+        assert_eq!(
+            status.user_text("Pridanie snímok"),
+            "Pridanie snímok zlyhalo: HTTP 500: boom"
+        );
+    }
 
     #[test]
     fn a_read_cut_off_is_told_from_a_wrong_answer() {

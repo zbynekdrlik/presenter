@@ -143,8 +143,17 @@ paths:
   range, more than 60 verses, the NLT as an item or default translation, an unknown translation
   or book, verses the translation lacks, a bad token index, an empty title. Never forced through
   `RepositoryError` (repository-error-pattern rule).
+- **Console verses into a sermon (#917, `append.rs`):** `POST /bible/presentations/{id}/append` on a
+  sermon does NOT store slides — `item_ranges` turns the slides into item ranges (adjacent verses of
+  one translation/book/chapter merge, ≤ `MAX_ITEM_VERSES`), each is `snapshot_item`ed and ONE
+  `commit_sermon` (`op=add`) appends them. A slide without verses or book code → `SermonRefusal`
+  "Do kázne sa pridávajú len verše z Biblie" (422). The handler labels the write with
+  `sermons::origin` and maps errors with `sermons::sermon_error`; HTTP-less callers (AI, eval) go
+  through `append_bible_presentation_slides` = `SermonOrigin::unattributed()` (client `-`, NOT
+  `system()`: the server's own pass refuses to store a missing secondary line). The UI's
+  `append_presentation_slides` uses `post_json_refusal`, toasts show `ApiError::user_text`.
 - **Sermon slides are read-only on the presentation routes** (spec §8.2): `refuse_if_sermon`
-  (`guard.rs`) runs FIRST in `append_bible_presentation_slides`, `delete_bible_slide`,
+  (`guard.rs`) runs FIRST in `delete_bible_slide`,
   `reorder_bible_slides`, `update_bible_slide` → `Conflict(SERMON_SLIDES_REFUSAL)` → 409 "Slajdy
   kázne sa generujú z jej položiek — upravuje sa v /ui/study"; the AI tools call the same state
   methods and get the same refusal. Rename (= the sermon title) and delete stay allowed. A new

@@ -1,8 +1,8 @@
 //! Sermon slides are generated from the items (#851 spec §8.2): the slide write
-//! paths of a Bible presentation (append, edit, delete, reorder; HTTP and the AI
-//! tools alike, both call the same `AppState` methods) refuse a sermon's
-//! presentation with 409. Renaming (= the sermon title) and deleting it stay
-//! allowed.
+//! paths of a Bible presentation (edit, delete, reorder; HTTP and the AI tools
+//! alike, both call the same `AppState` methods) refuse a sermon's presentation
+//! with 409. Renaming (= the sermon title) and deleting it stay allowed. Append
+//! is not refused since #917: the verses become items (`append.rs`).
 
 use presenter_core::BiblePresentationId;
 use presenter_persistence::RepositoryError;

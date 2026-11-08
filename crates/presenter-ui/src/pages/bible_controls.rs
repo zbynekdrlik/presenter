@@ -146,7 +146,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Pridanie snímok zlyhalo: {e}")));
+                        toast_message.set(Some(e.user_text("Pridanie snímok")));
                     }
                 }
             });
@@ -196,7 +196,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                                     }
                                     Err(e) => {
                                         toast_variant.set("error".to_string());
-                                        toast_message.set(Some(format!("Zlyhalo: {e}")));
+                                        toast_message.set(Some(e.user_text("Pridanie snímok")));
                                     }
                                 }
                             });

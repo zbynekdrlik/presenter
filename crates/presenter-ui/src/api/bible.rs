@@ -1,4 +1,4 @@
-use super::{get_json, post_json, post_json_detail, post_no_content, ApiError};
+use super::{get_json, post_json, post_json_detail, post_json_refusal, post_no_content, ApiError};
 use presenter_core::{
     BibleBroadcast, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
 };
@@ -472,11 +472,13 @@ pub struct AppendSlideInput {
 }
 
 /// Append slides to a Bible presentation. Server: POST /bible/presentations/{id}/append
+/// A sermon takes them as items; its refusal keeps the server's Slovak reason
+/// (`ApiError::Refused`, #917).
 pub async fn append_presentation_slides(
     id: &str,
     slides: &[AppendSlideInput],
 ) -> Result<BiblePresentationDetail, ApiError> {
-    post_json(
+    post_json_refusal(
         &format!("/bible/presentations/{id}/append"),
         &AppendSlidesRequest {
             slides: slides.to_vec(),

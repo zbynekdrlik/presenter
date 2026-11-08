@@ -26,7 +26,7 @@ use crate::state::sermons::{
 };
 use crate::state::AppState;
 
-type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
+pub(crate) type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
 type SermonResult = Result<Json<SermonDetailDto>, AppError>;
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -213,7 +213,7 @@ where
 // ---- Mapping ----------------------------------------------------------------
 
 /// The author label and client IP of a write (spec §9, §13).
-fn origin(headers: &HeaderMap, peer: Peer) -> SermonOrigin {
+pub(crate) fn origin(headers: &HeaderMap, peer: Peer) -> SermonOrigin {
     let peer = peer.map(|Extension(ConnectInfo(addr))| addr);
     SermonOrigin {
         author: access_email(headers, peer),
@@ -223,7 +223,7 @@ fn origin(headers: &HeaderMap, peer: Peer) -> SermonOrigin {
 
 /// A refused sermon request (spec §12, logged at WARN): `SermonRefusal` → 422
 /// with its Slovak message, everything else through the central mapping.
-fn sermon_error(err: anyhow::Error) -> AppError {
+pub(crate) fn sermon_error(err: anyhow::Error) -> AppError {
     tracing::warn!(
         target: "presenter::bible::sermon",
         error = %err,
