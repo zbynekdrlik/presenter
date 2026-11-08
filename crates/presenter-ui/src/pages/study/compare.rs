@@ -339,6 +339,25 @@ fn open_reader(s: Study, translation: &str, at: &Spot, verse: u16) {
     );
 }
 
+/// The bar's way back to reading (owner, 2026-11-08, #915: "neda sa prepnut spet
+/// do neporovnavacieho modu"): the lead translation at the verse on screen. Back
+/// alone cannot leave compare opened with no history (a reopened app).
+fn read_here(s: Study) {
+    let Some(at) = spot(s) else {
+        return;
+    };
+    let lead = s.translation().or_else(|| shown(s).into_iter().next());
+    if let Some(code) = lead {
+        open_reader(s, &code, &at, at.verse);
+    }
+}
+
+/// The header's place while comparing: the book and `11:1`.
+pub(super) fn header_place(s: Study) -> Option<(String, String)> {
+    let at = spot(s)?;
+    Some(title_parts(s, &at, &shown(s)))
+}
+
 fn switch(s: Study, column: usize, code: &str) {
     let next = switch_column(&listed(s), column, code);
     let mut route = s.route.get_untracked();
@@ -573,11 +592,6 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
     };
     let heading = move || place.get().map(|at| title(s, &at, &codes.get()));
     let numbered = Memo::new(move |_| shows_numbers(s));
-    // The bar has little room: a long name gives way, the place never does.
-    let bar_part = move |part: usize| {
-        let (book, place) = title_parts(s, &place.get()?, &codes.get());
-        Some(if part == 0 { book } else { format!(" {place}") })
-    };
     let step = move |dir| Memo::new(move |_| step_target(s, dir));
     let (previous, next) = (step(Step::Prev), step(Step::Next));
 
@@ -619,10 +633,14 @@ pub(super) fn CompareView(s: Study) -> impl IntoView {
             >
                 <span aria-hidden="true">"\u{25C0}"</span>
             </button>
-            <span class="study-compare__nav" data-role="compare-place">
-                <span class="study-compare__book">{move || bar_part(0)}</span>
-                <span class="study-compare__verse">{move || bar_part(1)}</span>
-            </span>
+            <button
+                type="button"
+                class="study-button study-bar__compare"
+                data-role="compare-read"
+                on:click=move |_| read_here(s)
+            >
+                "Čítať"
+            </button>
             <button
                 type="button"
                 class="study-button study-bar__step"

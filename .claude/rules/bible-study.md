@@ -126,6 +126,9 @@ preparation (the sermon views are in `sermon-prep.md`).
 
 - **Compare is a view, its ◀ ▶ a `nav::replace`:** Back leaves it at once, the verses are no history
   rows. Stacked = phone shell; columns = `CompareLayout` (2, 3 at ≥ 1024 px), the spec's aligned grid.
+- **Compare's bar is `◀ Čítať ▶` (#915):** Back alone cannot leave compare opened with no history (a
+  reopened app), and the usage counters showed the bar's place text pressed as an exit. `Čítať` opens
+  the lead translation at the verse; the place lives in the header (`compare::header_place`).
 - **One `CompareCell` per chapter:** a chapter left behind drops its cell, so a late answer has nowhere
   to land; only what is on screen is asked (the NLT's 500 requests). A step inside a chapter asks nothing.
 - **`study-compare[data-loaded-for="HEB.11.1"]`** = every shown translation answered or failed.
