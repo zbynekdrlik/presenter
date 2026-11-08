@@ -1,5 +1,6 @@
 //! The Cloudflare Access e-mail of a request (#851 spec §9): an author LABEL
-//! for sermons, never a permission. Trusted only from a loopback peer
+//! for sermons, never a permission; since #915 it also picks the reader's list
+//! of study bookmarks (a convenience scope, not a protection of the rows). Trusted only from a loopback peer
 //! (`cloudflared` on the same box) or with no peer at all (tests): the exact
 //! rule of `integrations::extract_client_ip` (#793), because a LAN client could
 //! send the header itself. On the LAN and the church Wi-Fi bypass there is no

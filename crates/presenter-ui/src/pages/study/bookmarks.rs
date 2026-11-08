@@ -179,8 +179,9 @@ fn RenameForm(
             class="study-bookmark__rename"
             on:submit=move |ev| {
                 ev.prevent_default();
-                if !busy.get_untracked() {
-                    rename(s, busy, editing, id, draft.get_untracked());
+                let name = draft.get_untracked();
+                if !busy.get_untracked() && !name.trim().is_empty() {
+                    rename(s, busy, editing, id, name);
                 }
             }
         >
@@ -197,7 +198,7 @@ fn RenameForm(
                 type="submit"
                 class="study-button study-button--primary"
                 data-role="bookmark-rename-save"
-                disabled=move || busy.get()
+                disabled=move || busy.get() || draft.with(|name| name.trim().is_empty())
             >
                 "Uložiť"
             </button>
@@ -280,17 +281,19 @@ fn BookmarkRow(
     }
 }
 
+/// The rows on screen: none while the list is not `Ready`. One keyed `<For>`
+/// outside the state match, so a reload (after Späť) keeps unchanged rows,
+/// an open rename field and what was typed in it.
+fn ready_rows(s: Study) -> Vec<Bookmark> {
+    s.bookmarks.with(|list| match list {
+        BookmarkList::Ready(rows) => rows.clone(),
+        _ => Vec::new(),
+    })
+}
+
 #[component]
-pub(super) fn BookmarksSheet(s: Study) -> impl IntoView {
-    load(s);
-    let busy = RwSignal::new(false);
-    let editing = RwSignal::new(None::<i64>);
-    let can_move = Memo::new(move |_| {
-        let route = s.route.get();
-        reading_place(&route, s.translation().as_deref(), None).is_some()
-    });
-    let body = move || {
-        match s.bookmarks.get() {
+fn ListState(s: Study) -> impl IntoView {
+    move || match s.bookmarks.get() {
         BookmarkList::Loading => view! {
             <p class="study-empty" data-role="bookmarks-loading">"Načítavam…"</p>
         }
@@ -315,28 +318,62 @@ pub(super) fn BookmarksSheet(s: Study) -> impl IntoView {
             </p>
         }
         .into_any(),
-        BookmarkList::Ready(rows) => view! {
-            <div class="study-list" data-role="bookmarks-list">
-                <For
-                    each=move || rows.clone()
-                    key=|row| (row.id, row.name.clone(), row.translation.clone(), row.book_code.clone(), row.chapter, row.verse)
-                    children=move |row| {
-                        view! { <BookmarkRow s=s busy=busy editing=editing can_move=can_move bookmark=row /> }
-                    }
-                />
-            </div>
-        }
-        .into_any(),
+        BookmarkList::Ready(_) => ().into_any(),
     }
-    };
+}
+
+#[component]
+pub(super) fn BookmarksSheet(s: Study) -> impl IntoView {
+    // A list from an earlier visit is never shown as this one's answer.
+    s.bookmarks.set(BookmarkList::Loading);
+    load(s);
+    let busy = RwSignal::new(false);
+    let editing = RwSignal::new(None::<i64>);
+    let can_move = Memo::new(move |_| {
+        let route = s.route.get();
+        reading_place(&route, s.translation().as_deref(), None).is_some()
+    });
+    // The settle marker of the specs: `ready` once this visit's list answered.
+    let state = Signal::derive(move || match s.bookmarks.with(|list| list.clone()) {
+        BookmarkList::Loading => "loading",
+        BookmarkList::Ready(_) => "ready",
+        BookmarkList::Failed(_) => "error",
+    });
     view! {
         <Sheet
             s=s
             role="bookmarks"
             title=Signal::derive(|| "Záložky".to_string())
             modal=true
+            state=state
         >
-            {body}
+            <ListState s=s />
+            <div class="study-list" data-role="bookmarks-list">
+                <For
+                    each=move || ready_rows(s)
+                    key=|row| {
+                        (
+                            row.id,
+                            row.name.clone(),
+                            row.translation.clone(),
+                            row.book_code.clone(),
+                            row.chapter,
+                            row.verse,
+                        )
+                    }
+                    children=move |row| {
+                        view! {
+                            <BookmarkRow
+                                s=s
+                                busy=busy
+                                editing=editing
+                                can_move=can_move
+                                bookmark=row
+                            />
+                        }
+                    }
+                />
+            </div>
         </Sheet>
     }
 }
@@ -363,7 +400,13 @@ fn save(s: Study, saving: RwSignal<bool>, name: String) {
         match api::create(&name, &to_api(place), None).await {
             Ok(made) => {
                 s.tell(format!("Záložka uložená: {}", made.name));
-                nav::close_sheet(s);
+                // Only this sheet: the reader may have moved on meanwhile.
+                let still_here = s
+                    .route
+                    .with_untracked(|route| route.sheet == Some(StudySheet::SaveBookmark));
+                if still_here {
+                    nav::close_sheet(s);
+                }
             }
             Err(err) => s.tell(sermon_error(&err)),
         }
@@ -377,6 +420,8 @@ pub(super) fn SaveBookmarkSheet(s: Study) -> impl IntoView {
     let draft = RwSignal::new(None::<String>);
     let saving = RwSignal::new(false);
     let value = move || draft.get().or_else(|| offered(s)).unwrap_or_default();
+    // A name of spaces is refused by the server: no button to press for it.
+    let blank = move || value().trim().is_empty();
     view! {
         <Sheet
             s=s
@@ -388,8 +433,9 @@ pub(super) fn SaveBookmarkSheet(s: Study) -> impl IntoView {
                 class="study-bookmark__save"
                 on:submit=move |ev| {
                     ev.prevent_default();
-                    if !saving.get_untracked() {
-                        save(s, saving, value());
+                    let name = untrack(value);
+                    if !saving.get_untracked() && !name.trim().is_empty() {
+                        save(s, saving, name);
                     }
                 }
             >
@@ -410,7 +456,7 @@ pub(super) fn SaveBookmarkSheet(s: Study) -> impl IntoView {
                     type="submit"
                     class="study-button study-button--primary"
                     data-role="bookmark-save"
-                    disabled=move || saving.get()
+                    disabled=move || saving.get() || blank()
                 >
                     "Uložiť"
                 </button>

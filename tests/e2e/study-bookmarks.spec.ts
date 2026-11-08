@@ -46,7 +46,8 @@ const bookmark = (page: Page, name: string | RegExp): Locator =>
 async function openList(page: Page): Promise<void> {
   await page.locator('[data-role="study-bookmarks"]').tap();
   await expect(page).toHaveURL(/s=zalozky/);
-  await expect(sheet(page).locator('[data-role="bookmarks-loading"]')).toHaveCount(0);
+  // The settle marker: this visit's list answered (a list of an earlier visit never counts).
+  await expect(sheet(page)).toHaveAttribute("data-state", "ready");
 }
 
 for (const [label, profile] of [
@@ -123,18 +124,35 @@ for (const [label, profile] of [
   });
 }
 
-test("an empty name is refused with the server's sentence and nothing is saved", async ({ browser }) => {
+test("a name of spaces cannot be saved; the server refuses it in Slovak too", async ({
+  browser,
+}) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
   await verseNumber(page, 2).tap();
   await page.locator('[data-role="verse-save-bookmark"]').tap();
-  await page.locator('[data-role="bookmark-new-name"]').fill("   ");
-  // The refusal is a 422: Chrome logs the failed resource, the test takes exactly it out.
-  await page.locator('[data-role="bookmark-save"]').tap();
-  await expect(notice(page)).toContainText("Záložka potrebuje názov");
+  const nameField = page.locator('[data-role="bookmark-new-name"]');
+  const save = page.locator('[data-role="bookmark-save"]');
+  await expect(nameField).toHaveValue("Hebrejom 11:2");
+  await expect(save).toBeEnabled();
+  await nameField.fill("   ");
+  await expect(save).toBeDisabled();
+  await nameField.press("Enter");
   await expect(page.locator('[data-role="save-bookmark"]')).toBeVisible();
-  const refused = /Failed to load resource: the server responded with a status of 422\b/;
-  expect(opened.errors.filter((text) => refused.test(text))).toHaveLength(1);
-  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((text) => !refused.test(text)));
+  const saved = await page.evaluate(async () => (await fetch("/bible/study/bookmarks")).json());
+  expect(saved.map((item: { name: string }) => item.name)).not.toContain("   ");
+  // The server refuses it too, in Slovak (the API itself; the button never sends it).
+  const refused = await page.evaluate(async () => {
+    const response = await fetch("/bible/study/bookmarks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: " ", translation: "slk-seb", bookCode: "HEB", chapter: 11, verse: 2 }),
+    });
+    return { status: response.status, body: await response.json() };
+  });
+  expect(refused).toEqual({ status: 422, body: { message: "Záložka potrebuje názov" } });
+  const deliberate = /Failed to load resource: the server responded with a status of 422\b/;
+  expect(opened.errors.filter((text) => deliberate.test(text))).toHaveLength(1);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((text) => !deliberate.test(text)));
   await finish(opened);
 });

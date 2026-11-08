@@ -77,15 +77,15 @@ async fn a_place_the_translation_lacks_is_refused_in_slovak() {
         ),
         (
             place("slk-seb", "HEB", 11, 4),
-            "HEB 11:4 v preklade SEB nie je",
+            "Hebrejom 11:4 v preklade SEB nie je",
         ),
         (
             place("slk-seb", "HEB", 11, 0),
-            "HEB 11:0 v preklade SEB nie je",
+            "Hebrejom 11:0 v preklade SEB nie je",
         ),
         (
             place("slk-seb", "HEB", 12, 1),
-            "HEB 12:1 v preklade SEB nie je",
+            "Hebrejom 12:1 v preklade SEB nie je",
         ),
         (
             place("slk-seb", "JHN", 1, 1),
@@ -201,7 +201,7 @@ async fn an_update_renames_moves_and_refuses_an_empty_change_or_a_bad_place() {
         .update_study_bookmark(None, made.id, None, Some(&place("eng-kjv", "HEB", 11, 9)))
         .await
         .expect_err("bad place");
-    assert_eq!(refusal(&bad), "HEB 11:9 v preklade KJV nie je");
+    assert_eq!(refusal(&bad), "Hebrews 11:9 v preklade KJV nie je");
     let still = state.list_study_bookmarks(None).await.expect("list");
     assert_eq!(still, vec![moved]);
 }

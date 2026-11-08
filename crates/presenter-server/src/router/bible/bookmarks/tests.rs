@@ -188,7 +188,7 @@ async fn a_refusal_is_422_with_the_slovak_sentence() {
         ),
         (
             json!({ "name": "x", "translation": "slk-seb", "bookCode": "HEB", "chapter": 11, "verse": 9 }),
-            "HEB 11:9 v preklade SEB nie je",
+            "Hebrejom 11:9 v preklade SEB nie je",
         ),
         (
             json!({ "name": "x", "translation": "slk-seb", "bookCode": "QQQ", "chapter": 1, "verse": 1 }),

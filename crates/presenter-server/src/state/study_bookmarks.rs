@@ -1,7 +1,9 @@
 //! The study page's named bookmarks (#915, the owner's option 2 of 2026-11-08):
 //! a list per reader, kept on the server so the phone and the PC show the same
 //! one. The reader is the Cloudflare Access e-mail (`None` = the shared list of
-//! the LAN). Every rule lives here; the repository only stores and orders.
+//! the LAN). That e-mail picks WHICH list a request reads and writes — a
+//! convenience scope for one preacher's devices, not a protection of the
+//! rows (`access_identity.rs`). Every rule lives here; the repository only stores and orders.
 //! Lookups and `study.last` never touch a bookmark: only these writes do.
 
 use presenter_core::bible::canonical_book_by_code;
@@ -47,18 +49,25 @@ pub(crate) struct StudyBookmark {
     pub(crate) updated_at: String,
 }
 
-impl From<StudyBookmarkRecord> for StudyBookmark {
-    fn from(row: StudyBookmarkRecord) -> Self {
-        Self {
+impl TryFrom<StudyBookmarkRecord> for StudyBookmark {
+    type Error = anyhow::Error;
+
+    /// A stored place that is no `u16` is a damaged row: an error, never verse 0.
+    fn try_from(row: StudyBookmarkRecord) -> anyhow::Result<Self> {
+        let place = |value: i64, what: &str| {
+            u16::try_from(value)
+                .map_err(|_| anyhow::anyhow!("bookmark {}: stored {what} {value}", row.id))
+        };
+        Ok(Self {
             id: row.id,
+            chapter: place(row.chapter, "chapter")?,
+            verse: place(row.verse, "verse")?,
             name: row.name,
             translation: row.translation_code,
             book_code: row.book_code,
             book: row.book_name,
-            chapter: u16::try_from(row.chapter).unwrap_or(0),
-            verse: u16::try_from(row.verse).unwrap_or(0),
             updated_at: row.updated_at,
-        }
+        })
     }
 }
 
@@ -82,7 +91,7 @@ impl AppState {
         owner: Option<&str>,
     ) -> anyhow::Result<Vec<StudyBookmark>> {
         let rows = self.repository.list_study_bookmarks(owner).await?;
-        Ok(rows.into_iter().map(StudyBookmark::from).collect())
+        rows.into_iter().map(StudyBookmark::try_from).collect()
     }
 
     /// A new bookmark at the end of the list, or at `index` (Späť after a
@@ -107,7 +116,7 @@ impl AppState {
             .insert_study_bookmark(owner, &name, &place, index)
             .await?;
         log_write("create", owner, &row);
-        Ok(row.into())
+        row.try_into()
     }
 
     /// A new name, a new place ("Presunúť sem"), or both.
@@ -131,7 +140,7 @@ impl AppState {
             .update_study_bookmark(owner, id, name.as_deref(), place.as_ref())
             .await?;
         log_write(if place.is_some() { "move" } else { "rename" }, owner, &row);
-        Ok(row.into())
+        row.try_into()
     }
 
     /// Deletes one; answers it with its index, for Späť.
@@ -142,8 +151,9 @@ impl AppState {
     ) -> anyhow::Result<(StudyBookmark, usize)> {
         let row = self.repository.delete_study_bookmark(owner, id).await?;
         log_write("delete", owner, &row);
-        let index = usize::try_from(row.position).unwrap_or(0);
-        Ok((row.into(), index))
+        let index = usize::try_from(row.position)
+            .map_err(|_| anyhow::anyhow!("bookmark {}: stored position {}", row.id, row.position))?;
+        Ok((row.try_into()?, index))
     }
 
     /// A place this translation really has, with its own name of the book. The
@@ -166,13 +176,19 @@ impl AppState {
             })?;
         let canon = canonical_book_by_code(&place.book_code)
             .ok_or_else(|| BookmarkRefusal(format!("Neznáma kniha {}", place.book_code)))?;
-        let chapter = self
+        let book: Vec<_> = self
             .bible_book_chapter_summaries(&translation.code)
             .await?
             .into_iter()
-            .find(|summary| {
-                summary.book_code.as_deref() == Some(canon.code) && summary.chapter == place.chapter
-            });
+            .filter(|summary| summary.book_code.as_deref() == Some(canon.code))
+            .collect();
+        // The refusal names the book as this translation does, when it has it.
+        let book_name = book
+            .first()
+            .map_or_else(|| canon.code.to_string(), |summary| summary.book.clone());
+        let chapter = book
+            .into_iter()
+            .find(|summary| summary.chapter == place.chapter);
         match chapter {
             Some(summary) if place.verse >= 1 && place.verse <= summary.verse_count => {
                 Ok(BookmarkPlace {
@@ -185,7 +201,7 @@ impl AppState {
             }
             _ => Err(BookmarkRefusal(format!(
                 "{} {}:{} v preklade {} nie je",
-                canon.code,
+                book_name,
                 place.chapter,
                 place.verse,
                 translation_short_code(&translation.code)
