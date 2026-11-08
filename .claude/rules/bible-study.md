@@ -12,6 +12,12 @@ paths:
   - "tests/e2e/study-*.ts"
   - "crates/presenter-server/src/router/bible/study.rs"
   - "crates/presenter-server/src/state/bible_source/study.rs"
+  - "crates/presenter-ui/src/pages/study/bookmarks.rs"
+  - "crates/presenter-ui/src/state/study_bookmarks.rs"
+  - "crates/presenter-ui/src/api/bookmarks.rs"
+  - "crates/presenter-server/src/router/bible/bookmarks.rs"
+  - "crates/presenter-server/src/state/study_bookmarks.rs"
+  - "crates/presenter-persistence/src/repository/bible/study_bookmarks.rs"
 ---
 
 # The study page `/ui/study` (#851 S1–S5)
@@ -121,6 +127,21 @@ preparation (the sermon views are in `sermon-prep.md`).
   `__wbindgen_externref_table_alloc`, and a debug build floods the console with reactive warnings.
 - **`refresh-dev-data` refuses as stale:** `cargo build --release -p presenter-importer --bin
   import_propresenter --bin ingest_bibles`.
+
+## Named bookmarks (#915, `pages/study/bookmarks.rs`, `/bible/study/bookmarks*`)
+
+- **Server-side, one list per Access e-mail** (`access_email`), NULL = the shared list of the LAN AND of the
+  tunnel's Access bypass (the church): a list follows the network, not the device. An id of another list is 404.
+  The e-mail is a convenience scope, never a protection: bookmarks are no secret.
+- **Rules live in `state/study_bookmarks.rs`** (`BookmarkRefusal` → 422, Slovak): trimmed name 1–80 chars, ≤ 100 per
+  list, a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
+  structure with no request); the refusal names the book as the translation does. The row stores `book_name`.
+- **Sheets:** `s=zalozka` (needs a verse; the verse sheet REPLACES itself with it, like Odkazy) and `s=zalozky` (from
+  the header icon, hidden on the sermon views for the 360 px header). A save answer closes only the save sheet.
+- **The list sheet starts every visit in `Loading`** and carries `data-state=loading|ready|error` (the spec's settle
+  marker); its keyed `<For>` sits OUTSIDE the state match, so a reload after Späť keeps an open rename field.
+- **Späť after Zmazať** re-creates at the deleted `index` (POST `index`), the repository renumbers 0..n in one
+  transaction. Lookups and `study.last` never touch bookmarks.
 
 ## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
 

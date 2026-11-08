@@ -135,7 +135,8 @@ paths:
 - `router/access_identity.rs` `access_email(headers, peer)`: `Cf-Access-Authenticated-User-Email`
   only from a loopback peer (cloudflared) or no peer (tests) — the #793 `extract_client_ip`
   rule; trimmed, lower case, must contain `@`, ≤ 254 chars. A LABEL (stored as `author_email`
-  on create, logged on every write), never a permission. `GET /bible/study/identity` →
+  on create, logged on every write), never a permission; since #915 it also picks the reader's list of study
+  bookmarks (`bible-study.md`). `GET /bible/study/identity` →
   `{"email": … | null}` (lives here until D4 creates `router/bible/study.rs`).
 - Router tests drive `build_router(state)` with `oneshot`; a LAN peer is simulated by inserting
   `ConnectInfo(SocketAddr)` into the request extensions.
