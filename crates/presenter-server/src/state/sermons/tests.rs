@@ -1365,3 +1365,32 @@ async fn deleting_an_unknown_sermon_slide_is_not_found() {
         Some(presenter_persistence::RepositoryError::NotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn a_sermon_slide_whose_item_carries_the_pastors_cuts_is_not_deleted() {
+    let state = hebrews().await;
+    let id = stored_sermon(&state, local_today(), vec![item(1..=1, &[(1, &[0])])]).await;
+    state.regenerate_future_sermons(local_today()).await;
+    let detail = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    let slide_id = detail.items[0].slide_ids[0];
+
+    let err = state
+        .delete_bible_slide(id, slide_id)
+        .await
+        .expect_err("the pastor's cuts are not thrown away from the console");
+    let refusal = err.downcast_ref::<SermonRefusal>().expect("422 refusal");
+    assert_eq!(
+        refusal.0,
+        "Táto snímka patrí k položke kázne s úpravami alebo s viacerými snímkami — zmaž ju v Štúdiu"
+    );
+    let after = state
+        .sermon_detail(id)
+        .await
+        .expect("detail")
+        .expect("sermon");
+    assert_eq!(after.items.len(), 1);
+}

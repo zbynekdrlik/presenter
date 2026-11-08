@@ -526,6 +526,24 @@ async fn the_console_reorders_and_deletes_a_sermons_slides_through_its_items() {
     let (_, after) = call(&app, "GET", &format!("/bible/sermons/{id}"), None, &[]).await;
     assert_eq!(after["items"][0]["id"], second_item);
 
+    // The fixture's first item carries the pastor's cuts: refused with the reason.
+    let uri = format!("/bible/presentations/{id}/slides/{first}");
+    let (status, answer) = call(&app, "DELETE", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    assert_eq!(
+        answer["message"],
+        "Táto snímka patrí k položke kázne s úpravami alebo s viacerými snímkami — zmaž ju v Štúdiu"
+    );
+
+    // The fixture's first item carries the pastor's cuts: refused with the reason.
+    let uri = format!("/bible/presentations/{id}/slides/{first}");
+    let (status, answer) = call(&app, "DELETE", &uri, None, &[]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    assert_eq!(
+        answer["message"],
+        "Táto snímka patrí k položke kázne s úpravami alebo s viacerými snímkami — zmaž ju v Štúdiu"
+    );
+
     let uri = format!("/bible/presentations/{id}/slides/{second}");
     let (status, answer) = call(&app, "DELETE", &uri, None, &[]).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
