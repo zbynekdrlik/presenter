@@ -151,8 +151,9 @@ impl AppState {
     ) -> anyhow::Result<(StudyBookmark, usize)> {
         let row = self.repository.delete_study_bookmark(owner, id).await?;
         log_write("delete", owner, &row);
-        let index = usize::try_from(row.position)
-            .map_err(|_| anyhow::anyhow!("bookmark {}: stored position {}", row.id, row.position))?;
+        let index = usize::try_from(row.position).map_err(|_| {
+            anyhow::anyhow!("bookmark {}: stored position {}", row.id, row.position)
+        })?;
         Ok((row.try_into()?, index))
     }
 
