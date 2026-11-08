@@ -7,6 +7,7 @@
 //! - [`occurrences`] — where a Strong's number stands.
 //! - [`presentations`] — bible-presentation CRUD + slide row-mapping helpers.
 //! - [`sermons`]    — sermons: a presentation plus its source items.
+//! - [`study_bookmarks`] — the study page's named bookmarks (#915).
 //! - [`study_sources`] — Strong's dictionaries and cross-references.
 //!
 //! Every method stays a method on [`crate::repository::Repository`], so all
@@ -19,6 +20,7 @@ mod presentation_order;
 mod presentations;
 mod query;
 mod sermons;
+mod study_bookmarks;
 mod study_sources;
 
 pub use occurrences::StrongsVerse;
@@ -26,6 +28,7 @@ pub use sermons::{
     NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,
     SERMON_CONFLICT, SERMON_NOT_FOUND,
 };
+pub use study_bookmarks::{BookmarkPlace, StudyBookmarkRecord, BOOKMARK_NOT_FOUND};
 
 #[cfg(test)]
 mod tests;

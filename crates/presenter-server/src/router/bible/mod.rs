@@ -5,6 +5,7 @@
 //! self-contained handler group with `pub(crate)` items so `router.rs`'s
 //! route table can reference them directly.
 
+pub(super) mod bookmarks;
 pub(super) mod broadcast;
 pub(super) mod browse;
 pub(super) mod lookup;

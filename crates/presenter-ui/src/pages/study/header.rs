@@ -1,6 +1,8 @@
 //! The 48 px header: the chapter on screen, always in sight (owner, 2026-11-07,
 //! #913), ◀ ▶ step through the history, a long press on ◀ opens the list, Aa the
-//! text size, Kázne the sermon list. The sermon views add Biblia,
+//! text size, Kázne the sermon list, the bookmark icon the named bookmarks
+//! (#915; not on the sermon views, where Biblia leads back to the text first and
+//! a 360 px header has no room for both). The sermon views add Biblia,
 //! back to the last reading place: a tab reopened on a sermon has no history,
 //! and the field is not shown there (owner, 2026-11-06: "už sa neviem vrátiť k
 //! veršom").
@@ -108,6 +110,34 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
                 >
                     "Kázne"
                 </button>
+                <Show when=move || !on_sermon_view.get()>
+                    <button
+                        type="button"
+                        class="study-icon"
+                        data-role="study-bookmarks"
+                        aria-label="Záložky"
+                        title="Záložky"
+                        on:click=move |_| {
+                            nav::open_sheet(s, nav::sheet_route(s, StudySheet::Bookmarks))
+                        }
+                    >
+                        <svg
+                            class="study-icon__svg"
+                            viewBox="0 0 24 24"
+                            width="22"
+                            height="22"
+                            aria-hidden="true"
+                        >
+                            <path
+                                d="M6 3h12v18l-6-4.5L6 21z"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linejoin="round"
+                            />
+                        </svg>
+                    </button>
+                </Show>
                 <button
                     type="button"
                     class="study-icon"

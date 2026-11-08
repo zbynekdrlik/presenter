@@ -28,9 +28,10 @@ mod repository;
 
 pub use audit::{ResolumePushAuditEntry, SettingsAuditEntry, SettingsAuditSource};
 pub use repository::{
-    sync_should_apply, DatabaseSettings, NewInterpreterTip, NewSermon, NewStreamAsset,
-    NewStreamFont, Repository, RepositoryError, SermonItemRecord, SermonRecord, SermonSnapshot,
-    SermonSummary, SermonWrite, StrongsVerse, SyncApplyOutcome, SyncLibraryManifestRow,
-    SyncManifestRow, SyncPresentation, TrashedLibrary, TrashedPresentation, UiUsageCount,
-    PRUNE_HORIZON, SERMON_CONFLICT, SERMON_NOT_FOUND,
+    sync_should_apply, BookmarkPlace, DatabaseSettings, NewInterpreterTip, NewSermon,
+    NewStreamAsset, NewStreamFont, Repository, RepositoryError, SermonItemRecord, SermonRecord,
+    SermonSnapshot, SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkRecord,
+    SyncApplyOutcome, SyncLibraryManifestRow, SyncManifestRow, SyncPresentation, TrashedLibrary,
+    TrashedPresentation, UiUsageCount, BOOKMARK_NOT_FOUND, PRUNE_HORIZON, SERMON_CONFLICT,
+    SERMON_NOT_FOUND,
 };

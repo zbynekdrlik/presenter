@@ -7,6 +7,7 @@
 //! components only read `Study`.
 
 mod add_to_sermon;
+mod bookmarks;
 mod compare;
 mod crossrefs;
 mod favourites;
@@ -60,6 +61,7 @@ use crate::state::study_history::StudyHistory;
 use crate::state::study_word::{KEY_NUMBERS, SCOPE_ALL};
 
 use add_to_sermon::AddToSermonSheet;
+use bookmarks::{BookmarkList, BookmarksSheet, SaveBookmarkSheet};
 use compare::{CompareCell, CompareView};
 use crossrefs::{CrossRefSheet, CrossRefs};
 use favourites::{FavouriteSheet, Favourites};
@@ -140,6 +142,11 @@ enum Undo {
         position: usize,
         edits: ItemEdits,
     },
+    /// A deleted bookmark (#915), back at its index.
+    Bookmark {
+        bookmark: Box<crate::api::bookmarks::Bookmark>,
+        index: usize,
+    },
 }
 
 /// The page's state. `Copy` (signals only), passed to every component.
@@ -196,6 +203,8 @@ struct Study {
     /// The live socket's connects so far; `None` until the first sermon opens
     /// it, so reading alone keeps no socket awake on the phone.
     live: RwSignal<Option<u32>>,
+    /// The named bookmarks, as the Záložky sheet last read them.
+    bookmarks: RwSignal<BookmarkList>,
     /// Bumped by a retry button: asks again for the same chapter or search.
     retry: RwSignal<u32>,
     cache: StoredValue<ChapterCache>,
@@ -300,6 +309,7 @@ fn run_undo(s: Study) {
             position,
             edits,
         } => sermon_undo::undo_removed(s, sermon, *item, position, edits),
+        Undo::Bookmark { bookmark, index } => bookmarks::undo_delete(s, *bookmark, index),
     }
 }
 
@@ -570,6 +580,7 @@ pub fn StudyPage() -> impl IntoView {
         editors: StoredValue::new_local(HashMap::new()),
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
         live: RwSignal::new(None),
+        bookmarks: RwSignal::new(BookmarkList::default()),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
         scroll_plan: StoredValue::new(saved_verse.map_or(ScrollPlan::Keep, ScrollPlan::Verse)),
@@ -671,6 +682,8 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
         Some(StudySheet::CrossRefs) => view! { <CrossRefSheet s=s /> }.into_any(),
         Some(StudySheet::Word) => view! { <WordSheet s=s /> }.into_any(),
+        Some(StudySheet::Bookmarks) => view! { <BookmarksSheet s=s /> }.into_any(),
+        Some(StudySheet::SaveBookmark) => view! { <SaveBookmarkSheet s=s /> }.into_any(),
         Some(StudySheet::Preview) => open_editor(s)
             .map(|e| view! { <PreviewSheet e=e /> })
             .into_any(),
