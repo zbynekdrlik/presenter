@@ -128,7 +128,9 @@ The deploy never seeds: it only migrates the existing DB, exactly like SNV.
 - **Library rsync + ProPresenter import** (answered by `deploy.yml`): the rsync only copies the
   `.pro` files from git into `libraries/`; `import_propresenter` runs ONLY when the DB file is
   missing or empty ("Existing database found - preserving presentations"). So keeping both steps
-  never touches PRBA's own edits. Keep them.
+  never touches PRBA's own edits. **Superseded by the owner (2026-11-08):** „iba teraz na začiatku
+  sa tam nakopíruje zo SNV a potom už oni si tam budú upravovať vlastnú" — PRBA skips BOTH steps;
+  no SNV song file reaches PRBA after the one-time seed.
 - **First deploy vs. seed** *(my call)*: `deploy-prba` FAILS with a clear `::error::` when
   `/opt/presenter-prba/presenter.db` is missing — it must never create or import a fresh DB on
   PRBA. Order: dev1 setup → seed → merge that enables `deploy-prba`.
