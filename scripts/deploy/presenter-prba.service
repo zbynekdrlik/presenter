@@ -1,0 +1,38 @@
+[Unit]
+Description=Presenter - PRBA site (hosted on dev1 until PRBA has its own PC, #918)
+After=network.target
+
+[Service]
+Type=simple
+# #918: its own account — the deploy user AND the service user, like newlevel on SNV.
+User=presenter-prba
+Group=presenter-prba
+WorkingDirectory=/opt/presenter-prba
+ExecStart=/opt/presenter-prba/presenter-server
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+# Environment — a site without devices: no Companion, no sync peer, no stage TVs.
+Environment=PRESENTER_PORT=8081
+Environment=PRESENTER_DB_URL=sqlite:///opt/presenter-prba/presenter.db
+Environment=PRESENTER_LIBRARY_ROOT=/opt/presenter-prba/libraries
+Environment=PRESENTER_COMPANION_ENABLED=0
+Environment=PRESENTER_LISTEN_RECORDINGS_DIR=/opt/presenter-prba/recordings
+Environment=RUST_LOG=info,tower_http=debug,sqlx=warn
+Environment=GST_REGISTRY=/opt/presenter-prba/gstreamer-registry.bin
+# #761: the OpenRouter AI backend (0600 root-only, written by deploy-site.yml).
+EnvironmentFile=-/etc/presenter-prba/ai.env
+
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/presenter-prba
+PrivateTmp=true
+
+CPUQuota=300%
+MemoryMax=4G
+TasksMax=512
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

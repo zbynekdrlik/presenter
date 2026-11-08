@@ -481,6 +481,15 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s scripts/dev/bibles -p 'test_web_overlays_to_usfm.py' -v
 
+      # #918: the reusable site deploy (SNV keeps its steps, PRBA skips the device steps), the
+      # PRBA seeded-DB guard and the one-time SNV→PRBA seed cleaner.
+      - name: Test the site deploy + PRBA seed (#918)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/ci -p 'test_deploy_site_workflow.py' -v
+          python3 -m unittest discover -s scripts/deploy -p 'test_require_seeded_db.py' -v
+          python3 -m unittest discover -s scripts/ops -p 'test_prba_seed_clean.py' -v
+
       # Regression test for #802: the E2E harness (startTestServer,
       # refresh-dev-data.sh, the synthetic NDI sender) must never silently
       # fall back to a local `cargo run` — Tier-0 compiles in CI only. A

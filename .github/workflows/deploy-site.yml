@@ -1,0 +1,778 @@
+name: Deploy site
+
+# #918: the release deploy of ONE Presenter site, called by deploy.yml once per site (SNV, then
+# PRBA). The steps are the SNV deploy job as it was, parameterized by the inputs below; the SNV
+# call (hardware + library_sync true) runs every step it always ran. PRBA (no devices, its own
+# data after a one-time seed from SNV) skips the hardware steps and never syncs SNV's song files.
+on:
+  workflow_call:
+    inputs:
+      site:
+        description: "SNV or PRBA"
+        type: string
+        required: true
+      deploy_host:
+        type: string
+        required: true
+      deploy_user:
+        type: string
+        required: true
+      deploy_dir:
+        type: string
+        required: true
+      service_name:
+        type: string
+        required: true
+      unit_file:
+        description: "the committed systemd unit, under scripts/deploy/"
+        type: string
+        required: true
+      etc_dir:
+        description: "the folder of the 0600 env files (TURN, AI)"
+        type: string
+        required: true
+      http_port:
+        type: string
+        required: true
+      hardware:
+        description: "ADB, NDI, VA-API, the encoder gate, stage-url + sync-peer drop-ins, TURN, NDI self-heal, Companion"
+        type: boolean
+        required: true
+      library_sync:
+        description: "rsync data/libraries from git + the first-deploy ProPresenter import; false = the DB must already be seeded"
+        type: boolean
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.site }}
+    runs-on: self-hosted
+    env:
+      DEPLOY_DIR: ${{ inputs.deploy_dir }}
+      SERVICE_NAME: ${{ inputs.service_name }}
+      DEPLOY_HOST: ${{ inputs.deploy_host }}
+      DEPLOY_USER: ${{ inputs.deploy_user }}
+      UNIT_FILE: ${{ inputs.unit_file }}
+      ETC_DIR: ${{ inputs.etc_dir }}
+      HTTP_PORT: ${{ inputs.http_port }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the private Bible modules (#859)
+        uses: actions/checkout@v4
+        with:
+          repository: zbynekdrlik/presenter-bibles
+          # One pin for every workflow; bump them all in one commit (#859).
+          ref: bd09a76899f0c29a18ac7a1a0fa6d3d284cf9398
+          ssh-key: ${{ secrets.BIBLES_DEPLOY_KEY }}
+          path: data/bibles-private
+          persist-credentials: false
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: _artifacts
+
+      - name: Place binaries
+        run: |
+          mkdir -p target/release
+          cp _artifacts/presenter-server target/release/
+          cp _artifacts/import_propresenter target/release/
+          cp _artifacts/ingest_bibles target/release/
+          cp _artifacts/presenter-stage.apk target/release/
+          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles target/release/presenter-stage.apk
+
+      - name: Setup SSH for deployment
+        id: ssh_setup
+        run: |
+          mkdir -p ~/.ssh
+          # #795: (re)write the deploy-target alias FIRST, before ssh-keyscan.
+          # ~/.ssh/config is shared by every job on this self-hosted runner; if
+          # keyscan failed before the rewrite, the PREVIOUS job's alias (another
+          # host, e.g. SNV prod) stayed in place and a later step reached it.
+          rm -f ~/.ssh/config
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+              HostName ${{ env.DEPLOY_HOST }}
+              User ${{ env.DEPLOY_USER }}
+              IdentityFile ~/.ssh/id_deploy
+          EOF
+          touch ~/.ssh/known_hosts
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # #674: the host's STALE key is replaced (ssh-keygen -R, inside the loop below,
+          # only after a successful scan), so a re-deploy never accumulates duplicate
+          # entries for the same host (the dominant source of this file's unbounded
+          # growth on a persistent self-hosted runner).
+          # #674: a bare `ssh-keyscan ... 2>/dev/null` here used to abort the
+          # WHOLE step via this step's `-e` shell the instant keyscan itself
+          # returned non-zero (a transient connect timeout) — BEFORE ever
+          # reaching the emptiness guard below that was written to diagnose
+          # exactly that failure. Wrapping the call in `if ...; then` exempts
+          # it from `-e`; the retry loop then also tolerates a genuine blip.
+          KEYSCAN_OK=0
+          SCANNED=$(mktemp)
+          for attempt in 1 2 3 4 5; do
+            if ssh-keyscan -T 5 ${{ env.DEPLOY_HOST }} > "$SCANNED" 2>/dev/null && [ -s "$SCANNED" ]; then
+              # Replace the host's entry only now that fresh keys are in hand: removing it
+              # BEFORE a scan that then failed (host offline) left this shared runner's
+              # ~/.ssh/known_hosts without the host, breaking every later ssh to it (PP
+              # internet outage, 2026-10-14).
+              ssh-keygen -R ${{ env.DEPLOY_HOST }} -f ~/.ssh/known_hosts >/dev/null 2>&1 || true
+              cat "$SCANNED" >> ~/.ssh/known_hosts
+              KEYSCAN_OK=1
+              break
+            fi
+            echo "ssh-keyscan attempt $attempt/5 failed, retrying in 3s..."
+            sleep 3
+          done
+          rm -f "$SCANNED"
+          if [ "$KEYSCAN_OK" -ne 1 ] || [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan failed after 5 attempts — known_hosts is empty. Cannot verify host."
+            exit 1
+          fi
+
+      - name: Create deploy directory
+        run: |
+          ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
+
+      - name: Ensure ADB is installed
+        if: ${{ inputs.hardware }}
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          if ! command -v adb &> /dev/null; then
+            echo "Installing ADB..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq android-tools-adb
+          fi
+          echo "ADB version: $(adb --version | head -1)"
+          REMOTE_SCRIPT
+
+      - name: Ensure NDI SDK and avahi-daemon are installed
+        if: ${{ inputs.hardware }}
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          # Install avahi-daemon for mDNS (NDI source discovery)
+          if ! systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+            echo "Installing avahi-daemon..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq avahi-daemon
+            sudo systemctl enable avahi-daemon
+            sudo systemctl start avahi-daemon
+          fi
+          # Install NDI SDK if not present
+          if [ ! -f /usr/lib/ndi/libndi.so.6 ]; then
+            echo "Installing NDI SDK v6..."
+            NDI_URL="https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz"
+            curl -sL "$NDI_URL" -o /tmp/ndi_sdk.tar.gz
+            cd /tmp && tar xzf ndi_sdk.tar.gz
+            echo "y" | PAGER=cat sh /tmp/Install_NDI_SDK_v6_Linux.sh
+            sudo mkdir -p /usr/lib/ndi
+            sudo cp "/tmp/NDI SDK for Linux/lib/x86_64-linux-gnu/libndi.so.6.3.1" /usr/lib/ndi/
+            sudo ln -sf libndi.so.6.3.1 /usr/lib/ndi/libndi.so.6
+            sudo ln -sf libndi.so.6 /usr/lib/ndi/libndi.so
+            rm -rf /tmp/ndi_sdk.tar.gz /tmp/Install_NDI_SDK_v6_Linux.sh "/tmp/NDI SDK for Linux"
+            echo "NDI SDK installed"
+          else
+            echo "NDI SDK already present"
+          fi
+          ls -la /usr/lib/ndi/libndi.so.6
+          REMOTE_SCRIPT
+
+      - name: Ensure GStreamer + VA-API are installed
+        if: ${{ inputs.hardware }}
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          NEEDED="gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice intel-media-va-driver-non-free libva-drm2 libva2"
+          MISSING=""
+          for pkg in $NEEDED; do
+            dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "Installing missing packages:$MISSING"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq $MISSING
+          fi
+          # Probe that VAAPI H264 encoder is available
+          if ! gst-inspect-1.0 vah264enc >/dev/null 2>&1; then
+            echo "::error::vah264enc element not available after install — VA-API driver missing or kernel/firmware mismatch"
+            exit 1
+          fi
+          echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
+          REMOTE_SCRIPT
+
+      # STAGED deploy, PULL model: the runner→prod point-to-point path can be
+      # crippled (~21 KB/s over the inter-site bridge AND tailscale when the
+      # rig travels), while prod's own INTERNET stays fast (measured 4.2 MB/s
+      # from GitHub). So prod downloads the build artifact straight from
+      # GitHub via a short-lived signed URL instead of receiving an scp push.
+      # The service KEEPS RUNNING throughout; a later step stops → swaps →
+      # starts with seconds of downtime. sha256 sums computed on the runner
+      # guard the download's integrity.
+      - name: Stage binaries on prod (pull from GitHub, service keeps running)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_ID=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name=="build-artifacts") | .id')
+          test -n "$ARTIFACT_ID" || { echo "::error::build-artifacts artifact not found for this run"; exit 1; }
+          SUMS=$(cd _artifacts && sha256sum presenter-server import_propresenter ingest_bibles presenter-stage.apk)
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/staging.new"
+          # The signed URL from the 302 redirect is valid ~1 minute — resolve it
+          # LAST and hand it straight to prod's curl (no token leaves the runner).
+          SIGNED_URL=$(curl -sI -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            | tr -d '\r' | awk 'tolower($1)=="location:" {print $2}')
+          test -n "$SIGNED_URL" || { echo "::error::could not resolve the signed artifact URL"; exit 1; }
+          ssh deploy-target "set -euo pipefail
+            cd ${{ env.DEPLOY_DIR }}/staging.new
+            curl -sL --max-time 300 -o build-artifacts.zip '$SIGNED_URL'
+            unzip -oq build-artifacts.zip && rm build-artifacts.zip
+            printf '%s\n' '$SUMS' | sha256sum -c --quiet
+            chmod +x presenter-server import_propresenter ingest_bibles
+            ls -la"
+
+      # The APK rides the same pulled artifact; it is swapped into place
+      # together with the binaries (the running service may be serving the
+      # old file until then).
+
+      # #918: without the library sync there is no first-deploy import, so the data must come
+      # from the one-time seed. Never start such a site on a fresh, empty database.
+      - name: Require the seeded database
+        if: ${{ !inputs.library_sync }}
+        run: ssh deploy-target "bash -s -- ${{ env.DEPLOY_DIR }}/presenter.db" < scripts/deploy/require_seeded_db.sh
+
+      - name: Backup database
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="${{ env.DEPLOY_DIR }}/presenter.db"
+          BACKUP_DIR="${{ env.DEPLOY_DIR }}/backups"
+          mkdir -p "$BACKUP_DIR"
+          if [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            echo "Database backed up to ${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            ls -t "$BACKUP_DIR"/presenter-*.db 2>/dev/null | tail -n +6 | xargs -r rm --
+          else
+            echo "No existing database to back up"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Validate database schema
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="${{ env.DEPLOY_DIR }}/presenter.db"
+          if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
+            echo "No database - will be created on first start"
+            exit 0
+          fi
+          echo "Validating schema compatibility with new binary (validate mode)..."
+          # #771: probe the STAGED (incoming) binary, NOT the running one. The
+          # new binary lives at staging.new/ until the later "Swap staged
+          # binaries" step; ${{ env.DEPLOY_DIR }}/presenter-server here is still the OLD
+          # running binary, which predates validate mode — probing it would boot
+          # Normal (Companion 18175 bind, NDI restore) and recur the #771
+          # collision, AND validate the wrong (already-live) binary's schema.
+          NEW_BIN="${{ env.DEPLOY_DIR }}/staging.new/presenter-server"
+          test -x "$NEW_BIN" || { echo "::error::staged presenter-server missing at $NEW_BIN — cannot schema-validate the incoming binary"; exit 1; }
+          TEST_DB="/tmp/presenter-schema-test-$$.db"
+          LOG_FILE="/tmp/presenter-schema-test-$$.log"
+          cp "$DB_PATH" "$TEST_DB"
+          # #771: PRESENTER_STARTUP_MODE=validate runs migrations + opens the DB
+          # + serves /healthz but starts NO integration, so the probe never
+          # collides with the live presenter.service (Companion 18175, NDI, OSC).
+          PRESENTER_STARTUP_MODE=validate PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
+            timeout 10 "$NEW_BIN" > "$LOG_FILE" 2>&1 &
+          SERVER_PID=$!
+          sleep 3
+          if kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Schema is compatible (validate mode — no integrations started)"
+            kill $SERVER_PID 2>/dev/null || true
+            wait $SERVER_PID 2>/dev/null || true
+          else
+            echo "Probe process is not alive — last 40 log lines:"
+            tail -n 40 "$LOG_FILE" 2>/dev/null || true
+            # #771: distinguish a real broken migration (the binary prints the
+            # SCHEMA-VALIDATION-FAILED marker on a DB/migration error in validate
+            # mode) from a probe that died for another reason — never the blanket
+            # "migration is broken" for e.g. a port bind.
+            if grep -q 'SCHEMA-VALIDATION-FAILED' "$LOG_FILE"; then
+              echo "::error::New binary failed to migrate/open the existing database — migration is broken. Fix the migration before deploying."
+            else
+              echo "::error::Schema-validate probe failed to start for a reason OTHER than a broken migration (see the last 40 log lines above). This is NOT necessarily a migration problem."
+            fi
+            rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm" "$LOG_FILE"
+            exit 1
+          fi
+          rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm" "$LOG_FILE"
+          REMOTE_SCRIPT
+
+      - name: Deploy Bible files
+        run: |
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
+          scp -i ~/.ssh/id_deploy \
+            data/bibles/kjv.usfm.zip \
+            data/bibles-private/seb.bbl.mybible.zip \
+            data/bibles-private/rohacek.bbl.mybible.zip \
+            data/bibles-private/sevp.obohu.mybible.zip \
+            data/bibles-private/milost.bbl.mybible.zip \
+            data/bibles-private/ampc.usfm.zip \
+            data/bibles-private/ssv.usfm.zip \
+            data/bibles-private/botek.usfm.zip \
+            data/bibles-private/csp.usfm.zip \
+            deploy-target:${{ env.DEPLOY_DIR }}/bibles/
+
+      - name: Sync ProPresenter libraries from git
+        if: ${{ inputs.library_sync }}
+        run: |
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
+
+      - name: Import ProPresenter (first deploy or schema reset)
+        if: ${{ inputs.library_sync }}
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="${{ env.DEPLOY_DIR }}/presenter.db"
+          if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
+            echo "Fresh database - running ProPresenter import"
+            # The STAGED tool: ${{ env.DEPLOY_DIR }}/import_propresenter is the previous
+            # release's (absent on a first deploy) until the swap step.
+            PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
+              ${{ env.DEPLOY_DIR }}/staging.new/import_propresenter --root "${{ env.DEPLOY_DIR }}/libraries"
+          else
+            echo "Existing database found - preserving presentations"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Deploy systemd service
+        env:
+          # #538: the stage URL is PER SITE and no longer lives in the shared unit —
+          # each deploy writes its own drop-in. SNV prod points its TVs at itself.
+          # Passed through `env:` rather than interpolated straight into the shell line:
+          # the value ends up inside a remote ssh command, where a quote in it would run
+          # as a command under passwordless sudo.
+          PROD_STAGE_URL: ${{ vars.PROD_STAGE_URL || 'http://10.77.9.205/stage' }}
+        run: |
+          scp -i ~/.ssh/id_deploy ${{ env.UNIT_FILE }} deploy-target:/tmp/${{ env.SERVICE_NAME }}.service
+          # #544: the service's GStreamer registry must not survive this deploy — a driver
+          # or permission change would otherwise keep being judged by the old cache.
+          # #850 O1: drop two leftover drop-ins — ableset-debug.conf (closed #600) overrides
+          # the unit's RUST_LOG with tower_http=info, which hides the request log; noresolume.conf
+          # sets an env var no code reads. rm -f keeps this idempotent.
+          ssh deploy-target "sudo cp /tmp/${{ env.SERVICE_NAME }}.service /etc/systemd/system/ && \
+            sudo rm -f ${{ env.DEPLOY_DIR }}/gstreamer-registry.bin && \
+            sudo mkdir -p /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d && \
+            sudo rm -f /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/ableset-debug.conf /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/noresolume.conf && \
+            sudo systemctl daemon-reload"
+          # #918: a site without devices (PRBA) has no encoder gate, no stage TVs and no
+          # song-sync peer — the rest of this step is the hardware site's.
+          if [ "${{ inputs.hardware }}" != "true" ]; then
+            echo "No devices on ${{ inputs.site }}: no encoder gate, stage-url or sync-peer drop-in"
+            exit 0
+          fi
+          # #539: the encoder-ready gate the unit calls from ExecStartPre.
+          scp -i ~/.ssh/id_deploy scripts/deploy/wait-for-h264-encoder.sh deploy-target:/tmp/wait-for-h264-encoder.sh
+          ssh deploy-target "sudo install -m 0755 /tmp/wait-for-h264-encoder.sh ${{ env.DEPLOY_DIR }}/wait-for-h264-encoder.sh"
+          # A newline in the variable would inject arbitrary [Service] directives into the
+          # drop-in — accept only a single-line http(s) URL.
+          case "$PROD_STAGE_URL" in
+            *[$'\n\r']* | '') echo "::error::PROD_STAGE_URL must be a single-line URL"; exit 1 ;;
+            http://* | https://*) ;;
+            *) echo "::error::PROD_STAGE_URL must start with http:// or https://"; exit 1 ;;
+          esac
+          printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$PROD_STAGE_URL" |
+            ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/stage-url.conf >/dev/null && sudo systemctl daemon-reload"
+          # #555: song-sync peer — SNV pulls from PP over tailscale (the two sites
+          # have overlapping 10.77.8.0/23 LANs; tailscale is the only inter-site path).
+          printf '[Service]\nEnvironment=PRESENTER_SYNC_PEER_URL=%s\n' "http://100.101.72.101" |
+            ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/sync-peer.conf >/dev/null && sudo systemctl daemon-reload"
+
+      # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only
+      # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`).
+      # Secrets — must NOT live in the committed unit. The value is passed via
+      # the bash builtin printf (never in any process argv) piped over ssh stdin
+      # (never in the remote argv / ps), and written under `umask 077` so the
+      # file is 0600 from creation (no 0644 window). Unlike an inline
+      # `Environment=` drop-in, EnvironmentFile values are NOT exposed by
+      # `systemctl show`. When the secrets are unset, remove any stale file so
+      # TURN cleanly disables (LAN-only).
+      - name: Configure TURN credentials
+        if: ${{ inputs.hardware }}
+        env:
+          TURN_KEY_ID: ${{ secrets.TURN_KEY_ID }}
+          TURN_KEY_API_TOKEN: ${{ secrets.TURN_KEY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SECRET_FILE=${{ env.ETC_DIR }}/turn.env
+          if [ -n "$TURN_KEY_ID" ] && [ -n "$TURN_KEY_API_TOKEN" ]; then
+            ssh deploy-target "sudo install -d -m 755 ${{ env.ETC_DIR }}"
+            printf 'PRESENTER_TURN_KEY_ID=%s\nPRESENTER_TURN_KEY_API_TOKEN=%s\n' \
+              "$TURN_KEY_ID" "$TURN_KEY_API_TOKEN" \
+              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "TURN credentials written to $SECRET_FILE (0600 root-only)"
+          else
+            ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "TURN secrets unset — TURN disabled (LAN-only); any stale secret file removed"
+          fi
+          ssh deploy-target "sudo systemctl daemon-reload"
+
+      # #761: write the OpenRouter AI backend config to a 0600 root-only
+      # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`),
+      # mirroring the TURN step above. The API key is a SECRET — never in the
+      # committed unit, never in any process argv (passed via the printf builtin
+      # over ssh stdin, written under `umask 077` so 0600 from creation). The
+      # PRESENTER_AI_* env vars WIN over the stored DB `ai-settings` row for the
+      # effective AI call/status path (resolve_effective_settings, #761), so this
+      # file is what switches the live backend to OpenRouter WITHOUT a DB write —
+      # prod DBs still hold the pre-migration bundled-proxy apiUrl. Empty secret
+      # → remove the file so AI cleanly falls back to the stored DB row / default
+      # (AI off on OpenRouter), never half-configured. Runs BEFORE the swap/restart
+      # step below so the freshly-started service reads the new EnvironmentFile.
+      - name: Configure AI backend
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+        run: |
+          set -euo pipefail
+          SECRET_FILE=${{ env.ETC_DIR }}/ai.env
+          if [ -n "$OPENROUTER_API_KEY" ]; then
+            ssh deploy-target "sudo install -d -m 755 ${{ env.ETC_DIR }}"
+            printf 'PRESENTER_AI_API_URL=%s\nPRESENTER_AI_API_KEY=%s\nPRESENTER_AI_MODEL=%s\n' \
+              "https://openrouter.ai/api/v1" "$OPENROUTER_API_KEY" "${AI_MODEL:-google/gemini-3.8-flash}" \
+              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "AI backend → OpenRouter written to $SECRET_FILE (0600 root-only), model=${AI_MODEL:-google/gemini-3.8-flash}"
+          else
+            ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "OPENROUTER_API_KEY unset — OpenRouter AI backend disabled; any stale $SECRET_FILE removed"
+          fi
+          ssh deploy-target "sudo systemctl daemon-reload"
+
+      # The transfers above ran with the OLD service still serving. Downtime
+      # window = this single step: stop → swap the staged binaries into place
+      # → start. Seconds, not the length of a slow-bridge transfer.
+      - name: Swap staged binaries and restart service
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -euo pipefail
+          cd "${{ env.DEPLOY_DIR }}"
+          test -x staging.new/presenter-server || { echo "::error::staged presenter-server missing/not executable — aborting before touching the running service"; exit 1; }
+          if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; fi
+          mv -f staging.new/presenter-server staging.new/import_propresenter staging.new/ingest_bibles staging.new/presenter-stage.apk .
+          rmdir staging.new 2>/dev/null || true
+          sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}
+          REMOTE_SCRIPT
+
+      - name: Verify deployment
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          if ! systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then
+            echo "::error::Service failed to start"
+            sudo journalctl -u ${{ env.SERVICE_NAME }} -n 50 --no-pager
+            exit 1
+          fi
+          echo "Service is running"
+
+          # Poll /healthz until the port is bound. systemd reports the service
+          # active before tokio finishes binding; a fixed sleep raced with
+          # cold start (DB migration + library/Bible load). 60s max.
+          HEALTH=""
+          for attempt in $(seq 1 30); do
+            if HEALTH=$(curl -sf http://localhost:${{ env.HTTP_PORT }}/healthz 2>/dev/null); then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$HEALTH" ]; then
+            echo "::error::Post-deploy health check FAILED — /healthz did not respond within 60s"
+            sudo journalctl -u ${{ env.SERVICE_NAME }} -n 50 --no-pager
+            exit 1
+          fi
+          echo "Health check passed: $HEALTH"
+
+          if ! LIBS=$(curl -sf http://localhost:${{ env.HTTP_PORT }}/libraries/summary); then
+            echo "::error::Post-deploy data check FAILED — /libraries/summary did not respond"
+            exit 1
+          fi
+          if [ "$LIBS" = "[]" ]; then
+            echo "::error::Post-deploy data check FAILED — database appears empty"
+            exit 1
+          fi
+          echo "Data check passed: libraries endpoint returned data"
+          REMOTE_SCRIPT
+
+      - name: Post-deploy smoke test
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:${{ env.HTTP_PORT }}/stage)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Stage display returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "Stage display: OK (HTTP 200)"
+
+          curl -sf http://localhost:${{ env.HTTP_PORT }}/stage/snapshot > /dev/null
+          echo "Stage snapshot API: OK"
+
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:${{ env.HTTP_PORT }}/ui/operator)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Operator UI returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "Operator UI: OK (HTTP 200)"
+          REMOTE_SCRIPT
+
+      # #661 added this AI-path check; #675 review finding 2 fixed two bugs
+      # in it. (1) It used to sit INSIDE "Verify deployment", BEFORE the core
+      # smoke test above — an AI-side failure aborted the job via `if:
+      # success()` and skipped the smoke test that proves the actual
+      # lyrics/stage feature still works, so an unrelated AI hiccup could
+      # mask a real regression. Now it runs AFTER the smoke test. (2) It used
+      # to hard-fail on the aggregate `connected` field, which ANDs
+      # connectivity + Claude-OAuth-auth + model-validity — but the Claude
+      # OAuth token is DOCUMENTED to die silently every ~8h (#660) for
+      # reasons that have nothing to do with what THIS deploy shipped, so
+      # failing a PRODUCTION deploy over a coincidentally-stale token is
+      # wrong. Only `modelValid` is asserted as a hard gate: `check_status`
+      # (`router/ai.rs`) defaults it PERMISSIVELY to `true` whenever the
+      # model catalog itself couldn't be fetched (dead token, proxy down,
+      # network blip), so it can only be `false` when the proxy answered its
+      # catalog AND the CONFIGURED model genuinely isn't in it — the one
+      # AI-side failure mode a code/config change in this deploy could
+      # actually cause (the exact #661 incident: an invalid model id sat
+      # green for 4 days). `continue-on-error: true` is banned in this repo
+      # (`ci/no-continue-on-error`, see this repo's CLAUDE.md) —
+      # "non-blocking" here means the step itself never fails on these
+      # signals in the first place, not that a failing step is ignored.
+      - name: Verify AI status
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          # #764: /models (the /ai/status probe) 200s on a metered backend even
+          # with an exhausted budget / revoked key, while completions 403. Fire
+          # ONE cheap real completion so that failure is recorded server-side;
+          # the /ai/status read below then reports connected:false via the
+          # shared evaluate_ai_status. Best-effort (|| true keeps set -e happy),
+          # never fails the deploy on its own.
+          curl -s -m 30 -X POST http://localhost:${{ env.HTTP_PORT }}/ai/chat \
+            -H 'content-type: application/json' \
+            -d '{"message":"Odpovedz iba: OK"}' >/dev/null 2>&1 || true
+          curl -s -m 10 -X POST http://localhost:${{ env.HTTP_PORT }}/ai/clear >/dev/null 2>&1 || true
+          if ! AI_STATUS=$(curl -sf http://localhost:${{ env.HTTP_PORT }}/ai/status); then
+            echo "::error::Post-deploy AI check — /ai/status did not respond; the AI assistant may be DOWN and needs owner attention (non-blocking: this alone does not fail a production deploy)"
+          else
+            if printf '%s' "$AI_STATUS" | grep -q '"modelValid":false'; then
+              echo "::error::Post-deploy AI check FAILED — configured AI model is not in the backend's model catalog: $AI_STATUS"
+              exit 1
+            fi
+            if printf '%s' "$AI_STATUS" | grep -q '"connected":true'; then
+              echo "AI check passed: $AI_STATUS"
+            else
+              # #760: connected:false = the AI assistant is DOWN. It must NOT
+              # hard-fail an unrelated production deploy (that would block
+              # shipping every other fix while the AI login is dead), but it
+              # must be an OWNER-VISIBLE ::error:: annotation, never a
+              # ::warning:: nobody opens (the 14-day SNV blackout). The
+              # primary owner-visible signal is the external watchdog polling
+              # /healthz.ai; this annotation is the in-CI backstop.
+              echo "::error::Post-deploy AI check — AI is NOT connected (connected:false); the AI assistant is DOWN and needs owner attention (non-blocking: connected:false alone must not fail an unrelated deploy — #760): $AI_STATUS"
+            fi
+          fi
+          REMOTE_SCRIPT
+
+      # #768: a boot-restore NDI pipeline can come up degraded — dropping most
+      # encoded frames in the StreamProducer->appsrc bridge while its state
+      # stays "streaming" (the 2026-09-13 SNV incident). This gate reads
+      # /healthz.ndi_pipelines[].dropRatio once consumers have attached and
+      # auto-rebuilds ONCE (the proven deactivate/activate remedy). Owner-
+      # visible ::error:: but NEVER fails the deploy (a live-source hiccup must
+      # not block an unrelated deploy) — same non-blocking posture as the
+      # AI-status gate (the else-branch is a bare echo, exit 0 under set -e, so
+      # this is NOT a continue-on-error violation).
+      - name: NDI fan-out self-heal (#768)
+        if: ${{ inputs.hardware }}
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          BASE=http://localhost:${{ env.HTTP_PORT }}
+          read_sick() {
+            curl -sf "$BASE/healthz" 2>/dev/null | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          for p in d.get("ndi_pipelines", []):
+              if (p.get("consumers") or 0) >= 1 and (p.get("dropRatio") or 0) > 0.2:
+                  print(p.get("source_id", ""), p.get("dropRatio"))
+                  break
+          ' 2>/dev/null || true
+          }
+          SICK=""
+          for _ in $(seq 1 20); do
+            SICK=$(read_sick)
+            if [ -n "$SICK" ]; then break; fi
+            sleep 2
+          done
+          if [ -z "$SICK" ]; then
+            echo "NDI fan-out check: no degraded pipeline (or no consumers attached within ~40s)"
+          else
+            SID=$(echo "$SICK" | awk '{print $1}')
+            RATIO=$(echo "$SICK" | awk '{print $2}')
+            echo "::error::NDI fan-out DEGRADED after deploy — source $SID dropRatio=$RATIO (>0.2) with consumers attached; auto-rebuilding via deactivate/activate. #768 (non-blocking)"
+            echo "::group::#768 D2b per-link drop discriminator (source $SID) — captured before rebuild"
+            curl -sf "$BASE/ndi/snapshot/$SID" 2>/dev/null | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print("(snapshot unavailable)")
+              sys.exit(0)
+          for s in d.get("sessions", []):
+              print(s.get("id", "?"), "dropRatio=", s.get("dropRatio"), "link=", json.dumps(s.get("link", {})))
+          ' 2>/dev/null || echo "(link block unavailable)"
+            echo "::endgroup::"
+            curl -sf -X POST "$BASE/integrations/video-sources/deactivate" >/dev/null 2>&1 || true
+            sleep 4
+            curl -sf -X POST "$BASE/integrations/video-sources/$SID/activate" -H 'content-type: application/json' -d '{}' >/dev/null 2>&1 || true
+            STILL=""
+            for _ in $(seq 1 20); do
+              STILL=$(read_sick)
+              if [ -z "$STILL" ]; then break; fi
+              sleep 2
+            done
+            if [ -n "$STILL" ]; then
+              echo "::error::NDI fan-out STILL degraded after one rebuild ($STILL) — needs owner attention. #768 (non-blocking)"
+            else
+              echo "NDI fan-out self-heal: pipeline healthy after rebuild"
+            fi
+          fi
+          REMOTE_SCRIPT
+
+      - name: Show deployment info
+        run: |
+          echo "=== Deployment Complete ==="
+          echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "Service: ${{ env.SERVICE_NAME }}"
+          ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true
+
+      - name: Install & configure cloudflared (skipped if vars unset)
+        if: ${{ inputs.site == 'SNV' && vars.CLOUDFLARED_TUNNEL_ID_PROD != '' && vars.CLOUDFLARED_HOSTNAME_PROD != '' }}
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARED_CREDS_PROD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TUNNEL_TOKEN" ]; then
+            echo "::error::CLOUDFLARED_CREDS_PROD secret is empty. Register the tunnel token in repo settings."
+            exit 1
+          fi
+          ssh deploy-target "set -euo pipefail
+            if ! command -v cloudflared >/dev/null 2>&1; then
+              wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -O /tmp/cf.deb
+              sudo dpkg -i /tmp/cf.deb
+              rm /tmp/cf.deb
+            fi
+            sudo cloudflared service uninstall 2>/dev/null || true
+            sudo cloudflared service install ${TUNNEL_TOKEN}
+            sudo systemctl enable --now cloudflared
+          "
+
+      # #918: PRBA's public tunnel (prba.newlevel.media, no Access app). Its own unit, never
+      # `cloudflared service install`: that installs THE `cloudflared.service` and would replace
+      # any other tunnel on the host. The token reaches the host over ssh stdin into a 0600
+      # root-only EnvironmentFile (cloudflared reads TUNNEL_TOKEN from the environment).
+      - name: Configure the PRBA tunnel (skipped if vars unset)
+        if: ${{ inputs.site == 'PRBA' && vars.CLOUDFLARED_TUNNEL_ID_PRBA != '' && vars.CLOUDFLARED_HOSTNAME_PRBA != '' }}
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARED_CREDS_PRBA }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TUNNEL_TOKEN" ]; then
+            echo "::error::CLOUDFLARED_CREDS_PRBA secret is empty. Register the tunnel token in repo settings."
+            exit 1
+          fi
+          ssh deploy-target "command -v cloudflared >/dev/null" || {
+            echo "::error::cloudflared is not installed on ${{ inputs.site }}"
+            exit 1
+          }
+          printf 'TUNNEL_TOKEN=%s\n' "$TUNNEL_TOKEN" |
+            ssh deploy-target "sudo install -d -m 755 ${{ env.ETC_DIR }} && sudo sh -c 'umask 077 && cat > ${{ env.ETC_DIR }}/cloudflared.env'"
+          scp -i ~/.ssh/id_deploy scripts/deploy/cloudflared-prba.service deploy-target:/tmp/cloudflared-prba.service
+          ssh deploy-target "set -euo pipefail
+            sudo sed -i \"s#^ExecStart=.*#ExecStart=\$(command -v cloudflared) tunnel --no-autoupdate run#\" /tmp/cloudflared-prba.service
+            sudo cp /tmp/cloudflared-prba.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable cloudflared-prba
+            sudo systemctl restart cloudflared-prba
+            sleep 3
+            systemctl is-active --quiet cloudflared-prba"
+
+      # #851 D1: AFTER the swap and the /healthz wait, never before. Until the
+      # swap ${{ env.DEPLOY_DIR }}/ingest_bibles is the PREVIOUS release's binary
+      # (old parser: it skips every translation as up-to-date), and the
+      # staged one would migrate the DB the old service is still running on.
+      # Here the new service has migrated, so ingest's own migration run is a
+      # no-op. Each translation is replaced in ONE transaction (WAL): the
+      # running service keeps reading the old text until the commit, and its
+      # writes wait at most one translation (~1.9 s on SNV's N100, 8.2 s for
+      # all five; an unchanged digest skips the translation). Placed after the
+      # smoke test, the AI check, the NDI self-heal and cloudflared so an
+      # import failure never skips them; the RUST_LOG check stays last.
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          echo "Importing Bible translations..."
+          export PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db
+          export PRESENTER_BIBLE_KJV=${{ env.DEPLOY_DIR }}/bibles/kjv.usfm.zip
+          export PRESENTER_BIBLE_SEB=${{ env.DEPLOY_DIR }}/bibles/seb.bbl.mybible.zip
+          export PRESENTER_BIBLE_ROHACEK=${{ env.DEPLOY_DIR }}/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_SEVP=${{ env.DEPLOY_DIR }}/bibles/sevp.obohu.mybible.zip
+          export PRESENTER_BIBLE_MILOST=${{ env.DEPLOY_DIR }}/bibles/milost.bbl.mybible.zip
+          export PRESENTER_BIBLE_AMPC=${{ env.DEPLOY_DIR }}/bibles/ampc.usfm.zip
+          export PRESENTER_BIBLE_SSV=${{ env.DEPLOY_DIR }}/bibles/ssv.usfm.zip
+          export PRESENTER_BIBLE_BOTEK=${{ env.DEPLOY_DIR }}/bibles/botek.usfm.zip
+          export PRESENTER_BIBLE_CSP=${{ env.DEPLOY_DIR }}/bibles/csp.usfm.zip
+          ${{ env.DEPLOY_DIR }}/ingest_bibles
+          REMOTE_SCRIPT
+
+      # #850: the Companion module ships WITH the release (it used to be deployed by every
+      # dev push, restarting the operators' Companion). Runs after the server is up and
+      # before the RUST_LOG check; Companion is always started again (the script fails loudly).
+      - name: Deploy Companion module
+        if: ${{ inputs.hardware }}
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target SNV
+
+      # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
+      # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement
+      # through. The RUNNING process must carry the committed unit's RUST_LOG. It is the job's
+      # LAST step on purpose: a mismatch must never skip the smoke test, the AI check, the NDI
+      # self-heal or cloudflared (the #675 ordering lesson).
+      - name: Verify effective RUST_LOG (#850 O1)
+        run: |
+          set -euo pipefail
+          lines=$(grep -c '^Environment=RUST_LOG=' ${{ env.UNIT_FILE }} || true)
+          if [ "$lines" != "1" ]; then
+            echo "::error::${{ env.UNIT_FILE }} must set RUST_LOG exactly once (found $lines)"
+            exit 1
+          fi
+          expected=$(sed -n 's/^Environment=RUST_LOG=//p' ${{ env.UNIT_FILE }})
+          # The process environment, not the unit's Environment property: systemd quotes entries
+          # with special characters there, and an EnvironmentFile override never shows in it.
+          # The service runs as root, so reading its environ needs sudo (verified on SNV + PP).
+          effective=$(ssh deploy-target 'pid=$(systemctl show -p MainPID --value ${{ env.SERVICE_NAME }}); sudo -n cat /proc/$pid/environ | tr "\0" "\n"' | sed -n 's/^RUST_LOG=//p')
+          if [ "$effective" != "$expected" ]; then
+            echo "::error::running RUST_LOG is '$effective', the unit sets '$expected' — a drop-in or EnvironmentFile overrides it"
+            exit 1
+          fi
+          echo "Running RUST_LOG matches the unit: $expected"
