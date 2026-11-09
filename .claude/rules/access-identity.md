@@ -47,5 +47,8 @@ paths:
   `build_router`. The E2E (`study-bookmarks-identity.spec.ts`) generates its pair with
   `node:crypto` `generateKeyPairSync`, serves the public JWK from a node mock (`PRESENTER_ACCESS_CERTS_URL`),
   and carries the cookie to a second browser context.
+- **`rsa` as a dev-dependency trips cargo-deny RUSTSEC-2023-0071** (Marvin, decryption timing; no fix):
+  ignored in `deny.toml` with that reasoning (`.cargo/audit.toml` already had it). Never use `rsa` in
+  production code — the server only verifies through `jsonwebtoken`/`ring`.
 - Logs (`presenter::access`): DEBUG `source=jwt|device-cookie|none` per request, INFO when a device is
   remembered / keys fetched, WARN for a refused token or a failed key fetch. Never the token or cookie value.
