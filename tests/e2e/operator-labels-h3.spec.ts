@@ -290,6 +290,14 @@ for (const viewport of VIEWPORTS) {
     expect(await uppercaseElements(page)).toEqual([]);
     expect(englishIn(await labelTexts(page, DATA))).toEqual([]);
     expect(await smallControls(page, 40)).toEqual([]);
+    // #921: the open ▾ translation list follows the same rules (its rows are 44 px).
+    await page.locator('[data-role="console-translation-menu"][data-kind="main"]').click();
+    await expect(page.locator('[data-role="translation-list"]')).toBeVisible();
+    expect(await uppercaseElements(page)).toEqual([]);
+    expect(englishIn(await labelTexts(page, DATA))).toEqual([]);
+    expect(await smallControls(page, 40)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(page.locator('[data-role="translation-list"]')).toHaveCount(0);
     // Show a verse: the main action and the one that clears it are 48 px.
     await page.locator('[data-role="console-field"]').fill("John 3:16");
     await expect(page.locator('[data-role="bible-console"]')).toHaveAttribute("data-preview-ready", "true");
