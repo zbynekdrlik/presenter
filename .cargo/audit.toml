@@ -50,4 +50,11 @@ ignore = [
   # 1.41.0, and the fix requires rkyv >=0.8.17, which is not reachable from
   # there.
   "RUSTSEC-2026-0235", # rkyv OOB reads (direct dep of sea-orm's rust_decimal, never compiled)
+  # SQLite < 3.54.0 uninitialized page-cache read with a crafted `-wal` of
+  # another page size (local vector: opening files a less trusted party wrote).
+  # libsqlite3-sys 0.30.1 is pinned by sqlx-sqlite 0.8.6 (and rusqlite 0.32);
+  # the fix needs libsqlite3-sys >= 0.39, which no sqlx 0.8 accepts. Presenter
+  # opens only its own DB and the owner's Bible modules. Remove BOTH entries
+  # (here and deny.toml) once sqlx allows >= 0.39. Published 2026-11-09.
+  "RUSTSEC-2026-0459", # libsqlite3-sys bundled SQLite WAL page-size read (pinned by sqlx)
 ]

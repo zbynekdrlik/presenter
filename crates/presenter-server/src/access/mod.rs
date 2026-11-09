@@ -102,16 +102,15 @@ impl AccessIdentity {
         Self::new(None, DeviceKey::open(None))
     }
 
-    /// From the process environment: the team + AUD of this site's Access app
-    /// (missing → no verified logins, one WARN) and the device key next to the
-    /// sqlite file of `db_url`. `persist_key = false` (the validate probe) never
-    /// writes a key file.
     /// The site's service (`AppState::from_config`): the validate probe
     /// (`StartupMode::Validate`) writes no key file.
     pub(crate) fn for_site(db_url: &str, mode: crate::state::StartupMode) -> Arc<Self> {
         Arc::new(Self::from_env(db_url, mode.starts_integrations()))
     }
 
+    /// From the process environment: the team + AUD of this site's Access app
+    /// (missing → no verified logins, one WARN) and the device key next to the
+    /// sqlite file of `db_url`. `persist_key = false` never writes a key file.
     fn from_env(db_url: &str, persist_key: bool) -> Self {
         let jwt = Self::verifier_from_env();
         let location = if persist_key {
@@ -161,11 +160,13 @@ impl AccessIdentity {
             None => CookieState::Absent,
         };
         if let Some(email) = self.verified_login(facts).await {
-            let current = match &device {
-                CookieState::Valid(claims) => Some(claims),
-                _ => None,
+            let set_cookie = match &device {
+                CookieState::Valid(claims) => self.cookie_for(&email, Some(claims), facts),
+                // A stand-in key (key file unreadable) must not overwrite a cookie
+                // of the real key: fixing the file brings that device back.
+                CookieState::Refused if !self.key_is_persisted() => None,
+                _ => self.cookie_for(&email, None, facts),
             };
-            let set_cookie = self.cookie_for(&email, current, facts);
             tracing::debug!(target: LOG_TARGET, source = "jwt", email = %email, "reader identified");
             return Resolution {
                 identity: Some(Identity {
@@ -191,7 +192,7 @@ impl AccessIdentity {
                 // stops sending it (and the log stops seeing it). Never with a
                 // stand-in key: the key file may be fixed, and these devices
                 // must be known again then.
-                let persisted = self.device.as_ref().is_some_and(DeviceKey::is_persisted);
+                let persisted = self.key_is_persisted();
                 tracing::debug!(target: LOG_TARGET, source = "none", removed = persisted, "device cookie refused");
                 Resolution {
                     identity: None,
@@ -203,6 +204,10 @@ impl AccessIdentity {
                 Resolution::default()
             }
         }
+    }
+
+    fn key_is_persisted(&self) -> bool {
+        self.device.as_ref().is_some_and(DeviceKey::is_persisted)
     }
 
     /// The e-mail of a token that verifies; a refused token is logged on the

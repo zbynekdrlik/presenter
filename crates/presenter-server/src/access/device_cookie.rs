@@ -381,9 +381,10 @@ mod tests {
 
         std::fs::write(&path, "not a key").expect("write");
         assert!(load_or_create(&path).is_err());
+        let stand_in = DeviceKey::open(Some(&path)).expect("falls back to a process key");
         assert!(
-            DeviceKey::open(Some(&path)).is_some(),
-            "falls back to a process key"
+            !stand_in.is_persisted(),
+            "a stand-in key never removes cookies"
         );
     }
 }

@@ -31,7 +31,8 @@ paths:
   immutable` asset in a shared cache would hand the cookie to another browser; a response without its own
   `Cache-Control` gets `private, no-store`. A refused cookie (rotated key, > 1 year, altered) is REMOVED
   (`Max-Age=0`) so it stops arriving — but only by a key read from the key file (`is_persisted`): a
-  stand-in key (unreadable file) never removes, so fixing the file brings those devices back. Key file `access-device.key` next to the sqlite file (0600); delete +
+  stand-in key (unreadable file) never removes nor overwrites a cookie it refuses (not even after
+  a login), so fixing the file brings those devices back. Key file `access-device.key` next to the sqlite file (0600); delete +
   restart = every device forgotten. The service is built in `AppState::from_config` from the config's DB
   url (`AccessIdentity::unconfigured()` before that and in test states); the validate probe writes no key.
 - **Per-site config = the deploy's `access.conf` drop-in** (`PRESENTER_ACCESS_TEAM_DOMAIN`,
