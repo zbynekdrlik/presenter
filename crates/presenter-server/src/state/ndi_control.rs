@@ -143,6 +143,10 @@ impl NdiManagerHandle {
                             encoder_timestamp_correction_ms: 0,
                             encoder_timestamp_guard: false,
                             drift_rebuilds: 0,
+                            // #925: the Fake connects by name; it reports the
+                            // finder's address it was given.
+                            advertised_address: f.advertised(),
+                            connect_address: None,
                         },
                     )
                     .collect()
@@ -262,6 +266,10 @@ pub(crate) struct FakeNdiControl {
     /// `stop_other_pipelines(keep)` keeps only `keep`'s (it runs after EVERY silent
     /// activation).
     silent_attempts: Mutex<std::collections::HashMap<String, u32>>,
+    /// #925: the address the "finder" reports for every source — carried by a
+    /// silent start (`SourceSilent { advertised_address }`) and by the health
+    /// snapshot, like the real manager's pipeline route. `None` = not advertised.
+    advertised_address: Mutex<Option<String>>,
 }
 
 /// A one-source start-gate for the #745(a) concurrency test. `start_pipeline` for
@@ -349,6 +357,21 @@ impl FakeNdiControl {
         *self.start_outcome.lock().expect("start_outcome lock") = outcome;
     }
 
+    /// #925: the address the finder reports for the sources from now on.
+    pub(crate) fn set_advertised_address(&self, address: Option<&str>) {
+        *self
+            .advertised_address
+            .lock()
+            .expect("advertised_address lock") = address.map(str::to_string);
+    }
+
+    fn advertised(&self) -> Option<String> {
+        self.advertised_address
+            .lock()
+            .expect("advertised_address lock")
+            .clone()
+    }
+
     /// A fake whose `whep_signaller_call` returns the chosen outcome (#630).
     pub(crate) fn with_whep_outcome(outcome: WhepOutcome) -> Arc<Self> {
         let fake = Self::default();
@@ -420,7 +443,10 @@ impl FakeNdiControl {
                 .lock()
                 .expect("discovered lock")
                 .iter()
-                .map(|name| presenter_ndi::discovery::NdiSourceInfo { name: name.clone() })
+                .map(|name| presenter_ndi::discovery::NdiSourceInfo {
+                    name: name.clone(),
+                    url_address: None,
+                })
                 .collect(),
         )
     }
@@ -510,6 +536,7 @@ impl FakeNdiControl {
                 Err(PipelineStartError::SourceSilent {
                     ndi_name: ndi_name.to_string(),
                     attempt: *attempt,
+                    advertised_address: self.advertised(),
                 })
             }
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(

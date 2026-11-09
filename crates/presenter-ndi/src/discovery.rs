@@ -8,6 +8,11 @@ use tracing::{debug, error, info, warn};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NdiSourceInfo {
     pub name: String,
+    /// The address the finder reports the sender at (`NDIlib_source_t.p_url_address`,
+    /// e.g. `10.77.9.201:5961`). #925: the receiver's address choice and the
+    /// "on the network but sends nothing" diagnosis read it.
+    #[serde(rename = "urlAddress", skip_serializing_if = "Option::is_none")]
+    pub url_address: Option<String>,
 }
 
 /// Thread-safe handle to the accumulated NDI source list.
@@ -64,6 +69,15 @@ impl SourceList {
             *w = list;
         }
         self.scanned.store(true, Ordering::SeqCst);
+    }
+
+    /// The address the finder last reported for `ndi_name` — `None` when the
+    /// source is not on the network (or its address was not readable).
+    pub fn advertised_address(&self, ndi_name: &str) -> Option<String> {
+        self.read()
+            .into_iter()
+            .find(|s| s.name == ndi_name)
+            .and_then(|s| s.url_address)
     }
 }
 
@@ -162,7 +176,10 @@ fn run_finder_loop(sdk: Arc<NdiLib>, sources: SourceList, stop: Arc<AtomicBool>)
                 let raw = std::slice::from_raw_parts(sources_ptr, num_sources as usize);
                 for src in raw {
                     if let Ok(name) = crate::ndi_sdk::cstr_to_string(src.p_ndi_name) {
-                        new_list.push(NdiSourceInfo { name });
+                        // A NULL / non-UTF-8 url only loses the #925 address
+                        // diagnosis, never the source itself.
+                        let url_address = crate::ndi_sdk::cstr_to_string(src.p_url_address).ok();
+                        new_list.push(NdiSourceInfo { name, url_address });
                     }
                 }
             }
@@ -192,9 +209,11 @@ mod tests {
         list.publish(vec![
             NdiSourceInfo {
                 name: "SRC-A".into(),
+                url_address: None,
             },
             NdiSourceInfo {
                 name: "SRC-B".into(),
+                url_address: None,
             },
         ]);
         let snapshot = list.read();
@@ -205,16 +224,22 @@ mod tests {
     #[test]
     fn source_list_update_replaces_contents() {
         let list = SourceList::new();
-        list.publish(vec![NdiSourceInfo { name: "OLD".into() }]);
+        list.publish(vec![NdiSourceInfo {
+            name: "OLD".into(),
+            url_address: None,
+        }]);
         list.publish(vec![
             NdiSourceInfo {
                 name: "NEW-1".into(),
+                url_address: None,
             },
             NdiSourceInfo {
                 name: "NEW-2".into(),
+                url_address: None,
             },
             NdiSourceInfo {
                 name: "NEW-3".into(),
+                url_address: None,
             },
         ]);
         let snapshot = list.read();
@@ -284,9 +309,34 @@ mod tests {
         let list = SourceList::new();
         list.publish(vec![NdiSourceInfo {
             name: "STREAM-PP (stream)".into(),
+            url_address: None,
         }]);
         let snapshot = list.snapshot().expect("the finder has scanned");
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].name, "STREAM-PP (stream)");
+    }
+
+    /// #925: the finder's address for a source is kept, so the receiver can tell
+    /// "on the network at X but silent" from "not on the network".
+    #[test]
+    fn the_advertised_address_of_a_listed_source_is_kept() {
+        let list = SourceList::new();
+        list.publish(vec![
+            NdiSourceInfo {
+                name: "RESOLUME-SNV (SP-program)".into(),
+                url_address: Some("10.77.7.107:5961".into()),
+            },
+            NdiSourceInfo {
+                name: "NO-URL (x)".into(),
+                url_address: None,
+            },
+        ]);
+        assert_eq!(
+            list.advertised_address("RESOLUME-SNV (SP-program)")
+                .as_deref(),
+            Some("10.77.7.107:5961")
+        );
+        assert_eq!(list.advertised_address("NO-URL (x)"), None);
+        assert_eq!(list.advertised_address("NOT-THERE (y)"), None);
     }
 }

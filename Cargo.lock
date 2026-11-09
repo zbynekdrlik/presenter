@@ -3556,6 +3556,7 @@ dependencies = [
  "gstreamer-video",
  "gstreamer-webrtc",
  "libloading 0.8.9",
+ "nix 0.29.0",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

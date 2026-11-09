@@ -267,6 +267,11 @@ pub struct NdiPipeline {
     /// pad probes hold clones). Read by `/healthz`, `/ndi/snapshot` and the
     /// supervisor's drift self-heal check.
     encoder_timing: Arc<encoder_timing::EncoderTiming>,
+    /// #925: the address the finder advertised for the source and, on a
+    /// multi-homed host where that address is on a side network, the reachable
+    /// address `ndisrc` connects to instead. Read by `/healthz` and the silent
+    /// outcome.
+    route: crate::connect_route::NdiRoute,
 }
 
 impl Drop for NdiPipeline {

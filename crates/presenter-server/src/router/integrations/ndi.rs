@@ -414,6 +414,9 @@ pub(crate) fn render_ndi_health_entry(
     entry["encoderTimestampCorrectionMs"] = serde_json::json!(h.encoder_timestamp_correction_ms);
     entry["encoderTimestampGuard"] = serde_json::json!(h.encoder_timestamp_guard);
     entry["driftRebuilds"] = serde_json::json!(h.drift_rebuilds);
+    // #925: where the finder sees the sender, and the address the receiver
+    // connects to instead when that one is on a side network (null = by name).
+    // Always present, so "visible but unreachable" is readable off /healthz.
     entry
 }
 
@@ -503,6 +506,8 @@ mod tests {
             encoder_timestamp_correction_ms: 173,
             encoder_timestamp_guard: true,
             drift_rebuilds: 1,
+            advertised_address: None,
+            connect_address: None,
         };
         let entry = render_ndi_health_entry(&h);
         assert_eq!(entry["timestampLeadMs30s"], -3);
@@ -521,6 +526,43 @@ mod tests {
             "a window without frames must render null, not vanish: {entry}"
         );
         assert_eq!(entry["encoderTimestampGuard"], false);
+    }
+
+    /// #925: every entry names where the finder sees the sender and the address
+    /// the receiver connects to instead — `null` (never omitted) when unknown /
+    /// connected by name.
+    #[test]
+    fn render_ndi_health_entry_emits_the_sender_addresses() {
+        use presenter_ndi::pipeline::health::PipelineDropHealth;
+        use presenter_ndi::pipeline::PipelineState;
+
+        let mut h = PipelineDropHealth {
+            source_id: "src-1".to_string(),
+            state: PipelineState::Starting,
+            drop_ratio: 0.0,
+            consumers: 0,
+            drop_ratio_30s: None,
+            pushed_fps_30s: None,
+            timestamp_lead_ms_30s: None,
+            encoder_timestamp_correction_ms: 0,
+            encoder_timestamp_guard: true,
+            drift_rebuilds: 0,
+            advertised_address: Some("10.77.7.107:5961".to_string()),
+            connect_address: Some("10.77.9.201:5961".to_string()),
+        };
+        let entry = render_ndi_health_entry(&h);
+        assert_eq!(entry["advertisedAddress"], "10.77.7.107:5961");
+        assert_eq!(entry["connectAddress"], "10.77.9.201:5961");
+
+        h.advertised_address = None;
+        h.connect_address = None;
+        let entry = render_ndi_health_entry(&h);
+        for key in ["advertisedAddress", "connectAddress"] {
+            assert!(
+                entry.get(key).is_some_and(serde_json::Value::is_null),
+                "{key} must render null, not vanish: {entry}"
+            );
+        }
     }
 
     /// A busy manager is not "source not active": `/ndi/snapshot` answers

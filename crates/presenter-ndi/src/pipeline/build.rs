@@ -35,7 +35,21 @@ impl NdiPipeline {
     ///
     /// `whep_url` is the axum route path (e.g. `/ndi/whep/<source_id>`) used
     /// as a logical key; the element does NOT bind its own HTTP port.
+    ///
+    /// Connects by NAME only (today's path); the manager uses
+    /// [`Self::build_routed`] with the route `connect_route::resolve` chose.
     pub fn build(ndi_name: &str, whep_url: String) -> Result<Self> {
+        Self::build_routed(
+            crate::connect_route::NdiRoute::name_only(ndi_name),
+            whep_url,
+        )
+    }
+
+    /// Build with an explicit [`NdiRoute`](crate::connect_route::NdiRoute): a
+    /// route with a `connect_address` makes `ndisrc` connect to that address
+    /// instead of resolving the name (#925).
+    pub fn build_routed(route: crate::connect_route::NdiRoute, whep_url: String) -> Result<Self> {
+        let ndi_name = route.ndi_name.as_str();
         crate::init().context("gstreamer init failed")?;
         let encoder_name = crate::hw_h264_encoder().ok_or_else(|| {
             anyhow!(
@@ -64,7 +78,7 @@ impl NdiPipeline {
         // Streaming (`NDI pipeline streaming`).
         tracing::debug!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
 
-        let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
+        let (ndisrc, ndisrcdemux) = build_ndi_source(&route)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
         let (raw_tee, q_default) = build_raw_tee_and_queues()?;
         let encoder = build_encoder(encoder_name)?;
@@ -122,6 +136,7 @@ impl NdiPipeline {
         tracing::debug!(
             encoder = encoder_name,
             %ndi_name,
+            connect_address = route.connect_address.as_deref().unwrap_or("-"),
             "pipeline built (720p H264 shared encoder, per-consumer-pipeline fanout)"
         );
 
@@ -137,6 +152,7 @@ impl NdiPipeline {
             producer,
             keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
             encoder_timing,
+            route,
         })
     }
 }
@@ -196,10 +212,21 @@ fn connect_demux_pads(
 /// frame gap per 5 s window 36.4 ms p50, 44.7 ms p99, 65 ms max) is absorbed
 /// by the browser's jitter buffer — when the encoder keeps the input PTS
 /// (vah264enc 1.24 replaces it with a frame counter, see `encoder_timing`).
-fn build_ndi_source(ndi_name: &str) -> Result<(gst::Element, gst::Element)> {
-    let ndisrc = gst::ElementFactory::make("ndisrc")
-        .name("ndisrc")
-        .property("ndi-name", ndi_name)
+///
+/// #925: the route decides how ndisrc finds the sender — `ndi-name` (the SDK
+/// resolves it, today's path) or, when the advertised address is on a side
+/// network of this host, `url-address` ALONE: the SDK uses the url when the
+/// name is unset (`Processing.NDI.structs.h`), so the name must not be set too.
+fn build_ndi_source(
+    route: &crate::connect_route::NdiRoute,
+) -> Result<(gst::Element, gst::Element)> {
+    use crate::connect_route::NdisrcTarget;
+    let builder = gst::ElementFactory::make("ndisrc").name("ndisrc");
+    let builder = match route.ndisrc_target() {
+        NdisrcTarget::Name(name) => builder.property("ndi-name", name),
+        NdisrcTarget::UrlAddress(url) => builder.property("url-address", url),
+    };
+    let ndisrc = builder
         .property_from_str("timestamp-mode", "receive-time")
         .build()
         .context("build ndisrc")?;

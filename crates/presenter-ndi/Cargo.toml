@@ -20,7 +20,8 @@ required-features = ["test-helpers"]
 anyhow.workspace = true
 axum.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# `net`: the #925 sender lookup (`lookup_host`) and TCP connect probe.
+tokio = { workspace = true, features = ["net"] }
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -35,6 +36,8 @@ gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
 gst-plugin-rtp.workspace = true
 uuid.workspace = true
+# getifaddrs for the #925 side-network check (this host's interface subnets).
+nix = { version = "0.29", default-features = false, features = ["net"] }
 
 [dev-dependencies]
 # Paused-clock tests for the bounded `active` lock waits (no real-time sleeps).
