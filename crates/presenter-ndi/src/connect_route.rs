@@ -34,6 +34,9 @@ use std::time::Duration;
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long one TCP connect probe to a candidate address may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+/// At most this many alternatives are probed, so the whole choice is bounded
+/// (lookup + MAX_PROBES × probe = 6 s) however many A records mDNS returns.
+const MAX_PROBES: usize = 4;
 
 /// One IPv4 address of a local network interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +91,12 @@ impl NdiRoute {
             None => NdisrcTarget::Name(&self.ndi_name),
         }
     }
+}
+
+/// The device an interface entry belongs to: getifaddrs reports a labelled
+/// IPv4 alias as `enp2s0:1`, `/proc/net/route` names the device `enp2s0`.
+fn device_name(name: &str) -> &str {
+    name.split_once(':').map_or(name, |(device, _)| device)
 }
 
 /// Whether `ip` lies in `iface`'s subnet.
@@ -151,12 +160,12 @@ pub fn is_off_route(ip: Ipv4Addr, net: &HostNetwork) -> bool {
     let on_default = net
         .interfaces
         .iter()
-        .any(|i| i.name == default && in_subnet(ip, i));
+        .any(|i| device_name(&i.name) == default && in_subnet(ip, i));
     !on_default
         && net
             .interfaces
             .iter()
-            .any(|i| i.name != default && !i.addr.is_loopback() && in_subnet(ip, i))
+            .any(|i| device_name(&i.name) != default && !i.addr.is_loopback() && in_subnet(ip, i))
 }
 
 /// The sender's other addresses worth trying instead of `advertised`, in the
@@ -285,7 +294,8 @@ pub async fn resolve(ndi_name: &str, advertised: Option<String>) -> NdiRoute {
         return route;
     };
     let candidates = lookup_machine(machine, advertised.port()).await;
-    let alternatives = alternatives(advertised, &candidates, &net);
+    let mut alternatives = alternatives(advertised, &candidates, &net);
+    alternatives.truncate(MAX_PROBES);
     match first_reachable(&alternatives, tcp_probe).await {
         Some(chosen) => {
             tracing::debug!(%ndi_name, %advertised, %chosen, "advertised NDI address is on a side network; connecting to the sender's reachable address (#925)");
@@ -358,6 +368,18 @@ mod tests {
         assert!(!is_off_route(ip([192, 168, 50, 10]), &snv()));
         // dev has no Dante NIC, so 10.77.7.x goes via the gateway there.
         assert!(!is_off_route(ip([10, 77, 7, 107]), &dev()));
+    }
+
+    /// A labelled alias of the default NIC (`enp2s0:1`) is the default NIC, not
+    /// a side network.
+    #[test]
+    fn an_alias_of_the_default_interface_is_not_a_side_network() {
+        let mut net = snv();
+        net.interfaces
+            .push(iface("enp2s0:1", [192, 168, 77, 2], 24));
+        assert!(!is_off_route(ip([192, 168, 77, 50]), &net));
+        assert_eq!(device_name("enp2s0:1"), "enp2s0");
+        assert_eq!(device_name("enp2s0"), "enp2s0");
     }
 
     #[test]
@@ -489,8 +511,10 @@ mod tests {
         );
     }
 
-    /// The single-homed path: an advertised LAN address resolves without any
-    /// lookup to the name-only route (dev / PP stay on today's path).
+    /// `resolve` keeps the name-only route (no lookup, no probe) for an address
+    /// that is not off-route — here loopback, which no host treats as a side
+    /// network — and for a source without an advertised address. The dev / PP
+    /// single-homed classification itself is pinned by the pure `dev()` tests.
     #[tokio::test]
     async fn an_advertised_address_that_is_not_off_route_keeps_the_name_only_path() {
         let route = resolve("SENDER (out)", Some("127.0.0.1:5961".to_string())).await;

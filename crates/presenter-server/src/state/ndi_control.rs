@@ -537,6 +537,7 @@ impl FakeNdiControl {
                     ndi_name: ndi_name.to_string(),
                     attempt: *attempt,
                     advertised_address: self.advertised(),
+                    connect_address: None,
                 })
             }
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(

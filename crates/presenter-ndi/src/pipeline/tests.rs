@@ -384,38 +384,43 @@ fn state_transitions_start_at_stopped() {
 /// ALONE — no `ndi-name`, which the SDK would resolve through its finder to the
 /// unreachable advertised address again (`Processing.NDI.structs.h`). A route
 /// without one keeps today's name-only `ndisrc`.
+///
+/// Tests `build_ndi_source` directly — it needs only the gst-plugin-ndi
+/// registration, no encoder, so it runs on every CI runner (no skip).
 #[test]
 fn ndisrc_follows_the_route() {
+    super::super::init().unwrap();
+    let mut route = crate::connect_route::NdiRoute::name_only("RESOLUME-SNV (SP-program)");
+    route.advertised_address = Some("10.77.7.107:5961".to_string());
+    let (ndisrc, _demux) = super::build::build_ndi_source(&route).expect("build ndisrc by name");
+    assert_eq!(
+        ndisrc.property::<Option<String>>("ndi-name").as_deref(),
+        Some("RESOLUME-SNV (SP-program)")
+    );
+    assert_eq!(ndisrc.property::<Option<String>>("url-address"), None);
+
+    route.connect_address = Some("10.77.9.201:5961".to_string());
+    let (ndisrc, _demux) = super::build::build_ndi_source(&route).expect("build ndisrc by url");
+    assert_eq!(
+        ndisrc.property::<Option<String>>("url-address").as_deref(),
+        Some("10.77.9.201:5961")
+    );
+    assert_eq!(ndisrc.property::<Option<String>>("ndi-name"), None);
+}
+
+/// #925: a built pipeline keeps its route, so `/healthz` and the silent outcome
+/// can name the addresses.
+#[test]
+fn a_built_pipeline_keeps_its_route() {
     super::super::init().unwrap();
     if super::super::hw_h264_encoder().is_none() {
         return;
     }
     let mut route = crate::connect_route::NdiRoute::name_only("RESOLUME-SNV (SP-program)");
     route.advertised_address = Some("10.77.7.107:5961".to_string());
-    let by_name = NdiPipeline::build_routed(route.clone(), "/ndi/whep/x".into()).unwrap();
-    let ndisrc = by_name.pipeline.by_name("ndisrc").expect("ndisrc");
-    assert_eq!(
-        ndisrc.property::<Option<String>>("ndi-name").as_deref(),
-        Some("RESOLUME-SNV (SP-program)")
-    );
-    assert_eq!(ndisrc.property::<Option<String>>("url-address"), None);
-    assert_eq!(
-        by_name.route().advertised_address.as_deref(),
-        Some("10.77.7.107:5961")
-    );
-
     route.connect_address = Some("10.77.9.201:5961".to_string());
-    let by_url = NdiPipeline::build_routed(route, "/ndi/whep/x".into()).unwrap();
-    let ndisrc = by_url.pipeline.by_name("ndisrc").expect("ndisrc");
-    assert_eq!(
-        ndisrc.property::<Option<String>>("url-address").as_deref(),
-        Some("10.77.9.201:5961")
-    );
-    assert_eq!(ndisrc.property::<Option<String>>("ndi-name"), None);
-    assert_eq!(
-        by_url.route().connect_address.as_deref(),
-        Some("10.77.9.201:5961")
-    );
+    let p = NdiPipeline::build_routed(route.clone(), "/ndi/whep/x".into()).unwrap();
+    assert_eq!(p.route(), &route);
 }
 
 /// Low-latency regression locks (2026-06-11 design): every knob below was a

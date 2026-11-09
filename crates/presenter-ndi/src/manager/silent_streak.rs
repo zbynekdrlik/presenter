@@ -89,11 +89,13 @@ pub(in crate::manager) fn silent_error(
     source_id: &str,
     ndi_name: String,
     advertised_address: Option<String>,
+    connect_address: Option<String>,
 ) -> PipelineStartError {
     PipelineStartError::SourceSilent {
         ndi_name,
         attempt: streaks.bump(source_id),
         advertised_address,
+        connect_address,
     }
 }
 
@@ -269,6 +271,7 @@ mod tests {
                 "id",
                 "RESOLUME-SNV (SP-program)".to_string(),
                 None,
+                None,
             );
             assert_eq!(attempt_of(&err), expected);
             assert!(
@@ -282,12 +285,12 @@ mod tests {
     fn reaching_streaming_ends_the_streak() {
         let streaks = SilentStreaks::default();
         for _ in 0..3 {
-            silent_error(&streaks, "id", "NAME".to_string(), None);
+            silent_error(&streaks, "id", "NAME".to_string(), None, None);
         }
         let before = log_pipeline_streaming(&streaks, "id", "NAME", "vah264enc", true, None);
         assert_eq!(before, 3, "the line reports the silent attempts before it");
         assert_eq!(streaks.get("id"), 0, "streaming ends the streak");
-        let next = silent_error(&streaks, "id", "NAME".to_string(), None);
+        let next = silent_error(&streaks, "id", "NAME".to_string(), None, None);
         assert_eq!(attempt_of(&next), 1, "a new silence starts over at 1");
     }
 
@@ -301,11 +304,17 @@ mod tests {
             "id",
             "RESOLUME-SNV (SP-program)".to_string(),
             Some("10.77.7.107:5961".to_string()),
+            Some("10.77.9.201:5961".to_string()),
         );
         match err {
             PipelineStartError::SourceSilent {
-                advertised_address, ..
-            } => assert_eq!(advertised_address.as_deref(), Some("10.77.7.107:5961")),
+                advertised_address,
+                connect_address,
+                ..
+            } => {
+                assert_eq!(advertised_address.as_deref(), Some("10.77.7.107:5961"));
+                assert_eq!(connect_address.as_deref(), Some("10.77.9.201:5961"));
+            }
             PipelineStartError::Failed(_) | PipelineStartError::Superseded => {
                 panic!("expected SourceSilent, got {err:?}")
             }

@@ -118,15 +118,31 @@ fn silent_attempt(err: &PipelineStartError) -> u32 {
     }
 }
 
-/// The address the finder reported for a silent source (#925), `None` for the
-/// variants that are not a silent outcome. A TOTAL match, like [`silent_attempt`].
-fn silent_advertised_address(err: &PipelineStartError) -> Option<&str> {
+/// The sender addresses of a silent outcome (#925): where the finder sees it
+/// and the address the receiver dialled instead (`None` = by name). Both `None`
+/// for the variants that are not a silent outcome. A TOTAL match, like
+/// [`silent_attempt`].
+fn silent_addresses(err: &PipelineStartError) -> SilentAddresses<'_> {
     match err {
         PipelineStartError::SourceSilent {
-            advertised_address, ..
-        } => advertised_address.as_deref(),
-        PipelineStartError::Failed(_) | PipelineStartError::Superseded => None,
+            advertised_address,
+            connect_address,
+            ..
+        } => SilentAddresses {
+            advertised: advertised_address.as_deref(),
+            connect: connect_address.as_deref(),
+        },
+        PipelineStartError::Failed(_) | PipelineStartError::Superseded => {
+            SilentAddresses::default()
+        }
     }
+}
+
+/// See [`silent_addresses`].
+#[derive(Debug, Clone, Copy, Default)]
+struct SilentAddresses<'a> {
+    advertised: Option<&'a str>,
+    connect: Option<&'a str>,
 }
 
 /// The #448 line for an activated source whose broadcaster is silent. A silent
@@ -138,13 +154,15 @@ fn silent_advertised_address(err: &PipelineStartError) -> Option<&str> {
 /// cannot reach the address it was given (SNV: the sender's Dante address). That
 /// gets ONE WARN per silent streak, naming the address, so it is never mistaken
 /// for a sender that is simply switched off.
-fn log_silent_activation(source: &VideoSource, attempt: u32, advertised_address: Option<&str>) {
-    if presenter_ndi::manager::should_warn_silent_but_advertised(attempt, advertised_address) {
+fn log_silent_activation(source: &VideoSource, attempt: u32, addresses: SilentAddresses<'_>) {
+    if presenter_ndi::manager::should_warn_silent_but_advertised(attempt, addresses.advertised) {
         tracing::warn!(
             source_id = %source.id,
             ndi_name = %source.ndi_name,
             attempt,
-            advertised_address = %advertised_address.unwrap_or("-"),
+            advertised_address = %addresses.advertised.unwrap_or("-"),
+            // `-` = connected by name; otherwise the address dialled instead.
+            connect_address = %addresses.connect.unwrap_or("-"),
             "NDI source is on the network but sends no frames — this server most likely cannot \
              reach the address it advertises (#925)"
         );
@@ -590,7 +608,7 @@ impl AppState {
                 // activation SUCCEEDS (the source is genuinely active, just
                 // waiting for signal); the stage shows a neutral `no-signal`
                 // placeholder, not a red error.
-                log_silent_activation(&source, silent_attempt(&e), silent_advertised_address(&e));
+                log_silent_activation(&source, silent_attempt(&e), silent_addresses(&e));
                 self.live_hub.publish(LiveEvent::NdiConnectionStatus {
                     status: classified.status,
                 });
@@ -1546,6 +1564,7 @@ mod tests {
             ndi_name: "RESOLUME-SNV (cg-obs)".to_string(),
             attempt: 1,
             advertised_address: None,
+            connect_address: None,
         };
         let classified = ndi_status_for_start_error(&err);
         assert_eq!(
@@ -1823,6 +1842,11 @@ mod tests {
                 warns[0].field("advertised_address"),
                 Some("10.77.7.107:5961"),
                 "the WARN names the address the receiver cannot reach"
+            );
+            assert_eq!(
+                warns[0].field("connect_address"),
+                Some("-"),
+                "the Fake connects by name"
             );
             assert_eq!(
                 attempt(&warns[0]),

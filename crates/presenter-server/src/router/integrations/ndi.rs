@@ -416,7 +416,10 @@ pub(crate) fn render_ndi_health_entry(
     entry["driftRebuilds"] = serde_json::json!(h.drift_rebuilds);
     // #925: where the finder sees the sender, and the address the receiver
     // connects to instead when that one is on a side network (null = by name).
-    // Always present, so "visible but unreachable" is readable off /healthz.
+    // Always present (null, never omitted) on every pipeline entry. A source
+    // that stays silent has an entry only while a start is in flight (`starting`,
+    // <= 8 s of each 30 s reconnect cycle); between starts its diagnosis is the
+    // one #925 WARN and `urlAddress` on `GET /ndi/sources`.
     entry["advertisedAddress"] = serde_json::json!(h.advertised_address);
     entry["connectAddress"] = serde_json::json!(h.connect_address);
     entry

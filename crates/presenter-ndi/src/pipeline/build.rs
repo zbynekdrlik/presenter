@@ -217,7 +217,7 @@ fn connect_demux_pads(
 /// resolves it, today's path) or, when the advertised address is on a side
 /// network of this host, `url-address` ALONE: the SDK uses the url when the
 /// name is unset (`Processing.NDI.structs.h`), so the name must not be set too.
-fn build_ndi_source(
+pub(super) fn build_ndi_source(
     route: &crate::connect_route::NdiRoute,
 ) -> Result<(gst::Element, gst::Element)> {
     use crate::connect_route::NdisrcTarget;
