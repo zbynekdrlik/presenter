@@ -258,7 +258,42 @@ async fn stale_keys_answer_at_once_and_refresh_in_the_background() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(test_support::certs_json()))
-        .expect(3)
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    // Every later fetch takes 2 s: a refresh done inline would hold the request.
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(test_support::certs_json())
+                .set_delay(Duration::from_secs(2)),
+        )
+        .mount(&server)
+        .await;
+    let verifier = remote(&format!("{}/certs", server.uri()), no_wait());
+    let token = token("preacher@example.org");
+    assert!(verifier.verify(&token).await.is_ok());
+    let answered = tokio::time::timeout(Duration::from_millis(500), verifier.verify(&token)).await;
+    assert_eq!(
+        answered.expect("a stale cached key answers without waiting for the refresh"),
+        Ok("preacher@example.org".into())
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while server.received_requests().await.expect("requests").len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no background refresh"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_stale_key_refreshes_no_more_than_once_a_minute() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_support::certs_json()))
+        .expect(1)
         .mount(&server)
         .await;
     let verifier = remote(
@@ -269,27 +304,10 @@ async fn stale_keys_answer_at_once_and_refresh_in_the_background() {
         },
     );
     let token = token("preacher@example.org");
-    assert!(verifier.verify(&token).await.is_ok());
-    // Stale (ttl 0) but cached: answered from the cache. The background refresh
-    // waits for the minute since the last fetch, so nothing is fetched yet.
-    assert!(verifier.verify(&token).await.is_ok());
-    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
-
-    let verifier = remote(&format!("{}/certs", server.uri()), no_wait());
-    assert!(verifier.verify(&token).await.is_ok());
-    // Two fetches so far (one per verifier); the background refresh is the third.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    assert!(
-        verifier.verify(&token).await.is_ok(),
-        "a stale key still answers"
-    );
-    while server.received_requests().await.expect("requests").len() < 3 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no background refresh"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    for _ in 0..3 {
+        assert!(verifier.verify(&token).await.is_ok());
     }
+    tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
 #[tokio::test]
@@ -445,6 +463,21 @@ async fn a_login_re_issues_a_cookie_older_than_thirty_days_and_a_refused_cookie_
         removal.starts_with("presenter_device=; Max-Age=0"),
         "{removal}"
     );
+}
+
+#[tokio::test]
+async fn a_stand_in_key_never_removes_a_cookie_it_cannot_read() {
+    // The key file was unreadable at start: the cookies of the real key are
+    // refused, but kept, so they work again once the file is fixed.
+    let stand_in = DeviceKey::from_bytes([3; 32]).expect("key");
+    assert!(!stand_in.is_persisted());
+    let identity = AccessIdentity::new(None, Some(stand_in));
+    let cookie =
+        test_support::device_key().issue("preacher@example.org", test_support::now(), true);
+    let pair = cookie.split(';').next().expect("pair").to_string();
+    let request = headers(&[("cookie", &pair)]);
+    let resolved = identity.resolve(facts(&request, true)).await;
+    assert_eq!((resolved.identity, resolved.set_cookie), (None, None));
 }
 
 #[test]

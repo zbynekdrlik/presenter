@@ -70,6 +70,10 @@ pub(crate) fn removal(secure: bool) -> String {
 pub(crate) struct DeviceKey {
     /// The keyed HMAC, built once; cloned per use.
     mac: HmacSha256,
+    /// The key came from the site's key file. A stand-in key (no file, or a
+    /// file that could not be read) must never REMOVE a cookie: the file may
+    /// be fixed, and its devices must then be known again.
+    persisted: bool,
     #[cfg(test)]
     key: [u8; KEY_LEN],
 }
@@ -80,6 +84,7 @@ impl DeviceKey {
     pub(crate) fn from_bytes(key: [u8; KEY_LEN]) -> Result<Self, hmac::digest::InvalidLength> {
         Ok(Self {
             mac: <HmacSha256 as Mac>::new_from_slice(&key)?,
+            persisted: false,
             #[cfg(test)]
             key,
         })
@@ -96,7 +101,8 @@ impl DeviceKey {
                         target: LOG_TARGET,
                         path = %path.display(),
                         error = %err,
-                        "device key unusable: remembered devices last until the next restart"
+                        "device key file unusable: devices remembered now last until the next \
+                         restart, and devices remembered before are not recognised until the file is fixed"
                     );
                     Self::ephemeral()
                 }
@@ -106,6 +112,17 @@ impl DeviceKey {
                 Self::ephemeral()
             }
         }
+    }
+
+    pub(crate) fn is_persisted(&self) -> bool {
+        self.persisted
+    }
+
+    /// Tests: a key that behaves as one read from the site's key file.
+    #[cfg(test)]
+    pub(crate) fn into_persisted(mut self) -> Self {
+        self.persisted = true;
+        self
     }
 
     fn ephemeral() -> Option<Self> {
@@ -223,8 +240,11 @@ fn create(path: &Path) -> std::io::Result<DeviceKey> {
     }
 }
 
+/// A key read from (or written to) the key file.
 fn key_from_bytes(key: [u8; KEY_LEN]) -> std::io::Result<DeviceKey> {
-    DeviceKey::from_bytes(key).map_err(std::io::Error::other)
+    let mut key = DeviceKey::from_bytes(key).map_err(std::io::Error::other)?;
+    key.persisted = true;
+    Ok(key)
 }
 
 fn parse_key(text: &str) -> std::io::Result<[u8; KEY_LEN]> {
@@ -347,6 +367,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("access-device.key");
         let first = load_or_create(&path).expect("create");
+        assert!(first.is_persisted());
         let mode = std::fs::metadata(&path).expect("meta").permissions();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(mode.mode() & 0o777, 0o600);

@@ -456,9 +456,7 @@ impl AppState {
             startup_mode,
         );
 
-        // #915: the site's Access app + device key file (none in the validate probe).
-        state.access_identity =
-            AccessIdentity::for_site(&db_url, startup_mode.starts_integrations());
+        state.access_identity = AccessIdentity::for_site(&db_url, startup_mode); // #915
 
         // Pre-load group color cache from database
         let group_colors = state

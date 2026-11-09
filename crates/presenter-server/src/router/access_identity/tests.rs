@@ -144,3 +144,37 @@ fn the_cookie_goes_only_on_responses_no_shared_cache_keeps() {
         &HeaderMap::new()
     ));
 }
+
+#[tokio::test]
+async fn the_cookie_response_is_private_and_a_cached_asset_carries_none() {
+    let app = app().await;
+    let token = test_support::token("preacher@example.org");
+    let request = |uri: &str| {
+        Request::builder()
+            .uri(uri)
+            .header("cf-access-jwt-assertion", token.as_str())
+            .body(Body::empty())
+            .expect("request")
+    };
+    let identity = app
+        .clone()
+        .oneshot(request("/bible/study/identity"))
+        .await
+        .expect("response");
+    assert!(identity.headers().contains_key(SET_COOKIE));
+    assert_eq!(
+        identity
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .map(|v| v.to_str().expect("ascii")),
+        Some("private, no-store")
+    );
+    // `/favicon.ico` is `public, max-age=86400`: a shared cache may keep it.
+    let asset = app
+        .clone()
+        .oneshot(request("/favicon.ico"))
+        .await
+        .expect("response");
+    assert_eq!(asset.status(), StatusCode::OK);
+    assert!(!asset.headers().contains_key(SET_COOKIE));
+}

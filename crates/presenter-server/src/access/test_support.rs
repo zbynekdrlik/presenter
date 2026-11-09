@@ -65,7 +65,9 @@ pub(crate) fn verifier() -> Arc<JwtVerifier> {
 }
 
 pub(crate) fn device_key() -> DeviceKey {
-    DeviceKey::from_bytes([42; 32]).expect("device key")
+    DeviceKey::from_bytes([42; 32])
+        .expect("device key")
+        .into_persisted()
 }
 
 /// The identity service of a site whose Access app is the test one.

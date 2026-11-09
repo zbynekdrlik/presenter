@@ -46,13 +46,6 @@ fn forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// Best-effort client IP for the live WS connect/disconnect logs (#793). A
-/// non-loopback socket peer IS the client (LAN stage TVs send no forwarding
-/// header — they were all logged as `anonymous` before) and a header it sends
-/// is ignored, so a LAN client cannot spoof its logged IP. Only from a
-/// loopback peer (the Cloudflare tunnel's `cloudflared`) or with no peer at all
-/// (a server not served with connect-info, e.g. tests) is the proxy header
-/// used; else `"anonymous"`.
 /// The #793 rule: a request came through the tunnel (`cloudflared` on the same
 /// box, a loopback peer) or has no peer at all (tests). Only then may proxy or
 /// Access headers be trusted; a LAN client could send them itself.
@@ -60,6 +53,13 @@ pub(in crate::router) fn is_tunnel_peer(peer: Option<SocketAddr>) -> bool {
     peer.is_none_or(|addr| addr.ip().is_loopback())
 }
 
+/// Best-effort client IP for the live WS connect/disconnect logs (#793). A
+/// non-loopback socket peer IS the client (LAN stage TVs send no forwarding
+/// header — they were all logged as `anonymous` before) and a header it sends
+/// is ignored, so a LAN client cannot spoof its logged IP. Only from a
+/// loopback peer (the Cloudflare tunnel's `cloudflared`) or with no peer at all
+/// (a server not served with connect-info, e.g. tests) is the proxy header
+/// used; else `"anonymous"`.
 pub(super) fn extract_client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     match peer {
         Some(addr) if !is_tunnel_peer(peer) => addr.ip().to_string(),

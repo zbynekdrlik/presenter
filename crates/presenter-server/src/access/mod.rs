@@ -106,8 +106,10 @@ impl AccessIdentity {
     /// (missing → no verified logins, one WARN) and the device key next to the
     /// sqlite file of `db_url`. `persist_key = false` (the validate probe) never
     /// writes a key file.
-    pub(crate) fn for_site(db_url: &str, persist_key: bool) -> Arc<Self> {
-        Arc::new(Self::from_env(db_url, persist_key))
+    /// The site's service (`AppState::from_config`): the validate probe
+    /// (`StartupMode::Validate`) writes no key file.
+    pub(crate) fn for_site(db_url: &str, mode: crate::state::StartupMode) -> Arc<Self> {
+        Arc::new(Self::from_env(db_url, mode.starts_integrations()))
     }
 
     fn from_env(db_url: &str, persist_key: bool) -> Self {
@@ -186,11 +188,14 @@ impl AccessIdentity {
             }
             CookieState::Refused => {
                 // A rotated key or a year-old cookie: remove it, so the browser
-                // stops sending it (and the log stops seeing it).
-                tracing::debug!(target: LOG_TARGET, source = "none", "device cookie refused: removed");
+                // stops sending it (and the log stops seeing it). Never with a
+                // stand-in key: the key file may be fixed, and these devices
+                // must be known again then.
+                let persisted = self.device.as_ref().is_some_and(DeviceKey::is_persisted);
+                tracing::debug!(target: LOG_TARGET, source = "none", removed = persisted, "device cookie refused");
                 Resolution {
                     identity: None,
-                    set_cookie: Some(device_cookie::removal(facts.https)),
+                    set_cookie: persisted.then(|| device_cookie::removal(facts.https)),
                 }
             }
             CookieState::Absent => {
