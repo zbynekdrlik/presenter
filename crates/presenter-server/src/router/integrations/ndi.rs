@@ -417,6 +417,8 @@ pub(crate) fn render_ndi_health_entry(
     // #925: where the finder sees the sender, and the address the receiver
     // connects to instead when that one is on a side network (null = by name).
     // Always present, so "visible but unreachable" is readable off /healthz.
+    entry["advertisedAddress"] = serde_json::json!(h.advertised_address);
+    entry["connectAddress"] = serde_json::json!(h.connect_address);
     entry
 }
 

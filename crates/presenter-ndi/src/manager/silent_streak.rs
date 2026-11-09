@@ -107,8 +107,7 @@ pub const SILENT_BUT_ADVERTISED_WARN_ATTEMPT: u32 = 2;
 /// frames" WARN (#925): exactly once per silent streak, and only when the finder
 /// reported an address for the source. Pure → unit-tested.
 pub fn should_warn_silent_but_advertised(attempt: u32, advertised_address: Option<&str>) -> bool {
-    let _ = (attempt, advertised_address);
-    false
+    attempt == SILENT_BUT_ADVERTISED_WARN_ATTEMPT && advertised_address.is_some()
 }
 
 /// `installed` / `not-installed` for the streaming line's `timestamp_guard` field.

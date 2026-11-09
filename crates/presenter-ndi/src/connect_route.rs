@@ -83,7 +83,10 @@ impl NdiRoute {
 
     /// The `ndisrc` properties for this route.
     pub fn ndisrc_target(&self) -> NdisrcTarget<'_> {
-        NdisrcTarget::Name(&self.ndi_name)
+        match self.connect_address.as_deref() {
+            Some(url) => NdisrcTarget::UrlAddress(url),
+            None => NdisrcTarget::Name(&self.ndi_name),
+        }
     }
 }
 
@@ -139,8 +142,21 @@ pub fn parse_default_interface(proc_net_route: &str) -> Option<String> {
 /// route (nothing to compare with), for loopback and for this host's own
 /// addresses (a sender on this box).
 pub fn is_off_route(ip: Ipv4Addr, net: &HostNetwork) -> bool {
-    let _ = (ip, net);
-    false
+    let Some(default) = net.default_interface.as_deref() else {
+        return false;
+    };
+    if ip.is_loopback() || net.interfaces.iter().any(|i| i.addr == ip) {
+        return false;
+    }
+    let on_default = net
+        .interfaces
+        .iter()
+        .any(|i| i.name == default && in_subnet(ip, i));
+    !on_default
+        && net
+            .interfaces
+            .iter()
+            .any(|i| i.name != default && !i.addr.is_loopback() && in_subnet(ip, i))
 }
 
 /// The sender's other addresses worth trying instead of `advertised`, in the
@@ -151,8 +167,18 @@ pub fn alternatives(
     candidates: &[Ipv4Addr],
     net: &HostNetwork,
 ) -> Vec<SocketAddrV4> {
-    let _ = (advertised, candidates, net);
-    Vec::new()
+    let mut out: Vec<SocketAddrV4> = Vec::new();
+    for ip in candidates.iter().copied() {
+        let usable = ip != *advertised.ip()
+            && !ip.is_loopback()
+            && !ip.is_unspecified()
+            && !is_off_route(ip, net);
+        let addr = SocketAddrV4::new(ip, advertised.port());
+        if usable && !out.contains(&addr) {
+            out.push(addr);
+        }
+    }
+    out
 }
 
 /// The first alternative `probe` reaches, in order.
