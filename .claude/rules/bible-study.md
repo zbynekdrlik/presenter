@@ -70,7 +70,7 @@ preparation (the sermon views are in `sermon-prep.md`).
   never changes the favourites; the open translation outside the shown chips takes the LAST chip's
   place (`favourite_row`, the chip keeps that slot, so a long press there still sets the slot). Long
   press keeps customising slots. Compare's column `<select>` already lists every translation. E2E:
-  `pickTranslation` (`study-support.ts`) taps the chip or goes through ▾; the NLT, the fifth
+  `pickTranslation` (`study-support.ts`) always goes through ▾ (a chip is tapped with `favourite`); the NLT, the fifth
   favourite, is in ▾ on a 360/390 phone. `study-translations.spec.ts` routes SNV's four extra
   translations in from the KJV (`tests/e2e/extra-translations.ts`).
 - **A translation switch keeps the eye's verse at its screen offset** (`ScrollPlan::VerseAt`): the
