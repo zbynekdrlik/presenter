@@ -307,7 +307,10 @@ async fn a_stale_key_refreshes_no_more_than_once_a_minute() {
     for _ in 0..3 {
         assert!(verifier.verify(&token).await.is_ok());
     }
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // A refresh spawned against the minute limit would reach the local mock
+    // well within this; none may.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
 }
 
 #[tokio::test]
@@ -478,6 +481,23 @@ async fn a_stand_in_key_never_removes_a_cookie_it_cannot_read() {
     let request = headers(&[("cookie", &pair)]);
     let resolved = identity.resolve(facts(&request, true)).await;
     assert_eq!((resolved.identity, resolved.set_cookie), (None, None));
+
+    // Logged in during the fault: identified by the token, the real cookie kept.
+    let identity = AccessIdentity::new(
+        Some(JwtVerifier::with_keys(
+            test_support::config(),
+            &test_support::certs(),
+        )),
+        Some(DeviceKey::from_bytes([3; 32]).expect("key")),
+    );
+    let token = token("preacher@example.org");
+    let both = headers(&[("cf-access-jwt-assertion", &token), ("cookie", &pair)]);
+    let resolved = identity.resolve(facts(&both, true)).await;
+    assert_eq!(
+        resolved.identity.map(|id| id.email),
+        Some("preacher@example.org".to_string())
+    );
+    assert_eq!(resolved.set_cookie, None);
 }
 
 #[test]
