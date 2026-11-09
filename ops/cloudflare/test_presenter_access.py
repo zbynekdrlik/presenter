@@ -61,6 +61,21 @@ class DesiredAppsTests(unittest.TestCase):
         policies = pa.desired_apps(config)[0]["policies"]
         self.assertEqual([(p["name"], p["precedence"]) for p in policies], [(pa.ALLOW_NAME, 1)])
 
+    def test_site_emails_are_added_to_that_site_only(self):
+        config = example_config()
+        config["sites"][1]["extra_emails"] = ["guest@example.com"]
+        apps = pa.desired_apps(config)
+        allow = {a["domain"]: a["policies"][-1]["include"] for a in apps if not a["domain"].endswith("/healthz")}
+        self.assertEqual(allow["presenter-site-a.example.com"], [{"email": {"email": "person@example.com"}}])
+        self.assertEqual(allow["presenter-site-b.example.com"], [{"email": {"email": "person@example.com"}},
+                                                                  {"email": {"email": "guest@example.com"}}])
+
+    def test_a_site_email_already_in_the_shared_list_is_not_doubled(self):
+        config = example_config()
+        config["sites"][1]["extra_emails"] = ["person@example.com"]
+        allow = pa.desired_apps(config)[2]["policies"][-1]["include"]
+        self.assertEqual(allow, [{"email": {"email": "person@example.com"}}])
+
     def test_invalid_configs_are_refused(self):
         for broken in ({"allowed_emails": ["a@example.com"], "sites": [{"host": "h"}]},
                        {**example_config(), "allowed_emails": []},
