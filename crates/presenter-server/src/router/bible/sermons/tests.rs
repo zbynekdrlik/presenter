@@ -23,7 +23,8 @@ const HEB_11_1: &str = "Viera je zárukou toho, v čo dúfame, a zdôvodnením t
 
 /// An in-memory state with SEB Heb 11:1.
 async fn seeded_state() -> AppState {
-    let state = AppState::in_memory().await.expect("state");
+    let mut state = AppState::in_memory().await.expect("state");
+    state.set_access_identity(crate::access::test_support::identity());
     let seb = BibleTranslation::new("slk-seb", "Slovenský ekumenický preklad", "sk");
     let reference =
         BibleReference::new_with_code("Hebrejom", "HEB", 58, 11, 1, 1).expect("reference");
@@ -179,13 +180,17 @@ async fn an_unknown_sermon_is_404_and_a_bad_id_400() {
 }
 
 #[tokio::test]
-async fn identity_trusts_the_access_email_only_from_the_tunnel() {
+async fn identity_trusts_a_verified_access_login_only_from_the_tunnel() {
     let app = app().await;
-    let header = [("cf-access-authenticated-user-email", "preacher@example.org")];
+    let token = crate::access::test_support::token("preacher@example.org");
+    let header = [("cf-access-jwt-assertion", token.as_str())];
 
     let (status, tunnel) = call(&app, "GET", "/bible/study/identity", None, &header).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(tunnel, json!({ "email": "preacher@example.org" }));
+    let spoofed = [("cf-access-authenticated-user-email", "preacher@example.org")];
+    let (_, body) = call(&app, "GET", "/bible/study/identity", None, &spoofed).await;
+    assert_eq!(body, json!({ "email": null }));
     let mut lan = Request::builder()
         .uri("/bible/study/identity")
         .header(header[0].0, header[0].1)
@@ -206,8 +211,9 @@ async fn identity_trusts_the_access_email_only_from_the_tunnel() {
 #[tokio::test]
 async fn create_records_the_author_and_delete_is_204_then_404() {
     let app = app().await;
+    let token = crate::access::test_support::token("Preacher@Example.org");
     let headers = [
-        ("cf-access-authenticated-user-email", "Preacher@Example.org"),
+        ("cf-access-jwt-assertion", token.as_str()),
         ("x-forwarded-for", "203.0.113.9"),
     ];
     let body = json!({ "serviceDate": local_today(), "defaultTranslation": "slk-seb",

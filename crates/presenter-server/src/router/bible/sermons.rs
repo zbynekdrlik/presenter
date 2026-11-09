@@ -17,7 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
 
-use super::super::access_identity::access_email;
+use super::super::access_identity::AccessEmail;
 use super::super::integrations::extract_client_ip;
 use super::super::AppError;
 use crate::state::sermons::{
@@ -212,11 +212,12 @@ where
 
 // ---- Mapping ----------------------------------------------------------------
 
-/// The author label and client IP of a write (spec §9, §13).
-pub(crate) fn origin(headers: &HeaderMap, peer: Peer) -> SermonOrigin {
+/// The author label and client IP of a write (spec §9, §13). The author is the
+/// reader the identity middleware resolved (#915).
+pub(crate) fn origin(headers: &HeaderMap, peer: Peer, author: AccessEmail) -> SermonOrigin {
     let peer = peer.map(|Extension(ConnectInfo(addr))| addr);
     SermonOrigin {
-        author: access_email(headers, peer),
+        author: author.0,
         client_ip: extract_client_ip(headers, peer),
     }
 }
@@ -337,6 +338,7 @@ async fn create_sermon(
     State(state): State<AppState>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<CreateSermonRequest>,
 ) -> SermonResult {
     let draft = SermonDraft {
@@ -346,7 +348,7 @@ async fn create_sermon(
         secondary_translation: body.secondary_translation,
     };
     let detail = state
-        .create_sermon(draft, local_today(), &origin(&headers, peer))
+        .create_sermon(draft, local_today(), &origin(&headers, peer, author))
         .await
         .map_err(sermon_error)?;
     Ok(Json(detail_dto(detail)))
@@ -379,9 +381,13 @@ async fn delete_sermon(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
 ) -> Result<StatusCode, AppError> {
     state
-        .delete_sermon(BiblePresentationId::from_uuid(id), &origin(&headers, peer))
+        .delete_sermon(
+            BiblePresentationId::from_uuid(id),
+            &origin(&headers, peer, author),
+        )
         .await
         .map_err(sermon_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -393,6 +399,7 @@ async fn add_item(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<AddItemRequest>,
 ) -> SermonResult {
     let range = ItemRange {
@@ -408,7 +415,7 @@ async fn add_item(
             body.expected_revision,
             body.position,
             &range,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
@@ -421,6 +428,7 @@ async fn put_edits(
     Path((id, item_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<EditsRequest>,
 ) -> SermonResult {
     let detail = state
@@ -429,7 +437,7 @@ async fn put_edits(
             item_id,
             body.expected_revision,
             &body.verses,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
@@ -442,6 +450,7 @@ async fn update_sermon(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<UpdateSermonRequest>,
 ) -> SermonResult {
     let patch = SermonPatch {
@@ -454,7 +463,7 @@ async fn update_sermon(
             BiblePresentationId::from_uuid(id),
             body.expected_revision,
             patch,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
@@ -467,10 +476,11 @@ async fn patch_item(
     Path((id, item_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<PatchItemRequest>,
 ) -> SermonResult {
     let id = BiblePresentationId::from_uuid(id);
-    let origin = origin(&headers, peer);
+    let origin = origin(&headers, peer, author);
     let revision = body.expected_revision;
     let result = match (body.refresh_source, body.translation.as_deref()) {
         (true, _) => {
@@ -499,13 +509,14 @@ async fn delete_item(
     Query(query): Query<RevisionQuery>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
 ) -> SermonResult {
     let detail = state
         .delete_sermon_item(
             BiblePresentationId::from_uuid(id),
             item_id,
             query.expected_revision,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
@@ -518,6 +529,7 @@ async fn reorder_items(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<ReorderRequest>,
 ) -> SermonResult {
     let detail = state
@@ -525,7 +537,7 @@ async fn reorder_items(
             BiblePresentationId::from_uuid(id),
             body.expected_revision,
             &body.item_ids,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
@@ -538,13 +550,14 @@ async fn regenerate(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     peer: Peer,
+    author: AccessEmail,
     Json(body): Json<RevisionRequest>,
 ) -> SermonResult {
     let detail = state
         .regenerate_sermon(
             BiblePresentationId::from_uuid(id),
             body.expected_revision,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
@@ -552,11 +565,8 @@ async fn regenerate(
 }
 
 #[instrument(skip_all)]
-async fn identity(headers: HeaderMap, peer: Peer) -> Json<IdentityDto> {
-    let peer = peer.map(|Extension(ConnectInfo(addr))| addr);
-    Json(IdentityDto {
-        email: access_email(&headers, peer),
-    })
+async fn identity(AccessEmail(email): AccessEmail) -> Json<IdentityDto> {
+    Json(IdentityDto { email })
 }
 
 #[cfg(test)]

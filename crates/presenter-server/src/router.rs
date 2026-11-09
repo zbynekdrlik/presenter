@@ -478,6 +478,9 @@ pub fn build_router(state: AppState) -> Router {
         .merge(bible::sermons::routes())
         .merge(bible::study::routes())
         .merge(bible::bookmarks::routes());
+    // #915: the reader of every request (Access token / remembered device),
+    // inside the request log so its lines carry the request span.
+    let router = access_identity::with_access_identity(router, &state);
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
     request_log::with_request_log(router).with_state(state)
 }

@@ -391,7 +391,7 @@ pub(crate) fn dir_next_to_db(db_url: &str, name: &str) -> PathBuf {
     parent.join(name)
 }
 
-fn sqlite_file_path(db_url: &str) -> Option<PathBuf> {
+pub(crate) fn sqlite_file_path(db_url: &str) -> Option<PathBuf> {
     let s = db_url.strip_prefix("sqlite://").unwrap_or(db_url);
     let s = s.strip_prefix("sqlite:").unwrap_or(s);
     let s = s.split('?').next().unwrap_or(s);

@@ -132,12 +132,12 @@ paths:
   rejections give 400 (bad UUID path) / 422 (bad JSON).
 - `sourceChanged` (view.rs) = some snapshot verse differs from the database text now, or is
   gone (read through `bible_passage_range`). A re-import never regenerates sermon slides.
-- `router/access_identity.rs` `access_email(headers, peer)`: `Cf-Access-Authenticated-User-Email`
-  only from a loopback peer (cloudflared) or no peer (tests) — the #793 `extract_client_ip`
-  rule; trimmed, lower case, must contain `@`, ≤ 254 chars. A LABEL (stored as `author_email`
-  on create, logged on every write), never a permission; since #915 it also picks the reader's list of study
-  bookmarks (`bible-study.md`). `GET /bible/study/identity` →
-  `{"email": … | null}` (lives here until D4 creates `router/bible/study.rs`).
+- The author = the request's reader (`AccessEmail`, resolved once by the `router/access_identity.rs`
+  middleware, rules in `access-identity.md`): a verified Access token, else the device cookie, else
+  none; trimmed, lower case, must contain `@`, ≤ 254 chars. A LABEL (stored as `author_email`
+  on create, logged on every write), never a permission; it also picks the reader's list of study
+  bookmarks (`bible-study.md`). Handlers take `author: AccessEmail` and pass it to `origin(..)`.
+  `GET /bible/study/identity` → `{"email": … | null}`.
 - Router tests drive `build_router(state)` with `oneshot`; a LAN peer is simulated by inserting
   `ConnectInfo(SocketAddr)` into the request extensions.
 - **`SermonRefusal(String)`** (state layer, `thiserror`) = 422 with a Slovak message: an invalid

@@ -300,6 +300,7 @@ pub(crate) async fn append_bible_presentation_handler(
     Path(id): Path<uuid::Uuid>,
     headers: HeaderMap,
     peer: Peer,
+    author: super::super::access_identity::AccessEmail,
     Json(payload): Json<AppendBibleSlidesRequest>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     if payload.slides.is_empty() {
@@ -316,7 +317,7 @@ pub(crate) async fn append_bible_presentation_handler(
         .append_bible_presentation_slides_as(
             BiblePresentationId::from_uuid(id),
             slides,
-            &origin(&headers, peer),
+            &origin(&headers, peer, author),
         )
         .await
         .map_err(sermon_error)?;
