@@ -1,18 +1,16 @@
 //! The study page's named bookmarks (#915): `GET|POST /bible/study/bookmarks`,
 //! `PATCH|DELETE /bible/study/bookmarks/{id}`. JSON camelCase. The list is the
-//! caller's: the Cloudflare Access e-mail (`access_email`), none on the LAN =
-//! the shared list. An id of another list answers 404, never its row.
+//! caller's: the reader's e-mail (`AccessEmail`: a verified Access login or a
+//! remembered device), nobody = the shared list. An id of another list answers 404, never its row.
 
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
 use axum::routing::{get, patch};
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::super::access_identity::access_email;
+use super::super::access_identity::AccessEmail;
 use super::super::AppError;
-use super::sermons::Peer;
 use crate::state::study_bookmarks::{BookmarkRefusal, PlaceRequest, StudyBookmark};
 use crate::state::AppState;
 
@@ -104,10 +102,6 @@ struct UpdateBody {
     place: Option<PlaceBody>,
 }
 
-fn owner(headers: &HeaderMap, peer: Peer) -> Option<String> {
-    access_email(headers, peer.map(|Extension(info)| info.0))
-}
-
 /// `BookmarkRefusal` → 422 with its Slovak message; everything else through the
 /// central mapping (an unknown id is the repository's `NotFound` → 404).
 fn bookmark_error(err: anyhow::Error) -> AppError {
@@ -125,10 +119,8 @@ fn bookmark_error(err: anyhow::Error) -> AppError {
 #[instrument(skip_all)]
 async fn list_bookmarks(
     State(state): State<AppState>,
-    peer: Peer,
-    headers: HeaderMap,
+    AccessEmail(owner): AccessEmail,
 ) -> Result<Json<Vec<BookmarkDto>>, AppError> {
-    let owner = owner(&headers, peer);
     let list = state
         .list_study_bookmarks(owner.as_deref())
         .await
@@ -139,11 +131,9 @@ async fn list_bookmarks(
 #[instrument(skip_all)]
 async fn create_bookmark(
     State(state): State<AppState>,
-    peer: Peer,
-    headers: HeaderMap,
+    AccessEmail(owner): AccessEmail,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<BookmarkDto>, AppError> {
-    let owner = owner(&headers, peer);
     let place = PlaceRequest::from(body.place);
     let made = state
         .create_study_bookmark(owner.as_deref(), &body.name, &place, body.index)
@@ -156,11 +146,9 @@ async fn create_bookmark(
 async fn update_bookmark(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-    peer: Peer,
-    headers: HeaderMap,
+    AccessEmail(owner): AccessEmail,
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<BookmarkDto>, AppError> {
-    let owner = owner(&headers, peer);
     let place = body.place.map(PlaceRequest::from);
     let changed = state
         .update_study_bookmark(owner.as_deref(), id, body.name.as_deref(), place.as_ref())
@@ -173,10 +161,8 @@ async fn update_bookmark(
 async fn delete_bookmark(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-    peer: Peer,
-    headers: HeaderMap,
+    AccessEmail(owner): AccessEmail,
 ) -> Result<Json<DeletedDto>, AppError> {
-    let owner = owner(&headers, peer);
     let (bookmark, index) = state
         .delete_study_bookmark(owner.as_deref(), id)
         .await

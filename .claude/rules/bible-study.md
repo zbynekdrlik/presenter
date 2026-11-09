@@ -130,9 +130,10 @@ preparation (the sermon views are in `sermon-prep.md`).
 
 ## Named bookmarks (#915, `pages/study/bookmarks.rs`, `/bible/study/bookmarks*`)
 
-- **Server-side, one list per Access e-mail** (`access_email`), NULL = the shared list of the LAN AND of the
-  tunnel's Access bypass (the church): a list follows the network, not the device. An id of another list is 404.
-  The e-mail is a convenience scope, never a protection: bookmarks are no secret.
+- **Server-side, one list per reader e-mail** (`AccessEmail`, `.claude/rules/access-identity.md`): a verified Access
+  login, or the device cookie that login left (so the same phone keeps its list through the church's Access bypass,
+  ROZHODNUTÉ 1, 2026-11-09). NULL = the shared list: the LAN address, a device that never logged in. An id of
+  another list is 404. The e-mail is a convenience scope, never a protection: bookmarks are no secret.
 - **Rules live in `state/study_bookmarks.rs`** (`BookmarkRefusal` → 422, Slovak): trimmed name 1–80 chars, ≤ 100 per
   list, a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
   structure with no request); the refusal names the book as the translation does. The row stores `book_name`.

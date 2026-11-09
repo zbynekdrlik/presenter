@@ -12,7 +12,7 @@ exclude = ["crates/presenter-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.361"
+version = "0.4.362"
 edition = "2021"
 authors = ["Presenter Team <drlik.zbynek@gmail.com>"]
 license = "MIT"
@@ -24,6 +24,14 @@ repository = "https://github.com/zbynekdrlik/presenter"
 # binds this profile via `profile = "mutants"` in .cargo/mutants.toml (do NOT remove
 # that line — it is the only thing selecting this profile, not auto-detect). There
 # is no longer a per-PR mutation gate.
+# #915: the Access tests generate 2048-bit RSA keys at runtime (no private key is
+# committed); unoptimised big-integer code makes that take seconds per key.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
 [profile.mutants]
 inherits = "test"
 debug = "none"

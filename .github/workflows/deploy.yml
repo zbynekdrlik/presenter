@@ -147,6 +147,8 @@ jobs:
       http_port: "80"
       hardware: true
       library_sync: true
+      # #915: Access app da73d2e3 (prsnv.newlevel.media).
+      access_aud: e5f02695d01e3e6122dc20276b49a621c09ed2fd5ef49f8d92197e8f313206b1
 
   # PRBA (#918): hosted on dev1 (tailscale) until PRBA has its own PC. Its data came from a
   # one-time seed of SNV (scripts/ops/seed_prba_from_snv.sh); afterwards PRBA edits its own,
@@ -167,3 +169,5 @@ jobs:
       http_port: "8081"
       hardware: false
       library_sync: false
+      # #915: Access app 106ddefe (prba.newlevel.media).
+      access_aud: 56005920a399ec50258c51d17904d5fd59ae5c9d946621f03c93b579a1194b87

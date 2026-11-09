@@ -18,6 +18,10 @@ paths:
 - **Adding a person** = one more e-mail in `allowed_emails` → the dry run shows
   `update_policy … changed=include` for both hosts → `--apply`. Verified live 2026-10-14 (a second
   owner e-mail): 2× `update_policy` → `done`, then the dry run printed 4× `ok`.
+- **A person for ONE site only** (#918 PRBA) = the site's own `"extra_emails": [...]` in its
+  `sites[]` entry; it is added to the shared `allowed_emails` for that host only (duplicates
+  dropped). The dry run shows one `update_policy … changed=include` for that host alone. Applied
+  live 2026-11-09 for PRBA: `done`, then 6× `ok`.
 - The script never deletes: a policy the config does not name is printed as `extra_policy` and kept.
 - `update_app` (a session-duration change) PUTs the existing app with its policy ids kept —
   **[unverified]** against the live API (the 2026-10-13 apps were created, never updated). The first

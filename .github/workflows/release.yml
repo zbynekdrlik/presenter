@@ -464,6 +464,11 @@ jobs:
           # have overlapping 10.77.8.0/23 LANs; tailscale is the only inter-site path).
           printf '[Service]\nEnvironment=PRESENTER_SYNC_PEER_URL=%s\n' "http://100.122.204.47" |
             ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/sync-peer.conf >/dev/null && sudo systemctl daemon-reload"
+          # #915: PP's Cloudflare Access app (68322373, prpp.newlevel.media) — the server verifies
+          # the login token and remembers the device (see deploy-site.yml).
+          printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' \
+            "newlevelchurch.cloudflareaccess.com" "d1ae757988a1592984b19685b43280e95e2b111dd025ee360ebdbb8f6c4352c7" |
+            ssh deploy-target "sudo tee /etc/systemd/system/presenter.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
 
       # #761: OpenRouter AI backend config → 0600 root-only EnvironmentFile
       # (committed unit references it as `EnvironmentFile=-`). Unlike deploy.yml/

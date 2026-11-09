@@ -68,6 +68,27 @@ later loads degrade at once. Every other translation keeps working.
 | `PRESENTER_NLT_API_KEY` | `TEST`               | Tyndale NLT API key. `TEST` = anonymous: ≤50 verses per request, ≤500 requests per day. A registered key raises this to ≤500 verses, ≤5000 requests. |
 | `PRESENTER_NLT_API_URL` | `https://api.nlt.to` | API base URL. Tests point it at a mock; the E2E harness defaults it to a dead loopback. |
 
+### Reader identity — Cloudflare Access + remembered device (#915)
+
+The study bookmarks list and the sermon author label belong to the reader's
+e-mail. The server takes it ONLY from a verified Cloudflare Access token
+(`Cf-Access-Jwt-Assertion`: RS256 with the team's keys from
+`https://<team>/cdn-cgi/access/certs`, `aud` = the site's Access app AUD, `iss` =
+`https://<team>`), never from the bare `Cf-Access-Authenticated-User-Email`
+header. After a verified login it sets the httpOnly cookie `presenter_device`
+(HMAC-signed e-mail + issue time, 1 year, refreshed after 30 days; never on a
+publicly cacheable response; a refused cookie is removed), so the same
+browser is still known through the church's Access bypass, where Cloudflare sends
+no login. No token and no valid cookie (the LAN address, another origin) = nobody
+= the shared list.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PRESENTER_ACCESS_TEAM_DOMAIN` | unset | The Access team domain (`newlevelchurch.cloudflareaccess.com`). Unset → no reader is identified by a login (one WARN at start); cookies still work. |
+| `PRESENTER_ACCESS_AUD` | unset | The site's Access app AUD tag (comma list allowed). Written per site by the deploy as the `access.conf` drop-in: SNV (deploy-site.yml), PRBA, PP (release.yml). |
+| `PRESENTER_ACCESS_CERTS_URL` | `https://<team>/cdn-cgi/access/certs` | Key URL override (tests). |
+| `PRESENTER_ACCESS_DEVICE_KEY_FILE` | `access-device.key` next to the sqlite file | The 32-byte cookie key (hex, 0600, created on first start). **Deleting it and restarting forgets every remembered device.** An in-memory DB uses a key that lives until the restart. |
+
 ### Stream playback — Google Drive folders (#843)
 
 A stream **playback** element plays a Google Drive folder's photos and videos

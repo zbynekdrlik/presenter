@@ -42,6 +42,10 @@ on:
         description: "rsync data/libraries from git + the first-deploy ProPresenter import; false = the DB must already be seeded"
         type: boolean
         required: true
+      access_aud:
+        description: "#915: the AUD tag of the site's Cloudflare Access app (not a secret: every token carries it)"
+        type: string
+        required: true
 
 jobs:
   deploy:
@@ -364,6 +368,9 @@ jobs:
           # the value ends up inside a remote ssh command, where a quote in it would run
           # as a command under passwordless sudo.
           PROD_STAGE_URL: ${{ vars.PROD_STAGE_URL || 'http://10.77.9.205/stage' }}
+          # #915: the site's Cloudflare Access app, so the server verifies the login token.
+          ACCESS_TEAM_DOMAIN: newlevelchurch.cloudflareaccess.com
+          ACCESS_AUD: ${{ inputs.access_aud }}
         run: |
           scp -i ~/.ssh/id_deploy ${{ env.UNIT_FILE }} deploy-target:/tmp/${{ env.SERVICE_NAME }}.service
           # #544: the service's GStreamer registry must not survive this deploy — a driver
@@ -376,6 +383,12 @@ jobs:
             sudo mkdir -p /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d && \
             sudo rm -f /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/ableset-debug.conf /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/noresolume.conf && \
             sudo systemctl daemon-reload"
+          # #915: verified Access logins + the remembered device. Both values reach a root-written
+          # drop-in, so only a host name and an alphanumeric tag pass.
+          case "$ACCESS_TEAM_DOMAIN" in *[!a-z0-9.-]* | '') echo "::error::bad ACCESS_TEAM_DOMAIN"; exit 1 ;; esac
+          case "$ACCESS_AUD" in *[!a-f0-9]* | '') echo "::error::access_aud must be the hex AUD tag"; exit 1 ;; esac
+          printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' "$ACCESS_TEAM_DOMAIN" "$ACCESS_AUD" |
+            ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
           # #918: a site without devices (PRBA) has no encoder gate, no stage TVs and no
           # song-sync peer — the rest of this step is the hardware site's.
           if [ "${{ inputs.hardware }}" != "true" ]; then

@@ -2,7 +2,8 @@
 """Reconcile the Cloudflare Access apps of the public Presenter hosts (#850 spec §9).
 
 Desired state = the JSON file named by --config (or PRESENTER_ACCESS_CONFIG): account
-id, allowed e-mails, hosts and the on-site bypass IPs. Only
+id, allowed e-mails (shared by every host, plus a site's own ``extra_emails``), hosts and
+the on-site bypass IPs. Only
 ``presenter-access.example.json`` (placeholders) is committed — the repo is public; the
 real file lives outside it (dev2: ``~/.config/presenter/presenter-access.json``, 0600).
 
@@ -75,8 +76,9 @@ def desired_apps(config: dict[str, Any]) -> list[dict[str, Any]]:
         if site.get("bypass_ips"):
             policies.append({"name": BYPASS_NAME, "decision": "bypass",
                              "include": [{"ip": {"ip": cidr}} for cidr in site["bypass_ips"]]})
+        emails = list(dict.fromkeys([*config["allowed_emails"], *site.get("extra_emails", [])]))
         policies.append({"name": ALLOW_NAME, "decision": "allow",
-                         "include": [{"email": {"email": e}} for e in config["allowed_emails"]]})
+                         "include": [{"email": {"email": e}} for e in emails]})
         for precedence, policy in enumerate(policies, start=1):
             policy["precedence"] = precedence
         apps.append({**APP_DEFAULTS, "name": f"presenter — {host}", "domain": host,

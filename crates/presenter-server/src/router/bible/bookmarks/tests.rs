@@ -2,6 +2,7 @@
 //! whose list a request reaches. The rules are pinned in
 //! `state/study_bookmarks/tests.rs`.
 
+use crate::access::test_support;
 use crate::router::build_router;
 use crate::state::AppState;
 use axum::body::Body;
@@ -12,12 +13,19 @@ use presenter_core::bible::BibleIngestionBatch;
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
+use std::sync::LazyLock;
 use tower::ServiceExt;
 
-const EMAIL: (&str, &str) = ("cf-access-authenticated-user-email", "Preacher@Example.org");
+/// A verified Access login of the preacher (#915: the e-mail header alone counts for nothing).
+static TOKEN: LazyLock<String> = LazyLock::new(|| test_support::token("Preacher@Example.org"));
+
+fn email() -> (&'static str, &'static str) {
+    ("cf-access-jwt-assertion", TOKEN.as_str())
+}
 
 async fn app() -> Router {
-    let state = AppState::in_memory().await.expect("state");
+    let mut state = AppState::in_memory().await.expect("state");
+    state.set_access_identity(test_support::identity());
     let seb = BibleTranslation::new("slk-seb", "Slovenský ekumenický preklad", "sk");
     let passages = (1..=4)
         .map(|verse| {
@@ -82,7 +90,7 @@ async fn save_list_rename_move_and_delete_answer_camel_case() {
         "POST",
         "/bible/study/bookmarks",
         Some(heb(4)),
-        &[EMAIL],
+        &[email()],
         false,
     )
     .await;
@@ -97,7 +105,15 @@ async fn save_list_rename_move_and_delete_answer_camel_case() {
     );
     let id = made["id"].as_i64().expect("id");
 
-    let (status, list) = call(&app, "GET", "/bible/study/bookmarks", None, &[EMAIL], false).await;
+    let (status, list) = call(
+        &app,
+        "GET",
+        "/bible/study/bookmarks",
+        None,
+        &[email()],
+        false,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list, json!([made]));
 
@@ -107,7 +123,7 @@ async fn save_list_rename_move_and_delete_answer_camel_case() {
         "PATCH",
         &uri,
         Some(json!({ "name": "Nedeľa" })),
-        &[EMAIL],
+        &[email()],
         false,
     )
     .await;
@@ -117,20 +133,28 @@ async fn save_list_rename_move_and_delete_answer_camel_case() {
         (json!("Nedeľa"), json!(4))
     );
     let place = json!({ "place": { "translation": "slk-seb", "bookCode": "HEB", "chapter": 11, "verse": 2 } });
-    let (status, moved) = call(&app, "PATCH", &uri, Some(place), &[EMAIL], false).await;
+    let (status, moved) = call(&app, "PATCH", &uri, Some(place), &[email()], false).await;
     assert_eq!(status, StatusCode::OK, "{moved}");
     assert_eq!(
         (moved["name"].clone(), moved["verse"].clone()),
         (json!("Nedeľa"), json!(2))
     );
 
-    let (status, deleted) = call(&app, "DELETE", &uri, None, &[EMAIL], false).await;
+    let (status, deleted) = call(&app, "DELETE", &uri, None, &[email()], false).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(deleted["index"], 0);
     assert_eq!(deleted["bookmark"]["name"], "Nedeľa");
-    let (status, _) = call(&app, "DELETE", &uri, None, &[EMAIL], false).await;
+    let (status, _) = call(&app, "DELETE", &uri, None, &[email()], false).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (_, empty) = call(&app, "GET", "/bible/study/bookmarks", None, &[EMAIL], false).await;
+    let (_, empty) = call(
+        &app,
+        "GET",
+        "/bible/study/bookmarks",
+        None,
+        &[email()],
+        false,
+    )
+    .await;
     assert_eq!(empty, json!([]));
 }
 
@@ -142,20 +166,28 @@ async fn the_lan_has_its_own_shared_list_and_cannot_reach_a_tunnel_list() {
         "POST",
         "/bible/study/bookmarks",
         Some(heb(1)),
-        &[EMAIL],
+        &[email()],
         false,
     )
     .await;
     let mine_uri = format!("/bible/study/bookmarks/{}", mine["id"]);
     // The LAN may send the header itself: it is not trusted from a LAN peer.
-    let (status, lan) = call(&app, "GET", "/bible/study/bookmarks", None, &[EMAIL], true).await;
+    let (status, lan) = call(
+        &app,
+        "GET",
+        "/bible/study/bookmarks",
+        None,
+        &[email()],
+        true,
+    )
+    .await;
     assert_eq!((status, lan), (StatusCode::OK, json!([])));
     let (status, _) = call(
         &app,
         "PATCH",
         &mine_uri,
         Some(json!({ "name": "x" })),
-        &[EMAIL],
+        &[email()],
         true,
     )
     .await;
@@ -174,7 +206,15 @@ async fn the_lan_has_its_own_shared_list_and_cannot_reach_a_tunnel_list() {
     assert_eq!(status, StatusCode::OK);
     let (_, lan) = call(&app, "GET", "/bible/study/bookmarks", None, &[], true).await;
     assert_eq!(lan, json!([shared]));
-    let (_, tunnel) = call(&app, "GET", "/bible/study/bookmarks", None, &[EMAIL], false).await;
+    let (_, tunnel) = call(
+        &app,
+        "GET",
+        "/bible/study/bookmarks",
+        None,
+        &[email()],
+        false,
+    )
+    .await;
     assert_eq!(tunnel, json!([mine]));
 }
 
