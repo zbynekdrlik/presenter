@@ -459,6 +459,17 @@ impl AppState {
         }
     }
 
+    /// `PUT /bible/preferences`: read, apply the draft, store — one at a time
+    /// (#921), so two quick saves of different fields never lose either one.
+    pub async fn update_bible_preferences(
+        &self,
+        draft: presenter_core::BiblePreferencesDraft,
+    ) -> anyhow::Result<()> {
+        let _write = self.bible.preferences_write.lock().await;
+        let current = self.get_bible_preferences().await?;
+        self.set_bible_preferences(draft.apply(current)).await
+    }
+
     pub async fn set_bible_preferences(&self, prefs: BiblePreferences) -> anyhow::Result<()> {
         let key = "bible-preferences";
         // #851 P3: a new character limit regenerates the sermons from today on;

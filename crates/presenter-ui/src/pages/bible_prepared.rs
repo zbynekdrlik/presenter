@@ -248,6 +248,7 @@ pub(super) fn BibleSettingsTab() -> impl IntoView {
                 main_translation: main,
                 secondary_translation: sec,
                 character_limit: Some(limit),
+                ..Default::default()
             };
 
             leptos::task::spawn_local(async move {
@@ -290,6 +291,7 @@ pub(super) fn BibleSettingsTab() -> impl IntoView {
                     on:click=on_save
                 >"Uložiť nastavenie"</button>
             </div>
+            <crate::pages::bible_preferred::PreferredTranslations />
         </div>
     }
 }

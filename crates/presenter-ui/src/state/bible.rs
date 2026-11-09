@@ -11,6 +11,10 @@ pub struct BibleState {
     pub translations: RwSignal<Vec<BibleTranslation>>,
     pub selected_translation: RwSignal<Option<String>>,
     pub secondary_translation: RwSignal<Option<String>>,
+    /// The translations with a chip in the console's main / second row
+    /// (#921, Biblia → Nastavenie; the server's shared default).
+    pub preferred_main: RwSignal<Vec<String>>,
+    pub preferred_secondary: RwSignal<Vec<String>>,
     /// The translation code whose books are currently loaded into `books`.
     /// Set by the books effect as its LAST write, once the async
     /// `list_books` round-trip has resolved, so observers (and E2E) can await
@@ -71,6 +75,12 @@ impl BibleState {
             translations: RwSignal::new(Vec::new()),
             selected_translation: RwSignal::new(None),
             secondary_translation: RwSignal::new(None),
+            preferred_main: RwSignal::new(
+                presenter_core::BiblePreferences::default().preferred_main_or_default(),
+            ),
+            preferred_secondary: RwSignal::new(
+                presenter_core::BiblePreferences::default().preferred_secondary_or_default(),
+            ),
             books_translation: RwSignal::new(None),
 
             books: RwSignal::new(Vec::new()),

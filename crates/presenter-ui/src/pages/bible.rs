@@ -29,6 +29,8 @@ pub fn BiblePage() -> impl IntoView {
         let selected_translation = bs.selected_translation;
         let secondary_translation = bs.secondary_translation;
         let character_limit = bs.character_limit;
+        let preferred_main = bs.preferred_main;
+        let preferred_secondary = bs.preferred_secondary;
         leptos::task::spawn_local(async move {
             let own_main = crate::state::session::get_persistent("bibleMainTranslation")
                 .filter(|main| !main.is_empty());
@@ -47,6 +49,8 @@ pub fn BiblePage() -> impl IntoView {
                     secondary_translation.set(Some(sec.clone()));
                 }
                 character_limit.set(prefs.character_limit);
+                preferred_main.set(prefs.preferred_main_or_default());
+                preferred_secondary.set(prefs.preferred_secondary_or_default());
             }
             // #701: per-browser localStorage override wins over the server-global
             // default, so concurrent operators keep independent selections and an
@@ -109,6 +113,7 @@ pub fn BiblePage() -> impl IntoView {
                     main_translation: main,
                     secondary_translation: sec,
                     character_limit: Some(limit),
+                    ..Default::default()
                 };
                 if let Err(e) = bible::update_preferences(&draft).await {
                     web_sys::console::warn_1(&format!("auto-save preferences failed: {e}").into());

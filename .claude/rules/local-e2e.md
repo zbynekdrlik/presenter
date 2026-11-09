@@ -32,6 +32,13 @@ before the push (one CI cycle is ~25 min).
 - **Env:** the `PRESENTER_LIBRARY_ROOT` / `PRESENTER_BIBLE_*` variables of
   pipeline.yml's "Run Playwright tests" step (KJV from `data/bibles`, the others
   from `data/bibles-private`). Leave `CI` unset locally, or a failure retries.
+  `refreshDevData` (support.ts) sets the `PRESENTER_BIBLE_*` paths ITSELF from
+  `<repo root>/data/bibles-private`, whatever your shell exports: in a worktree
+  (no private modules) link them in first, `ln -s <main checkout>/data/bibles-private
+  data/bibles-private`, and never `git add` that link (#921).
+- **Many translations without ingesting them:** `tests/e2e/extra-translations.ts`
+  lists SNV's four extra translations and serves their `?translation=` reads from
+  the KJV (layout / switching specs only; a verse lookup in them is not served).
 - **Reading a CI failure:** `gh run view --log-failed` can come back empty;
   `gh api repos/zbynekdrlik/presenter/actions/jobs/<job id>/logs` always works.
 - **A shard cancelled at 30 min has no blob report (#913).** Name the hung test

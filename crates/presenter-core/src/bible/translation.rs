@@ -67,6 +67,17 @@ impl BiblePassage {
     }
 }
 
+/// The console's main row shows these translations when nothing else was
+/// chosen in Biblia → Nastavenie (#921, owner 2026-11-09).
+pub const DEFAULT_PREFERRED_MAIN: [&str; 4] = ["slk-seb", "slk-roh", "slk-sevp", "eng-kjv"];
+/// The console's second row ("Druhý preklad") by default (#921).
+pub const DEFAULT_PREFERRED_SECONDARY: [&str; 2] = ["eng-nlt", "eng-kjv"];
+/// A preferred list keeps at most this many codes: the bar shows 3–4 of
+/// them, every translation is in its ▾ list anyway.
+pub const MAX_PREFERRED_TRANSLATIONS: usize = 12;
+/// A translation code longer than this is no code (`slk-sevp` is 8).
+const MAX_TRANSLATION_CODE_LEN: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BiblePreferences {
@@ -75,6 +86,13 @@ pub struct BiblePreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary_translation: Option<String>,
     pub character_limit: u32,
+    /// The translations with a chip in the console's main row (#921); `None`
+    /// = never set, [`DEFAULT_PREFERRED_MAIN`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_main: Option<Vec<String>>,
+    /// The same for the second row; `None` = [`DEFAULT_PREFERRED_SECONDARY`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_secondary: Option<Vec<String>>,
 }
 
 impl Default for BiblePreferences {
@@ -83,8 +101,23 @@ impl Default for BiblePreferences {
             main_translation: None,
             secondary_translation: None,
             character_limit: 320,
+            preferred_main: None,
+            preferred_secondary: None,
         }
     }
+}
+
+/// A preferred list as stored: trimmed codes, no empty or overlong one, each
+/// once (the first place wins), at most [`MAX_PREFERRED_TRANSLATIONS`].
+pub fn normalize_preferred_translations(codes: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    codes
+        .into_iter()
+        .map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty() && code.len() <= MAX_TRANSLATION_CODE_LEN)
+        .filter(|code| seen.insert(code.clone()))
+        .take(MAX_PREFERRED_TRANSLATIONS)
+        .collect()
 }
 
 impl BiblePreferences {
@@ -102,14 +135,33 @@ impl BiblePreferences {
         self.character_limit = limit;
         self
     }
+
+    /// The main row's preferred translations, the default when never set.
+    pub fn preferred_main_or_default(&self) -> Vec<String> {
+        self.preferred_main
+            .clone()
+            .unwrap_or_else(|| DEFAULT_PREFERRED_MAIN.map(str::to_string).to_vec())
+    }
+
+    /// The second row's preferred translations, the default when never set.
+    pub fn preferred_secondary_or_default(&self) -> Vec<String> {
+        self.preferred_secondary
+            .clone()
+            .unwrap_or_else(|| DEFAULT_PREFERRED_SECONDARY.map(str::to_string).to_vec())
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BiblePreferencesDraft {
     pub main_translation: Option<String>,
     pub secondary_translation: Option<String>,
     pub character_limit: Option<u32>,
+    /// `Some` replaces the stored list (#921), `None` keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_main: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_secondary: Option<Vec<String>>,
 }
 
 impl BiblePreferencesDraft {
@@ -122,6 +174,12 @@ impl BiblePreferencesDraft {
         }
         if let Some(limit) = self.character_limit {
             base.character_limit = limit;
+        }
+        if let Some(list) = self.preferred_main {
+            base.preferred_main = Some(normalize_preferred_translations(list));
+        }
+        if let Some(list) = self.preferred_secondary {
+            base.preferred_secondary = Some(normalize_preferred_translations(list));
         }
         base
     }

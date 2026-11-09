@@ -28,6 +28,7 @@ import {
   gateRoute,
   landed,
   openStudy,
+  pickTranslation,
   settled,
   verse,
 } from "./study-support";
@@ -316,7 +317,7 @@ test("nothing found and the NLT each say so", async ({ browser }) => {
   await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:qqxxzz");
   await expect(page.locator('[data-role="search-empty"]')).toContainText("Nič sa nenašlo");
 
-  await favourite(page, "eng-nlt").tap();
+  await pickTranslation(page, "eng-nlt");
   await expect(results(page)).toHaveAttribute("data-loaded-for", "eng-nlt:qqxxzz");
   await expect(page.locator('[data-role="search-empty"]')).toContainText("V NLT sa nedá hľadať");
   await finish(opened);

@@ -64,7 +64,7 @@ use add_to_sermon::AddToSermonSheet;
 use bookmarks::{BookmarkList, BookmarksSheet, SaveBookmarkSheet};
 use compare::{CompareCell, CompareView};
 use crossrefs::{CrossRefSheet, CrossRefs};
-use favourites::{FavouriteSheet, Favourites};
+use favourites::{FavouriteSheet, Favourites, TranslationsSheet};
 use field::StudyField;
 use header::StudyHeader;
 use history::HistorySheet;
@@ -179,6 +179,8 @@ struct Study {
     wide: RwSignal<bool>,
     /// The phone shell: compare stacks one verse.
     phone: RwSignal<bool>,
+    /// Under 420 px: four favourite chips beside ▾, not five (#921).
+    narrow: RwSignal<bool>,
     /// The compare view's chapters by `chapter_key`.
     compare: RwSignal<HashMap<String, CompareCell>>,
     /// The cross-references of the verse the sheets are about.
@@ -542,6 +544,10 @@ enum ViewKind {
 pub fn StudyPage() -> impl IntoView {
     let phone = RwSignal::new(false);
     crate::state::phone_shell::install_phone_shell(phone);
+    // Like the shell above: `/ui/study` is its own document and StudyPage
+    // mounts once per load, so the forgotten media listener is one per page.
+    let narrow = RwSignal::new(false);
+    crate::state::phone_shell::watch_media("(max-width: 419px)", move |on| narrow.set(on));
     crate::state::keyboard_inset::install_keyboard_inset();
     install_pwa();
 
@@ -569,6 +575,7 @@ pub fn StudyPage() -> impl IntoView {
         pending_passage: RwSignal::new(None),
         wide: RwSignal::new(false),
         phone,
+        narrow,
         compare: RwSignal::new(HashMap::new()),
         crossrefs: RwSignal::new(CrossRefs::default()),
         numbers: RwSignal::new(session::get_persistent(KEY_NUMBERS).as_deref() == Some("1")),
@@ -679,6 +686,7 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::History) => view! { <HistorySheet s=s /> }.into_any(),
         Some(StudySheet::TextSize) => view! { <TextSizeSheet s=s /> }.into_any(),
         Some(StudySheet::Favourite(slot)) => view! { <FavouriteSheet s=s index=slot /> }.into_any(),
+        Some(StudySheet::Translations) => view! { <TranslationsSheet s=s /> }.into_any(),
         Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
         Some(StudySheet::CrossRefs) => view! { <CrossRefSheet s=s /> }.into_any(),
         Some(StudySheet::Word) => view! { <WordSheet s=s /> }.into_any(),

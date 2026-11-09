@@ -1100,6 +1100,7 @@ async fn console_start_answers_the_preferences_with_the_books_of_the_asked_trans
             main_translation: Some("test".to_string()),
             secondary_translation: None,
             character_limit: 320,
+            ..presenter_core::BiblePreferences::default()
         })
         .await
         .unwrap();
@@ -1107,6 +1108,58 @@ async fn console_start_answers_the_preferences_with_the_books_of_the_asked_trans
     assert_eq!(preferred["preferences"]["mainTranslation"], "test");
     assert_eq!(preferred["booksTranslation"], "test");
     assert_eq!(preferred["books"], plain);
+}
+
+// #921: the console bar's preferred translations are a shared server default.
+#[tokio::test]
+async fn bible_preferences_keep_the_preferred_translations_of_each_row() {
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state.clone());
+    let put = |body: serde_json::Value| {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method(axum::http::Method::PUT)
+                        .uri("/bible/preferences")
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        }
+    };
+
+    // Never chosen: not in the answer, the browser shows the defaults.
+    let fresh: serde_json::Value = get_json(&app, "/bible/preferences").await;
+    assert_eq!(fresh.get("preferredMain"), None);
+
+    put(serde_json::json!({
+        "preferredMain": ["slk-mil", "ces-csp", "slk-mil"],
+        "preferredSecondary": ["eng-ampc"],
+    }))
+    .await;
+    // The console's own auto-save (no lists) keeps them.
+    put(serde_json::json!({ "mainTranslation": "slk-roh", "characterLimit": 320 })).await;
+
+    let stored: serde_json::Value = get_json(&app, "/bible/preferences").await;
+    assert_eq!(
+        stored["preferredMain"],
+        serde_json::json!(["slk-mil", "ces-csp"])
+    );
+    assert_eq!(
+        stored["preferredSecondary"],
+        serde_json::json!(["eng-ampc"])
+    );
+    assert_eq!(stored["mainTranslation"], "slk-roh");
+    let start: serde_json::Value = get_json(&app, "/bible/console-start").await;
+    assert_eq!(
+        start["preferences"]["preferredMain"],
+        serde_json::json!(["slk-mil", "ces-csp"])
+    );
 }
 
 #[tokio::test]

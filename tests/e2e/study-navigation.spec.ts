@@ -452,7 +452,8 @@ test("a long press on a chip changes that slot, a tap does not", async ({ browse
   await expect(sheet).toHaveCount(0);
   await expect(favourite(page, "slk-mil")).toBeVisible();
   await expect(favourite(page, "slk-sevp")).toHaveCount(0);
-  await expect(page.locator('[data-role="study-fav"]')).toHaveCount(5);
+  // #921: a 390 px phone shows four favourites beside ▾.
+  await expect(page.locator('[data-role="study-fav"]')).toHaveCount(4);
 
   await page.reload();
   await expectChapter(page, "slk-seb:HEB.11");

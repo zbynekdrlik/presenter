@@ -51,6 +51,8 @@ pub enum StudySheet {
     TextSize,
     /// Which translation sits in this favourite slot (long press on a chip).
     Favourite(usize),
+    /// Every installed translation, to read in one now (▾ after the chips, #921).
+    Translations,
     /// Which sermon the passage goes to. It exists only for the passage in hand,
     /// so a URL never opens it.
     AddToSermon,
@@ -81,6 +83,7 @@ impl StudySheet {
             Self::History => "historia".to_string(),
             Self::TextSize => "pismo".to_string(),
             Self::Favourite(slot) => format!("preklad{slot}"),
+            Self::Translations => "preklady".to_string(),
             Self::AddToSermon => "pridat".to_string(),
             Self::Preview => "nahlad".to_string(),
             Self::Reorder => "poradie".to_string(),
@@ -101,6 +104,7 @@ impl StudySheet {
             "odkazy" => Some(Self::CrossRefs),
             "zalozky" => Some(Self::Bookmarks),
             "zalozka" => Some(Self::SaveBookmark),
+            "preklady" => Some(Self::Translations),
             // `pridat` is no sheet of a URL: the passage it adds is gone.
             other => other
                 .strip_prefix("preklad")?
@@ -1067,6 +1071,16 @@ mod tests {
         assert_eq!(route.sheet, None);
         let other = StudyRoute::parse("p=HEB.11&s=pismo").expect("a route");
         assert_eq!(other.sheet, Some(StudySheet::TextSize));
+    }
+
+    #[test]
+    fn the_translation_list_has_its_own_url() {
+        let route = StudyRoute::parse("t=slk-seb&p=HEB.11&s=preklady").expect("a route");
+        assert_eq!(route.sheet, Some(StudySheet::Translations));
+        assert!(route.to_url().contains("s=preklady"), "{}", route.to_url());
+        // A slot's sheet still parses as the slot.
+        let slot = StudyRoute::parse("t=slk-seb&p=HEB.11&s=preklad2").expect("a route");
+        assert_eq!(slot.sheet, Some(StudySheet::Favourite(2)));
     }
 
     #[test]

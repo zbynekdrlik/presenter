@@ -335,6 +335,12 @@
   color: #fff;
 }
 
+/* ▾ = every installed translation (#921, `s=preklady`); never looks pressed. */
+.study-fav--menu {
+  color: var(--study-muted);
+  font-size: 17px;
+}
+
 /* Reader ------------------------------------------------------------------- */
 
 .study-scroll {

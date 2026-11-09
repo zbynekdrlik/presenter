@@ -35,4 +35,5 @@ pub mod stream_editor;
 pub mod surface_nav;
 pub mod timer_panel;
 pub mod toast;
+pub mod translation_list;
 pub mod version_label;

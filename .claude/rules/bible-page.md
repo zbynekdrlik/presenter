@@ -32,7 +32,10 @@ tab read: no selected book / chapter / verse, no `classic_loads` / `console_take
 - **E2E entry:** `selectPassage(page, query)` from `support.ts` types into the console field and
   waits for `data-preview-ready="true"` plus a slide card. A translation is picked with the bar's
   buttons: `[data-role="console-translation"][data-kind="main|secondary"][data-translation=<code>]`
-  (`""` = žiadny), never a select. NLT is never a main button.
+  (`""` = žiadny), never a select. NLT is never a main button. Since #921 a row shows only the
+  preferred chips that fit (phone 3, desktop 4): a translation outside them is picked through ▾
+  (`[data-role="console-translation-menu"][data-kind=…]`, then
+  `[data-role="translation-option"][data-kind=…][data-translation=<code>]`).
 - **Desktop layout = mockup v3 section 3** (`docs/mockups/operator-redesign-v3.html`, owner
   complaint 2026-11-06 on #875): sub-tabs 34 px segmented, then the on-air strip (spec section
   7.1 keeps Zhasnúť reachable; one 48 px line, transparent until a verse is live, then a red left
