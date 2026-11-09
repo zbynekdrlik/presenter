@@ -53,9 +53,16 @@ fn forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
 /// loopback peer (the Cloudflare tunnel's `cloudflared`) or with no peer at all
 /// (a server not served with connect-info, e.g. tests) is the proxy header
 /// used; else `"anonymous"`.
+/// The #793 rule: a request came through the tunnel (`cloudflared` on the same
+/// box, a loopback peer) or has no peer at all (tests). Only then may proxy or
+/// Access headers be trusted; a LAN client could send them itself.
+pub(in crate::router) fn is_tunnel_peer(peer: Option<SocketAddr>) -> bool {
+    peer.is_none_or(|addr| addr.ip().is_loopback())
+}
+
 pub(super) fn extract_client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     match peer {
-        Some(addr) if !addr.ip().is_loopback() => addr.ip().to_string(),
+        Some(addr) if !is_tunnel_peer(peer) => addr.ip().to_string(),
         _ => forwarded_client_ip(headers)
             .or_else(|| peer.map(|addr| addr.ip().to_string()))
             .unwrap_or_else(|| "anonymous".to_string()),

@@ -92,6 +92,7 @@ pub use startup_mode::StartupMode;
 
 // Same cfg as `AppState::in_memory` below (the only user of `OscConfig`
 // here) — widened for #680's `ai-eval` feature the same way.
+use crate::access::AccessIdentity;
 #[cfg(any(test, feature = "ai-eval"))]
 use crate::config::OscConfig;
 use crate::{
@@ -187,7 +188,7 @@ pub struct AppState {
     /// `PRESENTER_TURN_KEY_*` env vars are unset — on-LAN WebRTC is unaffected.
     turn: TurnService,
     /// #915: who a request is (verified Access token / remembered device).
-    access_identity: Arc<crate::access::AccessIdentity>,
+    access_identity: Arc<AccessIdentity>,
     /// #555 song-sync coordinator (nudge channel + status). Loop spawned only when
     /// PRESENTER_SYNC_PEER_URL is set.
     sync: sync::SyncCoordinator,
@@ -391,7 +392,7 @@ impl AppState {
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
             turn: TurnService::from_env(),
-            access_identity: Arc::new(crate::access::AccessIdentity::from_env()),
+            access_identity: Arc::new(AccessIdentity::unconfigured()),
             sync: sync::SyncCoordinator::new(),
             presentation_locks: PresentationLockRegistry::new(),
             ableset_ack_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -454,6 +455,10 @@ impl AppState {
             local_public_ip,
             startup_mode,
         );
+
+        // #915: the site's Access app + device key file (none in the validate probe).
+        state.access_identity =
+            AccessIdentity::for_site(&db_url, startup_mode.starts_integrations());
 
         // Pre-load group color cache from database
         let group_colors = state
@@ -784,13 +789,13 @@ impl AppState {
     }
 
     /// #915: the reader of a request (router `access_identity` middleware).
-    pub(crate) fn access_identity(&self) -> &crate::access::AccessIdentity {
+    pub(crate) fn access_identity(&self) -> &AccessIdentity {
         &self.access_identity
     }
 
     /// Test-only: a site whose Access app is the test one (`access::test_support`).
     #[cfg(test)]
-    pub(crate) fn set_access_identity(&mut self, identity: crate::access::AccessIdentity) {
+    pub(crate) fn set_access_identity(&mut self, identity: AccessIdentity) {
         self.access_identity = Arc::new(identity);
     }
 

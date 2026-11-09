@@ -3,13 +3,17 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::http::{header::COOKIE, HeaderMap, HeaderValue};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::jwt::TokenRefusal;
+use super::jwt::{KeyTiming, TokenRefusal};
 use super::test_support::{self, claims, forge, sign, token, AUD, TEAM};
 use super::*;
 
@@ -124,6 +128,170 @@ fn the_config_needs_a_team_host_and_an_alphanumeric_aud() {
 
 // ---- the keys from Cloudflare ------------------------------------------------
 
+fn remote(url: &str, timing: KeyTiming) -> Arc<JwtVerifier> {
+    let config = JwtConfig::parse(Some(TEAM), Some(AUD), Some(url)).expect("config");
+    Arc::new(JwtVerifier::new(config, timing).expect("client"))
+}
+
+fn no_wait() -> KeyTiming {
+    KeyTiming {
+        ttl: Duration::ZERO,
+        min_refetch: Duration::ZERO,
+    }
+}
+
+/// The published keys with every key id replaced (a rotation's old set).
+fn certs_with_kid(kid: &str) -> serde_json::Value {
+    let mut certs = test_support::certs_json();
+    certs["keys"][0]["kid"] = json!(kid);
+    certs
+}
+
+#[tokio::test]
+async fn hs256_none_or_kid_less_tokens_are_refused_before_any_key_is_used() {
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    let verifier = test_support::verifier();
+    let mut hs256 = Header::new(Algorithm::HS256);
+    hs256.kid = Some("test-signing".into());
+    let symmetric = encode(
+        &hs256,
+        &claims("boss@example.org"),
+        &EncodingKey::from_secret(b"public key bytes"),
+    )
+    .expect("hs256");
+    assert_eq!(
+        verifier.verify(&symmetric).await,
+        Err(TokenRefusal::NotRs256)
+    );
+
+    let none_header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+    let body = URL_SAFE_NO_PAD.encode(claims("boss@example.org").to_string());
+    assert_eq!(
+        verifier.verify(&format!("{none_header}.{body}.")).await,
+        Err(TokenRefusal::Malformed)
+    );
+
+    let kid_less = sign_without_kid(&claims("boss@example.org"));
+    assert_eq!(
+        verifier.verify(&kid_less).await,
+        Err(TokenRefusal::NotRs256)
+    );
+}
+
+fn sign_without_kid(claims: &serde_json::Value) -> String {
+    // A token signed by the trusted key, with the kid removed from its header.
+    let token = sign(claims);
+    let (_, rest) = token.split_once('.').expect("header");
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
+    format!("{header}.{rest}")
+}
+
+#[tokio::test]
+async fn a_rotated_key_is_fetched_when_a_token_names_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(certs_with_kid("old-key")))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_support::certs_json()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let verifier = remote(&format!("{}/certs", server.uri()), no_wait());
+    assert_eq!(
+        verifier.verify(&token("preacher@example.org")).await,
+        Err(TokenRefusal::UnknownKey),
+        "the first fetch only has the old key"
+    );
+    assert_eq!(
+        verifier.verify(&token("preacher@example.org")).await,
+        Ok("preacher@example.org".into()),
+        "an unknown kid fetches again and finds the new key"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_kid_fetches_at_most_once_a_minute() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(certs_with_kid("old-key")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let verifier = remote(&format!("{}/certs", server.uri()), KeyTiming::default());
+    for _ in 0..3 {
+        assert_eq!(
+            verifier.verify(&token("preacher@example.org")).await,
+            Err(TokenRefusal::UnknownKey)
+        );
+    }
+}
+
+#[tokio::test]
+async fn concurrent_first_logins_wait_for_one_fetch_and_all_verify() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(test_support::certs_json())
+                .set_delay(Duration::from_millis(300)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let verifier = remote(&format!("{}/certs", server.uri()), KeyTiming::default());
+    let token = token("preacher@example.org");
+    let results = futures_util::future::join_all((0..8).map(|_| verifier.verify(&token))).await;
+    assert!(
+        results
+            .iter()
+            .all(|result| result.as_deref() == Ok("preacher@example.org")),
+        "{results:?}"
+    );
+}
+
+#[tokio::test]
+async fn stale_keys_answer_at_once_and_refresh_in_the_background() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_support::certs_json()))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let verifier = remote(
+        &format!("{}/certs", server.uri()),
+        KeyTiming {
+            ttl: Duration::ZERO,
+            min_refetch: Duration::from_secs(60),
+        },
+    );
+    let token = token("preacher@example.org");
+    assert!(verifier.verify(&token).await.is_ok());
+    // Stale (ttl 0) but cached: answered from the cache. The background refresh
+    // waits for the minute since the last fetch, so nothing is fetched yet.
+    assert!(verifier.verify(&token).await.is_ok());
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+
+    let verifier = remote(&format!("{}/certs", server.uri()), no_wait());
+    assert!(verifier.verify(&token).await.is_ok());
+    // Two fetches so far (one per verifier); the background refresh is the third.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    assert!(
+        verifier.verify(&token).await.is_ok(),
+        "a stale key still answers"
+    );
+    while server.received_requests().await.expect("requests").len() < 3 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no background refresh"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn the_keys_are_fetched_once_and_a_failed_fetch_is_not_repeated_at_once() {
     let server = MockServer::start().await;
@@ -134,8 +302,7 @@ async fn the_keys_are_fetched_once_and_a_failed_fetch_is_not_repeated_at_once() 
         .mount(&server)
         .await;
     let url = format!("{}/cdn-cgi/access/certs", server.uri());
-    let verifier =
-        JwtVerifier::new(JwtConfig::parse(Some(TEAM), Some(AUD), Some(&url)).expect("config"));
+    let verifier = remote(&url, KeyTiming::default());
     for _ in 0..3 {
         assert_eq!(
             verifier.verify(&token("preacher@example.org")).await,
@@ -150,8 +317,7 @@ async fn the_keys_are_fetched_once_and_a_failed_fetch_is_not_repeated_at_once() 
         .mount(&down)
         .await;
     let url = format!("{}/certs", down.uri());
-    let verifier =
-        JwtVerifier::new(JwtConfig::parse(Some(TEAM), Some(AUD), Some(&url)).expect("config"));
+    let verifier = remote(&url, KeyTiming::default());
     for _ in 0..3 {
         assert_eq!(
             verifier.verify(&token("preacher@example.org")).await,
@@ -229,7 +395,7 @@ async fn the_bare_email_header_a_forged_token_or_a_lan_token_identify_nobody() {
 
 #[tokio::test]
 async fn without_access_config_a_token_identifies_nobody_but_a_cookie_still_does() {
-    let device = DeviceKey::from_bytes([42; 32]);
+    let device = test_support::device_key();
     let cookie = device.issue("preacher@example.org", test_support::now(), false);
     let identity = AccessIdentity::new(None, Some(device));
     let token = token("preacher@example.org");
@@ -244,6 +410,40 @@ async fn without_access_config_a_token_identifies_nobody_but_a_cookie_still_does
     assert_eq!(
         resolved.identity.map(|id| (id.email, id.source)),
         Some(("preacher@example.org".into(), IdentitySource::DeviceCookie))
+    );
+}
+
+#[tokio::test]
+async fn a_login_re_issues_a_cookie_older_than_thirty_days_and_a_refused_cookie_is_removed() {
+    let identity = test_support::identity();
+    let now = test_support::now();
+    let old = test_support::device_key().issue("preacher@example.org", now - 31 * 24 * 3600, true);
+    let old_pair = old.split(';').next().expect("pair").to_string();
+    let token = token("preacher@example.org");
+    let request = headers(&[("cf-access-jwt-assertion", &token), ("cookie", &old_pair)]);
+    let renewed = identity
+        .resolve(facts(&request, true))
+        .await
+        .set_cookie
+        .expect("renewed");
+    assert!(
+        renewed.starts_with("presenter_device=") && renewed.contains("Max-Age=31536000"),
+        "{renewed}"
+    );
+
+    // A cookie of a rotated key, at church (no token): nobody, and it is removed.
+    let rotated =
+        DeviceKey::from_bytes([9; 32])
+            .expect("key")
+            .issue("preacher@example.org", now, true);
+    let rotated_pair = rotated.split(';').next().expect("pair").to_string();
+    let at_church = headers(&[("cookie", &rotated_pair)]);
+    let resolved = identity.resolve(facts(&at_church, true)).await;
+    assert_eq!(resolved.identity, None);
+    let removal = resolved.set_cookie.expect("removal");
+    assert!(
+        removal.starts_with("presenter_device=; Max-Age=0"),
+        "{removal}"
     );
 }
 

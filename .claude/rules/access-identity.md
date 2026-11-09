@@ -17,12 +17,22 @@ paths:
 - **Only a verified token names a person** (`access/jwt.rs`): RS256, `kid` from the team's
   `/cdn-cgi/access/certs`, `aud` = the site's app AUD(s), `iss` = `https://<team>`, `exp`/`nbf`. The bare
   `Cf-Access-Authenticated-User-Email` header is ignored (a LAN client could send it). A token counts only
-  from a loopback peer or no peer (the #793 rule). Keys: cached by `kid`, 1 h TTL, refetch ≤ 1/min, ONE
-  request fetches (`try_lock`), the others use the cache — a slow Cloudflare never stalls requests.
+  from a loopback peer or no peer (`integrations::is_tunnel_peer`, the #793 rule, shared with
+  `extract_client_ip`). `alg` must be RS256 with a `kid` (HS256 / none / kid-less refused, tested).
+- **Keys** (`KeyTiming`, ONE fetch at a time under `fetching`): a cached `kid` answers at once, a stale
+  cache (> 1 h) refreshes in a background task; an UNCACHED `kid` (first start, rotation) waits for the
+  fetch in flight or starts one, so a first login is never "nobody" while keys load (a bookmark would land
+  in the shared list). `last_attempt` is stamped when a fetch ENDS; no two fetches within a minute.
+  Refused tokens log WARN on the #484 power-of-two streak (`listen::should_log_event`), DEBUG otherwise.
 - **The device cookie** (`access/device_cookie.rs`): `presenter_device=b64url(v1|issued|email).b64url(HMAC)`,
   HttpOnly, SameSite=Lax, 1 year, `Secure` when `X-Forwarded-Proto: https`; issued after a verified login
-  when the browser has no cookie for that e-mail or one ≥ 30 days old (never on every response). Key file
-  `access-device.key` next to the sqlite file (0600); delete + restart = every device forgotten.
+  when the browser has no cookie for that e-mail or one ≥ 30 days old. **Never on a cacheable response**
+  (`may_carry_cookie`: only no `Cache-Control`, `private` or `no-store`; never a 101) — a `public,
+  immutable` asset in a shared cache would hand the cookie to another browser; a response without its own
+  `Cache-Control` gets `private, no-store`. A refused cookie (rotated key, > 1 year, altered) is REMOVED
+  (`Max-Age=0`) so it stops arriving. Key file `access-device.key` next to the sqlite file (0600); delete +
+  restart = every device forgotten. The service is built in `AppState::from_config` from the config's DB
+  url (`AccessIdentity::unconfigured()` before that and in test states); the validate probe writes no key.
 - **Per-site config = the deploy's `access.conf` drop-in** (`PRESENTER_ACCESS_TEAM_DOMAIN`,
   `PRESENTER_ACCESS_AUD`): deploy-site.yml input `access_aud` (SNV, PRBA), release.yml for PP. AUD tags are
   read with the Cloudflare API (`GET /accounts/<id>/access/apps`, field `aud`) through

@@ -25,11 +25,13 @@ mod tests;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use axum::http::HeaderMap;
 
-pub(crate) use device_cookie::DeviceKey;
-pub(crate) use jwt::{JwtConfig, JwtVerifier};
+pub(crate) use device_cookie::{CookieState, DeviceClaims, DeviceKey};
+pub(crate) use jwt::{JwtConfig, JwtVerifier, KeyTiming};
 
 const LOG_TARGET: &str = "presenter::access";
 const JWT_HEADER: &str = "cf-access-jwt-assertion";
@@ -59,7 +61,8 @@ pub(crate) struct Identity {
 #[derive(Debug, Default)]
 pub(crate) struct Resolution {
     pub(crate) identity: Option<Identity>,
-    /// A `Set-Cookie` value to add to the response (a new or refreshed device).
+    /// A `Set-Cookie` value to add to the response (a new or refreshed device,
+    /// or the removal of a refused cookie).
     pub(crate) set_cookie: Option<String>,
 }
 
@@ -78,33 +81,52 @@ pub(crate) struct RequestFacts<'a> {
 
 /// The identity service, one per site process, shared by every `AppState` clone.
 pub(crate) struct AccessIdentity {
-    jwt: Option<JwtVerifier>,
+    jwt: Option<Arc<JwtVerifier>>,
     device: Option<DeviceKey>,
+    /// Refused tokens in a row: logged at WARN on the #484 power-of-two gate.
+    refused_tokens: AtomicU64,
 }
 
 impl AccessIdentity {
     pub(crate) fn new(jwt: Option<JwtVerifier>, device: Option<DeviceKey>) -> Self {
-        Self { jwt, device }
+        Self {
+            jwt: jwt.map(Arc::new),
+            device,
+            refused_tokens: AtomicU64::new(0),
+        }
+    }
+
+    /// Nobody is identified by a login; a process-lifetime device key. The
+    /// in-memory / test `AppState`s start with this, `from_config` replaces it.
+    pub(crate) fn unconfigured() -> Self {
+        Self::new(None, DeviceKey::open(None))
     }
 
     /// From the process environment: the team + AUD of this site's Access app
     /// (missing → no verified logins, one WARN) and the device key next to the
-    /// sqlite file (an in-memory database → an ephemeral key).
-    pub(crate) fn from_env() -> Self {
-        let jwt = match JwtConfig::parse(
+    /// sqlite file of `db_url`. `persist_key = false` (the validate probe) never
+    /// writes a key file.
+    pub(crate) fn for_site(db_url: &str, persist_key: bool) -> Arc<Self> {
+        Arc::new(Self::from_env(db_url, persist_key))
+    }
+
+    fn from_env(db_url: &str, persist_key: bool) -> Self {
+        let jwt = Self::verifier_from_env();
+        let location = if persist_key {
+            device_key_location(std::env::var_os(DEVICE_KEY_FILE_ENV), db_url)
+        } else {
+            None
+        };
+        Self::new(jwt, DeviceKey::open(location.as_deref()))
+    }
+
+    fn verifier_from_env() -> Option<JwtVerifier> {
+        let config = match JwtConfig::parse(
             env_value(TEAM_DOMAIN_ENV).as_deref(),
             env_value(AUD_ENV).as_deref(),
             env_value(CERTS_URL_ENV).as_deref(),
         ) {
-            Ok(config) => {
-                tracing::info!(
-                    target: LOG_TARGET,
-                    team = config.team_domain(),
-                    audiences = config.audiences().len(),
-                    "Cloudflare Access logins are verified"
-                );
-                Some(JwtVerifier::new(config))
-            }
+            Ok(config) => config,
             Err(reason) => {
                 tracing::warn!(
                     target: LOG_TARGET,
@@ -112,25 +134,36 @@ impl AccessIdentity {
                     "Cloudflare Access is not configured: no reader is identified by a login \
                      (set {TEAM_DOMAIN_ENV} and {AUD_ENV})"
                 );
-                None
+                return None;
             }
         };
-        let location = device_key_location(
-            std::env::var_os(DEVICE_KEY_FILE_ENV),
-            &std::env::var("PRESENTER_DB_URL").unwrap_or_default(),
-        );
-        Self::new(jwt, DeviceKey::open(location.as_deref()))
+        let team = config.team_domain().to_string();
+        let audiences = config.audiences().len();
+        match JwtVerifier::new(config, KeyTiming::default()) {
+            Ok(verifier) => {
+                tracing::info!(target: LOG_TARGET, team = %team, audiences, "Cloudflare Access logins are verified");
+                Some(verifier)
+            }
+            Err(err) => {
+                tracing::warn!(target: LOG_TARGET, error = %err, "no HTTP client for the Access keys: no reader is identified by a login");
+                None
+            }
+        }
     }
 
-    /// Who sent this request, and a device cookie to hand out when a verified
-    /// login has no current one.
+    /// Who sent this request, and a `Set-Cookie` to send: a new or refreshed
+    /// device after a verified login, or the removal of a refused cookie.
     pub(crate) async fn resolve(&self, facts: RequestFacts<'_>) -> Resolution {
-        let device = self
-            .device
-            .as_ref()
-            .and_then(|key| key.read(facts.headers, facts.now));
+        let device = match &self.device {
+            Some(key) => key.read(facts.headers, facts.now),
+            None => CookieState::Absent,
+        };
         if let Some(email) = self.verified_login(facts).await {
-            let set_cookie = self.cookie_for(&email, device.as_ref(), facts);
+            let current = match &device {
+                CookieState::Valid(claims) => Some(claims),
+                _ => None,
+            };
+            let set_cookie = self.cookie_for(&email, current, facts);
             tracing::debug!(target: LOG_TARGET, source = "jwt", email = %email, "reader identified");
             return Resolution {
                 identity: Some(Identity {
@@ -141,29 +174,35 @@ impl AccessIdentity {
             };
         }
         match device {
-            Some(device) => {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    source = "device-cookie",
-                    email = %device.email,
-                    "reader identified"
-                );
+            CookieState::Valid(claims) => {
+                tracing::debug!(target: LOG_TARGET, source = "device-cookie", email = %claims.email, "reader identified");
                 Resolution {
                     identity: Some(Identity {
-                        email: device.email,
+                        email: claims.email,
                         source: IdentitySource::DeviceCookie,
                     }),
                     set_cookie: None,
                 }
             }
-            None => {
+            CookieState::Refused => {
+                // A rotated key or a year-old cookie: remove it, so the browser
+                // stops sending it (and the log stops seeing it).
+                tracing::debug!(target: LOG_TARGET, source = "none", "device cookie refused: removed");
+                Resolution {
+                    identity: None,
+                    set_cookie: Some(device_cookie::removal(facts.https)),
+                }
+            }
+            CookieState::Absent => {
                 tracing::debug!(target: LOG_TARGET, source = "none", "reader not identified");
                 Resolution::default()
             }
         }
     }
 
-    /// The e-mail of a token that verifies; a token that does not is logged.
+    /// The e-mail of a token that verifies; a refused token is logged on the
+    /// #484 power-of-two gate (a WARN per request would flood the journal while
+    /// Cloudflare's keys are out of reach).
     async fn verified_login(&self, facts: RequestFacts<'_>) -> Option<String> {
         let token = facts.headers.get(JWT_HEADER)?.to_str().ok()?;
         if !facts.from_tunnel {
@@ -175,9 +214,20 @@ impl AccessIdentity {
             return None;
         };
         match verifier.verify(token).await {
-            Ok(email) => Some(email),
+            Ok(email) => {
+                let refused = self.refused_tokens.swap(0, Ordering::Relaxed);
+                if refused > 0 {
+                    tracing::info!(target: LOG_TARGET, refused, "Access tokens verify again");
+                }
+                Some(email)
+            }
             Err(err) => {
-                tracing::warn!(target: LOG_TARGET, reason = %err, "Access token refused");
+                let streak = self.refused_tokens.fetch_add(1, Ordering::Relaxed) + 1;
+                if crate::listen::should_log_event(streak) {
+                    tracing::warn!(target: LOG_TARGET, reason = %err, streak, "Access token refused");
+                } else {
+                    tracing::debug!(target: LOG_TARGET, reason = %err, streak, "Access token refused");
+                }
                 None
             }
         }
@@ -188,7 +238,7 @@ impl AccessIdentity {
     fn cookie_for(
         &self,
         email: &str,
-        current: Option<&device_cookie::DeviceClaims>,
+        current: Option<&DeviceClaims>,
         facts: RequestFacts<'_>,
     ) -> Option<String> {
         let key = self.device.as_ref()?;

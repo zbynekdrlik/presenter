@@ -12,9 +12,9 @@
 use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
-use axum::http::header::SET_COOKIE;
+use axum::http::header::{CACHE_CONTROL, SET_COOKIE};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::Router;
@@ -60,7 +60,7 @@ async fn resolve_identity(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| *addr);
-    let from_tunnel = peer.is_none_or(|addr| addr.ip().is_loopback());
+    let from_tunnel = super::integrations::is_tunnel_peer(peer);
     let facts = RequestFacts {
         headers: request.headers(),
         from_tunnel,
@@ -73,17 +73,45 @@ async fn resolve_identity(
         .insert(RequestIdentity(resolution.identity));
     let mut response = next.run(request).await;
     if let Some(cookie) = resolution.set_cookie {
-        match HeaderValue::from_str(&cookie) {
-            Ok(value) => {
-                response.headers_mut().append(SET_COOKIE, value);
-            }
-            Err(_) => tracing::warn!(
-                target: "presenter::access",
-                "device cookie not set: the value is no header value"
-            ),
-        }
+        attach_cookie(&mut response, &cookie);
     }
     response
+}
+
+/// Add the device cookie only to a response no shared cache keeps (an asset is
+/// `public, immutable`: a cache could hand the cookie to another browser). The
+/// next document or API answer carries it instead. A response without its own
+/// `Cache-Control` is marked `private, no-store`.
+fn attach_cookie(response: &mut Response, cookie: &str) {
+    if !may_carry_cookie(response.status(), response.headers()) {
+        tracing::debug!(target: "presenter::access", "device cookie held back from a cacheable response");
+        return;
+    }
+    let Ok(value) = HeaderValue::from_str(cookie) else {
+        tracing::warn!(target: "presenter::access", "device cookie not set: the value is no header value");
+        return;
+    };
+    let headers = response.headers_mut();
+    headers.append(SET_COOKIE, value);
+    if !headers.contains_key(CACHE_CONTROL) {
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    }
+}
+
+fn may_carry_cookie(status: StatusCode, headers: &HeaderMap) -> bool {
+    if status == StatusCode::SWITCHING_PROTOCOLS {
+        return false;
+    }
+    match headers
+        .get(CACHE_CONTROL)
+        .and_then(|value| value.to_str().ok())
+    {
+        None => true,
+        Some(value) => {
+            let value = value.to_ascii_lowercase();
+            value.contains("no-store") || value.contains("private")
+        }
+    }
 }
 
 /// The browser came over https: `cloudflared` forwards `X-Forwarded-Proto`.

@@ -76,7 +76,8 @@ e-mail. The server takes it ONLY from a verified Cloudflare Access token
 `https://<team>/cdn-cgi/access/certs`, `aud` = the site's Access app AUD, `iss` =
 `https://<team>`), never from the bare `Cf-Access-Authenticated-User-Email`
 header. After a verified login it sets the httpOnly cookie `presenter_device`
-(HMAC-signed e-mail + issue time, 1 year, refreshed after 30 days), so the same
+(HMAC-signed e-mail + issue time, 1 year, refreshed after 30 days; never on a
+publicly cacheable response; a refused cookie is removed), so the same
 browser is still known through the church's Access bypass, where Cloudflare sends
 no login. No token and no valid cookie (the LAN address, another origin) = nobody
 = the shared list.

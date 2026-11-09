@@ -117,3 +117,30 @@ async fn a_site_without_access_config_identifies_nobody() {
     let (_, body, cookies) = identity(&app, &[("cf-access-jwt-assertion", &token)], false).await;
     assert_eq!((body, cookies.len()), (json!({ "email": null }), 0));
 }
+
+#[test]
+fn the_cookie_goes_only_on_responses_no_shared_cache_keeps() {
+    use super::may_carry_cookie;
+    use axum::http::header::CACHE_CONTROL;
+    use axum::http::HeaderMap;
+    let with = |value: &str| {
+        let mut headers = HeaderMap::new();
+        headers.insert(CACHE_CONTROL, value.parse().expect("value"));
+        headers
+    };
+    assert!(may_carry_cookie(StatusCode::OK, &HeaderMap::new()));
+    assert!(may_carry_cookie(StatusCode::OK, &with("no-store")));
+    assert!(may_carry_cookie(
+        StatusCode::OK,
+        &with("private, max-age=60")
+    ));
+    assert!(!may_carry_cookie(
+        StatusCode::OK,
+        &with("public, max-age=31536000, immutable")
+    ));
+    assert!(!may_carry_cookie(StatusCode::OK, &with("max-age=3600")));
+    assert!(!may_carry_cookie(
+        StatusCode::SWITCHING_PROTOCOLS,
+        &HeaderMap::new()
+    ));
+}

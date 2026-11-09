@@ -4,13 +4,16 @@
 //! application's AUD tag, `iss` = `https://<team>`, `exp` / `nbf` in force. The
 //! person is the token's `email` claim (a service token has none).
 //!
-//! The keys are cached by `kid`. An unknown `kid` or a cache older than an hour
-//! fetches them again, but at most once a minute, and only ONE request fetches:
-//! the others go on with what is cached (a request never waits on a second fetch
-//! while Cloudflare is slow; it is identified by its device cookie or not at all).
+//! The keys are cached by `kid`, and only ONE fetch runs at a time:
+//! - a token whose key is cached never waits: a cache older than an hour is
+//!   refreshed by a background task;
+//! - a token whose key is NOT cached (first start, Cloudflare rotated its key)
+//!   waits for the fetch in flight, or starts one, so a first login is never
+//!   mistaken for nobody while the keys load. A fetch that brings no key for the
+//!   `kid` is not repeated within a minute.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::jwk::JwkSet;
@@ -25,6 +28,24 @@ const KEYS_TTL: Duration = Duration::from_secs(60 * 60);
 /// No two fetches closer than this, whatever the tokens ask for.
 const MIN_REFETCH: Duration = Duration::from_secs(60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// When the cached keys are fetched again.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KeyTiming {
+    /// Keys older than this are refreshed in the background.
+    pub(crate) ttl: Duration,
+    /// No two fetches closer than this.
+    pub(crate) min_refetch: Duration,
+}
+
+impl Default for KeyTiming {
+    fn default() -> Self {
+        Self {
+            ttl: KEYS_TTL,
+            min_refetch: MIN_REFETCH,
+        }
+    }
+}
 
 /// One site's Access application.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +141,8 @@ struct Claims {
 struct KeyCache {
     keys: HashMap<String, DecodingKey>,
     fetched_at: Option<Instant>,
+    /// When the last fetch ENDED (success or failure); a cancelled fetch
+    /// leaves it untouched, so the next request simply fetches.
     last_attempt: Option<Instant>,
 }
 
@@ -136,30 +159,36 @@ enum KeySource {
 pub(crate) struct JwtVerifier {
     validation: Validation,
     source: KeySource,
+    timing: KeyTiming,
     cache: Mutex<KeyCache>,
-    fetching: tokio::sync::Mutex<()>,
+    /// Held for the whole of a fetch: one fetch at a time.
+    fetching: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl JwtVerifier {
-    pub(crate) fn new(config: JwtConfig) -> Self {
+    /// `Err` when no HTTP client could be built (no TLS backend).
+    pub(crate) fn new(config: JwtConfig, timing: KeyTiming) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
             .user_agent(concat!("presenter/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default();
+            .build()?;
         let url = config.certs_url.clone();
-        Self::with_source(config, KeySource::Remote { client, url })
+        Ok(Self::with_source(
+            config,
+            KeySource::Remote { client, url },
+            timing,
+        ))
     }
 
     /// A verifier that trusts exactly `keys` (tests).
     #[cfg(test)]
     pub(crate) fn with_keys(config: JwtConfig, keys: &JwkSet) -> Self {
-        let verifier = Self::with_source(config, KeySource::Fixed);
+        let verifier = Self::with_source(config, KeySource::Fixed, KeyTiming::default());
         verifier.store(keys);
         verifier
     }
 
-    fn with_source(config: JwtConfig, source: KeySource) -> Self {
+    fn with_source(config: JwtConfig, source: KeySource, timing: KeyTiming) -> Self {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&config.audiences);
         validation.set_issuer(&[config.issuer()]);
@@ -168,13 +197,14 @@ impl JwtVerifier {
         Self {
             validation,
             source,
+            timing,
             cache: Mutex::new(KeyCache::default()),
-            fetching: tokio::sync::Mutex::new(()),
+            fetching: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     /// The verified, normalised e-mail of `token`.
-    pub(crate) async fn verify(&self, token: &str) -> Result<String, TokenRefusal> {
+    pub(crate) async fn verify(self: &Arc<Self>, token: &str) -> Result<String, TokenRefusal> {
         let header = decode_header(token).map_err(|_| TokenRefusal::Malformed)?;
         let kid = match (header.alg, header.kid) {
             (Algorithm::RS256, Some(kid)) => kid,
@@ -190,29 +220,52 @@ impl JwtVerifier {
             .ok_or(TokenRefusal::NoEmail)
     }
 
-    async fn key_for(&self, kid: &str) -> Result<DecodingKey, TokenRefusal> {
-        let (cached, wants_fetch) = {
+    async fn key_for(self: &Arc<Self>, kid: &str) -> Result<DecodingKey, TokenRefusal> {
+        let (cached, stale) = {
             let cache = self.lock_cache();
-            let now = Instant::now();
-            let fresh = cache
+            let stale = cache
                 .fetched_at
-                .is_some_and(|at| now.duration_since(at) < KEYS_TTL);
-            let cached = cache.keys.get(kid).cloned();
-            let may_fetch = cache
-                .last_attempt
-                .is_none_or(|at| now.duration_since(at) >= MIN_REFETCH);
-            (cached.clone(), may_fetch && !(fresh && cached.is_some()))
+                .is_none_or(|at| at.elapsed() >= self.timing.ttl);
+            (cache.keys.get(kid).cloned(), stale)
         };
-        if wants_fetch {
-            if let Ok(_turn) = self.fetching.try_lock() {
-                self.fetch().await;
-                return self.cached_key(kid);
+        if let Some(key) = cached {
+            if stale {
+                self.refresh_in_background();
             }
+            return Ok(key);
         }
-        match cached {
-            Some(key) => Ok(key),
-            None => self.cached_key(kid),
+        // Not cached: wait for a fetch in flight (it may bring the key), then
+        // fetch ourselves unless one just ended.
+        let _turn = self.fetching.lock().await;
+        if let Ok(key) = self.cached_key(kid) {
+            return Ok(key);
         }
+        if self.may_fetch() {
+            self.fetch().await;
+        }
+        self.cached_key(kid)
+    }
+
+    /// Refresh stale keys without making the request wait. Nothing when a
+    /// fetch is running or one ended less than `min_refetch` ago.
+    fn refresh_in_background(self: &Arc<Self>) {
+        let Ok(turn) = Arc::clone(&self.fetching).try_lock_owned() else {
+            return;
+        };
+        if !self.may_fetch() {
+            return;
+        }
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            let _turn = turn;
+            me.fetch().await;
+        });
+    }
+
+    fn may_fetch(&self) -> bool {
+        self.lock_cache()
+            .last_attempt
+            .is_none_or(|at| at.elapsed() >= self.timing.min_refetch)
     }
 
     fn cached_key(&self, kid: &str) -> Result<DecodingKey, TokenRefusal> {
@@ -224,8 +277,8 @@ impl JwtVerifier {
         }
     }
 
+    /// One fetch; the caller holds `fetching`.
     async fn fetch(&self) {
-        self.lock_cache().last_attempt = Some(Instant::now());
         let (client, url) = match &self.source {
             KeySource::Remote { client, url } => (client, url),
             #[cfg(test)]
@@ -261,6 +314,7 @@ impl JwtVerifier {
                 "Access signing keys could not be fetched; the cached ones stay"
             ),
         }
+        self.lock_cache().last_attempt = Some(Instant::now());
     }
 
     /// Replace the cache with the RSA keys of `keys`; the number stored.

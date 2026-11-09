@@ -51,13 +51,38 @@ impl DeviceClaims {
     }
 }
 
+/// What the request's device cookie says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CookieState {
+    /// No `presenter_device` cookie.
+    Absent,
+    Valid(DeviceClaims),
+    /// A cookie that does not verify (another key, older than a year, altered).
+    Refused,
+}
+
+/// The `Set-Cookie` value that removes the device cookie.
+pub(crate) fn removal(secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{DEVICE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax{secure}")
+}
+
 pub(crate) struct DeviceKey {
+    /// The keyed HMAC, built once; cloned per use.
+    mac: HmacSha256,
+    #[cfg(test)]
     key: [u8; KEY_LEN],
 }
 
 impl DeviceKey {
-    pub(crate) fn from_bytes(key: [u8; KEY_LEN]) -> Self {
-        Self { key }
+    /// `Err` never happens for HMAC (any key length is valid), but it is not
+    /// swallowed either.
+    pub(crate) fn from_bytes(key: [u8; KEY_LEN]) -> Result<Self, hmac::digest::InvalidLength> {
+        Ok(Self {
+            mac: <HmacSha256 as Mac>::new_from_slice(&key)?,
+            #[cfg(test)]
+            key,
+        })
     }
 
     /// The key at `location` (created when missing), or a process-lifetime key
@@ -84,8 +109,8 @@ impl DeviceKey {
     }
 
     fn ephemeral() -> Option<Self> {
-        match random_key() {
-            Ok(key) => Some(Self::from_bytes(key)),
+        match random_key().and_then(|key| Self::from_bytes(key).map_err(std::io::Error::other)) {
+            Ok(key) => Some(key),
             Err(err) => {
                 tracing::warn!(
                     target: LOG_TARGET,
@@ -109,18 +134,15 @@ impl DeviceKey {
 
     /// The first `presenter_device` cookie of the request that verifies and is
     /// not older than a year.
-    pub(crate) fn read(&self, headers: &HeaderMap, now: i64) -> Option<DeviceClaims> {
-        let mut seen = false;
+    pub(crate) fn read(&self, headers: &HeaderMap, now: i64) -> CookieState {
+        let mut state = CookieState::Absent;
         for value in cookie_values(headers) {
-            seen = true;
-            if let Some(claims) = self.verify(value, now) {
-                return Some(claims);
+            match self.verify(value, now) {
+                Some(claims) => return CookieState::Valid(claims),
+                None => state = CookieState::Refused,
             }
         }
-        if seen {
-            tracing::info!(target: LOG_TARGET, "device cookie refused (bad signature, old or malformed)");
-        }
-        None
+        state
     }
 
     fn verify(&self, value: &str, now: i64) -> Option<DeviceClaims> {
@@ -149,9 +171,7 @@ impl DeviceKey {
     }
 
     fn mac(&self) -> HmacSha256 {
-        // HMAC takes a key of any length, so this never fails.
-        <HmacSha256 as Mac>::new_from_slice(&self.key)
-            .unwrap_or_else(|_| <HmacSha256 as Mac>::new(&Default::default()))
+        self.mac.clone()
     }
 }
 
@@ -169,7 +189,7 @@ fn cookie_values(headers: &HeaderMap) -> impl Iterator<Item = &str> {
 
 fn load_or_create(path: &Path) -> std::io::Result<DeviceKey> {
     match std::fs::read_to_string(path) {
-        Ok(text) => parse_key(&text).map(DeviceKey::from_bytes),
+        Ok(text) => parse_key(&text).and_then(key_from_bytes),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => create(path),
         Err(err) => Err(err),
     }
@@ -193,14 +213,18 @@ fn create(path: &Path) -> std::io::Result<DeviceKey> {
                 path = %path.display(),
                 "new device key created: no device was remembered before"
             );
-            Ok(DeviceKey::from_bytes(key))
+            key_from_bytes(key)
         }
         // Another process created it first: use that one.
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            parse_key(&std::fs::read_to_string(path)?).map(DeviceKey::from_bytes)
+            parse_key(&std::fs::read_to_string(path)?).and_then(key_from_bytes)
         }
         Err(err) => Err(err),
     }
+}
+
+fn key_from_bytes(key: [u8; KEY_LEN]) -> std::io::Result<DeviceKey> {
+    DeviceKey::from_bytes(key).map_err(std::io::Error::other)
 }
 
 fn parse_key(text: &str) -> std::io::Result<[u8; KEY_LEN]> {
@@ -229,7 +253,7 @@ mod tests {
     use axum::http::HeaderValue;
 
     fn key() -> DeviceKey {
-        DeviceKey::from_bytes([7; KEY_LEN])
+        DeviceKey::from_bytes([7; KEY_LEN]).expect("key")
     }
 
     fn with_cookie(set_cookie: &str) -> HeaderMap {
@@ -255,7 +279,7 @@ mod tests {
         let claims = key().read(&with_cookie(&cookie), 1_000_000 + 60);
         assert_eq!(
             claims,
-            Some(DeviceClaims {
+            CookieState::Valid(DeviceClaims {
                 email: "preacher@example.org".into(),
                 issued_at: 1_000_000
             })
@@ -265,25 +289,46 @@ mod tests {
     #[test]
     fn another_key_a_changed_payload_or_an_old_cookie_is_refused() {
         let cookie = key().issue("preacher@example.org", 1_000_000, false);
-        let other = DeviceKey::from_bytes([8; KEY_LEN]);
-        assert_eq!(other.read(&with_cookie(&cookie), 1_000_000), None);
+        let other = DeviceKey::from_bytes([8; KEY_LEN]).expect("key");
+        assert_eq!(
+            other.read(&with_cookie(&cookie), 1_000_000),
+            CookieState::Refused
+        );
 
         let value = cookie.split(';').next().expect("pair");
         let (_, signature) = value.split_once('.').expect("dot");
         let forged_payload = URL_SAFE_NO_PAD.encode("v1|1000000|boss@example.org");
         let forged = format!("{DEVICE_COOKIE}={forged_payload}.{signature}");
-        assert_eq!(key().read(&with_cookie(&forged), 1_000_000), None);
+        assert_eq!(
+            key().read(&with_cookie(&forged), 1_000_000),
+            CookieState::Refused
+        );
 
         assert_eq!(
             key().read(&with_cookie(&cookie), 1_000_000 + MAX_AGE_SECS + 1),
-            None
+            CookieState::Refused
         );
-        assert!(key()
-            .read(&with_cookie(&cookie), 1_000_000 + MAX_AGE_SECS)
-            .is_some());
-        assert_eq!(key().read(&with_cookie(&cookie), 1_000_000 - 3_600), None);
-        assert_eq!(key().read(&HeaderMap::new(), 1_000_000), None);
-        assert_eq!(key().read(&with_cookie("presenter_device=x.y"), 1), None);
+        assert!(matches!(
+            key().read(&with_cookie(&cookie), 1_000_000 + MAX_AGE_SECS),
+            CookieState::Valid(_)
+        ));
+        assert_eq!(
+            key().read(&with_cookie(&cookie), 1_000_000 - 3_600),
+            CookieState::Refused
+        );
+        assert_eq!(
+            key().read(&HeaderMap::new(), 1_000_000),
+            CookieState::Absent
+        );
+        assert_eq!(
+            key().read(&with_cookie("presenter_device=x.y"), 1),
+            CookieState::Refused
+        );
+        let removal = removal(true);
+        assert!(
+            removal.starts_with("presenter_device=; Max-Age=0; Path=/; HttpOnly"),
+            "{removal}"
+        );
     }
 
     #[test]
@@ -308,7 +353,10 @@ mod tests {
         let second = load_or_create(&path).expect("read");
         assert_eq!(first.key, second.key);
         let cookie = first.issue("a@b.org", 10, false);
-        assert!(second.read(&with_cookie(&cookie), 10).is_some());
+        assert!(matches!(
+            second.read(&with_cookie(&cookie), 10),
+            CookieState::Valid(_)
+        ));
 
         std::fs::write(&path, "not a key").expect("write");
         assert!(load_or_create(&path).is_err());

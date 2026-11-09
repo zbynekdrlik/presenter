@@ -2,7 +2,7 @@
 //! for this test process, and tokens signed with it (or with a second,
 //! untrusted "forger" key under the same key id). No private key is committed.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -60,13 +60,20 @@ pub(crate) fn config() -> JwtConfig {
     JwtConfig::parse(Some(TEAM), Some(AUD), None).expect("config")
 }
 
-pub(crate) fn verifier() -> JwtVerifier {
-    JwtVerifier::with_keys(config(), &certs())
+pub(crate) fn verifier() -> Arc<JwtVerifier> {
+    Arc::new(JwtVerifier::with_keys(config(), &certs()))
+}
+
+pub(crate) fn device_key() -> DeviceKey {
+    DeviceKey::from_bytes([42; 32]).expect("device key")
 }
 
 /// The identity service of a site whose Access app is the test one.
 pub(crate) fn identity() -> AccessIdentity {
-    AccessIdentity::new(Some(verifier()), Some(DeviceKey::from_bytes([42; 32])))
+    AccessIdentity::new(
+        Some(JwtVerifier::with_keys(config(), &certs())),
+        Some(device_key()),
+    )
 }
 
 pub(crate) fn now() -> i64 {
