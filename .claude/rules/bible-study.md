@@ -61,6 +61,18 @@ preparation (the sermon views are in `sermon-prep.md`).
   Owner 2026-11-06: "aby bolo jasné, na ktorý sa fokusujem".
 - **The header names the chapter on screen** (`study-place`, #913): `Chapter::Ready` in the reader, else "Štúdium". A long book gives way, its chapter never.
 - **The field and the chips share one row** (`.study-tools`, #913). Up to 932 px the field leaves room while it has no focus (✕ and ▾ hidden, so the whole field is one target: at 360 px ▾ reached its middle and `tap()` hung to the 180 s limit on CI's slightly wider chips only), and with focus takes the row (`data-focused` + a sibling rule, not `:focus-within`: a tapped chip takes the focus too). `.study-suggest` still starts at 100 px.
+- **Every installed translation is one tap behind ▾** (#921, owner 2026-11-09: "chcem mať tieto novo
+  pridané preklady aj v štúdiu"): the favourites row = the favourites that fit
+  (`state::bible_translations::study_chip_cap`: 4 under 420 px — `Study::narrow`, one `watch_media`
+  at page start, so the field keeps ~94 px at 360 — else 5) + `study-translations-open` ▾, which opens
+  the `s=preklady` sheet (`StudySheet::Translations`, `components::translation_list`, grouped by
+  language, short code + full name). A pick is the chip's `switch()` (keeps the verse in place) and
+  never changes the favourites; the open translation outside the shown chips takes the LAST chip's
+  place (`favourite_row`, the chip keeps that slot, so a long press there still sets the slot). Long
+  press keeps customising slots. Compare's column `<select>` already lists every translation. E2E:
+  `pickTranslation` (`study-support.ts`) taps the chip or goes through ▾; the NLT, the fifth
+  favourite, is in ▾ on a 360/390 phone. `study-translations.spec.ts` routes SNV's four extra
+  translations in from the KJV (`tests/e2e/extra-translations.ts`).
 - **A translation switch keeps the eye's verse at its screen offset** (`ScrollPlan::VerseAt`): the
   highlighted verse while it shows, else `verse_in_view`. `verse_in_view` reads 2 px below the
   landing gap (`SLACK_PX`): a landed verse sits at the gap and the verse before ends there plus a

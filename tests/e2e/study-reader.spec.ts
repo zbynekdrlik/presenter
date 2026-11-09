@@ -26,6 +26,7 @@ import {
   gateRoute,
   landed,
   openStudy,
+  pickTranslation,
   scrollToVerse,
   settled,
   verse,
@@ -425,7 +426,7 @@ test("an unreachable NLT says so inline, the other chips stay", async ({ browser
   // support.ts points the NLT at a dead loopback: the server's real 503.
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
-  await favourite(page, "eng-nlt").tap();
+  await pickTranslation(page, "eng-nlt");
   const card = page.locator('[data-role="study-chapter-error"]');
   await expect(card).toContainText("NLT nedostupné");
   await expect(card.locator('[data-role="study-retry"]')).toBeVisible();

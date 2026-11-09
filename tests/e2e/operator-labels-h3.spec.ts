@@ -90,6 +90,11 @@ const DATA = [
   '[data-role="context-title"]',
   '[data-role="slides-song-bubble"]',
   '[data-role="stage-preview-frame"]',
+  // #921: a translation chip's tooltip / accessible name is the translation's
+  // own name ("New Living Translation"), data like a song title.
+  '[data-role="console-translation"]:not([data-translation=""])',
+  '[data-role="translation-list"]',
+  ".bible-preferred__name",
   "option",
 ].join(", ");
 
@@ -157,7 +162,7 @@ const MOCKUP_DENSE: { selector: string; min: number }[] = [
   { selector: 'body:not([data-shell="phone"]) .operator__slide-columns', min: 32 },
   { selector: 'body:not([data-shell="phone"]) [data-role="bible-tab"]', min: 34 },
   { selector: 'body:not([data-shell="phone"]) [data-role="console-translation"]', min: 36 },
-  { selector: 'body:not([data-shell="phone"]) [data-role="console-translation-more"]', min: 36 },
+  { selector: 'body:not([data-shell="phone"]) [data-role="console-translation-menu"]', min: 36 },
 ];
 
 /** Visible buttons / selects / fields below `min` px, outside the header row,

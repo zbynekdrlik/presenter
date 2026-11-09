@@ -101,11 +101,30 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
 
 - **A secondary that did not load** (`resp.warning`, #826 NLT down) is a toast as well as the
   card's inline text: a desktop draws no preview card.
-- **Translation bar** (`translation_bar.rs`, order in `state::bible_translations`): phone and
-  desktop; SEB · ROH · SEVP · KJV, the rest behind "…", NLT never main. Labels: "Preklad" / "Pod
-  ním" inline on a phone, "Hlavný preklad" / "Druhý preklad" as row headings on a desktop. It writes the same `BibleState` signals as the selects, so #701
-  holds: localStorage per browser + the server default. "žiadny" cannot clear the server default
-  (`BiblePreferencesDraft` reads None as "keep").
+- **Translation bar** (`translation_bar.rs`, pure half `state::bible_translations`, #921 owner
+  2026-11-09: "keď budem mať 100 prekladov, celá plocha budú tlačidlá"): each row is ONE line that
+  never grows or scrolls. It holds the PREFERRED translations (`BibleState::preferred_main` /
+  `preferred_secondary`, default SEB ROH SEVP KJV / NLT KJV) up to `console_chip_cap` (phone 3,
+  desktop 4; the second row one fewer, "žiadny" takes a place — measured: phone row 330 px beside its
+  label, desktop 284 px at 900–1024 px), the selected translation in the LAST place when it is not
+  preferred (`row_chips`, never an extra chip), and ▾ (`console-translation-menu`, never
+  `aria-pressed`) opening `components::translation_list` as a popover: every installed translation,
+  short code + full name, grouped Slovenské / České / Anglické / Ďalšie (`translation_groups`), the
+  main list without the NLT (`offered_as_main`). A pick selects and closes; Escape (root keydown)
+  and the transparent backdrop close without one; an open list counts as an overlay for the window
+  keys (`operator.rs`). Chips: `title` = full name, `aria-label` = "SEB — <name>",
+  `min-width: max-content` (the cap is what keeps the line inside the panel, pinned by
+  `bible-translation-bar.spec.ts` with four SNV translations routed in from the KJV,
+  `tests/e2e/extra-translations.ts`). Labels: "Preklad" / "Pod ním" inline on a phone, "Hlavný
+  preklad" / "Druhý preklad" as row headings on a desktop. It writes the same `BibleState`
+  signals as the selects, so #701 holds: localStorage per browser + the server default. "žiadny"
+  cannot clear the server default (`BiblePreferencesDraft` reads None as "keep").
+- **Preferované preklady** (Biblia → Nastavenie, `pages/bible_preferred.rs`): one checkbox per
+  translation and row (`preferred-translation`, data-kind + data-translation); a tick appends, an
+  untick removes, saved at once as `BiblePreferencesDraft::preferred_main|secondary` (`Some` =
+  replace, normalised in core: trimmed, deduplicated, ≤ 12). Stored inside the existing
+  `bible-preferences` app-setting JSON (`#[serde(default)]`, no migration); `None` = the defaults,
+  never written. The console's auto-save sends no lists, so it never clears them.
 - **Log fields:** `/bible/resolve` carries `query` (non-empty input) + `device`; `/bible/trigger-slide`
   carries `source: "console"` + `device`. The server keeps `device` only for `touch` / `desktop`
   and counts `console` only when claimed. A prepared show keeps its own route (`source=prepared`).

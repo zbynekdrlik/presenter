@@ -58,21 +58,35 @@
   flex-direction: column;
   gap: 6px;
 }
-.console-translations__row {
+/* One line per row (#921): the preferred chips (a capped number,
+   `state::bible_translations::console_chip_cap`) + ▾ for every other
+   translation. A chip is never narrower than its label (`min-width:
+   max-content`); the cap is what keeps the row inside 330 px (phone) / 284 px
+   (desktop), pinned by bible-translation-bar.spec.ts. */
+.console-translations {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+}
+.console-translations__row {
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 5px;
 }
 .console-translations__label {
+  flex: none;
   width: 3.6rem;
   color: #94a3b8;
   font-size: 0.65rem;
   letter-spacing: 0.05em;
 }
 .console-translation {
-  flex: 1 0 44px;
+  flex: 1 1 0;
+  min-width: max-content;
   min-height: 44px;
+  padding: 0 6px;
   border: 1px solid #334155;
   border-radius: 9px;
   background: #1e293b;
@@ -80,7 +94,35 @@
   font: inherit;
   font-size: 0.8rem;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
+}
+.console-translation--menu {
+  flex: none;
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  font-size: 1rem;
+  color: #94a3b8;
+}
+.console-translations__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.console-translations__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 41;
+  max-height: min(55vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #0f172a;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 .console-translation[aria-pressed="true"] {
   background: #3b82f6;
@@ -500,7 +542,9 @@ body.operator:not([data-shell="phone"]) .console-field__clear {
 body.operator:not([data-shell="phone"]) .console-translations {
   order: 2;
 }
+/* The heading takes its own line; the chips + ▾ stay on ONE line under it. */
 body.operator:not([data-shell="phone"]) .console-translations__row {
+  flex-wrap: wrap;
   gap: 6px;
 }
 body.operator:not([data-shell="phone"]) .console-translations__label {
@@ -514,14 +558,17 @@ body.operator:not([data-shell="phone"]) .console-translations__label {
   letter-spacing: normal;
 }
 body.operator:not([data-shell="phone"]) .console-translation {
-  flex: 1 1 0;
-  min-width: 0;
   height: 36px;
   min-height: 36px;
   border-radius: 8px;
   background: transparent;
   font-size: 13px;
   font-weight: 500;
+}
+body.operator:not([data-shell="phone"]) .console-translation--menu {
+  width: 36px;
+  min-width: 36px;
+  font-size: 15px;
 }
 body.operator:not([data-shell="phone"]) .console-translation[aria-pressed="true"] {
   background: #3b82f6;
@@ -599,4 +646,69 @@ body.operator:not([data-shell="phone"]) .console-preview {
   flex-direction: row;
   flex-wrap: wrap;
   max-height: 5.5rem;
+}
+
+/* ── Biblia → Nastavenie → Preferované preklady (#921, `bible_preferred.rs`) ── */
+.bible-preferred {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+  color: #e2e8f0;
+}
+.bible-preferred__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.bible-preferred__hint {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+.bible-preferred__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+}
+.bible-preferred__row legend {
+  padding: 0 4px;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 600;
+}
+.bible-preferred__group {
+  display: flex;
+  flex-direction: column;
+}
+.bible-preferred__group-label {
+  margin: 4px 0 2px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.bible-preferred__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  cursor: pointer;
+}
+.bible-preferred__option input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.bible-preferred__code {
+  flex: none;
+  min-width: 3.2em;
+  font-weight: 700;
+}
+.bible-preferred__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #cbd5e1;
 }

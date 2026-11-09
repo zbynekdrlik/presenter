@@ -1439,12 +1439,18 @@ test("the translation bar: one tap switches the main and the line below, and is 
   const { context, page, errors } = await openConsole(browser, PHONE_390);
   try {
     const mainChips = page.locator('[data-role="console-translation"][data-kind="main"]');
-    await expect(mainChips).toHaveText(["SEB", "ROH", "SEVP", "KJV"]);
+    // #921: a phone's row holds three preferred chips + ▾ with every translation.
+    await expect(mainChips).toHaveText(["SEB", "ROH", "SEVP"]);
     await expect(mainChips.first()).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator('[data-role="console-translation"][data-translation="eng-nlt"][data-kind="main"]')).toHaveCount(0);
-    await page.locator('[data-role="console-translation-more"]').tap();
+    await page.locator('[data-role="console-translation-menu"][data-kind="main"]').tap();
+    await page
+      .locator('[data-role="translation-option"][data-kind="main"][data-translation="slk-mil"]')
+      .tap();
     await expect(mainChips.last()).toHaveText("MIL");
+    await expect(mainChips.last()).toHaveAttribute("aria-pressed", "true");
     await assertMinTapTarget(page.locator('[data-role="console-translation"]'), 44);
+    await page.locator('[data-role="console-translation"][data-kind="main"][data-translation="slk-seb"]').tap();
 
     await lookUp(page, "zid 11 1", "Hebrejom 11:1 (SEB)");
     await page.locator('[data-role="console-translation"][data-kind="secondary"][data-translation="eng-kjv"]').tap();
@@ -1487,7 +1493,7 @@ test("console requests say what was typed and from which device", async ({ brows
   }
 });
 
-test("the bar always shows what is selected: a secondary outside its row, a main behind the dots", async ({
+test("the bar always shows what is selected: a secondary and a main outside the preferred chips", async ({
   browser,
   request,
 }) => {

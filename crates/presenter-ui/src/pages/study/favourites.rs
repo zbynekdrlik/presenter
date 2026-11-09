@@ -1,5 +1,6 @@
 //! The five translation chips (spec §6.3): one tap switches and keeps the
 //! place, a long press picks which translation sits in that slot, per device.
+//! Since #921 the row ends with ▾: every installed translation in a sheet.
 
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
@@ -9,6 +10,8 @@ use super::reader::chapter_settled_untracked;
 use super::scroll::{self, ScrollPlan};
 use super::sheet::Sheet;
 use super::{nav, Study};
+use crate::components::translation_list::TranslationList;
+use crate::state::bible_translations::{favourite_row, study_chip_cap, translation_groups};
 use crate::state::session;
 use crate::state::study::{
     set_favourite, visible_favourites, StudySheet, StudyView, KEY_FAVOURITES,
@@ -44,14 +47,20 @@ fn keep_in_place(s: Study, highlighted: Option<u16>) -> ScrollPlan {
     })
 }
 
+/// The favourites row (#921): the favourite chips that fit (`study_chip_cap`),
+/// the open translation in the last place when it is none of them, and ▾ for
+/// every installed translation. One row however many are installed.
 #[component]
 pub(super) fn Favourites(s: Study) -> impl IntoView {
     let chips = move || {
-        visible_favourites(&s.favourites.get(), &{
+        let favourites = visible_favourites(&s.favourites.get(), &{
             s.translations.track();
             s.installed_codes()
-        })
+        });
+        let open = s.route.with(|route| route.translation.clone());
+        favourite_row(favourites, open.as_deref(), study_chip_cap(s.narrow.get()))
     };
+    let open_list = move |_| nav::open_sheet(s, nav::sheet_route(s, StudySheet::Translations));
     view! {
         <nav class="study-favs" data-role="study-favs" aria-label="Preklady">
             <For
@@ -59,7 +68,51 @@ pub(super) fn Favourites(s: Study) -> impl IntoView {
                 key=|chip| chip.clone()
                 children=move |(slot, code)| view! { <FavouriteChip s=s index=slot code=code /> }
             />
+            <button
+                type="button"
+                class="study-fav study-fav--menu"
+                data-role="study-translations-open"
+                title="Všetky preklady"
+                aria-label="Všetky preklady"
+                aria-haspopup="dialog"
+                on:click=open_list
+            >
+                "\u{25BE}"
+            </button>
         </nav>
+    }
+}
+
+/// Every installed translation, grouped by language (`s=preklady`). A pick
+/// reads that translation at the same place; the favourites stay as they are.
+#[component]
+pub(super) fn TranslationsSheet(s: Study) -> impl IntoView {
+    let groups = Signal::derive(move || s.translations.with(|t| translation_groups(t, |_| true)));
+    let selected = Signal::derive(move || s.route.with(|route| route.translation.clone()));
+    let on_pick = Callback::new(move |code: String| {
+        if s.route
+            .with_untracked(|route| route.translation.as_deref() == Some(code.as_str()))
+        {
+            nav::close_sheet(s);
+        } else {
+            switch(s, &code);
+        }
+    });
+    view! {
+        <Sheet
+            s=s
+            role="study-translations-sheet"
+            title=Signal::derive(|| "Preklady".to_string())
+            modal=true
+        >
+            <TranslationList
+                groups=groups
+                translations=s.translations
+                selected=selected
+                kind="study"
+                on_pick=on_pick
+            />
+        </Sheet>
     }
 }
 

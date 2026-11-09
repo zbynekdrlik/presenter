@@ -281,3 +281,57 @@
   min-height: 40px;
   box-sizing: border-box;
 }
+
+/* ── Translation ▾ list (#921, `components::translation_list`): the console
+   bar's popover and Study's `s=preklady` sheet. ── */
+.translation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+}
+.translation-list__heading {
+  padding: 6px 8px 2px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.translation-list__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.translation-list__option:hover {
+  background: #1e293b;
+}
+.translation-list__option[aria-pressed="true"] {
+  background: #3b82f6;
+  color: #ffffff;
+}
+.translation-list__code {
+  flex: none;
+  min-width: 3.4em;
+  font-weight: 700;
+}
+.translation-list__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  opacity: 0.85;
+}

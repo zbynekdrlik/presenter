@@ -556,7 +556,9 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
                 focus: focus_kind(),
                 overlay_open: op.open_modal.get_untracked().is_some()
                     || op.more_sheet_open.get_untracked()
-                    || presentation_modal_open(),
+                    || presentation_modal_open()
+                    // #921: the open ▾ translation list takes the keys too.
+                    || element(".console-translations__popover").is_some(),
             };
             run_global_key(&ctx, &ev, global_key(scope, &key));
         });

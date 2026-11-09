@@ -43,6 +43,7 @@ async fn seeded() -> AppState {
             main_translation: Some("slk-seb".to_string()),
             secondary_translation: None,
             character_limit: 320,
+            ..BiblePreferences::default()
         })
         .await
         .unwrap();
