@@ -121,6 +121,25 @@ for (const [name, profile] of [
   });
 }
 
+test("compare's column picker lists every installed translation", async ({ browser }) => {
+  const opened = await openStudy(
+    browser,
+    baseURL,
+    { viewport: { width: 1024, height: 768 } },
+    "/ui/study?view=compare&t=slk-seb&p=HEB.11.1&tt=slk-seb,eng-kjv",
+    null,
+    routeExtraTranslations,
+  );
+  const { page } = opened;
+  await expect(page.locator('[data-role="study-compare"]')).toHaveAttribute("data-loaded-for", "HEB.11.1");
+  const column = page.locator('[data-role="compare-column"]').first();
+  await expect(column.locator("option")).toHaveCount(INSTALLED);
+  await column.selectOption("ces-csp");
+  await expect(page).toHaveURL(/tt=ces-csp/);
+  await expect(page.locator('[data-role="study-compare"]')).toHaveAttribute("data-loaded-for", "HEB.11.1");
+  await finish(opened);
+});
+
 test("a wider screen keeps the five favourites beside ▾", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, { viewport: { width: 1024, height: 768 } });
   const { page } = opened;

@@ -196,6 +196,11 @@ for (const [name, profile, cap] of [
       await expect(mainList).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(mainList).toHaveCount(0);
+      // Escape closes it with the focus anywhere (Safari never focuses a clicked button).
+      await menu(page, "main").click();
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.keyboard.press("Escape");
+      await expect(mainList).toHaveCount(0);
       const fieldBox = await page.locator('[data-role="console-field"]').boundingBox();
       if (!fieldBox) throw new Error("the console field has no box");
       await menu(page, "main").click();
@@ -265,13 +270,40 @@ test("the preferred translations are a setting: Nastavenie changes the chips, a 
     await box("secondary", "eng-ampc").check();
     await put;
 
-    const stored = await (await request.get(new URL("/bible/preferences", baseURL).toString())).json();
+    const read = async () =>
+      (await request.get(new URL("/bible/preferences", baseURL).toString())).json();
+    const stored = await read();
     expect(stored.preferredMain).toEqual(["slk-seb", "slk-sevp", "eng-kjv", "ces-csp"]);
     expect(stored.preferredSecondary).toEqual(["eng-nlt", "eng-kjv", "eng-ampc"]);
 
+    // Three quick ticks in both rows, no wait between them: none is lost.
+    await box("main", "slk-sevp").uncheck();
+    await box("secondary", "eng-ampc").uncheck();
+    await box("main", "slk-mil").check();
+    await expect
+      .poll(async () => {
+        const now = await read();
+        return [now.preferredMain, now.preferredSecondary];
+      })
+      .toEqual([
+        ["slk-seb", "eng-kjv", "ces-csp", "slk-mil"],
+        ["eng-nlt", "eng-kjv"],
+      ]);
+    await box("main", "slk-mil").uncheck();
+    await box("main", "slk-sevp").check();
+    await box("secondary", "eng-ampc").check();
+    await expect
+      .poll(async () => (await read()).preferredMain)
+      .toEqual(["slk-seb", "eng-kjv", "ces-csp", "slk-sevp"]);
+    await expect.poll(async () => (await read()).preferredSecondary).toEqual([
+      "eng-nlt",
+      "eng-kjv",
+      "eng-ampc",
+    ]);
+
     await page.reload();
     await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-    await expect(chips(page, "main")).toHaveText(["SEB", "SEVP", "KJV", "CSP"]);
+    await expect(chips(page, "main")).toHaveText(["SEB", "KJV", "CSP", "SEVP"]);
     await expect(row(page, "secondary").locator('[data-translation="eng-ampc"]')).toHaveText("AMPC");
     await assertRowsFit(page);
     expect(errors).toEqual([]);

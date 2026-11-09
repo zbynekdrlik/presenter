@@ -110,9 +110,12 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
   preferred (`row_chips`, never an extra chip), and ▾ (`console-translation-menu`, never
   `aria-pressed`) opening `components::translation_list` as a popover: every installed translation,
   short code + full name, grouped Slovenské / České / Anglické / Ďalšie (`translation_groups`), the
-  main list without the NLT (`offered_as_main`). A pick selects and closes; Escape (root keydown)
-  and the transparent backdrop close without one; an open list counts as an overlay for the window
-  keys (`operator.rs`). Chips: `title` = full name, `aria-label` = "SEB — <name>",
+  main list without the NLT (`offered_as_main`). A pick selects and closes; Escape (a window
+  CAPTURE listener that lives only while a list is open, `ListCloser`, so the operator's own window
+  Escape never sees it) and the transparent backdrop close without one; leaving Biblia's Live tab
+  closes it; an open list counts as an overlay for the window keys (`operator.rs`). The chips + ▾
+  sit in `.console-translations__chips` (`flex-wrap: nowrap`), so a desktop row's heading wraps but
+  the chips never do. Chips: `title` = full name, `aria-label` = "SEB — <name>",
   `min-width: max-content` (the cap is what keeps the line inside the panel, pinned by
   `bible-translation-bar.spec.ts` with four SNV translations routed in from the KJV,
   `tests/e2e/extra-translations.ts`). Labels: "Preklad" / "Pod ním" inline on a phone, "Hlavný
@@ -122,7 +125,11 @@ fails. The B2a/B2b reconciliation with the old inputs (`classic_loads`, `console
 - **Preferované preklady** (Biblia → Nastavenie, `pages/bible_preferred.rs`): one checkbox per
   translation and row (`preferred-translation`, data-kind + data-translation); a tick appends, an
   untick removes, saved at once as `BiblePreferencesDraft::preferred_main|secondary` (`Some` =
-  replace, normalised in core: trimmed, deduplicated, ≤ 12). Stored inside the existing
+  replace, normalised in core: trimmed, deduplicated, ≤ 12). Every save carries BOTH lists and
+  goes one at a time (`SaveQueue`: the newest waiting change follows the one on its way); a refused
+  save re-reads the server's lists. The server applies a draft under `BibleManager::preferences_write`
+  (`AppState::update_bible_preferences`), so the console's auto-save and a settings save never
+  overwrite each other's fields. Stored inside the existing
   `bible-preferences` app-setting JSON (`#[serde(default)]`, no migration); `None` = the defaults,
   never written. The console's auto-save sends no lists, so it never clears them.
 - **Log fields:** `/bible/resolve` carries `query` (non-empty input) + `device`; `/bible/trigger-slide`

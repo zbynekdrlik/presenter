@@ -18,7 +18,7 @@ use std::sync::Arc;
 use super::bible_shown::ShownToday;
 use crate::bible_remote::NltClient;
 use presenter_core::{BibleBroadcast, BibleSlideOutput};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Owns the Bible broadcast / slide-output state.
 ///
@@ -35,6 +35,10 @@ pub(crate) struct BibleManager {
     /// #826: the NLT API client (with its in-memory verse cache), shared by
     /// every clone — see `state/bible_source.rs`.
     pub(crate) nlt: Arc<NltClient>,
+    /// #921: one `PUT /bible/preferences` read-apply-store at a time, so two
+    /// quick saves (the settings' preferred lists, the console's auto-save)
+    /// never overwrite each other's fields.
+    pub(crate) preferences_write: Arc<Mutex<()>>,
     /// Test-only ingestion override (swaps the real ingestion service).
     #[cfg(test)]
     pub(crate) ingestion_override: Option<Arc<dyn super::seed::TestBibleIngestion + Send + Sync>>,
@@ -50,6 +54,7 @@ impl BibleManager {
             slide_output: Arc::new(RwLock::new(None)),
             shown_today: Arc::new(RwLock::new(ShownToday::default())),
             nlt: Arc::new(NltClient::from_env()),
+            preferences_write: Arc::new(Mutex::new(())),
             #[cfg(test)]
             ingestion_override: None,
         }

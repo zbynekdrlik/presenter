@@ -4,21 +4,81 @@
 //! list, an untick removes it. Saved at once with the Bible preferences on
 //! the server (`BiblePreferencesDraft::preferred_*`), the shared default every
 //! console reads on its next start.
+//!
+//! Saves go one at a time and always carry BOTH lists: two quick ticks never
+//! race (only the newest waiting save follows the one on its way), and a
+//! refused save puts the lists back to what the server holds.
 
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
+use presenter_core::BiblePreferencesDraft;
 
 use crate::api::bible;
 use crate::state::bible::BibleState;
 use crate::state::bible_translations::{
-    console_chip_cap, offered_as_main, translation_groups, TranslationGroup,
+    console_chip_cap, offered_as_main, translation_groups, translation_name, TranslationGroup,
+    TranslationRow as Row,
 };
 use crate::state::AppContext;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Row {
-    Main,
-    Secondary,
+/// One save on its way at a time; the newest change waits for it.
+#[derive(Default)]
+struct SaveQueue {
+    sending: bool,
+    waiting: Option<BiblePreferencesDraft>,
+}
+
+impl SaveQueue {
+    /// `Some(draft)` = send it now; `None` = it waits behind the one on its way.
+    fn offer(&mut self, draft: BiblePreferencesDraft) -> Option<BiblePreferencesDraft> {
+        if self.sending {
+            self.waiting = Some(draft);
+            None
+        } else {
+            self.sending = true;
+            Some(draft)
+        }
+    }
+
+    /// The save on its way answered: the next one to send, if any.
+    fn answered(&mut self) -> Option<BiblePreferencesDraft> {
+        let next = self.waiting.take();
+        self.sending = next.is_some();
+        next
+    }
+}
+
+fn both_lists(bs: BibleState) -> BiblePreferencesDraft {
+    BiblePreferencesDraft {
+        preferred_main: Some(bs.preferred_main.get_untracked()),
+        preferred_secondary: Some(bs.preferred_secondary.get_untracked()),
+        ..Default::default()
+    }
+}
+
+/// Send `draft`, then whatever waited behind it. A refused save toasts and
+/// re-reads the lists the server holds, so no box claims a save that did not
+/// happen.
+fn send(
+    bs: BibleState,
+    ctx: AppContext,
+    queue: StoredValue<SaveQueue>,
+    draft: BiblePreferencesDraft,
+) {
+    leptos::task::spawn_local(async move {
+        let mut next = Some(draft);
+        while let Some(draft) = next {
+            if let Err(e) = bible::update_preferences(&draft).await {
+                ctx.show_toast(&format!("Uloženie zlyhalo: {e}"), "error");
+                if let Ok(stored) = bible::get_preferences().await {
+                    bs.preferred_main.set(stored.preferred_main_or_default());
+                    bs.preferred_secondary
+                        .set(stored.preferred_secondary_or_default());
+                }
+            }
+            next = queue.try_update_value(SaveQueue::answered).flatten();
+        }
+    });
 }
 
 /// The row's list after a tick (`on`) or an untick of `code`.
@@ -32,6 +92,7 @@ fn toggled(list: &[String], code: &str, on: bool) -> Vec<String> {
 
 #[component]
 pub fn PreferredTranslations() -> impl IntoView {
+    let queue = StoredValue::new(SaveQueue::default());
     view! {
         <div class="bible-preferred" data-role="preferred-translations">
             <h3 class="bible-preferred__title">"Preferované preklady"</h3>
@@ -43,21 +104,22 @@ pub fn PreferredTranslations() -> impl IntoView {
                     console_chip_cap(true, false),
                 )}
             </p>
-            <RowChoices row=Row::Main />
-            <RowChoices row=Row::Secondary />
+            <RowChoices row=Row::Main queue=queue />
+            <RowChoices row=Row::Secondary queue=queue />
         </div>
     }
 }
 
 #[component]
-fn RowChoices(row: Row) -> impl IntoView {
+fn RowChoices(row: Row, queue: StoredValue<SaveQueue>) -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
     let translations = bs.translations;
-    let (preferred, kind, legend) = match row {
-        Row::Main => (bs.preferred_main, "main", "Hlavný preklad"),
-        Row::Secondary => (bs.preferred_secondary, "secondary", "Druhý preklad"),
+    let (preferred, legend) = match row {
+        Row::Main => (bs.preferred_main, "Hlavný preklad"),
+        Row::Secondary => (bs.preferred_secondary, "Druhý preklad"),
     };
+    let kind = row.kind();
     let groups = move || {
         translations.with(|installed| {
             translation_groups(installed, |code| match row {
@@ -68,24 +130,11 @@ fn RowChoices(row: Row) -> impl IntoView {
         })
     };
     let on_toggle = move |code: String, on: bool| {
-        let next = toggled(&preferred.get_untracked(), &code, on);
-        preferred.set(next.clone());
-        let draft = match row {
-            Row::Main => presenter_core::BiblePreferencesDraft {
-                preferred_main: Some(next),
-                ..Default::default()
-            },
-            Row::Secondary => presenter_core::BiblePreferencesDraft {
-                preferred_secondary: Some(next),
-                ..Default::default()
-            },
-        };
-        let ctx = ctx.clone();
-        leptos::task::spawn_local(async move {
-            if let Err(e) = bible::update_preferences(&draft).await {
-                ctx.show_toast(&format!("Uloženie zlyhalo: {e}"), "error");
-            }
-        });
+        preferred.update(|list| *list = toggled(list, &code, on));
+        let draft = both_lists(bs);
+        if let Some(draft) = queue.try_update_value(|q| q.offer(draft)).flatten() {
+            send(bs, ctx.clone(), queue, draft);
+        }
     };
 
     view! {
@@ -104,12 +153,7 @@ fn RowChoices(row: Row) -> impl IntoView {
                                 .into_iter()
                                 .map(|code| {
                                     let name = translations
-                                        .with_untracked(|list| {
-                                            list.iter()
-                                                .find(|t| t.code == code)
-                                                .map(|t| t.name.clone())
-                                                .unwrap_or_default()
-                                        });
+                                        .with_untracked(|list| translation_name(list, &code));
                                     let label = translation_short_code(&code);
                                     let mine = code.clone();
                                     let checked = Memo::new(move |_| {
@@ -164,5 +208,25 @@ mod tests {
             toggled(&list, "slk-roh", true),
             codes(&["slk-seb", "slk-roh"])
         );
+    }
+
+    fn draft(main: &[&str]) -> BiblePreferencesDraft {
+        BiblePreferencesDraft {
+            preferred_main: Some(codes(main)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saves_go_one_at_a_time_and_only_the_newest_waits() {
+        let mut queue = SaveQueue::default();
+        assert_eq!(queue.offer(draft(&["a"])), Some(draft(&["a"])));
+        // Two more ticks while the first is on its way: only the newest waits.
+        assert_eq!(queue.offer(draft(&["a", "b"])), None);
+        assert_eq!(queue.offer(draft(&["a", "b", "c"])), None);
+        assert_eq!(queue.answered(), Some(draft(&["a", "b", "c"])));
+        // Nothing waits behind that one: the queue is free again.
+        assert_eq!(queue.answered(), None);
+        assert_eq!(queue.offer(draft(&["x"])), Some(draft(&["x"])));
     }
 }

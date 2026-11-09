@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
 use presenter_core::BibleTranslation;
 
-use crate::state::bible_translations::TranslationGroup;
+use crate::state::bible_translations::{translation_name, TranslationGroup};
 
 #[component]
 pub fn TranslationList(
@@ -26,14 +26,8 @@ pub fn TranslationList(
     kind: &'static str,
     on_pick: Callback<String>,
 ) -> impl IntoView {
-    let name_of = move |code: &str| {
-        translations.with_untracked(|list| {
-            list.iter()
-                .find(|t| t.code == code)
-                .map(|t| t.name.clone())
-                .unwrap_or_else(|| code.to_string())
-        })
-    };
+    let name_of =
+        move |code: &str| translations.with_untracked(|list| translation_name(list, code));
     view! {
         <div class="translation-list" data-role="translation-list" data-kind=kind>
             <For

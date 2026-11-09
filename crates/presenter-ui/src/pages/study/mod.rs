@@ -544,6 +544,8 @@ enum ViewKind {
 pub fn StudyPage() -> impl IntoView {
     let phone = RwSignal::new(false);
     crate::state::phone_shell::install_phone_shell(phone);
+    // Like the shell above: `/ui/study` is its own document and StudyPage
+    // mounts once per load, so the forgotten media listener is one per page.
     let narrow = RwSignal::new(false);
     crate::state::phone_shell::watch_media("(max-width: 419px)", move |on| narrow.set(on));
     crate::state::keyboard_inset::install_keyboard_inset();

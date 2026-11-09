@@ -42,16 +42,11 @@ export const favourite = (page: Page, code: string): Locator =>
   page.locator(`[data-role="study-fav"][data-translation="${code}"]`);
 
 /**
- * #921: read in `code` the way an operator does: its chip when the row shows
- * one, else ▾ and its row in the list (a phone under 420 px shows four
- * favourites, the fifth is in the list).
+ * #921: read in `code` through ▾ and its row in the list — the way to a
+ * translation the row does not show (a phone under 420 px shows four
+ * favourites; the fifth, the NLT, is in the list).
  */
 export async function pickTranslation(page: Page, code: string): Promise<void> {
-  const chip = favourite(page, code);
-  if (await chip.isVisible()) {
-    await chip.tap();
-    return;
-  }
   await page.locator('[data-role="study-translations-open"]').tap();
   const sheet = page.locator('[data-role="study-translations-sheet"]');
   await sheet.locator(`[data-role="translation-option"][data-translation="${code}"]`).tap();

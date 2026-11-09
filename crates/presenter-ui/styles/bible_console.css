@@ -75,6 +75,15 @@
   align-items: center;
   gap: 5px;
 }
+/* The chips + ▾ never wrap, whatever the row around them does. */
+.console-translations__chips {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
 .console-translations__label {
   flex: none;
   width: 3.6rem;
@@ -545,6 +554,10 @@ body.operator:not([data-shell="phone"]) .console-translations {
 /* The heading takes its own line; the chips + ▾ stay on ONE line under it. */
 body.operator:not([data-shell="phone"]) .console-translations__row {
   flex-wrap: wrap;
+  gap: 6px;
+}
+body.operator:not([data-shell="phone"]) .console-translations__chips {
+  flex: 1 1 100%;
   gap: 6px;
 }
 body.operator:not([data-shell="phone"]) .console-translations__label {

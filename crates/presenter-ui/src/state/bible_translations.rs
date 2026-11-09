@@ -18,6 +18,31 @@ const ORDER: [&str; 10] = [
 /// Remote translations: never offered as the console's main one.
 pub const REMOTE: [&str; 1] = ["eng-nlt"];
 
+/// One of the console's two translation rows (`data-kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranslationRow {
+    Main,
+    Secondary,
+}
+
+impl TranslationRow {
+    pub fn kind(self) -> &'static str {
+        match self {
+            TranslationRow::Main => "main",
+            TranslationRow::Secondary => "secondary",
+        }
+    }
+}
+
+/// The full name of an installed translation, the code when it is unknown.
+pub fn translation_name(installed: &[BibleTranslation], code: &str) -> String {
+    installed
+        .iter()
+        .find(|t| t.code == code)
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| code.to_string())
+}
+
 /// Chips the console's main row holds (the second row one less: "žiadny"
 /// takes a place). Measured at the narrowest panels (#921): a phone's row is
 /// 330 px next to its inline label, a desktop's 284 px.

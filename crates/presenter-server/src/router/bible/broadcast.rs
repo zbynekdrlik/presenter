@@ -290,8 +290,6 @@ pub(crate) async fn update_bible_preferences(
     State(state): State<AppState>,
     Json(draft): Json<BiblePreferencesDraft>,
 ) -> Result<StatusCode, AppError> {
-    let current = state.get_bible_preferences().await?;
-    let updated = draft.apply(current);
-    state.set_bible_preferences(updated).await?;
+    state.update_bible_preferences(draft).await?;
     Ok(StatusCode::NO_CONTENT)
 }

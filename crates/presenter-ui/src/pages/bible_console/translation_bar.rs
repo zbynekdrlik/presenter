@@ -13,33 +13,22 @@
 
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::components::translation_list::TranslationList;
 use crate::state::bible::BibleState;
 use crate::state::bible_translations::{
-    console_chip_cap, offered_as_main, row_chips, translation_groups,
+    console_chip_cap, offered_as_main, row_chips, translation_groups, translation_name,
+    TranslationRow as Row,
 };
 use crate::state::AppContext;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Row {
-    Main,
-    Secondary,
-}
-
-impl Row {
-    fn kind(self) -> &'static str {
-        match self {
-            Row::Main => "main",
-            Row::Secondary => "secondary",
-        }
-    }
-}
 
 #[component]
 pub(super) fn TranslationBar() -> impl IntoView {
     let bs = use_ctx!(BibleState);
-    let phone = use_ctx!(AppContext).phone_shell;
+    let ctx = use_ctx!(AppContext);
+    let phone = ctx.phone_shell;
     // A desktop names the rows like the mockup v3 Biblia panel (a heading
     // over each row); a phone keeps the short inline labels of mockup v2.
     let main_label = move || {
@@ -58,46 +47,84 @@ pub(super) fn TranslationBar() -> impl IntoView {
     };
     let open = RwSignal::new(None::<Row>);
     let secondary = bs.secondary_translation;
-
-    // Escape closes an open list wherever the focus is in the bar (on ▾ after
-    // its click, or on an option), and goes no further.
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" && open.get_untracked().is_some() {
-            ev.stop_propagation();
-            ev.prevent_default();
+    // Leaving Biblia's Live tab closes an open list: a list kept in a hidden
+    // panel would keep the window keys switched off (`operator.rs`).
+    let bible_tab = bs.bible_tab;
+    let view = ctx.view;
+    Effect::new(move || {
+        let shown = view.get() == "bible" && bible_tab.get() == "live";
+        if !shown && open.get_untracked().is_some() {
             open.set(None);
         }
-    };
+    });
 
     view! {
-        <div class="console-translations" data-role="console-translations" on:keydown=on_keydown>
+        <div class="console-translations" data-role="console-translations">
             <div class="console-translations__row" data-row="main">
                 <span class="console-translations__label">{main_label}</span>
-                <RowChips row=Row::Main open=open />
+                <div class="console-translations__chips">
+                    <RowChips row=Row::Main open=open />
+                </div>
             </div>
             <div class="console-translations__row" data-row="secondary">
                 <span class="console-translations__label">{secondary_label}</span>
-                <button
-                    type="button"
-                    class="console-translation"
-                    data-role="console-translation"
-                    data-kind="secondary"
-                    data-translation=""
-                    title="Bez druhého prekladu"
-                    aria-pressed=move || {
-                        if secondary.with(Option::is_none) { "true" } else { "false" }
-                    }
-                    on:click=move |_| secondary.set(None)
-                >
-                    "žiadny"
-                </button>
-                <RowChips row=Row::Secondary open=open />
+                <div class="console-translations__chips">
+                    <button
+                        type="button"
+                        class="console-translation"
+                        data-role="console-translation"
+                        data-kind="secondary"
+                        data-translation=""
+                        title="Bez druhého prekladu"
+                        aria-pressed=move || {
+                            if secondary.with(Option::is_none) { "true" } else { "false" }
+                        }
+                        on:click=move |_| secondary.set(None)
+                    >
+                        "žiadny"
+                    </button>
+                    <RowChips row=Row::Secondary open=open />
+                </div>
             </div>
             <Show when=move || open.get().is_some()>
-                <div class="console-translations__backdrop" on:click=move |_| open.set(None)></div>
+                <ListCloser open=open />
             </Show>
         </div>
     }
+}
+
+/// While a list is open: the transparent backdrop (a press beside the list
+/// closes it) and Escape anywhere on the page. The Escape listener sits on
+/// the window in the CAPTURE phase, before the operator's own window keys
+/// (which would close the header search instead), and lives only as long as
+/// the list, so a closed list takes no key.
+#[component]
+fn ListCloser(open: RwSignal<Option<Row>>) -> impl IntoView {
+    let on_key =
+        Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+            if ev.key() == "Escape" {
+                ev.stop_propagation();
+                ev.prevent_default();
+                open.set(None);
+            }
+        });
+    let window = crate::utils::window::window();
+    let _ = window.add_event_listener_with_callback_and_bool(
+        "keydown",
+        on_key.as_ref().unchecked_ref(),
+        true,
+    );
+    let listener = StoredValue::new_local(on_key);
+    on_cleanup(move || {
+        listener.with_value(|on_key| {
+            let _ = crate::utils::window::window().remove_event_listener_with_callback_and_bool(
+                "keydown",
+                on_key.as_ref().unchecked_ref(),
+                true,
+            );
+        });
+    });
+    view! { <div class="console-translations__backdrop" on:click=move |_| open.set(None)></div> }
 }
 
 /// The chips of one row, its ▾ and (while open) its list.
@@ -131,20 +158,13 @@ fn RowChips(row: Row, open: RwSignal<Option<Row>>) -> impl IntoView {
         selected.set(Some(code));
         open.set(None);
     });
-    let name_of = move |code: &str| {
-        translations.with_untracked(|list| {
-            list.iter()
-                .find(|t| t.code == code)
-                .map(|t| t.name.clone())
-                .unwrap_or_else(|| code.to_string())
-        })
-    };
+
     view! {
         <For
             each=move || chips.get()
             key=|code| code.clone()
             children=move |code| {
-                let name = name_of(&code);
+                let name = translations.with_untracked(|list| translation_name(list, &code));
                 chip(code, name, row.kind(), selected)
             }
         />
@@ -155,14 +175,14 @@ fn RowChips(row: Row, open: RwSignal<Option<Row>>) -> impl IntoView {
             data-kind=row.kind()
             title="Všetky preklady"
             aria-label="Všetky preklady"
-            aria-haspopup="true"
+            aria-haspopup="dialog"
             aria-expanded=move || if is_open() { "true" } else { "false" }
             on:click=move |_| open.update(|o| *o = if *o == Some(row) { None } else { Some(row) })
         >
             "\u{25BE}"
         </button>
         <Show when=is_open>
-            <div class="console-translations__popover">
+            <div class="console-translations__popover" role="dialog" aria-label="Všetky preklady">
                 <TranslationList
                     groups=groups
                     translations=translations
