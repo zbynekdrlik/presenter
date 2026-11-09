@@ -290,13 +290,13 @@
   gap: 4px;
   padding: 6px;
 }
+/* Sentence case like every operator label (#875 H3: no uppercase in
+   .operator__main; operator-labels-h3.spec.ts measures the open list). */
 .translation-list__heading {
   padding: 6px 8px 2px;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 .translation-list__option {
   display: flex;
