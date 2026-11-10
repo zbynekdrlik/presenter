@@ -39,6 +39,13 @@ answered). `~/.ndi/ndi-config.v1.json` `adapters.allowed` did NOT change the cho
   advertised address gets ONE 1 s TCP probe; it answers → dialled as `url-address` (one short
   connect per start); silent → the same mDNS + probe alternatives. A side-network
   address is replaced even when it answers (the guard may accept the SYN, then drop the stream).
+- **A dead connection must end in a pipeline EOS** (dev 2026-11-10: sender restarted on another
+  port, receiver black > 120 s). `ndisrc` posts EOS after 5 s without frames (`timeout`), and only
+  `Stopped` makes the supervisor rebuild and call `route_for` again. A bin posts EOS only when EVERY
+  sink got one, so no sink may wait for a pad that may never come: the audio fakesink is created in
+  `pad-added` (`add_demux_branches`), never up front. The NDI SDK keeps a sender's port per source
+  name across restarts, so a port move is rare — but without the EOS it was permanent (by name too,
+  once an outage lasted > 5 s).
 - **`resolve_with`** takes the host network, the lookup and the probe as arguments — test the
   decision through it, never through real sockets.
 - **Detection:** `SourceSilent { advertised_address }` carries the finder's address; the server

@@ -178,44 +178,56 @@ fn install_timing_probes(
 }
 
 /// Wire the demux's sometimes-pads into `pipeline`: video → `videoconvert`,
-/// audio → a fakesink.
+/// audio → a fakesink created only when the `audio` pad appears (#925).
+///
+/// A bin posts EOS only once EVERY sink got one. `ndisrc` ends a dead
+/// connection with EOS after 5 s without frames, and that EOS is what lets the
+/// supervisor rebuild and re-resolve the sender's address — an audio sink
+/// added up front waits for a pad a video-only sender (SP-program) never
+/// creates, so the dead pipeline stayed `Streaming` forever.
 pub(super) fn add_demux_branches(
     pipeline: &gst::Pipeline,
     ndisrcdemux: &gst::Element,
     videoconvert: &gst::Element,
 ) -> Result<()> {
-    let audio_fakesink = gst::ElementFactory::make("fakesink")
+    let pipeline = pipeline.downgrade();
+    let videoconvert = videoconvert.clone();
+    ndisrcdemux.connect_pad_added(move |_, pad| match pad.name().as_str() {
+        "video" => {
+            if let Some(sink_pad) = videoconvert.static_pad("sink") {
+                let _ = pad.link(&sink_pad);
+            }
+        }
+        "audio" => {
+            if let Some(pipeline) = pipeline.upgrade() {
+                if let Err(e) = add_audio_sink(&pipeline, pad) {
+                    tracing::warn!(error = %e, "NDI audio pad left unlinked");
+                }
+            }
+        }
+        _ => {}
+    });
+    Ok(())
+}
+
+/// Discard the demux's `audio` pad into a fakesink added to the running
+/// pipeline (`async=false`: never holds the state change).
+fn add_audio_sink(pipeline: &gst::Pipeline, pad: &gst::Pad) -> Result<()> {
+    let sink = gst::ElementFactory::make("fakesink")
         .property("async", false)
         .property("sync", false)
         .build()
         .context("build fakesink (audio)")?;
-    pipeline
-        .add(&audio_fakesink)
-        .context("add audio fakesink")?;
-    connect_demux_pads(ndisrcdemux, videoconvert, &audio_fakesink);
+    pipeline.add(&sink).context("add audio fakesink")?;
+    sink.sync_state_with_parent()
+        .context("start audio fakesink")?;
+    let sink_pad = sink
+        .static_pad("sink")
+        .context("audio fakesink has no sink pad")?;
+    pad.link(&sink_pad)
+        .context("link demux audio -> fakesink")?;
+    tracing::debug!("NDI audio pad linked to a fakesink");
     Ok(())
-}
-
-/// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → fakesink.
-fn connect_demux_pads(
-    ndisrcdemux: &gst::Element,
-    videoconvert: &gst::Element,
-    audio_fakesink: &gst::Element,
-) {
-    let videoconvert = videoconvert.clone();
-    let audio_fakesink = audio_fakesink.clone();
-    ndisrcdemux.connect_pad_added(move |_, pad| {
-        let name = pad.name();
-        if name == "video" {
-            if let Some(sink_pad) = videoconvert.static_pad("sink") {
-                let _ = pad.link(&sink_pad);
-            }
-        } else if name == "audio" {
-            if let Some(sink_pad) = audio_fakesink.static_pad("sink") {
-                let _ = pad.link(&sink_pad);
-            }
-        }
-    });
 }
 
 /// Build the NDI ingest pair: `ndisrc` (named "ndisrc") and `ndisrcdemux`
