@@ -140,10 +140,16 @@ pub fn should_warn_silent_but_advertised(attempt: u32, advertised_address: Optio
 /// connect — neither the advertised one nor an mDNS alternative — so ndisrc fell
 /// back to the name (`connect_route::resolve_with`). When an address DID answer
 /// (`connect` is set), the server can reach the sender and the silence is the
-/// sender's own (#448): `None`. Pure → unit-tested.
+/// sender's own (#448): `None`. An advertised address that is not an IPv4
+/// `ip:port` is never probed by the route, so it is never blamed either. Pure →
+/// unit-tested.
 pub fn unreached_address(advertised: Option<&str>, connect: Option<&str>) -> Option<String> {
     match (advertised, connect) {
-        (Some(advertised), None) => Some(advertised.to_string()),
+        (Some(advertised), None)
+            if crate::connect_route::parse_url_address(advertised).is_some() =>
+        {
+            Some(advertised.to_string())
+        }
         _ => None,
     }
 }
@@ -403,6 +409,11 @@ mod tests {
             None
         );
         assert_eq!(unreached_address(None, None), None);
+        assert_eq!(
+            unreached_address(Some("not-an-address"), None),
+            None,
+            "an address the route never probed is never blamed"
+        );
     }
 
     /// #925: the visible state starts with the WARN attempt, lasts for the rest of

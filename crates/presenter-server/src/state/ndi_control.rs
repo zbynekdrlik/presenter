@@ -120,9 +120,9 @@ impl NdiManagerHandle {
             Self::Real(m) => m.silent_streak(source_id),
             #[cfg(test)]
             Self::Fake(f) => f
-                .silent_attempts
+                .silent_streaks
                 .lock()
-                .expect("silent_attempts lock")
+                .expect("silent_streaks lock")
                 .get(source_id)
                 .cloned()
                 .unwrap_or_default(),
@@ -281,7 +281,7 @@ pub(crate) struct FakeNdiControl {
     /// ended by a streaming start and by `stop_pipeline` / `stop_all`;
     /// `stop_other_pipelines(keep)` keeps only `keep`'s (it runs after EVERY silent
     /// activation).
-    silent_attempts: Mutex<std::collections::HashMap<String, presenter_ndi::manager::SilentStreak>>,
+    silent_streaks: Mutex<std::collections::HashMap<String, presenter_ndi::manager::SilentStreak>>,
     /// #925: the address a silent start "dialled" (`SourceSilent { connect_address }`);
     /// `None` = no address answered, the real route's name-only fallback.
     connect_address: Mutex<Option<String>>,
@@ -547,9 +547,9 @@ impl FakeNdiControl {
         let outcome = *self.start_outcome.lock().expect("start_outcome lock");
         match outcome {
             StartOutcome::Ok => {
-                self.silent_attempts
+                self.silent_streaks
                     .lock()
-                    .expect("silent_attempts lock")
+                    .expect("silent_streaks lock")
                     .remove(source_id);
                 Ok(())
             }
@@ -560,7 +560,7 @@ impl FakeNdiControl {
                     .lock()
                     .expect("connect_address lock")
                     .clone();
-                let mut attempts = self.silent_attempts.lock().expect("silent_attempts lock");
+                let mut attempts = self.silent_streaks.lock().expect("silent_streaks lock");
                 let streak = attempts.entry(source_id.to_string()).or_default();
                 streak.attempts += 1;
                 streak.unreached_address = presenter_ndi::manager::unreached_address(
@@ -582,9 +582,9 @@ impl FakeNdiControl {
     }
 
     async fn stop_pipeline(&self, source_id: &str) {
-        self.silent_attempts
+        self.silent_streaks
             .lock()
-            .expect("silent_attempts lock")
+            .expect("silent_streaks lock")
             .remove(source_id);
         self.record(NdiCall::StopPipeline {
             source_id: source_id.to_string(),
@@ -592,17 +592,17 @@ impl FakeNdiControl {
     }
 
     async fn stop_all(&self) {
-        self.silent_attempts
+        self.silent_streaks
             .lock()
-            .expect("silent_attempts lock")
+            .expect("silent_streaks lock")
             .clear();
         self.record(NdiCall::StopAll);
     }
 
     async fn stop_other_pipelines(&self, keep_id: &str) {
-        self.silent_attempts
+        self.silent_streaks
             .lock()
-            .expect("silent_attempts lock")
+            .expect("silent_streaks lock")
             .retain(|id, _| id == keep_id);
         self.record(NdiCall::StopOtherPipelines {
             keep_id: keep_id.to_string(),
