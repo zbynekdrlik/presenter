@@ -208,6 +208,13 @@ pub(super) struct ListEditor<F: EditorForm> {
     editing: RwSignal<EditTarget>,
     form: F,
     status: EditorStatus,
+    /// The fields' `aria-invalid` (the message line shows an error). Made here, under
+    /// the CARD's owner, never in `render_editor`: an editor's fields may sit in a
+    /// nested reactive branch (the mic form's VBAN / Dante `<Show>`, #852), and Leptos
+    /// 0.7 keeps such a branch's effects alive one task past the editor's own owner.
+    /// The `status.clear()` that closes the editor wakes them, and a signal made in
+    /// the editor's owner would then be read after it was disposed (a WASM panic).
+    invalid: Signal<bool>,
     /// What the open editor was filled with; [`is_dirty`] compares against it.
     loaded: RwSignal<F::Values>,
     dirty: Memo<bool>,
@@ -252,10 +259,13 @@ impl<F: EditorForm> ListEditor<F> {
             let current = form.values();
             editing.with(|open| loaded.with(|opened_with| is_dirty(open, &current, opened_with)))
         });
+        let status = EditorStatus::default();
+        let invalid = Signal::derive(move || status.state.get() == "error");
         Self {
             editing,
             form,
-            status: EditorStatus::default(),
+            status,
+            invalid,
             loaded,
             dirty,
             generation: RwSignal::new(0),
@@ -489,6 +499,11 @@ pub(super) struct EditorSpec {
 /// existing row (Save updates). `on_save` validates and saves; Cancel and Escape
 /// close the editor without saving. Only one editor exists in a card at a time, so
 /// the field `data-role`s and the `id`s stay unique on the page.
+///
+/// The form is `novalidate`: the form's own `validate` answers an empty field in the
+/// message line (Slovak, `aria-invalid`, #459). A field's `required` stays for
+/// assistive tech, but the browser's own bubble would block the submit, so the
+/// editor's check (e.g. "Zadaj názov kanála Dante.") would never show.
 pub(super) fn render_editor<F, S>(
     spec: EditorSpec,
     editor: ListEditor<F>,
@@ -501,7 +516,7 @@ where
 {
     let status = editor.status;
     let role = move |field: &str| format!("{}-{field}", spec.role);
-    let invalid = Signal::derive(move || status.state.get() == "error");
+    let invalid = editor.invalid;
     let (mode, title, submit_text) = if creating {
         ("create", spec.new_title, spec.new_submit)
     } else {
@@ -538,7 +553,7 @@ where
     view! {
         <form class="settings__form settings__form--inline-editor" data-role=role("editor")
             data-mode=mode aria-labelledby=role("editor-title")
-            autocomplete="off" on:submit=on_submit on:keydown=on_keydown>
+            autocomplete="off" novalidate on:submit=on_submit on:keydown=on_keydown>
             <h3 class="settings__editor-title" id=role("editor-title")
                 data-role=role("editor-title")>{title}</h3>
             {fields}

@@ -282,7 +282,9 @@ impl EditorForm for MicForm {
             self.taken
                 .with(|taken| id_line(id.as_deref(), mic_role, taken))
         };
-        let dante = Memo::new(move |_| self.transport.get() == MicTransport::Dante);
+        // The transport `<Show>` and its two branches read only the form's own signals
+        // and the card-level `invalid`, never a Memo / signal made here: the branch
+        // effects outlive this editor's owner by one task (`ListEditor::invalid`).
         view! {
             <>
                 <div class="settings__form-row">
@@ -296,7 +298,7 @@ impl EditorForm for MicForm {
                     </label>
                     {render_select("Prenos", role("transport"), spec.message_id, invalid, self.transport, TRANSPORTS)}
                 </div>
-                <Show when=move || dante.get() fallback=move || self.render_vban_fields(spec, invalid)>
+                <Show when=move || self.transport.get() == MicTransport::Dante fallback=move || self.render_vban_fields(spec, invalid)>
                     {self.render_dante_fields(spec, invalid)}
                 </Show>
                 <div class="settings__form-row">

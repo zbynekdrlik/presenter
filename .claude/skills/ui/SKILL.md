@@ -159,6 +159,24 @@ self.saves.try_update_value(|control| control.send_waiting(|id| listed.contains(
 A read nested in a read of the same value (`with_value` inside `with_value`) does get the
 lock, but keep those closures pure too.
 
+## A nested reactive branch outlives its parent's owner by one task — read only long-lived values in it (#852)
+
+In leptos 0.7 / reactive_graph 0.1.8 a `<Show>` (or any `move || …` view) is a
+`RenderEffect` whose spawned task holds a clone of the effect's `value` — the branch's whole
+view state, including the branch's own attribute effects. When the PARENT unmounts (the
+inline editor closes), the parent owner is disposed at once, but that branch state is only
+dropped when the `<Show>`'s task polls again. A signal set in the same handler that closed
+the parent (`status.clear()` in `ListEditor::discard`) has already queued the branch's
+attribute effects; they run, read a `Signal::derive` / `Memo` made in the parent's owner,
+and panic: `reactive_graph-0.1.8/src/traits.rs:388:39: Tried to access a reactive value that
+has already been disposed`, then `RuntimeError: unreachable` and `RefCell already borrowed`.
+One panic per stale reader (the mic form's VBAN branch: stream, sender IP, channel = 3).
+Direct (non-nested) children never hit it: the parent's rebuild drops them at once.
+
+Rule: inside a nested branch (and in its `when`), read only values that outlive the parent —
+the form's own signals, or signals made under the CARD's owner (`ListEditor::invalid`).
+Never create a `Memo` / `Signal::derive` in the parent render fn for a nested branch to read.
+
 ## The toast `<div>` is ALWAYS mounted — assert visibility via `data-visible`, not DOM presence (#558 W1)
 
 `components/toast.rs` renders `<div data-role="toast" data-visible=… class:operator__toast--visible=…>`
