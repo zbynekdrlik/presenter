@@ -7,6 +7,7 @@ paths:
   - "crates/presenter-ndi/src/manager/supervisor.rs"
   - "crates/presenter-ndi/src/manager/silent_streak.rs"
   - "crates/presenter-server/src/state/integrations.rs"
+  - "crates/presenter-server/src/state/video_source_status.rs"
 ---
 
 # Which address the NDI receiver connects to — multi-homed hosts (#925)
@@ -59,6 +60,14 @@ answered). `~/.ndi/ndi-config.v1.json` `adapters.allowed` did NOT change the cho
   finder still sees — "on the network but sends no frames". `/healthz ndi_pipelines[]` has
   `advertisedAddress` + `connectAddress` (null = by name); the `NDI pipeline streaming` INFO line
   has `connect_address` (`-` = by name).
+- **Visible state (v0.4.367):** the Settings row reads the SAME streak, never a copy of it:
+  `NdiManager::silent_attempts` → `video_source_status::with_silence` turns `not-broadcasting`
+  into `unreachable` („Nedá sa pripojiť", hint names `advertisedAddress` from the finder) while
+  `is_silent_but_advertised` (attempt >= the WARN attempt + an advertised address) holds; an
+  errored pipeline keeps `not-broadcasting` + its error text. It clears by itself: the streak
+  ends on every promote / stop. CI has no multi-homed sender, so the E2E rewrites the real
+  status response in the browser (`video-source-status.spec.ts`); the server half is the
+  FakeNdiControl test (the Fake's discovery carries `set_advertised_address`).
 - **Verify on SNV:** journal `NDI pipeline streaming … connect_address=10.77.9.201:5961`, `ss -tan`
   `ESTAB … 10.77.9.201:5961`. The temporary `nft table ip presenter_ndi_fix` DNAT must be deleted
   only after that, then verify again.

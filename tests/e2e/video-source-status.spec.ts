@@ -196,3 +196,65 @@ test("the row's active state follows the server, not this tab's own actions", as
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(row.locator(".settings__source-dot--active")).toHaveCount(1);
 });
+
+// #925 — SNV: SP-program was on the network (the finder listed it at its Dante address
+// 10.77.7.107) but this server could not connect, and the row read exactly like a
+// sender with NDI switched off. The server now reports `unreachable` + the finder's
+// address while the silent streak lasts. Neither CI lane has a multi-homed sender, so
+// the server's answer is rewritten in the browser (the real response, one entry
+// changed) — the server half is pinned by the state/integrations unit tests.
+test("an unreachable source names the address, and clears once it streams", async ({
+  page,
+  request,
+}) => {
+  const errors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error" || m.type() === "warning") errors.push(m.text());
+  });
+
+  const source = await createSource(request, "sp-program", GHOST);
+  // The wire contract: every entry carries `advertisedAddress` (null = not reported).
+  const real = (await readStatus(request)).sources.find(
+    (s: any) => s.id === source.id,
+  );
+  expect(real).toHaveProperty("advertisedAddress", null);
+
+  let served: { state: string; advertisedAddress: string | null } = {
+    state: "unreachable",
+    advertisedAddress: "10.77.7.107:5961",
+  };
+  await page.route("**/integrations/video-sources/status", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.sources = body.sources.map((s: any) =>
+      s.id === source.id ? { ...s, isActive: true, ...served } : s,
+    );
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(new URL("/ui/settings", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 60_000,
+  });
+
+  const badge = page.locator(
+    `[data-role="video-source-status"][data-source-id="${source.id}"]`,
+  );
+  const hint = page.locator(
+    `[data-role="video-source-hint"][data-source-id="${source.id}"]`,
+  );
+  await expect(badge).toHaveText("Nedá sa pripojiť", { timeout: 30_000 });
+  await expect(badge).toHaveAttribute("data-state", "unreachable");
+  await expect(badge).toHaveClass(/settings__status--unreachable/);
+  await expect(hint).toContainText(
+    "Zdroj je v sieti, ale nedá sa pripojiť (adresa 10.77.7.107:5961).",
+  );
+
+  // The sender becomes reachable: the next poll says live, the hint goes away.
+  served = { state: "live", advertisedAddress: "10.77.9.201:5961" };
+  await expect(badge).toHaveText("Naživo", { timeout: 30_000 });
+  await expect(badge).toHaveAttribute("data-state", "live");
+  await expect(hint).toHaveCount(0);
+
+  expect(errors, `console errors: ${errors.join(" | ")}`).toEqual([]);
+});

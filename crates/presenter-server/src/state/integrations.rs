@@ -11,7 +11,7 @@ use super::AppState;
 use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use crate::resolume::ResolumeConnectionSnapshot;
 use crate::state::video_source_status;
-use crate::state::video_source_status::{Discovery, PipelineFact};
+use crate::state::video_source_status::Discovery;
 
 /// What the server can honestly say about every mapped NDI source right now (#546).
 ///
@@ -33,10 +33,13 @@ pub struct VideoSourceStatusEntry {
     pub id: String,
     pub ndi_name: String,
     pub is_active: bool,
-    /// `unknown | not-found | ready | connecting | not-broadcasting | live`.
+    /// `unknown | not-found | ready | connecting | not-broadcasting | unreachable | live`.
     pub state: &'static str,
     /// The pipeline's error text, when it has one.
     pub detail: Option<String>,
+    /// #925: the address the NDI finder reports the source at (`None` = not
+    /// discovered / not reported). The `unreachable` row names it.
+    pub advertised_address: Option<String>,
 }
 
 impl VideoSourceStatusEntry {
@@ -47,6 +50,7 @@ impl VideoSourceStatusEntry {
             is_active: row.is_active,
             state: video_source_status::VideoSourceState::Unknown.as_str(),
             detail: None,
+            advertised_address: None,
         }
     }
 }
@@ -386,7 +390,7 @@ impl AppState {
     /// Fail-soft on purpose — but never into a LIE. A discovery failure degrades to
     /// [`Discovery::Blind`] ("we cannot see the network"), NOT to an empty network
     /// (which would make a broken server accuse every sending machine at the site);
-    /// a busy pipeline lock degrades to [`PipelineFact::Unreadable`] ("the manager is
+    /// a busy pipeline lock degrades to [`video_source_status::PipelineFact::Unreadable`] ("the manager is
     /// busy starting it"), NOT to "no pipeline" (which would paint every normal
     /// activation as "sending nothing"). Both were deep-review findings on the first
     /// cut of #546. Neither degrades to an error page: the settings page must keep
@@ -411,9 +415,16 @@ impl AppState {
         // only just booted). That is BLINDNESS, not an empty network — and the difference
         // is the whole ticket: an empty list reported as fact makes the page tell the
         // operator that every sending machine at the site is switched off.
-        let discovered: Option<Vec<String>> = manager
-            .discovery_snapshot()
-            .map(|sources| sources.into_iter().map(|s| s.name).collect());
+        let snapshot = manager.discovery_snapshot();
+        let discovered: Option<Vec<String>> = snapshot
+            .as_ref()
+            .map(|sources| sources.iter().map(|s| s.name.clone()).collect());
+        // #925: the finder's address per name, for the "cannot connect" state.
+        let advertised: HashMap<String, String> = snapshot
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.url_address.map(|addr| (s.name, addr)))
+            .collect();
         if discovered.is_none() {
             tracing::warn!(
                 "NDI finder has not completed a scan — reporting the network as unseen \
@@ -441,25 +452,17 @@ impl AppState {
         let sources = rows
             .into_iter()
             .map(|row| {
-                let pipeline = pipelines
-                    .as_ref()
-                    .map(|map| map.get(&row.id.to_string()).cloned());
-                let state = video_source_status::classify(
-                    row.is_active,
-                    &row.ndi_name,
+                let id = row.id.to_string();
+                let pipeline = pipelines.as_ref().map(|map| map.get(&id).cloned());
+                let advertised_address = advertised.get(&row.ndi_name).cloned();
+                let silent_attempts = manager.silent_attempts(&id);
+                video_source_status::status_entry(
+                    row,
+                    pipeline,
                     discovery,
-                    match &pipeline {
-                        Some(entry) => PipelineFact::Known(entry.as_ref().map(|(s, _)| *s)),
-                        None => PipelineFact::Unreadable,
-                    },
-                );
-                VideoSourceStatusEntry {
-                    id: row.id.to_string(),
-                    ndi_name: row.ndi_name,
-                    is_active: row.is_active,
-                    state: state.as_str(),
-                    detail: pipeline.flatten().and_then(|(_, err)| err),
-                }
+                    advertised_address,
+                    silent_attempts,
+                )
             })
             .collect();
 
@@ -1656,6 +1659,82 @@ mod tests {
         let entry = snapshot.sources.first().expect("one source");
         assert_eq!(entry.state, "live");
         assert_eq!(entry.detail, None);
+    }
+
+    /// #925 THE SNV CASE on the Settings row: the source is on the network at an
+    /// address, activated, and silent through a whole reconnect cycle → the row says
+    /// `unreachable` and names the address (the same moment the one WARN fires); the
+    /// first silent attempt is still `not-broadcasting`; a streaming start clears it.
+    #[tokio::test]
+    async fn video_source_status_says_unreachable_while_an_advertised_source_stays_silent() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        fake.set_advertised_address(Some("10.77.7.107:5961"));
+        let activate = || async {
+            state
+                .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+                .expect("a silent-source activation still succeeds (#448)");
+        };
+        let entry = || async {
+            let snapshot = state.video_source_status().await.expect("status snapshot");
+            snapshot.sources.into_iter().next().expect("one source")
+        };
+
+        activate().await;
+        let first = entry().await;
+        assert_eq!(
+            first.state, "not-broadcasting",
+            "attempt 1 is not yet a diagnosis"
+        );
+        assert_eq!(
+            first.advertised_address.as_deref(),
+            Some("10.77.7.107:5961")
+        );
+
+        activate().await;
+        let second = entry().await;
+        assert_eq!(
+            second.state, "unreachable",
+            "silent through a whole cycle while on the network"
+        );
+        assert_eq!(
+            second.advertised_address.as_deref(),
+            Some("10.77.7.107:5961")
+        );
+        activate().await;
+        assert_eq!(
+            entry().await.state,
+            "unreachable",
+            "it lasts for the whole streak"
+        );
+
+        // The sender becomes reachable: the start streams and the streak ends.
+        fake.set_start_outcome(StartOutcome::Ok);
+        fake.set_pipeline(&id, presenter_ndi::pipeline::PipelineState::Streaming);
+        activate().await;
+        assert_eq!(entry().await.state, "live");
+        // Even if the pipeline then stops, the old streak is gone.
+        fake.set_pipeline(&id, presenter_ndi::pipeline::PipelineState::Stopped);
+        assert_eq!(entry().await.state, "not-broadcasting");
+    }
+
+    /// #925: a silent source the finder lists WITHOUT an address stays
+    /// `not-broadcasting` however long the streak — nothing to name, nothing to blame.
+    #[tokio::test]
+    async fn video_source_status_never_says_unreachable_without_an_advertised_address() {
+        let (state, source_id, _id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        for _ in 0..3 {
+            state
+                .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+                .expect("a silent-source activation still succeeds (#448)");
+        }
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+        let entry = snapshot.sources.first().expect("one source");
+        assert_eq!(entry.state, "not-broadcasting");
+        assert_eq!(entry.advertised_address, None);
     }
 
     /// THE ACTIVATION WINDOW (deep review 🟡 #1). `start_pipeline` holds the manager's

@@ -116,6 +116,14 @@ impl NdiManager {
         self.source_list.snapshot()
     }
 
+    /// The source's current silent-start streak (#858; `0` = none): how many
+    /// starts in a row ended `SourceSilent`. It ends when the source streams or
+    /// is stopped. The status join reads it to show a source the finder sees but
+    /// this server cannot connect to (#925, [`super::is_silent_but_advertised`]).
+    pub fn silent_attempts(&self, source_id: &str) -> u32 {
+        self.silent_streaks.get(source_id)
+    }
+
     /// Start a pipeline for the given source.
     ///
     /// `source_id` = UUID from the `video_sources` DB row (used as the WHEP URL key).

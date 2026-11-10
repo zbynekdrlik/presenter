@@ -113,6 +113,22 @@ impl NdiManagerHandle {
         }
     }
 
+    /// Forward to [`NdiManager::silent_attempts`] — the source's silent-start
+    /// streak (#858; `0` = none), read by the #925 "cannot connect" status.
+    pub(crate) fn silent_attempts(&self, source_id: &str) -> u32 {
+        match self {
+            Self::Real(m) => m.silent_attempts(source_id),
+            #[cfg(test)]
+            Self::Fake(f) => f
+                .silent_attempts
+                .lock()
+                .expect("silent_attempts lock")
+                .get(source_id)
+                .copied()
+                .unwrap_or(0),
+        }
+    }
+
     /// Forward to [`NdiManager::pipeline_health_snapshots`] — per-pipeline
     /// delivery health (state + drop ratio + consumer count) for `/healthz`
     /// (#768). `None` when the manager's lock could not be taken in time.
@@ -445,7 +461,9 @@ impl FakeNdiControl {
                 .iter()
                 .map(|name| presenter_ndi::discovery::NdiSourceInfo {
                     name: name.clone(),
-                    url_address: None,
+                    // #925: like the real finder, every listed source carries
+                    // the address the Fake was given.
+                    url_address: self.advertised(),
                 })
                 .collect(),
         )

@@ -71,8 +71,7 @@ impl SilentStreaks {
     }
 
     /// The current streak length of `source_id` (`0` = none).
-    #[cfg(test)]
-    fn get(&self, source_id: &str) -> u32 {
+    pub(in crate::manager) fn get(&self, source_id: &str) -> u32 {
         self.streaks
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -110,6 +109,15 @@ pub const SILENT_BUT_ADVERTISED_WARN_ATTEMPT: u32 = 2;
 /// reported an address for the source. Pure → unit-tested.
 pub fn should_warn_silent_but_advertised(attempt: u32, advertised_address: Option<&str>) -> bool {
     attempt == SILENT_BUT_ADVERTISED_WARN_ATTEMPT && advertised_address.is_some()
+}
+
+/// Whether a silent streak this long, for a source the finder reports at an
+/// address, means "on the network but this server cannot connect" (#925) — the
+/// state the Settings row shows for as long as the streak lasts. Same threshold
+/// as the one WARN ([`should_warn_silent_but_advertised`]), so the log line and
+/// the visible state appear together. Pure → unit-tested.
+pub fn is_silent_but_advertised(attempt: u32, advertised_address: Option<&str>) -> bool {
+    attempt >= SILENT_BUT_ADVERTISED_WARN_ATTEMPT && advertised_address.is_some()
 }
 
 /// `installed` / `not-installed` for the streaming line's `timestamp_guard` field.
@@ -332,6 +340,23 @@ mod tests {
         assert_eq!(warned, vec![SILENT_BUT_ADVERTISED_WARN_ATTEMPT]);
         assert_eq!(SILENT_BUT_ADVERTISED_WARN_ATTEMPT, 2);
         assert!((0..=64).all(|attempt| !should_warn_silent_but_advertised(attempt, None)));
+    }
+
+    /// #925: the visible "cannot connect" state starts with the WARN (attempt 2)
+    /// and lasts for the rest of the streak; never without an advertised address.
+    #[test]
+    fn the_unreachable_state_lasts_from_the_warn_to_the_end_of_the_streak() {
+        let advertised = Some("10.77.7.107:5961");
+        assert!(!is_silent_but_advertised(0, advertised));
+        assert!(!is_silent_but_advertised(1, advertised));
+        assert!(is_silent_but_advertised(2, advertised));
+        assert!(is_silent_but_advertised(500, advertised));
+        assert!((0..=64).all(|attempt| !is_silent_but_advertised(attempt, None)));
+        // The state starts exactly where the one WARN fires.
+        let first = (0..=64)
+            .find(|attempt| is_silent_but_advertised(*attempt, advertised))
+            .expect("some attempt is unreachable");
+        assert!(should_warn_silent_but_advertised(first, advertised));
     }
 
     #[test]

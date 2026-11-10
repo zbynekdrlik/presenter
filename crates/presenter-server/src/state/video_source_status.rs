@@ -32,6 +32,10 @@ pub(crate) enum VideoSourceState {
     /// On the network AND activated — but no frames are arriving. The broadcaster is
     /// silent (#448), or the pipeline stopped/errored.
     NotBroadcasting,
+    /// On the network at an address the finder reports, activated, and silent for a
+    /// whole reconnect cycle (#925): this server most likely cannot connect to that
+    /// address (SNV: the sender's Dante address). The Settings row names the address.
+    Unreachable,
     /// Activated and streaming. Video is flowing.
     Live,
 }
@@ -46,6 +50,7 @@ impl VideoSourceState {
             Self::Ready => "ready",
             Self::Connecting => "connecting",
             Self::NotBroadcasting => "not-broadcasting",
+            Self::Unreachable => "unreachable",
             Self::Live => "live",
         }
     }
@@ -119,6 +124,56 @@ pub(crate) fn classify(
             VideoSourceState::Connecting
         }
         _ => VideoSourceState::NotBroadcasting,
+    }
+}
+
+/// Rule 7 (#925), applied to [`classify`]'s answer: a `NotBroadcasting` source whose
+/// silent-start streak says "on the network at an address, silent for a whole
+/// reconnect cycle" ([`presenter_ndi::manager::is_silent_but_advertised`]) is
+/// `Unreachable` — unless its pipeline ERRORED, whose own error text (`detail`) is
+/// the better "why". Every other state is kept: `Live` / `Connecting` win over an
+/// old streak (and the streak ends on the promote anyway). Pure → unit-tested.
+pub(crate) fn with_silence(
+    state: VideoSourceState,
+    pipeline: PipelineFact<'_>,
+    silent_but_advertised: bool,
+) -> VideoSourceState {
+    let errored = pipeline == PipelineFact::Known(Some("errored"));
+    if state == VideoSourceState::NotBroadcasting && silent_but_advertised && !errored {
+        VideoSourceState::Unreachable
+    } else {
+        state
+    }
+}
+
+/// One row of the #546 status join: the pure [`classify`] plus
+/// the #925 silence rule, over the facts `AppState::video_source_status` gathered.
+/// `pipeline`: `None` = the map was unreadable; `Some(None)` = no pipeline.
+pub(crate) fn status_entry(
+    row: presenter_core::VideoSource,
+    pipeline: Option<Option<(&'static str, Option<String>)>>,
+    discovery: Discovery<'_>,
+    advertised_address: Option<String>,
+    silent_attempts: u32,
+) -> super::integrations::VideoSourceStatusEntry {
+    let fact = match &pipeline {
+        Some(entry) => PipelineFact::Known(entry.as_ref().map(|(s, _)| *s)),
+        None => PipelineFact::Unreadable,
+    };
+    let state = classify(row.is_active, &row.ndi_name, discovery, fact);
+    // #925: the same rule as the one WARN, for as long as the silent streak lasts.
+    let silent_but_advertised = presenter_ndi::manager::is_silent_but_advertised(
+        silent_attempts,
+        advertised_address.as_deref(),
+    );
+    let state = with_silence(state, fact, silent_but_advertised);
+    super::integrations::VideoSourceStatusEntry {
+        id: row.id.to_string(),
+        ndi_name: row.ndi_name,
+        is_active: row.is_active,
+        state: state.as_str(),
+        detail: pipeline.flatten().and_then(|(_, err)| err),
+        advertised_address,
     }
 }
 
@@ -316,8 +371,80 @@ mod tests {
         );
     }
 
+    /// #925 THE SNV CASE: discovered, activated, no pipeline, silent through a whole
+    /// reconnect cycle at an advertised address → `Unreachable`, not "turn NDI on".
+    #[test]
+    fn unreachable_when_a_discovered_source_stays_silent_at_its_address() {
+        let net = network(&[MAPPED]);
+        let pipeline = PipelineFact::Known(None);
+        let state = classify(true, MAPPED, Discovery::Names(&net), pipeline);
+        assert_eq!(
+            with_silence(state, pipeline, true),
+            VideoSourceState::Unreachable
+        );
+        // A stopped pipeline (EOS, the supervisor is rebuilding) — the same.
+        let stopped = PipelineFact::Known(Some("stopped"));
+        let state = classify(true, MAPPED, Discovery::Names(&net), stopped);
+        assert_eq!(
+            with_silence(state, stopped, true),
+            VideoSourceState::Unreachable
+        );
+    }
+
+    /// The first silent attempt (or no advertised address) stays `NotBroadcasting`.
+    #[test]
+    fn not_broadcasting_until_the_streak_says_unreachable() {
+        let net = network(&[MAPPED]);
+        let pipeline = PipelineFact::Known(None);
+        let state = classify(true, MAPPED, Discovery::Names(&net), pipeline);
+        assert_eq!(
+            with_silence(state, pipeline, false),
+            VideoSourceState::NotBroadcasting
+        );
+    }
+
+    /// An errored pipeline keeps `NotBroadcasting`: its error text is the "why".
+    #[test]
+    fn an_errored_pipeline_is_not_reported_as_unreachable() {
+        let net = network(&[MAPPED]);
+        let errored = PipelineFact::Known(Some("errored"));
+        let state = classify(true, MAPPED, Discovery::Names(&net), errored);
+        assert_eq!(
+            with_silence(state, errored, true),
+            VideoSourceState::NotBroadcasting
+        );
+    }
+
+    /// Streaming, starting, not found, not active, blind: a streak never changes them.
+    #[test]
+    fn silence_never_overrides_any_other_state() {
+        let net = network(&[MAPPED]);
+        let cases = [
+            (
+                true,
+                Discovery::Names(&net),
+                PipelineFact::Known(Some("streaming")),
+            ),
+            (
+                true,
+                Discovery::Names(&net),
+                PipelineFact::Known(Some("starting")),
+            ),
+            (true, Discovery::Names(&net), PipelineFact::Unreadable),
+            (true, Discovery::Names(&[]), PipelineFact::Known(None)),
+            (false, Discovery::Names(&net), PipelineFact::Known(None)),
+            (true, Discovery::Blind, PipelineFact::Known(None)),
+        ];
+        for (active, discovery, pipeline) in cases {
+            let state = classify(active, MAPPED, discovery, pipeline);
+            assert_ne!(state, VideoSourceState::NotBroadcasting);
+            assert_eq!(with_silence(state, pipeline, true), state);
+        }
+    }
+
     #[test]
     fn wire_names_are_kebab_case() {
+        assert_eq!(VideoSourceState::Unreachable.as_str(), "unreachable");
         assert_eq!(VideoSourceState::NotFound.as_str(), "not-found");
         assert_eq!(
             VideoSourceState::NotBroadcasting.as_str(),

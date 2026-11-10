@@ -88,6 +88,8 @@ pub(crate) struct VideoSourceStatusDto {
     is_active: bool,
     state: String,
     detail: Option<String>,
+    /// #925: where the NDI finder sees the source (`null` = not reported).
+    advertised_address: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -107,6 +109,7 @@ pub(crate) async fn video_source_status(
                 is_active: s.is_active,
                 state: s.state.to_string(),
                 detail: s.detail,
+                advertised_address: s.advertised_address,
             })
             .collect(),
     }))
