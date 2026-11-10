@@ -245,7 +245,7 @@ fn read_interfaces() -> Vec<InterfaceAddr> {
 }
 
 /// The IPv4 addresses `<machine>.local` resolves to (nss-mdns), bounded.
-async fn lookup_machine(machine: &str, port: u16) -> Vec<Ipv4Addr> {
+async fn lookup_machine(machine: String, port: u16) -> Vec<Ipv4Addr> {
     let host = format!("{machine}.local:{port}");
     match tokio::time::timeout(LOOKUP_TIMEOUT, tokio::net::lookup_host(host.clone())).await {
         Ok(Ok(addrs)) => addrs
@@ -276,6 +276,32 @@ async fn tcp_probe(addr: SocketAddrV4) -> bool {
 /// The route for `ndi_name`, given the address the finder advertised for it.
 /// Never fails: anything it cannot decide keeps the name-only path.
 pub async fn resolve(ndi_name: &str, advertised: Option<String>) -> NdiRoute {
+    let net = HostNetwork::read();
+    resolve_with(ndi_name, advertised, &net, lookup_machine, tcp_probe).await
+}
+
+/// [`resolve`] with the host network, the sender lookup and the TCP probe
+/// injected, so the decision is testable without a network.
+///
+/// The advertised address is replaced when it is on a side network of this
+/// host (SNV's Dante NIC) OR when it does not answer a TCP connect on the
+/// sender's port (a sender advertising an address this host cannot route to,
+/// e.g. SNV after its Dante NIC was removed, 2026-11-10). A reachable address
+/// that is not on a side network keeps the name-only path, so a working site
+/// (dev, PP) only pays one short TCP connect per pipeline start.
+pub async fn resolve_with<L, LF, P, PF>(
+    ndi_name: &str,
+    advertised: Option<String>,
+    net: &HostNetwork,
+    lookup: L,
+    probe: P,
+) -> NdiRoute
+where
+    L: FnOnce(String, u16) -> LF,
+    LF: Future<Output = Vec<Ipv4Addr>>,
+    P: Fn(SocketAddrV4) -> PF,
+    PF: Future<Output = bool>,
+{
     let mut route = NdiRoute::name_only(ndi_name);
     route.advertised_address = advertised;
     let Some(advertised) = route
@@ -285,24 +311,25 @@ pub async fn resolve(ndi_name: &str, advertised: Option<String>) -> NdiRoute {
     else {
         return route;
     };
-    let net = HostNetwork::read();
-    if !is_off_route(*advertised.ip(), &net) {
-        return route;
-    }
-    let Some(machine) = machine_name(ndi_name) else {
-        tracing::debug!(%ndi_name, %advertised, "advertised NDI address is on a side network; no machine name to look up (#925)");
+    let reason = if is_off_route(*advertised.ip(), net) {
+        "on a side network"
+    } else {
         return route;
     };
-    let candidates = lookup_machine(machine, advertised.port()).await;
-    let mut alternatives = alternatives(advertised, &candidates, &net);
+    let Some(machine) = machine_name(ndi_name) else {
+        tracing::debug!(%ndi_name, %advertised, reason, "advertised NDI address unusable; no machine name to look up (#925)");
+        return route;
+    };
+    let candidates = lookup(machine.to_string(), advertised.port()).await;
+    let mut alternatives = alternatives(advertised, &candidates, net);
     alternatives.truncate(MAX_PROBES);
-    match first_reachable(&alternatives, tcp_probe).await {
+    match first_reachable(&alternatives, probe).await {
         Some(chosen) => {
-            tracing::debug!(%ndi_name, %advertised, %chosen, "advertised NDI address is on a side network; connecting to the sender's reachable address (#925)");
+            tracing::debug!(%ndi_name, %advertised, %chosen, reason, "advertised NDI address unusable; connecting to the sender's reachable address (#925)");
             route.connect_address = Some(chosen.to_string());
         }
         None => {
-            tracing::debug!(%ndi_name, %advertised, ?candidates, "advertised NDI address is on a side network and no other address of the sender answers (#925)");
+            tracing::debug!(%ndi_name, %advertised, ?candidates, reason, "advertised NDI address unusable and no other address of the sender answers (#925)");
         }
     }
     route
@@ -523,5 +550,82 @@ mod tests {
         assert_eq!(route.ndisrc_target(), NdisrcTarget::Name("SENDER (out)"));
         let unknown = resolve("SENDER (out)", None).await;
         assert_eq!(unknown, NdiRoute::name_only("SENDER (out)"));
+    }
+    /// Probe that answers only for the listed addresses.
+    fn answers(up: &'static [[u8; 4]]) -> impl Fn(SocketAddrV4) -> std::future::Ready<bool> {
+        move |a: SocketAddrV4| std::future::ready(up.iter().any(|u| Ipv4Addr::from(*u) == *a.ip()))
+    }
+
+    /// SNV after the Dante NIC was pulled (2026-11-10): no side interface, the
+    /// sender still advertises 10.77.7.107, which this host cannot reach.
+    #[tokio::test]
+    async fn an_unreachable_advertised_address_on_a_single_homed_host_uses_the_reachable_one() {
+        let route = resolve_with(
+            "RESOLUME-SNV (SP-program)",
+            Some("10.77.7.107:5961".to_string()),
+            &dev(),
+            |machine, _port| {
+                assert_eq!(machine, "RESOLUME-SNV");
+                std::future::ready(vec![ip([10, 77, 7, 107]), ip([10, 77, 9, 201])])
+            },
+            answers(&[[10, 77, 9, 201]]),
+        )
+        .await;
+        assert_eq!(route.connect_address.as_deref(), Some("10.77.9.201:5961"));
+        assert_eq!(
+            route.ndisrc_target(),
+            NdisrcTarget::UrlAddress("10.77.9.201:5961")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reachable_advertised_address_keeps_the_name_only_path_without_a_lookup() {
+        let route = resolve_with(
+            "RESOLUME-SNV (SP-program)",
+            Some("10.77.9.201:5961".to_string()),
+            &dev(),
+            |_machine, _port| -> std::future::Ready<Vec<Ipv4Addr>> {
+                panic!("a reachable advertised address must not trigger a lookup")
+            },
+            answers(&[[10, 77, 9, 201]]),
+        )
+        .await;
+        assert_eq!(route.connect_address, None);
+        assert_eq!(
+            route.ndisrc_target(),
+            NdisrcTarget::Name("RESOLUME-SNV (SP-program)")
+        );
+    }
+
+    /// A side-network address is replaced even when it answers (the Dante NIC
+    /// may accept the SYN while the guard drops the stream).
+    #[tokio::test]
+    async fn a_side_network_address_is_replaced_even_when_it_answers() {
+        let route = resolve_with(
+            "RESOLUME-SNV (SP-program)",
+            Some("10.77.7.107:5961".to_string()),
+            &snv(),
+            |_machine, _port| std::future::ready(vec![ip([10, 77, 9, 201])]),
+            answers(&[[10, 77, 7, 107], [10, 77, 9, 201]]),
+        )
+        .await;
+        assert_eq!(route.connect_address.as_deref(), Some("10.77.9.201:5961"));
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_address_with_no_answering_alternative_keeps_the_name() {
+        let route = resolve_with(
+            "RESOLUME-SNV (SP-program)",
+            Some("10.77.7.107:5961".to_string()),
+            &dev(),
+            |_machine, _port| std::future::ready(vec![ip([10, 77, 9, 201])]),
+            answers(&[]),
+        )
+        .await;
+        assert_eq!(route.connect_address, None);
+        assert_eq!(
+            route.advertised_address.as_deref(),
+            Some("10.77.7.107:5961")
+        );
     }
 }
