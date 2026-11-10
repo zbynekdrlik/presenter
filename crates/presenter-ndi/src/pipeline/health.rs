@@ -89,6 +89,13 @@ pub struct PipelineDropHealth {
     pub encoder_timestamp_guard: bool,
     /// #854: drift self-heal rebuilds for this source since process start.
     pub drift_rebuilds: u32,
+    /// #925: the address the NDI finder reported for the source when this
+    /// pipeline was built (`None` = not on the network then, or unreadable).
+    pub advertised_address: Option<String>,
+    /// #925: the address `ndisrc` connects to instead of resolving the name —
+    /// set only when the advertised address is on a side network of this host
+    /// (e.g. SNV's Dante NIC) and another address of the sender answered.
+    pub connect_address: Option<String>,
 }
 
 #[cfg(test)]

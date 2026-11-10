@@ -466,6 +466,9 @@ impl NdiManager {
         // instead we CARRY FORWARD the removed dead entry's supervisor handle
         // (that same live caller) into the rebuilt slot, so every abort path can
         // still reach it (#745 item c — was `supervisor: None`, the double-watch).
+        // #925: the connect route is decided before the lock (bounded I/O on a
+        // multi-homed host), exactly like `start_pipeline`.
+        let route = self.route_for(ndi_name).await;
         let reserved = {
             let mut active = self.active.lock().await;
             // A TOTAL match (not `if let Idempotent`) — a non-exhaustive `if let`
@@ -497,7 +500,7 @@ impl NdiManager {
                 StateCheckOutcome::RebuildDead(carried) => carried,
             };
             let whep_url = format!("/ndi/whep/{}", source_id);
-            let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+            let pipeline = NdiPipeline::build_routed(route, whep_url)?;
             pipeline.start().await?;
             let arc = std::sync::Arc::new(pipeline);
             active.insert(

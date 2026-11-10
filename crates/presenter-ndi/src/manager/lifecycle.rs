@@ -33,7 +33,19 @@ pub enum PipelineStartError {
     /// `attempt` (1-based) is the source's consecutive silent-start streak (#858,
     /// `manager/silent_streak.rs`): it restarts at 1 after the source streams or
     /// is stopped, and the caller gates its log line on it (INFO on 1,2,4,8,...).
-    SourceSilent { ndi_name: String, attempt: u32 },
+    ///
+    /// `advertised_address` (#925) is the address the finder reported for the
+    /// source when the attempt ended: `Some` means the sender IS on the network
+    /// and still sent nothing — after a few attempts that is an unreachable
+    /// address, not a source that is off (the caller WARNs once, naming it).
+    /// `connect_address` is the address the receiver dialled instead (a
+    /// multi-homed host's choice, `connect_route`), `None` = by name.
+    SourceSilent {
+        ndi_name: String,
+        attempt: u32,
+        advertised_address: Option<String>,
+        connect_address: Option<String>,
+    },
     /// A genuine failure to build/start/run the pipeline (encoder build failure,
     /// GStreamer element error, etc.).
     Failed(anyhow::Error),
@@ -125,6 +137,13 @@ impl NdiManager {
         source_id: &str,
         ndi_name: &str,
     ) -> std::result::Result<(), PipelineStartError> {
+        // #925: which address ndisrc connects to — decided BEFORE the lock (it may
+        // run a bounded mDNS lookup + TCP probe on a multi-homed host; the `active`
+        // map is never held across it, ndi-manager-locking.md). Accepted cost: an
+        // operator re-activate of an already-streaming source on such a host waits
+        // for that choice (<= 6 s) before the idempotent no-op; the 30 s ticker
+        // never gets here for a streaming source (`ReconnectAction::Heartbeat`).
+        let route = self.route_for(ndi_name).await;
         // Phase 1 — RESERVE under the lock (fast: check + build + start + insert a
         // `Starting` entry). The lock is RELEASED before the ~8 s streaming-ready
         // wait (#741), so status polls / stop / reap / WHEP no longer stall behind
@@ -170,7 +189,7 @@ impl NdiManager {
             }
 
             let whep_url = format!("/ndi/whep/{}", source_id);
-            let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+            let pipeline = NdiPipeline::build_routed(route, whep_url)?;
             pipeline.start().await?;
             let arc = std::sync::Arc::new(pipeline);
             // Insert the reservation in `Starting`. It (a) blocks a concurrent
@@ -254,7 +273,13 @@ impl NdiManager {
             }
             // Stopped/TimedOut → broadcaster silent / not producing (#448): a
             // neutral "waiting for source" placeholder, not a red error.
-            Finalize::Removed(_) => Err(silent_error(&self.silent_streaks, &source_id, ndi_name)),
+            Finalize::Removed(_) => Err(silent_error(
+                &self.silent_streaks,
+                &source_id,
+                ndi_name,
+                reserved.route().advertised_address.clone(),
+                reserved.route().connect_address.clone(),
+            )),
             Finalize::Superseded => Err(PipelineStartError::Superseded),
         }
     }
@@ -276,7 +301,18 @@ impl NdiManager {
             ndi_name,
             &timing.encoder_factory,
             timing.installed,
+            pipeline.route().connect_address.as_deref(),
         );
+    }
+
+    /// #925: the route `ndisrc` uses for `ndi_name` — the finder's advertised
+    /// address, and a reachable alternative when that one is on a side network
+    /// of this host (`connect_route::resolve`). Never holds `active`.
+    pub(in crate::manager) async fn route_for(
+        &self,
+        ndi_name: &str,
+    ) -> crate::connect_route::NdiRoute {
+        crate::connect_route::resolve(ndi_name, self.source_list.advertised_address(ndi_name)).await
     }
 
     /// Observer-join an in-flight `Starting` reservation created by a CONCURRENT
@@ -311,6 +347,8 @@ impl NdiManager {
                 &self.silent_streaks,
                 source_id,
                 ndi_name.to_string(),
+                in_flight.route().advertised_address.clone(),
+                in_flight.route().connect_address.clone(),
             )),
         }
     }
@@ -380,6 +418,8 @@ mod tests {
         let msg = PipelineStartError::SourceSilent {
             ndi_name: ndi_name.into(),
             attempt: 1,
+            advertised_address: None,
+            connect_address: None,
         }
         .to_string();
         assert!(

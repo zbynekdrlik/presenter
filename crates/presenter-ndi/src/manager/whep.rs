@@ -135,6 +135,9 @@ impl NdiManager {
                 encoder_timestamp_correction_ms: timing.correction_ms(),
                 encoder_timestamp_guard: timing.is_installed(),
                 drift_rebuilds,
+                // #925: "on the network at X" vs "connecting to Y instead".
+                advertised_address: pipeline.route().advertised_address.clone(),
+                connect_address: pipeline.route().connect_address.clone(),
             });
         }
         Some(out)

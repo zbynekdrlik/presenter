@@ -88,11 +88,28 @@ pub(in crate::manager) fn silent_error(
     streaks: &SilentStreaks,
     source_id: &str,
     ndi_name: String,
+    advertised_address: Option<String>,
+    connect_address: Option<String>,
 ) -> PipelineStartError {
     PipelineStartError::SourceSilent {
         ndi_name,
         attempt: streaks.bump(source_id),
+        advertised_address,
+        connect_address,
     }
+}
+
+/// The silent attempt (1-based) on which a source the finder still SEES gets its
+/// one WARN (#925): attempt 2 = it stayed silent through a whole reconnect cycle
+/// (~40 s) while being on the network — a sender that is merely off disappears
+/// from the finder instead.
+pub const SILENT_BUT_ADVERTISED_WARN_ATTEMPT: u32 = 2;
+
+/// Whether a silent attempt logs the one "on the network at X but sends no
+/// frames" WARN (#925): exactly once per silent streak, and only when the finder
+/// reported an address for the source. Pure → unit-tested.
+pub fn should_warn_silent_but_advertised(attempt: u32, advertised_address: Option<&str>) -> bool {
+    attempt == SILENT_BUT_ADVERTISED_WARN_ATTEMPT && advertised_address.is_some()
 }
 
 /// `installed` / `not-installed` for the streaming line's `timestamp_guard` field.
@@ -114,6 +131,7 @@ pub(in crate::manager) fn log_pipeline_streaming(
     ndi_name: &str,
     encoder: &str,
     guard_installed: bool,
+    connect_address: Option<&str>,
 ) -> u32 {
     let silent_attempts_before = streaks.reset(source_id);
     tracing::info!(
@@ -122,6 +140,8 @@ pub(in crate::manager) fn log_pipeline_streaming(
         encoder = %encoder,
         timestamp_guard = timestamp_guard_label(guard_installed),
         silent_attempts_before,
+        // #925: `-` = connected by name (the SDK's own address choice).
+        connect_address = connect_address.unwrap_or("-"),
         "NDI pipeline streaming"
     );
     silent_attempts_before
@@ -246,7 +266,13 @@ mod tests {
     fn silent_error_carries_the_attempt_number_and_the_name() {
         let streaks = SilentStreaks::default();
         for expected in 1..=3u32 {
-            let err = silent_error(&streaks, "id", "RESOLUME-SNV (SP-program)".to_string());
+            let err = silent_error(
+                &streaks,
+                "id",
+                "RESOLUME-SNV (SP-program)".to_string(),
+                None,
+                None,
+            );
             assert_eq!(attempt_of(&err), expected);
             assert!(
                 err.to_string().contains("RESOLUME-SNV (SP-program)"),
@@ -259,20 +285,60 @@ mod tests {
     fn reaching_streaming_ends_the_streak() {
         let streaks = SilentStreaks::default();
         for _ in 0..3 {
-            silent_error(&streaks, "id", "NAME".to_string());
+            silent_error(&streaks, "id", "NAME".to_string(), None, None);
         }
-        let before = log_pipeline_streaming(&streaks, "id", "NAME", "vah264enc", true);
+        let before = log_pipeline_streaming(&streaks, "id", "NAME", "vah264enc", true, None);
         assert_eq!(before, 3, "the line reports the silent attempts before it");
         assert_eq!(streaks.get("id"), 0, "streaming ends the streak");
-        let next = silent_error(&streaks, "id", "NAME".to_string());
+        let next = silent_error(&streaks, "id", "NAME".to_string(), None, None);
         assert_eq!(attempt_of(&next), 1, "a new silence starts over at 1");
+    }
+
+    /// #925: the silent outcome carries the finder's address for the source, so
+    /// the caller can tell "on the network but unreachable" from "off".
+    #[test]
+    fn silent_error_carries_the_advertised_address() {
+        let streaks = SilentStreaks::default();
+        let err = silent_error(
+            &streaks,
+            "id",
+            "RESOLUME-SNV (SP-program)".to_string(),
+            Some("10.77.7.107:5961".to_string()),
+            Some("10.77.9.201:5961".to_string()),
+        );
+        match err {
+            PipelineStartError::SourceSilent {
+                advertised_address,
+                connect_address,
+                ..
+            } => {
+                assert_eq!(advertised_address.as_deref(), Some("10.77.7.107:5961"));
+                assert_eq!(connect_address.as_deref(), Some("10.77.9.201:5961"));
+            }
+            PipelineStartError::Failed(_) | PipelineStartError::Superseded => {
+                panic!("expected SourceSilent, got {err:?}")
+            }
+        }
+    }
+
+    /// #925: one WARN per silent streak, on attempt 2, and only for a source the
+    /// finder still sees (an advertised address) — a sender that is off has none.
+    #[test]
+    fn the_unreachable_warn_fires_once_per_streak_and_only_when_advertised() {
+        let advertised = Some("10.77.7.107:5961");
+        let warned: Vec<u32> = (0..=64)
+            .filter(|attempt| should_warn_silent_but_advertised(*attempt, advertised))
+            .collect();
+        assert_eq!(warned, vec![SILENT_BUT_ADVERTISED_WARN_ATTEMPT]);
+        assert_eq!(SILENT_BUT_ADVERTISED_WARN_ATTEMPT, 2);
+        assert!((0..=64).all(|attempt| !should_warn_silent_but_advertised(attempt, None)));
     }
 
     #[test]
     fn a_pipeline_that_was_never_silent_reports_zero_attempts_before() {
         let streaks = SilentStreaks::default();
         assert_eq!(
-            log_pipeline_streaming(&streaks, "id", "NAME", "x264enc", false),
+            log_pipeline_streaming(&streaks, "id", "NAME", "x264enc", false, None),
             0
         );
     }

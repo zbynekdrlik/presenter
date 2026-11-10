@@ -1,6 +1,7 @@
 #![allow(non_camel_case_types)]
 
 pub mod clock;
+pub mod connect_route;
 pub mod discovery;
 pub mod gpu;
 pub mod manager;

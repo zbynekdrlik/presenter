@@ -190,6 +190,12 @@ impl NdiPipeline {
         &self.encoder_timing
     }
 
+    /// #925: how this pipeline's `ndisrc` reaches the sender (advertised
+    /// address + the chosen connect address, if any).
+    pub fn route(&self) -> &crate::connect_route::NdiRoute {
+        &self.route
+    }
+
     pub fn state_watcher(&self) -> watch::Receiver<PipelineState> {
         self.state_rx.clone()
     }

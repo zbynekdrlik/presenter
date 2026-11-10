@@ -118,11 +118,55 @@ fn silent_attempt(err: &PipelineStartError) -> u32 {
     }
 }
 
+/// The sender addresses of a silent outcome (#925): where the finder sees it
+/// and the address the receiver dialled instead (`None` = by name). Both `None`
+/// for the variants that are not a silent outcome. A TOTAL match, like
+/// [`silent_attempt`].
+fn silent_addresses(err: &PipelineStartError) -> SilentAddresses<'_> {
+    match err {
+        PipelineStartError::SourceSilent {
+            advertised_address,
+            connect_address,
+            ..
+        } => SilentAddresses {
+            advertised: advertised_address.as_deref(),
+            connect: connect_address.as_deref(),
+        },
+        PipelineStartError::Failed(_) | PipelineStartError::Superseded => {
+            SilentAddresses::default()
+        }
+    }
+}
+
+/// See [`silent_addresses`].
+#[derive(Debug, Clone, Copy, Default)]
+struct SilentAddresses<'a> {
+    advertised: Option<&'a str>,
+    connect: Option<&'a str>,
+}
+
 /// The #448 line for an activated source whose broadcaster is silent. A silent
 /// source is re-activated every 30 s by the reconnect ticker (SNV: hours of
 /// silence between events), so the line is INFO only on attempts 1,2,4,8,... of
 /// the streak (`log-flood-backoff.md`, #858) and DEBUG in between.
-fn log_silent_activation(source: &VideoSource, attempt: u32) {
+///
+/// #925: a silent source the NDI finder still SEES is not "off" — the receiver
+/// cannot reach the address it was given (SNV: the sender's Dante address). That
+/// gets ONE WARN per silent streak, naming the address, so it is never mistaken
+/// for a sender that is simply switched off.
+fn log_silent_activation(source: &VideoSource, attempt: u32, addresses: SilentAddresses<'_>) {
+    if presenter_ndi::manager::should_warn_silent_but_advertised(attempt, addresses.advertised) {
+        tracing::warn!(
+            source_id = %source.id,
+            ndi_name = %source.ndi_name,
+            attempt,
+            advertised_address = %addresses.advertised.unwrap_or("-"),
+            // `-` = connected by name; otherwise the address dialled instead.
+            connect_address = %addresses.connect.unwrap_or("-"),
+            "NDI source is on the network but sends no frames — this server most likely cannot \
+             reach the address it advertises (#925)"
+        );
+    }
     if presenter_ndi::manager::should_log_silent_attempt(attempt) {
         tracing::info!(
             source_id = %source.id,
@@ -564,7 +608,7 @@ impl AppState {
                 // activation SUCCEEDS (the source is genuinely active, just
                 // waiting for signal); the stage shows a neutral `no-signal`
                 // placeholder, not a red error.
-                log_silent_activation(&source, silent_attempt(&e));
+                log_silent_activation(&source, silent_attempt(&e), silent_addresses(&e));
                 self.live_hub.publish(LiveEvent::NdiConnectionStatus {
                     status: classified.status,
                 });
@@ -1519,6 +1563,8 @@ mod tests {
         let err = PipelineStartError::SourceSilent {
             ndi_name: "RESOLUME-SNV (cg-obs)".to_string(),
             attempt: 1,
+            advertised_address: None,
+            connect_address: None,
         };
         let classified = ndi_status_for_start_error(&err);
         assert_eq!(
@@ -1762,6 +1808,71 @@ mod tests {
                 attempts,
                 (1..=8u64).map(Some).collect::<Vec<_>>(),
                 "every line names its attempt number"
+            );
+        }
+
+        const UNREACHABLE_LINE: &str = "NDI source is on the network but sends no frames";
+
+        /// #925 (SNV 2026-11-09): the SP-program sender stayed on the network the
+        /// whole afternoon while the receiver's SYN to its Dante address was never
+        /// answered — logged only as the INFO "broadcaster silent" line, exactly
+        /// like a sender that is off. A silent source the finder still sees gets
+        /// ONE WARN per streak naming the advertised address.
+        #[tokio::test]
+        async fn a_silent_source_on_the_network_warns_once_naming_its_address() {
+            let (state, source_id, _id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+            fake.set_advertised_address(Some("10.77.7.107:5961"));
+            let capture = Capture::install();
+
+            for _ in 0..6 {
+                state
+                    .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+                    .await
+                    .expect("a silent-source activation still succeeds (#448)");
+            }
+
+            let warns = capture.events_with_message(UNREACHABLE_LINE);
+            assert_eq!(
+                warns.len(),
+                1,
+                "exactly one WARN per silent streak; got {warns:?}"
+            );
+            assert_eq!(warns[0].level, tracing::Level::WARN);
+            assert_eq!(
+                warns[0].field("advertised_address"),
+                Some("10.77.7.107:5961"),
+                "the WARN names the address the receiver cannot reach"
+            );
+            assert_eq!(
+                warns[0].field("connect_address"),
+                Some("-"),
+                "the Fake connects by name"
+            );
+            assert_eq!(
+                attempt(&warns[0]),
+                Some(u64::from(
+                    presenter_ndi::manager::SILENT_BUT_ADVERTISED_WARN_ATTEMPT
+                ))
+            );
+        }
+
+        /// A sender that is off is not on the network: no address, no WARN — the
+        /// #448/#858 INFO schedule alone, unchanged.
+        #[tokio::test]
+        async fn a_silent_source_that_is_not_on_the_network_never_warns() {
+            let (state, source_id, _id, _fake) = state_with_fake(StartOutcome::SilentSource).await;
+            let capture = Capture::install();
+
+            for _ in 0..6 {
+                state
+                    .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+                    .await
+                    .expect("a silent-source activation still succeeds (#448)");
+            }
+
+            assert!(
+                capture.events_with_message(UNREACHABLE_LINE).is_empty(),
+                "a source that is not advertised is simply off — no WARN"
             );
         }
 
