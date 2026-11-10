@@ -3,6 +3,7 @@ paths:
   - "crates/presenter-core/src/audio/**"
   - "crates/presenter-core/src/listen/**"
   - "crates/presenter-server/src/listen/**"
+  - "crates/presenter-server/src/listen/dante/**"
   - "crates/presenter-server/src/state/listen.rs"
   - "crates/presenter-server/src/router/listen.rs"
   - "scripts/dev/listen/**"
@@ -245,3 +246,25 @@ paths:
   30-day retention follow the box clock; the 10-min first-pass delay only helps where NTP runs.
 - **FOH routing** (VB-Matrix on fohabl, songplayer `vban-out.md`): only with the owner's go; `Mute` only
   (VB-Matrix ignores `dBGain=-inf`); record the prior values; read back every point after each write.
+- **Dante mics (#852, `listen/dante/`)** — a mic's `transport` is `vban` (default, NOT written:
+  a stored VBAN list stays byte-identical) or `dante` + `dante: {channel, source?}` (`streamName`
+  then empty and not written; `channel` normalized to `left`). Core validates the Dante names with
+  dstack's rules mirrored (`is_valid_dante_channel_name` / `_device_name`, unique channel case-aside).
+  ONE in-process `dlink` device (git tag v0.6.73, `deny.toml` `allow-git`) carries every Dante mic as
+  one RX channel; a source becomes `Config::subscribe` (Dante Controller's own subscription, kept in
+  `dante-listen.toml` next to the DB, wins). dlink facts read from its source (correcting the dstack
+  FINDING): the app rate `16_000` needs `.network_rate(<site rate>)` too or the DEVICE runs at 16 kHz;
+  `Link::start` must run OUTSIDE any tokio runtime (spawn_blocking has one entered) → the link lives on
+  its own std thread (`link.rs`), started/stopped from `spawn_blocking`; app blocks are 42⅔ frames
+  at 48 kHz, 21⅓ at 96 kHz; the pump calls `process` with SILENCE when no flow arrives, so liveness =
+  `RxChannel.written` advancing (polled every 100 ms on the link thread into `Flows`), never "blocks
+  arrive". `Tap` (media thread): no lock / alloc / log — one `rtrb` ring per channel (1 s), a full ring
+  drops + counts (atomic), a media-time jump ≤ 1 s → silence, more → resync. The 20 ms drain makes one
+  `mic_chain::Block` (16 kHz mono f32) per LIVE channel into the mic's `BlockQueue` → the UNCHANGED
+  `run_chain`. Env (per site, like `DANTE_SUBNET`): `PRESENTER_LISTEN_DANTE_IFACE` (unset = no device,
+  status `no_interface` + the mic's Slovak error — dev/CI/PP), `_NAME` (`presenter-listen`), `_RATE`
+  (96000). Health: `MicCounters.transport`; `set_transport_mics` / `end_session` touch only their own
+  transport (a VBAN socket closing never wipes a Dante mic); `vban_rx` routes only VBAN mics and stays
+  idle without one. Status `dante: {state, device, interface, error}`; a Dante mic's `sender` =
+  `channel@device (stav)`. Tests: `dante/tests.rs` — the only mock is `DanteBackend` (the dlink
+  boundary); `dlink_config(plan).device()` is dlink's own check of the config, no network.
