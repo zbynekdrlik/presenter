@@ -311,6 +311,7 @@ crates/
 | `PRESENTER_LISTEN_VBAN_ADDR`  | `0.0.0.0:6980`          | Bind address of the VBAN receive socket for the listening microphones (#852 C1a); bound only while `listen.mics` is non-empty (it ships empty). The E2E harness uses `127.0.0.1:0`. |
 | `PRESENTER_LISTEN_RECORDINGS_DIR` | `recordings` next to the sqlite file | Folder of the listening recordings (#852 C1b): `<dir>/<YYYY-MM-DD>/<mic id>_<HHMMSS>.wav`, a day folder is kept 30 days and deleted on the 31st. Prod / PP `/opt/presenter/recordings`, dev `/opt/presenter-dev/recordings`. |
 | `PRESENTER_ACCESS_TEAM_DOMAIN` / `PRESENTER_ACCESS_AUD` | unset | #915: the site's Cloudflare Access app; the server verifies the login token and remembers the device. Unset → nobody identified by a login (WARN). Per-site `access.conf` drop-in. See `docs/configuration.md`. |
+| `DANTE_SUBNET`                | unset                   | #925 / dstack two-networks.md §4: the site's Dante VLAN subnet (CIDR), never used for NDI even on a host without a Dante leg. SNV + dev `10.77.7.0/24` (deploy-site drop-in `dante-subnet.conf`, dev unit); PP unset. Malformed → WARN, ignored. |
 | `RUST_LOG`                    | `info,tower_http=debug,sqlx=warn` | Tracing filter                                                       |
 
 ---

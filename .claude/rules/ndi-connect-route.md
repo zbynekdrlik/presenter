@@ -24,6 +24,9 @@ answered). `~/.ndi/ndi-config.v1.json` `adapters.allowed` did NOT change the cho
 - **Alternatives come from mDNS** (`<machine>.local`, nss-mdns via `lookup_host`, 2 s bound) — the
   SDK reports one url per source. The first one on the default-route side that answers a 1 s TCP
   connect on the sender's port wins.
+- **`DANTE_SUBNET` (CIDR, dstack two-networks.md §4, one name for all projects)** is ALWAYS
+  off-route, even on a host without a Dante leg (dev, PP); SNV + dev get `10.77.7.0/24`
+  (deploy-site `dante-subnet.conf` drop-in, dev unit). Malformed → WARN, ignored.
 - **A chosen address = `url-address` ALONE.** `Processing.NDI.structs.h`: the url is used when the
   name is NULL/empty; with a name set the SDK may resolve the name through its finder again.
 - **A verified address is dialled DIRECTLY (`url-address`), never by name** (SNV 2026-11-10

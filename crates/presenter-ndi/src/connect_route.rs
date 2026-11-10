@@ -155,8 +155,19 @@ pub fn parse_default_interface(proc_net_route: &str) -> Option<String> {
 /// through that side interface (SNV: Dante, isolated by policy routing and a
 /// firewall), so the receiver should not rely on it. `false` without a default
 /// route (nothing to compare with), for loopback and for this host's own
-/// addresses (a sender on this box).
+/// addresses (a sender on this box). Always `true` inside the configured
+/// `DANTE_SUBNET` (dstack two-networks.md §4), with or without a Dante leg.
 pub fn is_off_route(ip: Ipv4Addr, net: &HostNetwork) -> bool {
+    if let Some((addr, prefix_len)) = net.dante_subnet {
+        let dante = InterfaceAddr {
+            name: String::new(),
+            addr,
+            prefix_len,
+        };
+        if in_subnet(ip, &dante) {
+            return true;
+        }
+    }
     let Some(default) = net.default_interface.as_deref() else {
         return false;
     };
@@ -241,8 +252,10 @@ fn read_dante_subnet() -> Option<(Ipv4Addr, u8)> {
 
 /// `"10.77.7.0/24"` → `(10.77.7.0, 24)`; anything else → `None`.
 pub fn parse_cidr(raw: &str) -> Option<(Ipv4Addr, u8)> {
-    let _ = raw;
-    None
+    let (addr, len) = raw.trim().split_once('/')?;
+    let len: u8 = len.parse().ok()?;
+    (len <= 32).then_some(())?;
+    Some((addr.parse().ok()?, len))
 }
 
 fn read_interfaces() -> Vec<InterfaceAddr> {
