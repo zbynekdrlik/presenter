@@ -173,7 +173,7 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 | --------------------------------- | ------------------------------------- | ------- |
 | `PRESENTER_LISTEN_VBAN_ADDR`      | `0.0.0.0:6980`                        | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
 | `PRESENTER_LISTEN_RECORDINGS_DIR` | `recordings` next to the sqlite file  | Folder of the listening recordings: prod / PP `/opt/presenter/recordings`, dev `/opt/presenter-dev/recordings` (inside the units' `ReadWritePaths`). Unit tests use a temp folder. |
-| `PRESENTER_LISTEN_DANTE_IFACE` | unset | #852: the box's Dante interface; the in-process Dante device (dstack `dlink`) runs on it while a Dante mic is configured. Unset → no Dante device: a Dante mic shows "rozhranie Dante nie je nastavené" (dev, CI, PP). SNV: `enp2s0.70` (VLAN 70) once its drop-in is set. |
+| `PRESENTER_LISTEN_DANTE_IFACE` | unset | #852: the box's Dante interface (SNV: `enp2s0.70`, deploy-site drop-in `dante-listen.conf`); the in-process Dante device (dstack `dlink`) runs on it while a Dante mic is configured. Unset → no Dante device: a Dante mic shows "rozhranie Dante nie je nastavené" (dev, CI, PP). SNV: `enp2s0.70` (VLAN 70) once its drop-in is set. |
 | `PRESENTER_LISTEN_DANTE_NAME` | `presenter-listen` | #852: the Dante device's name in Dante Controller (1–31 of A–Z a–z 0–9 `-`). |
 | `PRESENTER_LISTEN_DANTE_RATE` | `96000` | #852: the Dante network's sample rate (dstack #90: the site runs 96 kHz); dlink converts to the mics' 16 kHz on the device clock. Not a number → WARN, default. |
 
