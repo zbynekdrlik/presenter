@@ -405,6 +405,10 @@ jobs:
             http://* | https://*) ;;
             *) echo "::error::PROD_STAGE_URL must start with http:// or https://"; exit 1 ;;
           esac
+          # #925: the hardware site's Dante VLAN subnet (dstack two-networks.md §4) — never
+          # used for NDI. SNV is the only hardware site deployed from main.
+          printf '[Service]\nEnvironment=DANTE_SUBNET=10.77.7.0/24\n' |
+            ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/dante-subnet.conf >/dev/null && sudo systemctl daemon-reload"
           printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$PROD_STAGE_URL" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/stage-url.conf >/dev/null && sudo systemctl daemon-reload"
           # #555: song-sync peer — SNV pulls from PP over tailscale (the two sites

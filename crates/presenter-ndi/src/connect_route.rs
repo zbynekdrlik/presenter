@@ -9,11 +9,14 @@
 //!
 //! The rule here:
 //!
-//! - The advertised address is SUSPECT only when it lies in the subnet of a local
+//! - The advertised address is SUSPECT when it lies in the subnet of a local
 //!   interface that is NOT the default-route interface (a side network such as
-//!   Dante). Anything else — the same LAN as the default route, a routed subnet, a
-//!   host without a default route — keeps today's name-only path, so single-homed
-//!   hosts (dev, PP) and every normal sender are unchanged.
+//!   Dante), or when it does not answer a bounded TCP connect on its port.
+//! - An advertised address that is not suspect is dialled DIRECTLY as
+//!   `url-address`: by NAME the SDK may pick another address the sender
+//!   advertises (SNV 2026-11-10: the finder said 10.77.9.201, the SDK dialled the
+//!   sender's new Dante VLAN address 10.77.7.115). Only a source without an
+//!   advertised address keeps the name-only path.
 //! - For a suspect address the sender's other addresses come from mDNS
 //!   (`<machine>.local`, the SDK reports only one url per source). The first one
 //!   that is reachable over the default-route side and answers a bounded TCP
@@ -51,6 +54,9 @@ pub struct InterfaceAddr {
 pub struct HostNetwork {
     pub interfaces: Vec<InterfaceAddr>,
     pub default_interface: Option<String>,
+    /// The site's Dante subnet from `DANTE_SUBNET` (dstack two-networks.md §4):
+    /// never used for NDI, even on a host without a Dante leg of its own.
+    pub dante_subnet: Option<(Ipv4Addr, u8)>,
 }
 
 /// What the receiver connects with: the NDI name, the address the finder
@@ -149,8 +155,21 @@ pub fn parse_default_interface(proc_net_route: &str) -> Option<String> {
 /// through that side interface (SNV: Dante, isolated by policy routing and a
 /// firewall), so the receiver should not rely on it. `false` without a default
 /// route (nothing to compare with), for loopback and for this host's own
-/// addresses (a sender on this box).
+/// addresses (a sender on this box). Always `true` inside the configured
+/// `DANTE_SUBNET` (dstack two-networks.md §4), with or without a Dante leg —
+/// checked first, so it wins even for this host's own Dante address (the
+/// mDNS alternative then names the same box on its LAN address).
 pub fn is_off_route(ip: Ipv4Addr, net: &HostNetwork) -> bool {
+    if let Some((addr, prefix_len)) = net.dante_subnet {
+        let dante = InterfaceAddr {
+            name: String::new(),
+            addr,
+            prefix_len,
+        };
+        if in_subnet(ip, &dante) {
+            return true;
+        }
+    }
     let Some(default) = net.default_interface.as_deref() else {
         return false;
     };
@@ -218,8 +237,27 @@ impl HostNetwork {
                 .ok()
                 .as_deref()
                 .and_then(parse_default_interface),
+            dante_subnet: read_dante_subnet(),
         }
     }
+}
+
+/// `DANTE_SUBNET` as CIDR; unset → `None`, malformed → WARN + `None`.
+fn read_dante_subnet() -> Option<(Ipv4Addr, u8)> {
+    let raw = std::env::var("DANTE_SUBNET").ok()?;
+    let parsed = parse_cidr(&raw);
+    if parsed.is_none() {
+        tracing::warn!(value = %raw, "DANTE_SUBNET is not an IPv4 CIDR (e.g. 10.77.7.0/24) — ignored (#925)");
+    }
+    parsed
+}
+
+/// `"10.77.7.0/24"` → `(10.77.7.0, 24)`; anything else → `None`.
+pub fn parse_cidr(raw: &str) -> Option<(Ipv4Addr, u8)> {
+    let (addr, len) = raw.trim().split_once('/')?;
+    let len: u8 = len.parse().ok()?;
+    (len <= 32).then_some(())?;
+    Some((addr.parse().ok()?, len))
 }
 
 fn read_interfaces() -> Vec<InterfaceAddr> {
@@ -287,8 +325,8 @@ pub async fn resolve(ndi_name: &str, advertised: Option<String>) -> NdiRoute {
 /// host (SNV's Dante NIC) OR when it does not answer a TCP connect on the
 /// sender's port (a sender advertising an address this host cannot route to,
 /// e.g. SNV after its Dante NIC was removed, 2026-11-10). A reachable address
-/// that is not on a side network keeps the name-only path, so a working site
-/// (dev, PP) only pays one short TCP connect per pipeline start.
+/// that is not on a side network is dialled directly (`url-address`), at the
+/// cost of one short TCP connect per pipeline start.
 pub async fn resolve_with<L, LF, P, PF>(
     ndi_name: &str,
     advertised: Option<String>,
@@ -314,6 +352,9 @@ where
     let reason = if is_off_route(*advertised.ip(), net) {
         "on a side network"
     } else if probe(advertised).await {
+        // Dial exactly the address that answered: by NAME the SDK may pick
+        // another address the sender advertises (SNV 2026-11-10: 10.77.7.115).
+        route.connect_address = Some(advertised.to_string());
         return route;
     } else {
         "not answering"
@@ -361,6 +402,7 @@ mod tests {
                 iface("tailscale0", [100, 122, 204, 47], 32),
             ],
             default_interface: Some("enp2s0".to_string()),
+            dante_subnet: None,
         }
     }
 
@@ -373,6 +415,7 @@ mod tests {
                 iface("docker0", [172, 17, 0, 1], 16),
             ],
             default_interface: Some("enp4s0".to_string()),
+            dante_subnet: None,
         }
     }
 
@@ -540,17 +583,26 @@ mod tests {
         );
     }
 
-    /// `resolve` keeps the name-only route (no lookup, no probe) for an address
-    /// that is not off-route — here loopback, which no host treats as a side
-    /// network — and for a source without an advertised address. The dev / PP
-    /// single-homed classification itself is pinned by the pure `dev()` tests.
+    /// The name-only route stays when the advertised address does not answer
+    /// and the sender's machine name resolves to nothing, and for a source
+    /// without an advertised address. Probe and lookup are injected: a real
+    /// sender on loopback 5961 (dev2 runs NDI test senders) must not decide it.
     #[tokio::test]
     async fn an_advertised_address_that_is_not_off_route_keeps_the_name_only_path() {
-        let route = resolve("SENDER (out)", Some("127.0.0.1:5961".to_string())).await;
+        let silent = |_: SocketAddrV4| std::future::ready(false);
+        let nobody = |_: String, _: u16| std::future::ready(Vec::new());
+        let route = resolve_with(
+            "SENDER (out)",
+            Some("127.0.0.1:5961".to_string()),
+            &dev(),
+            nobody,
+            silent,
+        )
+        .await;
         assert_eq!(route.connect_address, None);
         assert_eq!(route.advertised_address.as_deref(), Some("127.0.0.1:5961"));
         assert_eq!(route.ndisrc_target(), NdisrcTarget::Name("SENDER (out)"));
-        let unknown = resolve("SENDER (out)", None).await;
+        let unknown = resolve_with("SENDER (out)", None, &dev(), nobody, silent).await;
         assert_eq!(unknown, NdiRoute::name_only("SENDER (out)"));
     }
     /// Probe that answers only for the listed addresses.
@@ -580,8 +632,12 @@ mod tests {
         );
     }
 
+    /// SNV 2026-11-10 10:45: the finder reported 10.77.9.201, but the SDK,
+    /// connecting by NAME, dialled the sender's new Dante VLAN address
+    /// 10.77.7.115. A verified address is therefore dialled as `url-address`,
+    /// never left to the SDK's own name resolution.
     #[tokio::test]
-    async fn a_reachable_advertised_address_keeps_the_name_only_path_without_a_lookup() {
+    async fn a_reachable_advertised_address_is_dialled_directly_without_a_lookup() {
         let route = resolve_with(
             "RESOLUME-SNV (SP-program)",
             Some("10.77.9.201:5961".to_string()),
@@ -592,10 +648,10 @@ mod tests {
             answers(&[[10, 77, 9, 201]]),
         )
         .await;
-        assert_eq!(route.connect_address, None);
+        assert_eq!(route.connect_address.as_deref(), Some("10.77.9.201:5961"));
         assert_eq!(
             route.ndisrc_target(),
-            NdisrcTarget::Name("RESOLUME-SNV (SP-program)")
+            NdisrcTarget::UrlAddress("10.77.9.201:5961")
         );
     }
 
@@ -629,5 +685,40 @@ mod tests {
             route.advertised_address.as_deref(),
             Some("10.77.7.107:5961")
         );
+    }
+    #[test]
+    fn dante_subnet_parses_ipv4_cidr_only() {
+        assert_eq!(parse_cidr("10.77.7.0/24"), Some((ip([10, 77, 7, 0]), 24)));
+        assert_eq!(parse_cidr(" 10.77.7.0/24 "), Some((ip([10, 77, 7, 0]), 24)));
+        assert_eq!(parse_cidr("10.77.7.0"), None);
+        assert_eq!(parse_cidr("10.77.7.0/33"), None);
+        assert_eq!(parse_cidr("fe80::/64"), None);
+        assert_eq!(parse_cidr(""), None);
+    }
+
+    /// dstack two-networks.md §4: a host WITHOUT a Dante leg (dev, PP) still
+    /// never uses an address in the configured Dante subnet for NDI.
+    #[test]
+    fn the_configured_dante_subnet_is_off_route_on_a_host_without_a_dante_leg() {
+        let mut net = dev();
+        assert!(!is_off_route(ip([10, 77, 7, 107]), &net));
+        net.dante_subnet = Some((ip([10, 77, 7, 0]), 24));
+        assert!(is_off_route(ip([10, 77, 7, 107]), &net));
+        assert!(!is_off_route(ip([10, 77, 9, 201]), &net));
+    }
+
+    #[tokio::test]
+    async fn an_answering_dante_address_is_replaced_by_the_senders_lan_address() {
+        let mut net = dev();
+        net.dante_subnet = Some((ip([10, 77, 7, 0]), 24));
+        let route = resolve_with(
+            "RESOLUME-SNV (SP-program)",
+            Some("10.77.7.107:5961".to_string()),
+            &net,
+            |_machine, _port| std::future::ready(vec![ip([10, 77, 7, 107]), ip([10, 77, 9, 201])]),
+            answers(&[[10, 77, 7, 107], [10, 77, 9, 201]]),
+        )
+        .await;
+        assert_eq!(route.connect_address.as_deref(), Some("10.77.9.201:5961"));
     }
 }

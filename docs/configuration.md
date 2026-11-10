@@ -174,6 +174,12 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 | `PRESENTER_LISTEN_VBAN_ADDR`      | `0.0.0.0:6980`                        | Bind address of the VBAN socket. The E2E harness uses `127.0.0.1:0`, so a test server never takes the dev service's port. |
 | `PRESENTER_LISTEN_RECORDINGS_DIR` | `recordings` next to the sqlite file  | Folder of the listening recordings: prod / PP `/opt/presenter/recordings`, dev `/opt/presenter-dev/recordings` (inside the units' `ReadWritePaths`). Unit tests use a temp folder. |
 
+### NDI on a site with a Dante network (#925)
+
+| Variable       | Default | Purpose |
+| -------------- | ------- | ------- |
+| `DANTE_SUBNET` | unset   | The site's Dante VLAN subnet as CIDR (dstack `docs/two-networks.md` §4, the same name in every project). An NDI sender address inside it is never dialled; presenter looks up the sender's LAN address instead. SNV and dev `10.77.7.0/24` (deploy-site drop-in `dante-subnet.conf`, dev unit); PP unset. A malformed value is logged as a WARN and ignored. |
+
 ### Companion Integration
 
 | Variable                      | Default | Description                      |

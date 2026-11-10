@@ -79,7 +79,7 @@ impl NdiPipeline {
         tracing::debug!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
 
         let (ndisrc, ndisrcdemux) = build_ndi_source(&route)?;
-        let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
+        let (videoconvert, videoscale, scale_caps) = build_video_chain()?;
         let (raw_tee, q_default) = build_raw_tee_and_queues()?;
         let encoder = build_encoder(encoder_name)?;
         let profile_caps = build_profile_caps()?;
@@ -92,7 +92,6 @@ impl NdiPipeline {
                 &videoconvert,
                 &videoscale,
                 &scale_caps,
-                &audio_fakesink,
                 &raw_tee,
                 &q_default,
                 &encoder,
@@ -125,7 +124,7 @@ impl NdiPipeline {
         let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
         let producer = StreamProducer::with(&appsink, settings);
 
-        connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
+        add_demux_branches(&pipeline, &ndisrcdemux, &videoconvert)?;
         let encoder_timing = install_timing_probes(
             &videoconvert,
             &encoder,
@@ -178,26 +177,68 @@ fn install_timing_probes(
     super::encoder_timing::install(encoder, appsink, ndi_name)
 }
 
-/// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → fakesink.
-fn connect_demux_pads(
+/// Wire the demux's sometimes-pads into `pipeline`: video → `videoconvert`,
+/// audio → a fakesink created only when the `audio` pad appears (#925).
+///
+/// A bin posts EOS only once EVERY sink got one. `ndisrc` ends a dead
+/// connection with EOS after 5 s without frames, and that EOS is what lets the
+/// supervisor rebuild and re-resolve the sender's address — an audio sink
+/// added up front waits for a pad a video-only sender (SP-program) never
+/// creates, so the dead pipeline stayed `Streaming` forever.
+pub(super) fn add_demux_branches(
+    pipeline: &gst::Pipeline,
     ndisrcdemux: &gst::Element,
     videoconvert: &gst::Element,
-    audio_fakesink: &gst::Element,
-) {
+) -> Result<()> {
+    let pipeline = pipeline.downgrade();
     let videoconvert = videoconvert.clone();
-    let audio_fakesink = audio_fakesink.clone();
-    ndisrcdemux.connect_pad_added(move |_, pad| {
-        let name = pad.name();
-        if name == "video" {
+    ndisrcdemux.connect_pad_added(move |_, pad| match pad.name().as_str() {
+        "video" => {
             if let Some(sink_pad) = videoconvert.static_pad("sink") {
                 let _ = pad.link(&sink_pad);
             }
-        } else if name == "audio" {
-            if let Some(sink_pad) = audio_fakesink.static_pad("sink") {
-                let _ = pad.link(&sink_pad);
+        }
+        "audio" => {
+            if let Some(pipeline) = pipeline.upgrade() {
+                if let Err(e) = add_audio_sink(&pipeline, pad) {
+                    tracing::warn!(error = %e, "NDI audio pad left unlinked");
+                }
             }
         }
+        _ => {}
     });
+    Ok(())
+}
+
+/// Discard the demux's `audio` pad into a fakesink added to the running
+/// pipeline (`async=false`: never holds the state change).
+fn add_audio_sink(pipeline: &gst::Pipeline, pad: &gst::Pad) -> Result<()> {
+    let sink = gst::ElementFactory::make("fakesink")
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .context("build fakesink (audio)")?;
+    pipeline.add(&sink).context("add audio fakesink")?;
+    if let Err(e) = start_and_link_audio_sink(&sink, pad) {
+        // A sink left in the bin without upstream never gets EOS, and the
+        // pipeline would never post one: take it out again.
+        let _ = sink.set_state(gst::State::Null);
+        let _ = pipeline.remove(&sink);
+        return Err(e);
+    }
+    tracing::debug!("NDI audio pad linked to a fakesink");
+    Ok(())
+}
+
+fn start_and_link_audio_sink(sink: &gst::Element, pad: &gst::Pad) -> Result<()> {
+    sink.sync_state_with_parent()
+        .context("start audio fakesink")?;
+    let sink_pad = sink
+        .static_pad("sink")
+        .context("audio fakesink has no sink pad")?;
+    pad.link(&sink_pad)
+        .context("link demux audio -> fakesink")?;
+    Ok(())
 }
 
 /// Build the NDI ingest pair: `ndisrc` (named "ndisrc") and `ndisrcdemux`
@@ -319,9 +360,9 @@ fn build_branch_queue(name: &str) -> Result<gst::Element> {
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the
-/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)` plus the
-/// audio `fakesink`. Returns `(videoconvert, videoscale, scale_caps, audio_fakesink)`.
-fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element, gst::Element)> {
+/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)`.
+/// Returns `(videoconvert, videoscale, scale_caps)`.
+fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element)> {
     let videoconvert = gst::ElementFactory::make("videoconvert")
         .build()
         .context("build videoconvert")?;
@@ -356,12 +397,7 @@ fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element, gst:
         )
         .build()
         .context("build scale capsfilter")?;
-    let audio_fakesink = gst::ElementFactory::make("fakesink")
-        .property("async", false)
-        .property("sync", false)
-        .build()
-        .context("build fakesink (audio)")?;
-    Ok((videoconvert, videoscale, scale_caps, audio_fakesink))
+    Ok((videoconvert, videoscale, scale_caps))
 }
 
 /// Build the default branch's H264 encoder ("encoder") with tuning applied
