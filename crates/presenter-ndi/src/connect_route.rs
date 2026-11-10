@@ -580,8 +580,12 @@ mod tests {
         );
     }
 
+    /// SNV 2026-11-10 10:45: the finder reported 10.77.9.201, but the SDK,
+    /// connecting by NAME, dialled the sender's new Dante VLAN address
+    /// 10.77.7.115. A verified address is therefore dialled as `url-address`,
+    /// never left to the SDK's own name resolution.
     #[tokio::test]
-    async fn a_reachable_advertised_address_keeps_the_name_only_path_without_a_lookup() {
+    async fn a_reachable_advertised_address_is_dialled_directly_without_a_lookup() {
         let route = resolve_with(
             "RESOLUME-SNV (SP-program)",
             Some("10.77.9.201:5961".to_string()),
@@ -592,10 +596,10 @@ mod tests {
             answers(&[[10, 77, 9, 201]]),
         )
         .await;
-        assert_eq!(route.connect_address, None);
+        assert_eq!(route.connect_address.as_deref(), Some("10.77.9.201:5961"));
         assert_eq!(
             route.ndisrc_target(),
-            NdisrcTarget::Name("RESOLUME-SNV (SP-program)")
+            NdisrcTarget::UrlAddress("10.77.9.201:5961")
         );
     }
 
