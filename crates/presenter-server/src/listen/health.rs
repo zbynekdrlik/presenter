@@ -13,10 +13,11 @@ use chrono::NaiveDateTime;
 use presenter_core::audio::level::is_voiced;
 use presenter_core::audio::sequence::SequenceVerdict;
 use presenter_core::audio::vban::{VbanAudioFormat, VbanReject};
-use presenter_core::listen::mics::MicConfig;
+use presenter_core::listen::mics::{MicConfig, MicTransport};
 use presenter_core::listen::recorder::{MicRecording, RecorderStatus, RecordingState};
 use presenter_core::listen::status::{
-    ListenStatus, MicState, MicStatus, RejectedSender, SocketState, SocketStatus, UnmatchedStream,
+    DanteStatus, ListenStatus, MicState, MicStatus, RejectedSender, SocketState, SocketStatus,
+    UnmatchedStream,
 };
 use tokio::time::Instant;
 
@@ -67,7 +68,12 @@ pub(crate) struct PacketTally {
 
 #[derive(Debug, Default)]
 struct MicCounters {
+    /// Which receiver owns these counters: a VBAN socket session never
+    /// clears a Dante mic's, nor the Dante device a VBAN mic's (#852).
+    transport: MicTransport,
     sender: Option<SocketAddr>,
+    /// A Dante mic's subscription (`channel@device`), shown as its sender.
+    source: Option<String>,
     format: Option<VbanAudioFormat>,
     frames_per_packet: Option<u16>,
     packets: u64,
@@ -353,6 +359,8 @@ pub(crate) struct ListenHealth {
     reject_total: u64,
     /// The recorder's writers (#852 C1b); not part of the socket session.
     pub(crate) recorder: RecorderHealth,
+    /// The Dante device (#852); not part of the VBAN socket session.
+    pub(crate) dante: DanteStatus,
 }
 
 impl ListenHealth {
@@ -372,10 +380,23 @@ impl ListenHealth {
     /// nothing), `fresh` ones start from zero with this update's generation,
     /// mics no longer listed go. Returns the generation.
     pub(crate) fn set_mics(&mut self, kept: &[&str], fresh: &[&str]) -> u64 {
+        self.set_transport_mics(MicTransport::Vban, kept, fresh)
+    }
+
+    /// [`Self::set_mics`] for the mics of one `transport`: the other
+    /// transport's mics keep their counters untouched.
+    pub(crate) fn set_transport_mics(
+        &mut self,
+        transport: MicTransport,
+        kept: &[&str],
+        fresh: &[&str],
+    ) -> u64 {
         self.generation += 1;
-        self.mics.retain(|id, _| kept.contains(&id.as_str()));
+        self.mics
+            .retain(|id, mic| mic.transport != transport || kept.contains(&id.as_str()));
         for id in fresh {
             let counters = MicCounters {
+                transport,
                 generation: self.generation,
                 ..MicCounters::default()
             };
@@ -384,12 +405,69 @@ impl ListenHealth {
         self.generation
     }
 
+    /// A block of a Dante mic's live channel reached its chain: counted like a
+    /// VBAN packet (`frames` 16 kHz samples, `source` its subscription); a
+    /// full queue that dropped the oldest block is counted too.
+    pub(crate) fn record_dante_block(
+        &mut self,
+        mic_id: &str,
+        frames: u16,
+        source: Option<&str>,
+        dropped_block: bool,
+        at: Instant,
+    ) {
+        let Some(mic) = self
+            .mics
+            .get_mut(mic_id)
+            .filter(|mic| mic.transport == MicTransport::Dante)
+        else {
+            return;
+        };
+        mic.packets += 1;
+        mic.last_packet = Some(at);
+        mic.format = Some(super::dante::DANTE_BLOCK_FORMAT);
+        mic.frames_per_packet = Some(frames);
+        mic.source = source.map(str::to_string);
+        if dropped_block {
+            mic.dropped_blocks += 1;
+        }
+    }
+
+    /// Samples a Dante mic lost: `gap` = a skipped media-time range written as
+    /// silence (a lost "packet"), else a jump over 1 s (a resync); returns
+    /// that kind's count, the #484 gate of its WARN.
+    pub(crate) fn record_dante_loss(&mut self, mic_id: &str, gap: bool) -> u64 {
+        let Some(mic) = self.mics.get_mut(mic_id) else {
+            return 0;
+        };
+        if gap {
+            mic.lost_packets += 1;
+            mic.gap_events += 1;
+            mic.gap_events
+        } else {
+            mic.resyncs += 1;
+            mic.resyncs
+        }
+    }
+
+    /// Why a Dante mic gives no audio (Slovak), or `None` once it can.
+    pub(crate) fn set_dante_error(&mut self, mic_id: &str, error: Option<&str>) {
+        if let Some(mic) = self
+            .mics
+            .get_mut(mic_id)
+            .filter(|mic| mic.transport == MicTransport::Dante)
+        {
+            mic.error = error.map(str::to_string);
+        }
+    }
+
     /// The socket closed: the session's counters go, so a later bind (or a
     /// failed rebind under a new stream name) never shows the last session's
     /// numbers, and the unassigned-stream and reject log gates (their
     /// session-wide counts included) start over.
     pub(crate) fn end_session(&mut self) {
-        self.mics.clear();
+        self.mics
+            .retain(|_, mic| mic.transport != MicTransport::Vban);
         self.unmatched = Recent::default();
         self.unmatched_names = Recent::default();
         self.new_names = 0;
@@ -399,9 +477,20 @@ impl ListenHealth {
         self.reject_total = 0;
     }
 
-    /// Packets per second over the time since the last tick.
+    /// Packets per second of the VBAN mics over the time since the last tick.
     pub(crate) fn on_tick(&mut self, now: Instant) {
-        for mic in self.mics.values_mut() {
+        self.on_transport_tick(MicTransport::Vban, now);
+    }
+
+    /// [`Self::on_tick`] for the mics of one `transport`: each receiver ticks
+    /// its own mics, so two 1 s ticks a few ms apart never measure a rate over
+    /// a few ms (#852).
+    pub(crate) fn on_transport_tick(&mut self, transport: MicTransport, now: Instant) {
+        for mic in self
+            .mics
+            .values_mut()
+            .filter(|mic| mic.transport == transport)
+        {
             if let Some(at) = mic.tick_at {
                 let seconds = now.saturating_duration_since(at).as_secs_f32();
                 if seconds > 0.0 {
@@ -576,6 +665,7 @@ impl ListenHealth {
             unmatched: self.unmatched_streams(now),
             rejected: self.rejected_senders(now),
             recorder: self.recorder.snapshot(mics),
+            dante: self.dante.clone(),
         }
     }
 
@@ -645,7 +735,10 @@ fn mic_status(config: &MicConfig, counters: Option<&MicCounters>, now: Instant) 
     MicStatus {
         config: config.clone(),
         state,
-        sender: c.sender.map(|addr| addr.to_string()),
+        sender: c
+            .sender
+            .map(|addr| addr.to_string())
+            .or_else(|| c.source.clone()),
         format: c.format,
         frames_per_packet: c.frames_per_packet,
         packets: c.packets,

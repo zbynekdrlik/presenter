@@ -35,6 +35,8 @@ fn mic(id: &str, stream: &str, sender_ip: Option<&str>) -> MicConfig {
         channel: MicChannel::Left,
         language: MicLanguage::En,
         role: MicRole::Guest,
+        transport: presenter_core::listen::mics::MicTransport::Vban,
+        dante: None,
     }
 }
 

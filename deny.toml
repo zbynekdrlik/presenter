@@ -119,3 +119,9 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# #852: dstack's dlink (the in-process Dante device) and its dsync PTP follower,
+# our own public repos, pinned to release tags.
+allow-git = [
+    "https://github.com/zbynekdrlik/dstack",
+    "https://github.com/zbynekdrlik/dsync",
+]

@@ -32,6 +32,16 @@ opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
 
+# #852: dlink's rate converter (16 kHz app on a 48/96 kHz Dante network) runs
+# inside its pump's block; unoptimised it overruns every block (dlink lib.rs
+# "Debug builds with a rate converter"). Cargo takes profiles from the top
+# workspace only, so they are set here as dstack sets them.
+[profile.dev.package.rubato]
+opt-level = 3
+
+[profile.dev.package.dstack-resample]
+opt-level = 3
+
 [profile.mutants]
 inherits = "test"
 debug = "none"

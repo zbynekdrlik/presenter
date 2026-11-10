@@ -10,7 +10,10 @@
 //! (`recorder`, `recording_file`) has its own supervisor task, started with the
 //! socket task: it keeps one writer per configured mic while the per-day toggle
 //! names today and deletes day folders older than 30 days once per local date.
+//! A Dante mic (#852, `dante`) arrives through Presenter's own in-process
+//! Dante device (dstack's `dlink`) and feeds the same chain.
 
+mod dante;
 pub(crate) mod health;
 mod mic_chain;
 pub(crate) mod recorder;
@@ -136,14 +139,21 @@ impl ListenService {
         status
     }
 
-    /// Start the socket task and the recorder's supervisor once; `false` when
-    /// they were already started.
+    /// Start the socket task, the Dante device's supervisor (#852: a device
+    /// only while a Dante mic is configured and the box names its Dante
+    /// interface) and the recorder's supervisor once; `false` when they were
+    /// already started.
     pub(crate) fn start(&self, bind: SocketAddr) -> bool {
         if self.inner.started.swap(true, Ordering::SeqCst) {
             return false;
         }
         self.with_health(|health| health.socket.bind_addr = Some(bind));
         tokio::spawn(vban_rx::supervise(self.clone(), bind));
+        tokio::spawn(dante::supervise(
+            self.clone(),
+            Arc::new(dante::DlinkBackend),
+            dante::DanteEnv::from_env(),
+        ));
         tokio::spawn(recorder::supervise(self.clone()));
         true
     }
