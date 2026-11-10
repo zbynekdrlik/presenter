@@ -9,11 +9,14 @@
 //!
 //! The rule here:
 //!
-//! - The advertised address is SUSPECT only when it lies in the subnet of a local
+//! - The advertised address is SUSPECT when it lies in the subnet of a local
 //!   interface that is NOT the default-route interface (a side network such as
-//!   Dante). Anything else — the same LAN as the default route, a routed subnet, a
-//!   host without a default route — keeps today's name-only path, so single-homed
-//!   hosts (dev, PP) and every normal sender are unchanged.
+//!   Dante), or when it does not answer a bounded TCP connect on its port.
+//! - An advertised address that is not suspect is dialled DIRECTLY as
+//!   `url-address`: by NAME the SDK may pick another address the sender
+//!   advertises (SNV 2026-11-10: the finder said 10.77.9.201, the SDK dialled the
+//!   sender's new Dante VLAN address 10.77.7.115). Only a source without an
+//!   advertised address keeps the name-only path.
 //! - For a suspect address the sender's other addresses come from mDNS
 //!   (`<machine>.local`, the SDK reports only one url per source). The first one
 //!   that is reachable over the default-route side and answers a bounded TCP
@@ -287,8 +290,8 @@ pub async fn resolve(ndi_name: &str, advertised: Option<String>) -> NdiRoute {
 /// host (SNV's Dante NIC) OR when it does not answer a TCP connect on the
 /// sender's port (a sender advertising an address this host cannot route to,
 /// e.g. SNV after its Dante NIC was removed, 2026-11-10). A reachable address
-/// that is not on a side network keeps the name-only path, so a working site
-/// (dev, PP) only pays one short TCP connect per pipeline start.
+/// that is not on a side network is dialled directly (`url-address`), at the
+/// cost of one short TCP connect per pipeline start.
 pub async fn resolve_with<L, LF, P, PF>(
     ndi_name: &str,
     advertised: Option<String>,
@@ -314,6 +317,9 @@ where
     let reason = if is_off_route(*advertised.ip(), net) {
         "on a side network"
     } else if probe(advertised).await {
+        // Dial exactly the address that answered: by NAME the SDK may pick
+        // another address the sender advertises (SNV 2026-11-10: 10.77.7.115).
+        route.connect_address = Some(advertised.to_string());
         return route;
     } else {
         "not answering"
@@ -540,10 +546,10 @@ mod tests {
         );
     }
 
-    /// `resolve` keeps the name-only route (no lookup, no probe) for an address
-    /// that is not off-route — here loopback, which no host treats as a side
-    /// network — and for a source without an advertised address. The dev / PP
-    /// single-homed classification itself is pinned by the pure `dev()` tests.
+    /// `resolve` keeps the name-only route when the advertised address does not
+    /// answer and the sender's machine name resolves to nothing (here loopback
+    /// with no listener and an unknown `SENDER.local`), and for a source without
+    /// an advertised address.
     #[tokio::test]
     async fn an_advertised_address_that_is_not_off_route_keeps_the_name_only_path() {
         let route = resolve("SENDER (out)", Some("127.0.0.1:5961".to_string())).await;

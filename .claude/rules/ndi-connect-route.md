@@ -26,10 +26,15 @@ answered). `~/.ndi/ndi-config.v1.json` `adapters.allowed` did NOT change the cho
   connect on the sender's port wins.
 - **A chosen address = `url-address` ALONE.** `Processing.NDI.structs.h`: the url is used when the
   name is NULL/empty; with a name set the SDK may resolve the name through its finder again.
+- **A verified address is dialled DIRECTLY (`url-address`), never by name** (SNV 2026-11-10
+  10:45: the finder reported 10.77.9.201, the check passed, but the SDK connecting by NAME dialled
+  the sender's new Dante VLAN address 10.77.7.115 — SP-program black). The finder's
+  `p_url_address` is only ONE of the sender's addresses; name resolution may pick another. The
+  name-only path remains only for a source without an advertised address.
 - **An advertised address that does not answer is replaced too** (2026-11-10: SNV's Dante NIC was
   pulled, no side interface left, the sender still advertised 10.77.7.107). Off a side network the
-  advertised address gets ONE 1 s TCP probe; it answers → name-only (dev, PP: unchanged behaviour,
-  one short connect per start); silent → the same mDNS + probe alternatives. A side-network
+  advertised address gets ONE 1 s TCP probe; it answers → dialled as `url-address` (one short
+  connect per start); silent → the same mDNS + probe alternatives. A side-network
   address is replaced even when it answers (the guard may accept the SYN, then drop the stream).
 - **`resolve_with`** takes the host network, the lookup and the probe as arguments — test the
   decision through it, never through real sockets.
