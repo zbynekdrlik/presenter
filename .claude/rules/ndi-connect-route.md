@@ -46,6 +46,12 @@ answered). `~/.ndi/ndi-config.v1.json` `adapters.allowed` did NOT change the cho
   `pad-added` (`add_demux_branches`), never up front. The NDI SDK keeps a sender's port per source
   name across restarts, so a port move is rare — but without the EOS it was permanent (by name too,
   once an outage lasted > 5 s).
+- **No alternative found → name-only, never "no route"** (review of PR #927): an off-route or
+  silent advertised address with no mDNS alternative falls back to the SDK by name. The name may
+  still resolve to the Dante address, but then ndisrc gets no frames → EOS after 5 s → a rebuild
+  with a fresh `route_for`. A "no route" error would count as a failed start (rate limit, 5 min
+  cool-off after 5), which is slower. A rebuild right after a sender restart is often by name too
+  (the finder has not relisted the sender yet); the next EOS cycle corrects it.
 - **`resolve_with`** takes the host network, the lookup and the probe as arguments — test the
   decision through it, never through real sockets.
 - **Detection:** `SourceSilent { advertised_address }` carries the finder's address; the server

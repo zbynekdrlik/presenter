@@ -219,6 +219,18 @@ fn add_audio_sink(pipeline: &gst::Pipeline, pad: &gst::Pad) -> Result<()> {
         .build()
         .context("build fakesink (audio)")?;
     pipeline.add(&sink).context("add audio fakesink")?;
+    if let Err(e) = start_and_link_audio_sink(&sink, pad) {
+        // A sink left in the bin without upstream never gets EOS, and the
+        // pipeline would never post one: take it out again.
+        let _ = sink.set_state(gst::State::Null);
+        let _ = pipeline.remove(&sink);
+        return Err(e);
+    }
+    tracing::debug!("NDI audio pad linked to a fakesink");
+    Ok(())
+}
+
+fn start_and_link_audio_sink(sink: &gst::Element, pad: &gst::Pad) -> Result<()> {
     sink.sync_state_with_parent()
         .context("start audio fakesink")?;
     let sink_pad = sink
@@ -226,7 +238,6 @@ fn add_audio_sink(pipeline: &gst::Pipeline, pad: &gst::Pad) -> Result<()> {
         .context("audio fakesink has no sink pad")?;
     pad.link(&sink_pad)
         .context("link demux audio -> fakesink")?;
-    tracing::debug!("NDI audio pad linked to a fakesink");
     Ok(())
 }
 

@@ -156,7 +156,9 @@ pub fn parse_default_interface(proc_net_route: &str) -> Option<String> {
 /// firewall), so the receiver should not rely on it. `false` without a default
 /// route (nothing to compare with), for loopback and for this host's own
 /// addresses (a sender on this box). Always `true` inside the configured
-/// `DANTE_SUBNET` (dstack two-networks.md §4), with or without a Dante leg.
+/// `DANTE_SUBNET` (dstack two-networks.md §4), with or without a Dante leg —
+/// checked first, so it wins even for this host's own Dante address (the
+/// mDNS alternative then names the same box on its LAN address).
 pub fn is_off_route(ip: Ipv4Addr, net: &HostNetwork) -> bool {
     if let Some((addr, prefix_len)) = net.dante_subnet {
         let dante = InterfaceAddr {
