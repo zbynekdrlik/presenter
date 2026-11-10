@@ -26,8 +26,13 @@ answered). `~/.ndi/ndi-config.v1.json` `adapters.allowed` did NOT change the cho
   connect on the sender's port wins.
 - **A chosen address = `url-address` ALONE.** `Processing.NDI.structs.h`: the url is used when the
   name is NULL/empty; with a name set the SDK may resolve the name through its finder again.
-- **Single-homed hosts (dev, PP) never leave the name-only path** — `is_off_route` is `false`
-  there; keep it that way (owner: NDI changes must be general and must not touch working sites).
+- **An advertised address that does not answer is replaced too** (2026-11-10: SNV's Dante NIC was
+  pulled, no side interface left, the sender still advertised 10.77.7.107). Off a side network the
+  advertised address gets ONE 1 s TCP probe; it answers → name-only (dev, PP: unchanged behaviour,
+  one short connect per start); silent → the same mDNS + probe alternatives. A side-network
+  address is replaced even when it answers (the guard may accept the SYN, then drop the stream).
+- **`resolve_with`** takes the host network, the lookup and the probe as arguments — test the
+  decision through it, never through real sockets.
 - **Detection:** `SourceSilent { advertised_address }` carries the finder's address; the server
   logs ONE WARN per silent streak (attempt 2, `should_warn_silent_but_advertised`) for a source the
   finder still sees — "on the network but sends no frames". `/healthz ndi_pipelines[]` has

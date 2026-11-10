@@ -313,8 +313,10 @@ where
     };
     let reason = if is_off_route(*advertised.ip(), net) {
         "on a side network"
-    } else {
+    } else if probe(advertised).await {
         return route;
+    } else {
+        "not answering"
     };
     let Some(machine) = machine_name(ndi_name) else {
         tracing::debug!(%ndi_name, %advertised, reason, "advertised NDI address unusable; no machine name to look up (#925)");
