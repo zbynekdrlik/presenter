@@ -213,15 +213,15 @@ test("an unreachable source names the address, and clears once it streams", asyn
   });
 
   const source = await createSource(request, "sp-program", GHOST);
-  // The wire contract: every entry carries `advertisedAddress` (null = not reported).
+  // The wire contract: every entry carries `unreachableAddress` (null unless unreachable).
   const real = (await readStatus(request)).sources.find(
     (s: any) => s.id === source.id,
   );
-  expect(real).toHaveProperty("advertisedAddress", null);
+  expect(real).toHaveProperty("unreachableAddress", null);
 
-  let served: { state: string; advertisedAddress: string | null } = {
+  let served: { state: string; unreachableAddress: string | null } = {
     state: "unreachable",
-    advertisedAddress: "10.77.7.107:5961",
+    unreachableAddress: "10.77.7.107:5961",
   };
   await page.route("**/integrations/video-sources/status", async (route) => {
     const response = await route.fetch();
@@ -251,7 +251,7 @@ test("an unreachable source names the address, and clears once it streams", asyn
   );
 
   // The sender becomes reachable: the next poll says live, the hint goes away.
-  served = { state: "live", advertisedAddress: "10.77.9.201:5961" };
+  served = { state: "live", unreachableAddress: null };
   await expect(badge).toHaveText("Naživo", { timeout: 30_000 });
   await expect(badge).toHaveAttribute("data-state", "live");
   await expect(hint).toHaveCount(0);

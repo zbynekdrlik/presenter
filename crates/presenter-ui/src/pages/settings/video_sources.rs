@@ -94,9 +94,9 @@ pub(crate) fn header_badge_class(available: Option<bool>) -> &'static str {
 /// stage and no idea whether to look at the server, the network, the TV, or the sending
 /// machine. The answer was the sending machine — and now the page says so.
 ///
-/// #925: `unreachable` names the address the NDI finder reports (`advertised`) — at SNV
-/// that was the sender's Dante address, which this server cannot reach.
-pub(crate) fn status_hint(state: &str, advertised: Option<&str>) -> Option<String> {
+/// #925: `unreachable` names the address the source is on the network at but the
+/// server could not connect to (`address`) — at SNV the sender's Dante address.
+pub(crate) fn status_hint(state: &str, address: Option<&str>) -> Option<String> {
     match state {
         "not-found" => Some(
             "Tento názov NDI nie je v sieti. Skontroluj, či je vysielací počítač zapnutý a má \
@@ -107,7 +107,7 @@ pub(crate) fn status_hint(state: &str, advertised: Option<&str>) -> Option<Strin
             "V sieti je, ale neposiela obraz. Zapni výstup NDI na vysielacom počítači.".to_string(),
         ),
         "unreachable" => {
-            let address = advertised
+            let address = address
                 .map(|addr| format!(" (adresa {addr})"))
                 .unwrap_or_default();
             Some(format!(
@@ -338,8 +338,8 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                         });
                         let state_str = move || status.get().map(|st| st.state).unwrap_or_default();
                         let detail = move || status.get().and_then(|st| st.detail);
-                        let advertised =
-                            move || status.get().and_then(|st| st.advertised_address);
+                        let unreachable_at =
+                            move || status.get().and_then(|st| st.unreachable_address);
                         // The DOT and the BUTTON come from the POLLED status, not from the
                         // `sources` list — that list is only refetched by this tab's own
                         // actions, so activating from a second tab (or Companion) used to leave
@@ -360,7 +360,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                 <div class=dot_class></div>
                                 <div class="settings__source-info">
                                     <NdiNameParts ndi_name=source.ndi_name.clone() chip=false />
-                                    {move || status_hint(&state_str(), advertised().as_deref()).map(|text| view! {
+                                    {move || status_hint(&state_str(), unreachable_at().as_deref()).map(|text| view! {
                                         <div class="settings__source-hint"
                                             data-role="video-source-hint"
                                             data-source-id=id_hint.clone()>{text}</div>
@@ -629,7 +629,7 @@ mod tests {
         );
     }
 
-    /// Only the two BROKEN states get a hint — a hint under a working source is noise.
+    /// Only the BROKEN states get a hint — a hint under a working source is noise.
     #[test]
     fn only_the_broken_states_tell_the_operator_what_to_do() {
         let not_found = status_hint("not-found", None).expect("not-found must explain itself");

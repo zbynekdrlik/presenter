@@ -113,19 +113,19 @@ impl NdiManagerHandle {
         }
     }
 
-    /// Forward to [`NdiManager::silent_attempts`] — the source's silent-start
-    /// streak (#858; `0` = none), read by the #925 "cannot connect" status.
-    pub(crate) fn silent_attempts(&self, source_id: &str) -> u32 {
+    /// Forward to [`NdiManager::silent_streak`] — the source's silent-start streak
+    /// (#858) and the address its last silent start could not reach (#925).
+    pub(crate) fn silent_streak(&self, source_id: &str) -> presenter_ndi::manager::SilentStreak {
         match self {
-            Self::Real(m) => m.silent_attempts(source_id),
+            Self::Real(m) => m.silent_streak(source_id),
             #[cfg(test)]
             Self::Fake(f) => f
                 .silent_attempts
                 .lock()
                 .expect("silent_attempts lock")
                 .get(source_id)
-                .copied()
-                .unwrap_or(0),
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
@@ -281,7 +281,10 @@ pub(crate) struct FakeNdiControl {
     /// ended by a streaming start and by `stop_pipeline` / `stop_all`;
     /// `stop_other_pipelines(keep)` keeps only `keep`'s (it runs after EVERY silent
     /// activation).
-    silent_attempts: Mutex<std::collections::HashMap<String, u32>>,
+    silent_attempts: Mutex<std::collections::HashMap<String, presenter_ndi::manager::SilentStreak>>,
+    /// #925: the address a silent start "dialled" (`SourceSilent { connect_address }`);
+    /// `None` = no address answered, the real route's name-only fallback.
+    connect_address: Mutex<Option<String>>,
     /// #925: the address the "finder" reports for every source — carried by a
     /// silent start (`SourceSilent { advertised_address }`) and by the health
     /// snapshot, like the real manager's pipeline route. `None` = not advertised.
@@ -381,6 +384,11 @@ impl FakeNdiControl {
             .expect("advertised_address lock") = address.map(str::to_string);
     }
 
+    /// #925: the address the next starts connect to (`None` = no address answered).
+    pub(crate) fn set_connect_address(&self, address: Option<&str>) {
+        *self.connect_address.lock().expect("connect_address lock") = address.map(str::to_string);
+    }
+
     fn advertised(&self) -> Option<String> {
         self.advertised_address
             .lock()
@@ -461,9 +469,7 @@ impl FakeNdiControl {
                 .iter()
                 .map(|name| presenter_ndi::discovery::NdiSourceInfo {
                     name: name.clone(),
-                    // #925: like the real finder, every listed source carries
-                    // the address the Fake was given.
-                    url_address: self.advertised(),
+                    url_address: None,
                 })
                 .collect(),
         )
@@ -548,14 +554,24 @@ impl FakeNdiControl {
                 Ok(())
             }
             StartOutcome::SilentSource => {
+                let advertised = self.advertised();
+                let connect = self
+                    .connect_address
+                    .lock()
+                    .expect("connect_address lock")
+                    .clone();
                 let mut attempts = self.silent_attempts.lock().expect("silent_attempts lock");
-                let attempt = attempts.entry(source_id.to_string()).or_insert(0);
-                *attempt += 1;
+                let streak = attempts.entry(source_id.to_string()).or_default();
+                streak.attempts += 1;
+                streak.unreached_address = presenter_ndi::manager::unreached_address(
+                    advertised.as_deref(),
+                    connect.as_deref(),
+                );
                 Err(PipelineStartError::SourceSilent {
                     ndi_name: ndi_name.to_string(),
-                    attempt: *attempt,
-                    advertised_address: self.advertised(),
-                    connect_address: None,
+                    attempt: streak.attempts,
+                    advertised_address: advertised,
+                    connect_address: connect,
                 })
             }
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(

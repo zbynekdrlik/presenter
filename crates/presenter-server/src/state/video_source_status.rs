@@ -128,52 +128,49 @@ pub(crate) fn classify(
 }
 
 /// Rule 7 (#925), applied to [`classify`]'s answer: a `NotBroadcasting` source whose
-/// silent-start streak says "on the network at an address, silent for a whole
-/// reconnect cycle" ([`presenter_ndi::manager::is_silent_but_advertised`]) is
-/// `Unreachable` — unless its pipeline ERRORED, whose own error text (`detail`) is
-/// the better "why". Every other state is kept: `Live` / `Connecting` win over an
-/// old streak (and the streak ends on the promote anyway). Pure → unit-tested.
+/// silent streak says "on the network at this address, and no address of the sender
+/// answered, for a whole reconnect cycle" (`unreachable` =
+/// [`presenter_ndi::manager::unreachable_address`]) is `Unreachable` — unless its
+/// pipeline ERRORED, whose own error text (`detail`) is the better "why". Every other
+/// state is kept: `Live` / `Connecting` win over an old streak (and the streak ends
+/// on the promote anyway). Pure → unit-tested.
 pub(crate) fn with_silence(
     state: VideoSourceState,
     pipeline: PipelineFact<'_>,
-    silent_but_advertised: bool,
+    unreachable: bool,
 ) -> VideoSourceState {
     let errored = pipeline == PipelineFact::Known(Some("errored"));
-    if state == VideoSourceState::NotBroadcasting && silent_but_advertised && !errored {
+    if state == VideoSourceState::NotBroadcasting && unreachable && !errored {
         VideoSourceState::Unreachable
     } else {
         state
     }
 }
 
-/// One row of the #546 status join: the pure [`classify`] plus
-/// the #925 silence rule, over the facts `AppState::video_source_status` gathered.
-/// `pipeline`: `None` = the map was unreadable; `Some(None)` = no pipeline.
+/// One row of the #546 status join: the pure [`classify`] plus the #925 silence
+/// rule, over the facts `AppState::video_source_status` gathered. `pipeline`:
+/// `None` = the map was unreadable, `Some(None)` = no pipeline. `unreachable`: the
+/// streak's could-not-connect address ([`presenter_ndi::manager::unreachable_address`]).
 pub(crate) fn status_entry(
     row: presenter_core::VideoSource,
     pipeline: Option<Option<(&'static str, Option<String>)>>,
     discovery: Discovery<'_>,
-    advertised_address: Option<String>,
-    silent_attempts: u32,
+    unreachable: Option<String>,
 ) -> super::integrations::VideoSourceStatusEntry {
     let fact = match &pipeline {
         Some(entry) => PipelineFact::Known(entry.as_ref().map(|(s, _)| *s)),
         None => PipelineFact::Unreadable,
     };
     let state = classify(row.is_active, &row.ndi_name, discovery, fact);
-    // #925: the same rule as the one WARN, for as long as the silent streak lasts.
-    let silent_but_advertised = presenter_ndi::manager::is_silent_but_advertised(
-        silent_attempts,
-        advertised_address.as_deref(),
-    );
-    let state = with_silence(state, fact, silent_but_advertised);
+    let state = with_silence(state, fact, unreachable.is_some());
     super::integrations::VideoSourceStatusEntry {
         id: row.id.to_string(),
         ndi_name: row.ndi_name,
         is_active: row.is_active,
         state: state.as_str(),
         detail: pipeline.flatten().and_then(|(_, err)| err),
-        advertised_address,
+        // Named only while the row says so — never next to a working state.
+        unreachable_address: unreachable.filter(|_| state == VideoSourceState::Unreachable),
     }
 }
 

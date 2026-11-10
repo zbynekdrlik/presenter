@@ -22,8 +22,9 @@ pub struct VideoSourceStatusDto {
     pub state: String,
     /// The pipeline's error text, when it has one.
     pub detail: Option<String>,
-    /// #925: where the NDI finder sees the source; the `unreachable` hint names it.
-    pub advertised_address: Option<String>,
+    /// #925: the address the source is on the network at but the server could not
+    /// connect to (only with `state == "unreachable"`); the hint names it.
+    pub unreachable_address: Option<String>,
 }
 
 /// The server's answer to "what is mapped, what is on the network, and what works".

@@ -116,12 +116,13 @@ impl NdiManager {
         self.source_list.snapshot()
     }
 
-    /// The source's current silent-start streak (#858; `0` = none): how many
-    /// starts in a row ended `SourceSilent`. It ends when the source streams or
-    /// is stopped. The status join reads it to show a source the finder sees but
-    /// this server cannot connect to (#925, [`super::is_silent_but_advertised`]).
-    pub fn silent_attempts(&self, source_id: &str) -> u32 {
-        self.silent_streaks.get(source_id)
+    /// The source's current silent-start streak (#858; `attempts == 0` = none) and
+    /// the address its last silent start could not reach (#925). It ends when the
+    /// source streams or is stopped. The status join reads it to show a source the
+    /// finder sees but this server cannot connect to
+    /// ([`super::unreachable_address`]).
+    pub fn silent_streak(&self, source_id: &str) -> super::SilentStreak {
+        self.silent_streaks.streak(source_id)
     }
 
     /// Start a pipeline for the given source.
