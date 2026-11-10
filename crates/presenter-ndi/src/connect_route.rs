@@ -581,17 +581,26 @@ mod tests {
         );
     }
 
-    /// `resolve` keeps the name-only route when the advertised address does not
-    /// answer and the sender's machine name resolves to nothing (here loopback
-    /// with no listener and an unknown `SENDER.local`), and for a source without
-    /// an advertised address.
+    /// The name-only route stays when the advertised address does not answer
+    /// and the sender's machine name resolves to nothing, and for a source
+    /// without an advertised address. Probe and lookup are injected: a real
+    /// sender on loopback 5961 (dev2 runs NDI test senders) must not decide it.
     #[tokio::test]
     async fn an_advertised_address_that_is_not_off_route_keeps_the_name_only_path() {
-        let route = resolve("SENDER (out)", Some("127.0.0.1:5961".to_string())).await;
+        let silent = |_: SocketAddrV4| std::future::ready(false);
+        let nobody = |_: String, _: u16| std::future::ready(Vec::new());
+        let route = resolve_with(
+            "SENDER (out)",
+            Some("127.0.0.1:5961".to_string()),
+            &dev(),
+            nobody,
+            silent,
+        )
+        .await;
         assert_eq!(route.connect_address, None);
         assert_eq!(route.advertised_address.as_deref(), Some("127.0.0.1:5961"));
         assert_eq!(route.ndisrc_target(), NdisrcTarget::Name("SENDER (out)"));
-        let unknown = resolve("SENDER (out)", None).await;
+        let unknown = resolve_with("SENDER (out)", None, &dev(), nobody, silent).await;
         assert_eq!(unknown, NdiRoute::name_only("SENDER (out)"));
     }
     /// Probe that answers only for the listed addresses.
