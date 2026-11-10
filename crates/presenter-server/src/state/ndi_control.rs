@@ -113,6 +113,22 @@ impl NdiManagerHandle {
         }
     }
 
+    /// Forward to [`NdiManager::silent_streak`] — the source's silent-start streak
+    /// (#858) and the address its last silent start could not reach (#925).
+    pub(crate) fn silent_streak(&self, source_id: &str) -> presenter_ndi::manager::SilentStreak {
+        match self {
+            Self::Real(m) => m.silent_streak(source_id),
+            #[cfg(test)]
+            Self::Fake(f) => f
+                .silent_streaks
+                .lock()
+                .expect("silent_streaks lock")
+                .get(source_id)
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+
     /// Forward to [`NdiManager::pipeline_health_snapshots`] — per-pipeline
     /// delivery health (state + drop ratio + consumer count) for `/healthz`
     /// (#768). `None` when the manager's lock could not be taken in time.
@@ -265,7 +281,10 @@ pub(crate) struct FakeNdiControl {
     /// ended by a streaming start and by `stop_pipeline` / `stop_all`;
     /// `stop_other_pipelines(keep)` keeps only `keep`'s (it runs after EVERY silent
     /// activation).
-    silent_attempts: Mutex<std::collections::HashMap<String, u32>>,
+    silent_streaks: Mutex<std::collections::HashMap<String, presenter_ndi::manager::SilentStreak>>,
+    /// #925: the address a silent start "dialled" (`SourceSilent { connect_address }`);
+    /// `None` = no address answered, the real route's name-only fallback.
+    connect_address: Mutex<Option<String>>,
     /// #925: the address the "finder" reports for every source — carried by a
     /// silent start (`SourceSilent { advertised_address }`) and by the health
     /// snapshot, like the real manager's pipeline route. `None` = not advertised.
@@ -363,6 +382,11 @@ impl FakeNdiControl {
             .advertised_address
             .lock()
             .expect("advertised_address lock") = address.map(str::to_string);
+    }
+
+    /// #925: the address the next starts connect to (`None` = no address answered).
+    pub(crate) fn set_connect_address(&self, address: Option<&str>) {
+        *self.connect_address.lock().expect("connect_address lock") = address.map(str::to_string);
     }
 
     fn advertised(&self) -> Option<String> {
@@ -523,21 +547,31 @@ impl FakeNdiControl {
         let outcome = *self.start_outcome.lock().expect("start_outcome lock");
         match outcome {
             StartOutcome::Ok => {
-                self.silent_attempts
+                self.silent_streaks
                     .lock()
-                    .expect("silent_attempts lock")
+                    .expect("silent_streaks lock")
                     .remove(source_id);
                 Ok(())
             }
             StartOutcome::SilentSource => {
-                let mut attempts = self.silent_attempts.lock().expect("silent_attempts lock");
-                let attempt = attempts.entry(source_id.to_string()).or_insert(0);
-                *attempt += 1;
+                let advertised = self.advertised();
+                let connect = self
+                    .connect_address
+                    .lock()
+                    .expect("connect_address lock")
+                    .clone();
+                let mut attempts = self.silent_streaks.lock().expect("silent_streaks lock");
+                let streak = attempts.entry(source_id.to_string()).or_default();
+                streak.attempts += 1;
+                streak.unreached_address = presenter_ndi::manager::unreached_address(
+                    advertised.as_deref(),
+                    connect.as_deref(),
+                );
                 Err(PipelineStartError::SourceSilent {
                     ndi_name: ndi_name.to_string(),
-                    attempt: *attempt,
-                    advertised_address: self.advertised(),
-                    connect_address: None,
+                    attempt: streak.attempts,
+                    advertised_address: advertised,
+                    connect_address: connect,
                 })
             }
             StartOutcome::HardError => Err(PipelineStartError::Failed(anyhow::anyhow!(
@@ -548,9 +582,9 @@ impl FakeNdiControl {
     }
 
     async fn stop_pipeline(&self, source_id: &str) {
-        self.silent_attempts
+        self.silent_streaks
             .lock()
-            .expect("silent_attempts lock")
+            .expect("silent_streaks lock")
             .remove(source_id);
         self.record(NdiCall::StopPipeline {
             source_id: source_id.to_string(),
@@ -558,17 +592,17 @@ impl FakeNdiControl {
     }
 
     async fn stop_all(&self) {
-        self.silent_attempts
+        self.silent_streaks
             .lock()
-            .expect("silent_attempts lock")
+            .expect("silent_streaks lock")
             .clear();
         self.record(NdiCall::StopAll);
     }
 
     async fn stop_other_pipelines(&self, keep_id: &str) {
-        self.silent_attempts
+        self.silent_streaks
             .lock()
-            .expect("silent_attempts lock")
+            .expect("silent_streaks lock")
             .retain(|id, _| id == keep_id);
         self.record(NdiCall::StopOtherPipelines {
             keep_id: keep_id.to_string(),

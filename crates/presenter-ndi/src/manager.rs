@@ -36,8 +36,8 @@ mod whep;
 
 pub use lifecycle::PipelineStartError;
 pub use silent_streak::{
-    should_log_silent_attempt, should_warn_silent_but_advertised,
-    SILENT_BUT_ADVERTISED_WARN_ATTEMPT,
+    should_log_silent_attempt, should_warn_silent_but_advertised, unreachable_address,
+    unreached_address, SilentStreak, SILENT_BUT_ADVERTISED_WARN_ATTEMPT,
 };
 
 /// Status callback retained for backwards compatibility with the old MJPEG

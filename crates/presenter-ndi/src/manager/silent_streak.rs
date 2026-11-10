@@ -28,19 +28,34 @@ pub fn should_log_silent_attempt(attempt: u32) -> bool {
     attempt.is_power_of_two()
 }
 
+/// One source's silent streak: how many starts in a row were silent, and — for the
+/// LAST of them — the advertised address no connection reached (#925).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SilentStreak {
+    /// Consecutive silent starts (`0` = none / it ended).
+    pub attempts: u32,
+    /// The finder's address for the source when the last silent start's route
+    /// found NO address that answered a TCP connect (see [`unreached_address`]);
+    /// `None` when a connection was possible (or nothing was advertised).
+    pub unreached_address: Option<String>,
+}
+
 /// Consecutive silent start outcomes per source id.
 #[derive(Default)]
 pub(in crate::manager) struct SilentStreaks {
-    streaks: Mutex<HashMap<String, u32>>,
+    streaks: Mutex<HashMap<String, SilentStreak>>,
 }
 
 impl SilentStreaks {
-    /// Count one more silent attempt for `source_id` and return its 1-based number.
-    pub(in crate::manager) fn bump(&self, source_id: &str) -> u32 {
+    /// Count one more silent attempt for `source_id`, remember the address this
+    /// attempt could not reach (`None` = it could connect), and return the
+    /// attempt's 1-based number.
+    pub(in crate::manager) fn bump(&self, source_id: &str, unreached: Option<String>) -> u32 {
         let mut streaks = self.streaks.lock().unwrap_or_else(|p| p.into_inner());
-        let streak = streaks.entry(source_id.to_string()).or_insert(0);
-        *streak = streak.saturating_add(1);
-        *streak
+        let streak = streaks.entry(source_id.to_string()).or_default();
+        streak.attempts = streak.attempts.saturating_add(1);
+        streak.unreached_address = unreached;
+        streak.attempts
     }
 
     /// End `source_id`'s streak (it reached Streaming, or was stopped); returns
@@ -50,7 +65,7 @@ impl SilentStreaks {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(source_id)
-            .unwrap_or(0)
+            .map_or(0, |streak| streak.attempts)
     }
 
     /// Forget every source's streak (`stop_all`).
@@ -70,15 +85,20 @@ impl SilentStreaks {
             .retain(|id, _| id == keep_id);
     }
 
-    /// The current streak length of `source_id` (`0` = none).
-    #[cfg(test)]
-    fn get(&self, source_id: &str) -> u32 {
+    /// The current streak of `source_id` (`attempts == 0` = none).
+    pub(in crate::manager) fn streak(&self, source_id: &str) -> SilentStreak {
         self.streaks
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(source_id)
-            .copied()
-            .unwrap_or(0)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The current streak length of `source_id` (`0` = none).
+    #[cfg(test)]
+    fn get(&self, source_id: &str) -> u32 {
+        self.streak(source_id).attempts
     }
 }
 
@@ -93,7 +113,10 @@ pub(in crate::manager) fn silent_error(
 ) -> PipelineStartError {
     PipelineStartError::SourceSilent {
         ndi_name,
-        attempt: streaks.bump(source_id),
+        attempt: streaks.bump(
+            source_id,
+            unreached_address(advertised_address.as_deref(), connect_address.as_deref()),
+        ),
         advertised_address,
         connect_address,
     }
@@ -110,6 +133,38 @@ pub const SILENT_BUT_ADVERTISED_WARN_ATTEMPT: u32 = 2;
 /// reported an address for the source. Pure → unit-tested.
 pub fn should_warn_silent_but_advertised(attempt: u32, advertised_address: Option<&str>) -> bool {
     attempt == SILENT_BUT_ADVERTISED_WARN_ATTEMPT && advertised_address.is_some()
+}
+
+/// The advertised address a silent start could NOT connect to (#925): the finder
+/// reported one, and the route found no address of the sender that answered a TCP
+/// connect — neither the advertised one nor an mDNS alternative — so ndisrc fell
+/// back to the name (`connect_route::resolve_with`). When an address DID answer
+/// (`connect` is set), the server can reach the sender and the silence is the
+/// sender's own (#448): `None`. An advertised address that is not an IPv4
+/// `ip:port` is never probed by the route, so it is never blamed either. Pure →
+/// unit-tested.
+pub fn unreached_address(advertised: Option<&str>, connect: Option<&str>) -> Option<String> {
+    match (advertised, connect) {
+        (Some(advertised), None)
+            if crate::connect_route::parse_url_address(advertised).is_some() =>
+        {
+            Some(advertised.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// The address the Settings row names as "on the network, but cannot connect"
+/// (#925), or `None` while that is not the diagnosis: the streak reached the
+/// WARN attempt ([`SILENT_BUT_ADVERTISED_WARN_ATTEMPT`], a whole reconnect cycle)
+/// and its last attempt reached no address of the sender. It ends with the
+/// streak (every promote / stop). Pure → unit-tested.
+pub fn unreachable_address(streak: &SilentStreak) -> Option<&str> {
+    if streak.attempts >= SILENT_BUT_ADVERTISED_WARN_ATTEMPT {
+        streak.unreached_address.as_deref()
+    } else {
+        None
+    }
 }
 
 /// `installed` / `not-installed` for the streaming line's `timestamp_guard` field.
@@ -195,19 +250,19 @@ mod tests {
     #[test]
     fn consecutive_silent_attempts_are_numbered_from_one() {
         let streaks = SilentStreaks::default();
-        assert_eq!(streaks.bump("a"), 1);
-        assert_eq!(streaks.bump("a"), 2);
-        assert_eq!(streaks.bump("a"), 3);
+        assert_eq!(streaks.bump("a", None), 1);
+        assert_eq!(streaks.bump("a", None), 2);
+        assert_eq!(streaks.bump("a", None), 3);
         assert_eq!(streaks.get("a"), 3);
     }
 
     #[test]
     fn streaks_are_counted_per_source() {
         let streaks = SilentStreaks::default();
-        assert_eq!(streaks.bump("a"), 1);
-        assert_eq!(streaks.bump("a"), 2);
-        assert_eq!(streaks.bump("b"), 1, "b has its own streak");
-        assert_eq!(streaks.bump("a"), 3, "b's attempt did not touch a");
+        assert_eq!(streaks.bump("a", None), 1);
+        assert_eq!(streaks.bump("a", None), 2);
+        assert_eq!(streaks.bump("b", None), 1, "b has its own streak");
+        assert_eq!(streaks.bump("a", None), 3, "b's attempt did not touch a");
         assert_eq!(streaks.get("b"), 1);
         assert_eq!(streaks.get("unknown"), 0);
     }
@@ -216,11 +271,15 @@ mod tests {
     fn reset_reports_the_streak_it_ended_and_restarts_the_numbering() {
         let streaks = SilentStreaks::default();
         for _ in 0..3 {
-            streaks.bump("a");
+            streaks.bump("a", None);
         }
         assert_eq!(streaks.reset("a"), 3, "the streak that just ended");
         assert_eq!(streaks.get("a"), 0);
-        assert_eq!(streaks.bump("a"), 1, "numbering restarts after a reset");
+        assert_eq!(
+            streaks.bump("a", None),
+            1,
+            "numbering restarts after a reset"
+        );
         assert_eq!(streaks.reset("a"), 1);
         assert_eq!(streaks.reset("a"), 0, "no streak to end");
         assert_eq!(streaks.reset("never-silent"), 0);
@@ -229,9 +288,9 @@ mod tests {
     #[test]
     fn reset_touches_only_the_given_source() {
         let streaks = SilentStreaks::default();
-        streaks.bump("a");
-        streaks.bump("b");
-        streaks.bump("b");
+        streaks.bump("a", None);
+        streaks.bump("b", None);
+        streaks.bump("b", None);
         assert_eq!(streaks.reset("a"), 1);
         assert_eq!(streaks.get("b"), 2, "b's streak is untouched");
     }
@@ -239,12 +298,12 @@ mod tests {
     #[test]
     fn clear_forgets_every_source() {
         let streaks = SilentStreaks::default();
-        streaks.bump("a");
-        streaks.bump("b");
+        streaks.bump("a", None);
+        streaks.bump("b", None);
         streaks.clear();
         assert_eq!(streaks.get("a"), 0);
         assert_eq!(streaks.get("b"), 0);
-        assert_eq!(streaks.bump("a"), 1);
+        assert_eq!(streaks.bump("a", None), 1);
     }
 
     // `stop_other_pipelines(keep)` runs after EVERY silent activation (the #370
@@ -252,10 +311,10 @@ mod tests {
     #[test]
     fn retain_only_keeps_just_the_given_source() {
         let streaks = SilentStreaks::default();
-        streaks.bump("a");
-        streaks.bump("b");
-        streaks.bump("b");
-        streaks.bump("c");
+        streaks.bump("a", None);
+        streaks.bump("b", None);
+        streaks.bump("b", None);
+        streaks.bump("c", None);
         streaks.retain_only("b");
         assert_eq!(streaks.get("a"), 0, "a was reaped");
         assert_eq!(streaks.get("b"), 2, "the kept source keeps its streak");
@@ -332,6 +391,62 @@ mod tests {
         assert_eq!(warned, vec![SILENT_BUT_ADVERTISED_WARN_ATTEMPT]);
         assert_eq!(SILENT_BUT_ADVERTISED_WARN_ATTEMPT, 2);
         assert!((0..=64).all(|attempt| !should_warn_silent_but_advertised(attempt, None)));
+    }
+
+    /// #925: "could not connect" = advertised, and no address answered (name-only
+    /// fallback); an address that answered (the advertised one or an alternative)
+    /// means the server CAN reach the sender.
+    #[test]
+    fn unreached_only_when_no_address_of_the_sender_answered() {
+        let advertised = Some("10.77.7.107:5961");
+        assert_eq!(
+            unreached_address(advertised, None).as_deref(),
+            Some("10.77.7.107:5961")
+        );
+        assert_eq!(unreached_address(advertised, advertised), None);
+        assert_eq!(
+            unreached_address(advertised, Some("10.77.9.201:5961")),
+            None
+        );
+        assert_eq!(unreached_address(None, None), None);
+        assert_eq!(
+            unreached_address(Some("not-an-address"), None),
+            None,
+            "an address the route never probed is never blamed"
+        );
+    }
+
+    /// #925: the visible state starts with the WARN attempt, lasts for the rest of
+    /// the streak, follows the LAST attempt's route, and ends with the streak.
+    #[test]
+    fn the_unreachable_state_follows_the_streak_and_its_last_route() {
+        let streaks = SilentStreaks::default();
+        let addr = || Some("10.77.7.107:5961".to_string());
+        silent_error(&streaks, "id", "N".to_string(), addr(), None);
+        assert_eq!(
+            unreachable_address(&streaks.streak("id")),
+            None,
+            "attempt 1"
+        );
+        silent_error(&streaks, "id", "N".to_string(), addr(), None);
+        assert_eq!(
+            unreachable_address(&streaks.streak("id")),
+            Some("10.77.7.107:5961"),
+            "attempt 2 = the WARN attempt"
+        );
+        assert!(should_warn_silent_but_advertised(2, addr().as_deref()));
+        // The next attempt connected (the sender came back on a routed address)
+        // but is still silent: the server CAN reach it — no longer "unreachable".
+        silent_error(&streaks, "id", "N".to_string(), addr(), addr());
+        assert_eq!(unreachable_address(&streaks.streak("id")), None);
+        silent_error(&streaks, "id", "N".to_string(), addr(), None);
+        assert!(unreachable_address(&streaks.streak("id")).is_some());
+        log_pipeline_streaming(&streaks, "id", "N", "x264enc", false, None);
+        assert_eq!(
+            streaks.streak("id"),
+            SilentStreak::default(),
+            "streaming ends it"
+        );
     }
 
     #[test]

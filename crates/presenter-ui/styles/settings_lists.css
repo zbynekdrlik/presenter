@@ -127,7 +127,8 @@
   color: #b45309;
 }
 
-.settings__status--not-found {
+.settings__status--not-found,
+.settings__status--unreachable {
   background: #fee2e2;
   color: #b91c1c;
 }

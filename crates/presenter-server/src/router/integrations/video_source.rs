@@ -88,6 +88,9 @@ pub(crate) struct VideoSourceStatusDto {
     is_active: bool,
     state: String,
     detail: Option<String>,
+    /// #925: the address the source is on the network at but this server could not
+    /// connect to (`null` unless `state` is `unreachable`).
+    unreachable_address: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -107,6 +110,7 @@ pub(crate) async fn video_source_status(
                 is_active: s.is_active,
                 state: s.state.to_string(),
                 detail: s.detail,
+                unreachable_address: s.unreachable_address,
             })
             .collect(),
     }))

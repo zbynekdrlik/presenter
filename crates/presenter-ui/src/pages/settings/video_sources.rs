@@ -22,6 +22,7 @@ pub(crate) fn status_label(state: &str) -> &'static str {
         "live" => "Naživo",
         "not-broadcasting" => "Nevysiela",
         "not-found" => "Nie je v sieti",
+        "unreachable" => "Nedá sa pripojiť",
         "ready" => "Pripravené",
         "connecting" => "Pripája sa…",
         "unknown" => "NDI nedostupné",
@@ -35,7 +36,13 @@ pub(crate) fn status_label(state: &str) -> &'static str {
 pub(crate) fn status_class(state: &str) -> String {
     let known = matches!(
         state,
-        "live" | "not-broadcasting" | "not-found" | "ready" | "connecting" | "unknown"
+        "live"
+            | "not-broadcasting"
+            | "not-found"
+            | "unreachable"
+            | "ready"
+            | "connecting"
+            | "unknown"
     );
     let modifier = if known { state } else { "checking" };
     format!("settings__status settings__status--{modifier}")
@@ -83,17 +90,30 @@ pub(crate) fn header_badge_class(available: Option<bool>) -> &'static str {
 /// What the operator should DO about this state — shown under the row. `None` when the
 /// state needs no action (live / ready / connecting).
 ///
-/// These two sentences are the entire point of #546. At PP the operator had a blank
+/// These sentences are the entire point of #546. At PP the operator had a blank
 /// stage and no idea whether to look at the server, the network, the TV, or the sending
 /// machine. The answer was the sending machine — and now the page says so.
-pub(crate) fn status_hint(state: &str) -> Option<&'static str> {
+///
+/// #925: `unreachable` names the address the source is on the network at but the
+/// server could not connect to (`address`) — at SNV the sender's Dante address.
+pub(crate) fn status_hint(state: &str, address: Option<&str>) -> Option<String> {
     match state {
         "not-found" => Some(
             "Tento názov NDI nie je v sieti. Skontroluj, či je vysielací počítač zapnutý a má \
-             zapnutý výstup NDI — alebo vyber jeden z názvov nižšie.",
+             zapnutý výstup NDI — alebo vyber jeden z názvov nižšie."
+                .to_string(),
         ),
-        "not-broadcasting" => {
-            Some("V sieti je, ale neposiela obraz. Zapni výstup NDI na vysielacom počítači.")
+        "not-broadcasting" => Some(
+            "V sieti je, ale neposiela obraz. Zapni výstup NDI na vysielacom počítači.".to_string(),
+        ),
+        "unreachable" => {
+            let address = address
+                .map(|addr| format!(" (adresa {addr})"))
+                .unwrap_or_default();
+            Some(format!(
+                "Zdroj je v sieti, ale nedá sa pripojiť{address}. Tento server sa k nemu \
+                 nedostane — skontroluj sieť vysielacieho počítača."
+            ))
         }
         _ => None,
     }
@@ -318,6 +338,8 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                         });
                         let state_str = move || status.get().map(|st| st.state).unwrap_or_default();
                         let detail = move || status.get().and_then(|st| st.detail);
+                        let unreachable_at =
+                            move || status.get().and_then(|st| st.unreachable_address);
                         // The DOT and the BUTTON come from the POLLED status, not from the
                         // `sources` list — that list is only refetched by this tab's own
                         // actions, so activating from a second tab (or Companion) used to leave
@@ -338,7 +360,7 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                                 <div class=dot_class></div>
                                 <div class="settings__source-info">
                                     <NdiNameParts ndi_name=source.ndi_name.clone() chip=false />
-                                    {move || status_hint(&state_str()).map(|text| view! {
+                                    {move || status_hint(&state_str(), unreachable_at().as_deref()).map(|text| view! {
                                         <div class="settings__source-hint"
                                             data-role="video-source-hint"
                                             data-source-id=id_hint.clone()>{text}</div>
@@ -506,6 +528,7 @@ mod tests {
         assert_eq!(status_label("ready"), "Pripravené");
         assert_eq!(status_label("connecting"), "Pripája sa…");
         assert_eq!(status_label("unknown"), "NDI nedostupné");
+        assert_eq!(status_label("unreachable"), "Nedá sa pripojiť");
     }
 
     /// A state we do not know must not render a raw wire token at the operator, and must
@@ -568,6 +591,27 @@ mod tests {
         );
     }
 
+    /// #925: the SNV case names the address the server cannot reach, so the operator
+    /// (and whoever they call) knows WHICH network is wrong; red like `not-found`.
+    #[test]
+    fn unreachable_names_the_address_it_cannot_reach() {
+        let hint = status_hint("unreachable", Some("10.77.7.107:5961"))
+            .expect("unreachable must explain itself");
+        assert!(
+            hint.starts_with("Zdroj je v sieti, ale nedá sa pripojiť (adresa 10.77.7.107:5961)."),
+            "{hint}"
+        );
+        let no_address = status_hint("unreachable", None).expect("still explains itself");
+        assert!(
+            no_address.starts_with("Zdroj je v sieti, ale nedá sa pripojiť. "),
+            "no empty parentheses without an address: {no_address}"
+        );
+        assert_eq!(
+            status_class("unreachable"),
+            "settings__status settings__status--unreachable"
+        );
+    }
+
     #[test]
     fn class_is_built_from_the_state() {
         assert_eq!(
@@ -585,24 +629,30 @@ mod tests {
         );
     }
 
-    /// Only the two BROKEN states get a hint — a hint under a working source is noise.
+    /// Only the BROKEN states get a hint — a hint under a working source is noise.
     #[test]
     fn only_the_broken_states_tell_the_operator_what_to_do() {
-        let not_found = status_hint("not-found").expect("not-found must explain itself");
+        let not_found = status_hint("not-found", None).expect("not-found must explain itself");
         assert!(
             not_found.contains("nie je v sieti"),
             "the hint must name the actual problem: {not_found}"
         );
 
-        let silent = status_hint("not-broadcasting").expect("not-broadcasting must explain itself");
+        let silent =
+            status_hint("not-broadcasting", None).expect("not-broadcasting must explain itself");
         assert!(
             silent.contains("vysielacom počítači"),
             "the hint must point at the sending machine: {silent}"
         );
 
-        assert_eq!(status_hint("live"), None);
-        assert_eq!(status_hint("ready"), None);
-        assert_eq!(status_hint("connecting"), None);
-        assert_eq!(status_hint("unknown"), None);
+        assert_eq!(status_hint("live", None), None);
+        assert_eq!(
+            status_hint("live", Some("10.77.9.201:5961")),
+            None,
+            "a working source never gets a hint, address or not"
+        );
+        assert_eq!(status_hint("ready", None), None);
+        assert_eq!(status_hint("connecting", None), None);
+        assert_eq!(status_hint("unknown", None), None);
     }
 }

@@ -11,7 +11,7 @@ use super::AppState;
 use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use crate::resolume::ResolumeConnectionSnapshot;
 use crate::state::video_source_status;
-use crate::state::video_source_status::{Discovery, PipelineFact};
+use crate::state::video_source_status::Discovery;
 
 /// What the server can honestly say about every mapped NDI source right now (#546).
 ///
@@ -33,10 +33,13 @@ pub struct VideoSourceStatusEntry {
     pub id: String,
     pub ndi_name: String,
     pub is_active: bool,
-    /// `unknown | not-found | ready | connecting | not-broadcasting | live`.
+    /// `unknown | not-found | ready | connecting | not-broadcasting | unreachable | live`.
     pub state: &'static str,
     /// The pipeline's error text, when it has one.
     pub detail: Option<String>,
+    /// #925: the address the source is on the network at but this server could not
+    /// connect to — set exactly when `state` is `unreachable`.
+    pub unreachable_address: Option<String>,
 }
 
 impl VideoSourceStatusEntry {
@@ -47,6 +50,7 @@ impl VideoSourceStatusEntry {
             is_active: row.is_active,
             state: video_source_status::VideoSourceState::Unknown.as_str(),
             detail: None,
+            unreachable_address: None,
         }
     }
 }
@@ -386,7 +390,7 @@ impl AppState {
     /// Fail-soft on purpose — but never into a LIE. A discovery failure degrades to
     /// [`Discovery::Blind`] ("we cannot see the network"), NOT to an empty network
     /// (which would make a broken server accuse every sending machine at the site);
-    /// a busy pipeline lock degrades to [`PipelineFact::Unreadable`] ("the manager is
+    /// a busy pipeline lock degrades to [`video_source_status::PipelineFact::Unreadable`] ("the manager is
     /// busy starting it"), NOT to "no pipeline" (which would paint every normal
     /// activation as "sending nothing"). Both were deep-review findings on the first
     /// cut of #546. Neither degrades to an error page: the settings page must keep
@@ -441,25 +445,14 @@ impl AppState {
         let sources = rows
             .into_iter()
             .map(|row| {
-                let pipeline = pipelines
-                    .as_ref()
-                    .map(|map| map.get(&row.id.to_string()).cloned());
-                let state = video_source_status::classify(
-                    row.is_active,
-                    &row.ndi_name,
-                    discovery,
-                    match &pipeline {
-                        Some(entry) => PipelineFact::Known(entry.as_ref().map(|(s, _)| *s)),
-                        None => PipelineFact::Unreadable,
-                    },
-                );
-                VideoSourceStatusEntry {
-                    id: row.id.to_string(),
-                    ndi_name: row.ndi_name,
-                    is_active: row.is_active,
-                    state: state.as_str(),
-                    detail: pipeline.flatten().and_then(|(_, err)| err),
-                }
+                let id = row.id.to_string();
+                let pipeline = pipelines.as_ref().map(|map| map.get(&id).cloned());
+                // #925: the streak's "could not connect" address, when that is the
+                // diagnosis (WARN attempt reached, no address of the sender answered).
+                let streak = manager.silent_streak(&id);
+                let unreachable =
+                    presenter_ndi::manager::unreachable_address(&streak).map(str::to_string);
+                video_source_status::status_entry(row, pipeline, discovery, unreachable)
             })
             .collect();
 
@@ -1656,6 +1649,93 @@ mod tests {
         let entry = snapshot.sources.first().expect("one source");
         assert_eq!(entry.state, "live");
         assert_eq!(entry.detail, None);
+    }
+
+    /// #925 THE SNV CASE on the Settings row: the source is on the network at an
+    /// address no connection reaches (the route fell back to the name), activated,
+    /// and silent through a whole reconnect cycle → the row says `unreachable` and
+    /// names the address (the same moment the one WARN fires); the first silent
+    /// attempt is still `not-broadcasting`; a streaming start clears it.
+    #[tokio::test]
+    async fn video_source_status_says_unreachable_while_no_address_of_the_source_answers() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        fake.set_advertised_address(Some("10.77.7.107:5961"));
+        let activate = || async {
+            state
+                .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+                .await
+                .expect("a silent-source activation still succeeds (#448)");
+        };
+        let entry = || async {
+            let snapshot = state.video_source_status().await.expect("status snapshot");
+            snapshot.sources.into_iter().next().expect("one source")
+        };
+
+        activate().await;
+        let first = entry().await;
+        assert_eq!(
+            first.state, "not-broadcasting",
+            "attempt 1 is not yet a diagnosis"
+        );
+        assert_eq!(first.unreachable_address, None, "named only with the state");
+
+        activate().await;
+        let second = entry().await;
+        assert_eq!(second.state, "unreachable", "silent through a whole cycle");
+        assert_eq!(
+            second.unreachable_address.as_deref(),
+            Some("10.77.7.107:5961")
+        );
+        activate().await;
+        assert_eq!(
+            entry().await.state,
+            "unreachable",
+            "it lasts for the whole streak"
+        );
+
+        // The sender becomes reachable: the start streams and the streak ends.
+        fake.set_start_outcome(StartOutcome::Ok);
+        fake.set_pipeline(&id, presenter_ndi::pipeline::PipelineState::Streaming);
+        activate().await;
+        let live = entry().await;
+        assert_eq!(live.state, "live");
+        assert_eq!(live.unreachable_address, None);
+        // Even if the pipeline then stops, the old streak is gone.
+        fake.set_pipeline(&id, presenter_ndi::pipeline::PipelineState::Stopped);
+        assert_eq!(entry().await.state, "not-broadcasting");
+    }
+
+    /// #925 review: a sender this server CAN connect to (an address answered the
+    /// TCP check) that sends no frames is silent on its own side (#448) — it stays
+    /// `not-broadcasting` ("turn NDI output on") however long the streak; so does a
+    /// source with no advertised address at all.
+    #[tokio::test]
+    async fn video_source_status_never_says_unreachable_when_an_address_answered() {
+        let (state, source_id, _id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        let silent_streak = || async {
+            for _ in 0..3 {
+                state
+                    .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+                    .await
+                    .expect("a silent-source activation still succeeds (#448)");
+            }
+            let snapshot = state.video_source_status().await.expect("status snapshot");
+            snapshot.sources.into_iter().next().expect("one source")
+        };
+
+        // No advertised address: nothing to name.
+        let entry = silent_streak().await;
+        assert_eq!(entry.state, "not-broadcasting");
+        assert_eq!(entry.unreachable_address, None);
+
+        // Advertised AND the route connected to it: reachable, just silent.
+        fake.set_advertised_address(Some("10.77.9.201:5961"));
+        fake.set_connect_address(Some("10.77.9.201:5961"));
+        let entry = silent_streak().await;
+        assert_eq!(entry.state, "not-broadcasting");
+        assert_eq!(entry.unreachable_address, None);
     }
 
     /// THE ACTIVATION WINDOW (deep review 🟡 #1). `start_pipeline` holds the manager's
