@@ -54,6 +54,9 @@ pub struct InterfaceAddr {
 pub struct HostNetwork {
     pub interfaces: Vec<InterfaceAddr>,
     pub default_interface: Option<String>,
+    /// The site's Dante subnet from `DANTE_SUBNET` (dstack two-networks.md §4):
+    /// never used for NDI, even on a host without a Dante leg of its own.
+    pub dante_subnet: Option<(Ipv4Addr, u8)>,
 }
 
 /// What the receiver connects with: the NDI name, the address the finder
@@ -221,8 +224,25 @@ impl HostNetwork {
                 .ok()
                 .as_deref()
                 .and_then(parse_default_interface),
+            dante_subnet: read_dante_subnet(),
         }
     }
+}
+
+/// `DANTE_SUBNET` as CIDR; unset → `None`, malformed → WARN + `None`.
+fn read_dante_subnet() -> Option<(Ipv4Addr, u8)> {
+    let raw = std::env::var("DANTE_SUBNET").ok()?;
+    let parsed = parse_cidr(&raw);
+    if parsed.is_none() {
+        tracing::warn!(value = %raw, "DANTE_SUBNET is not an IPv4 CIDR (e.g. 10.77.7.0/24) — ignored (#925)");
+    }
+    parsed
+}
+
+/// `"10.77.7.0/24"` → `(10.77.7.0, 24)`; anything else → `None`.
+pub fn parse_cidr(raw: &str) -> Option<(Ipv4Addr, u8)> {
+    let _ = raw;
+    None
 }
 
 fn read_interfaces() -> Vec<InterfaceAddr> {
@@ -367,6 +387,7 @@ mod tests {
                 iface("tailscale0", [100, 122, 204, 47], 32),
             ],
             default_interface: Some("enp2s0".to_string()),
+            dante_subnet: None,
         }
     }
 
@@ -379,6 +400,7 @@ mod tests {
                 iface("docker0", [172, 17, 0, 1], 16),
             ],
             default_interface: Some("enp4s0".to_string()),
+            dante_subnet: None,
         }
     }
 
@@ -639,5 +661,40 @@ mod tests {
             route.advertised_address.as_deref(),
             Some("10.77.7.107:5961")
         );
+    }
+    #[test]
+    fn dante_subnet_parses_ipv4_cidr_only() {
+        assert_eq!(parse_cidr("10.77.7.0/24"), Some((ip([10, 77, 7, 0]), 24)));
+        assert_eq!(parse_cidr(" 10.77.7.0/24 "), Some((ip([10, 77, 7, 0]), 24)));
+        assert_eq!(parse_cidr("10.77.7.0"), None);
+        assert_eq!(parse_cidr("10.77.7.0/33"), None);
+        assert_eq!(parse_cidr("fe80::/64"), None);
+        assert_eq!(parse_cidr(""), None);
+    }
+
+    /// dstack two-networks.md §4: a host WITHOUT a Dante leg (dev, PP) still
+    /// never uses an address in the configured Dante subnet for NDI.
+    #[test]
+    fn the_configured_dante_subnet_is_off_route_on_a_host_without_a_dante_leg() {
+        let mut net = dev();
+        assert!(!is_off_route(ip([10, 77, 7, 107]), &net));
+        net.dante_subnet = Some((ip([10, 77, 7, 0]), 24));
+        assert!(is_off_route(ip([10, 77, 7, 107]), &net));
+        assert!(!is_off_route(ip([10, 77, 9, 201]), &net));
+    }
+
+    #[tokio::test]
+    async fn an_answering_dante_address_is_replaced_by_the_senders_lan_address() {
+        let mut net = dev();
+        net.dante_subnet = Some((ip([10, 77, 7, 0]), 24));
+        let route = resolve_with(
+            "RESOLUME-SNV (SP-program)",
+            Some("10.77.7.107:5961".to_string()),
+            &net,
+            |_machine, _port| std::future::ready(vec![ip([10, 77, 7, 107]), ip([10, 77, 9, 201])]),
+            answers(&[[10, 77, 7, 107], [10, 77, 9, 201]]),
+        )
+        .await;
+        assert_eq!(route.connect_address.as_deref(), Some("10.77.9.201:5961"));
     }
 }
