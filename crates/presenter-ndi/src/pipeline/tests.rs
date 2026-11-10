@@ -1305,3 +1305,45 @@ async fn record_client_stats_surfaces_in_snapshot_and_rejects_unknown_session() 
         "client block serializes camelCase with ageMs: {json}"
     );
 }
+
+/// #925 (dev 2026-11-10): `ndisrc` ends a dead connection with EOS after 5 s
+/// without frames, and only a pipeline EOS lets the supervisor rebuild and
+/// re-resolve the sender's address. A bin posts EOS only when EVERY sink got
+/// one — an audio sink that waits for an `audio` pad a video-only sender
+/// (SP-program, the test sender) never creates kept the dead pipeline
+/// `Streaming` forever (sender back on another port, receiver black > 120 s).
+#[test]
+fn a_source_without_audio_still_ends_the_pipeline_with_eos() {
+    super::super::init().unwrap();
+    let make = |factory: &str| gst::ElementFactory::make(factory).build().unwrap();
+    let pipeline = gst::Pipeline::new();
+    let src = gst::ElementFactory::make("videotestsrc")
+        .property("num-buffers", 3i32)
+        .build()
+        .unwrap();
+    let videoconvert = make("videoconvert");
+    let video_sink = gst::ElementFactory::make("fakesink")
+        .property("sync", false)
+        .build()
+        .unwrap();
+    let demux = make("ndisrcdemux");
+    pipeline
+        .add_many([&src, &videoconvert, &video_sink, &demux])
+        .unwrap();
+    gst::Element::link_many([&src, &videoconvert, &video_sink]).unwrap();
+    super::build::add_demux_branches(&pipeline, &demux, &videoconvert).unwrap();
+
+    pipeline.set_state(gst::State::Playing).unwrap();
+    let message = pipeline.bus().unwrap().timed_pop_filtered(
+        gst::ClockTime::from_seconds(5),
+        &[gst::MessageType::Eos, gst::MessageType::Error],
+    );
+    pipeline.set_state(gst::State::Null).unwrap();
+
+    let kind = message.map(|m| m.type_());
+    assert_eq!(
+        kind,
+        Some(gst::MessageType::Eos),
+        "the video branch ended, so the pipeline must post EOS"
+    );
+}

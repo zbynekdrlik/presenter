@@ -79,7 +79,7 @@ impl NdiPipeline {
         tracing::debug!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
 
         let (ndisrc, ndisrcdemux) = build_ndi_source(&route)?;
-        let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
+        let (videoconvert, videoscale, scale_caps) = build_video_chain()?;
         let (raw_tee, q_default) = build_raw_tee_and_queues()?;
         let encoder = build_encoder(encoder_name)?;
         let profile_caps = build_profile_caps()?;
@@ -92,7 +92,6 @@ impl NdiPipeline {
                 &videoconvert,
                 &videoscale,
                 &scale_caps,
-                &audio_fakesink,
                 &raw_tee,
                 &q_default,
                 &encoder,
@@ -125,7 +124,7 @@ impl NdiPipeline {
         let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
         let producer = StreamProducer::with(&appsink, settings);
 
-        connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
+        add_demux_branches(&pipeline, &ndisrcdemux, &videoconvert)?;
         let encoder_timing = install_timing_probes(
             &videoconvert,
             &encoder,
@@ -176,6 +175,25 @@ fn install_timing_probes(
         super::ingest_timing::install_probe(&sink, ndi_name);
     }
     super::encoder_timing::install(encoder, appsink, ndi_name)
+}
+
+/// Wire the demux's sometimes-pads into `pipeline`: video → `videoconvert`,
+/// audio → a fakesink.
+pub(super) fn add_demux_branches(
+    pipeline: &gst::Pipeline,
+    ndisrcdemux: &gst::Element,
+    videoconvert: &gst::Element,
+) -> Result<()> {
+    let audio_fakesink = gst::ElementFactory::make("fakesink")
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .context("build fakesink (audio)")?;
+    pipeline
+        .add(&audio_fakesink)
+        .context("add audio fakesink")?;
+    connect_demux_pads(ndisrcdemux, videoconvert, &audio_fakesink);
+    Ok(())
 }
 
 /// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → fakesink.
@@ -319,9 +337,9 @@ fn build_branch_queue(name: &str) -> Result<gst::Element> {
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the
-/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)` plus the
-/// audio `fakesink`. Returns `(videoconvert, videoscale, scale_caps, audio_fakesink)`.
-fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element, gst::Element)> {
+/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)`.
+/// Returns `(videoconvert, videoscale, scale_caps)`.
+fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element)> {
     let videoconvert = gst::ElementFactory::make("videoconvert")
         .build()
         .context("build videoconvert")?;
@@ -356,12 +374,7 @@ fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element, gst:
         )
         .build()
         .context("build scale capsfilter")?;
-    let audio_fakesink = gst::ElementFactory::make("fakesink")
-        .property("async", false)
-        .property("sync", false)
-        .build()
-        .context("build fakesink (audio)")?;
-    Ok((videoconvert, videoscale, scale_caps, audio_fakesink))
+    Ok((videoconvert, videoscale, scale_caps))
 }
 
 /// Build the default branch's H264 encoder ("encoder") with tuning applied
