@@ -6,12 +6,13 @@ use tracing::{debug, error, info, warn};
 
 /// A discovered NDI source on the network.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NdiSourceInfo {
     pub name: String,
     /// The address the finder reports the sender at (`NDIlib_source_t.p_url_address`,
     /// e.g. `10.77.9.201:5961`). #925: the receiver's address choice and the
     /// "on the network but sends nothing" diagnosis read it.
-    #[serde(rename = "urlAddress", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url_address: Option<String>,
 }
 
