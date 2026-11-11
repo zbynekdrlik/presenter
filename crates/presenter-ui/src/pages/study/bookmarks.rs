@@ -1,5 +1,6 @@
-//! Named bookmarks (#915, the owner's option 2 of 2026-11-08): "Uložiť záložku"
-//! in the verse sheet names the first selected verse, the header's Záložky sheet
+//! Named bookmarks (#915, the owner's option 2 of 2026-11-08): "Pridať záložku"
+//! in the verse sheet adds the first selected verse at once under its place's
+//! name (#932: no naming sheet), the header's Záložky sheet
 //! (`s=zalozky`) lists them. A row opens the reader at its verse; "Presunúť sem"
 //! moves it to the place being read, "Premenovať" names it again, "Zmazať"
 //! deletes it with Späť. The server keeps the list (the phone and the PC share
@@ -12,7 +13,6 @@ use super::scroll::{self, ScrollPlan};
 use super::sheet::Sheet;
 use super::{nav, sermon_error, Chapter, Study, Undo};
 use crate::api::bookmarks::{self as api, Bookmark, BookmarkPlace};
-use crate::state::study::StudySheet;
 use crate::state::study_bookmarks::{
     offered_name, open_route, place_label, reading_place, ReadingPlace,
 };
@@ -73,9 +73,29 @@ fn here(s: Study) -> Option<ReadingPlace> {
     reading_place(&route, s.translation().as_deref(), in_view)
 }
 
-/// "Uložiť záložku" in the verse sheet: the name sheet takes its place.
-pub(super) fn open_save(s: Study) {
-    nav::replace(s, nav::sheet_route(s, StudySheet::SaveBookmark));
+/// "Pridať záložku" in the verse sheet (#932, owner 2026-11-11: "miesto aby sa
+/// rovno pridala tak vyskočí ďalšie okno … Načo je to dobré?!"): one tap adds
+/// the first selected verse under the name the old sheet offered ("Hebrejom
+/// 11:4"); Premenovať in Záložky names it later. The verse sheet closes now, the
+/// answer is a notice. `true` = the sheet was closed.
+pub(super) fn add_here(s: Study) -> bool {
+    let route = s.route.get_untracked();
+    let (Some(place), Some(name)) = (
+        reading_place(&route, s.translation().as_deref(), None),
+        untrack(|| offered(s)),
+    ) else {
+        // The chapter on screen is not the route's yet: say so, no dead button.
+        s.tell("Verš sa ešte načítava, skús znova".to_string());
+        return false;
+    };
+    nav::close_sheet(s);
+    leptos::task::spawn_local(async move {
+        match api::create(&name, &to_api(place), None).await {
+            Ok(made) => s.tell(format!("Záložka pridaná: {}", made.name)),
+            Err(err) => s.tell(sermon_error(&err)),
+        }
+    });
+    true
 }
 
 /// Späť on "Záložka zmazaná": it comes back where it stood.
@@ -130,7 +150,12 @@ fn move_here(s: Study, busy: RwSignal<bool>, id: i64) {
 fn delete(s: Study, busy: RwSignal<bool>, id: i64) {
     busy.set(true);
     leptos::task::spawn_local(async move {
-        match api::delete(id).await {
+        let answer = api::delete(id).await;
+        // Before the row goes: a row being renamed reads `busy` in its form,
+        // and a write after the row's removal reached its disposed field
+        // ("reactive value … already been disposed", #932's spec).
+        busy.set(false);
+        match answer {
             Ok(deleted) => {
                 s.bookmarks.update(|list| {
                     if let BookmarkList::Ready(rows) = list {
@@ -147,7 +172,6 @@ fn delete(s: Study, busy: RwSignal<bool>, id: i64) {
             }
             Err(err) => s.tell(sermon_error(&err)),
         }
-        busy.set(false);
     });
 }
 
@@ -314,7 +338,7 @@ fn ListState(s: Study) -> impl IntoView {
         .into_any(),
         BookmarkList::Ready(rows) if rows.is_empty() => view! {
             <p class="study-empty" data-role="bookmarks-empty">
-                "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Uložiť záložku“."
+                "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Pridať záložku“."
             </p>
         }
         .into_any(),
@@ -388,79 +412,4 @@ fn offered(s: Study) -> Option<String> {
         }
         _ => None,
     })
-}
-
-fn save(s: Study, saving: RwSignal<bool>, name: String) {
-    let route = s.route.get_untracked();
-    let Some(place) = reading_place(&route, s.translation().as_deref(), None) else {
-        return;
-    };
-    saving.set(true);
-    leptos::task::spawn_local(async move {
-        match api::create(&name, &to_api(place), None).await {
-            Ok(made) => {
-                s.tell(format!("Záložka uložená: {}", made.name));
-                // Only this sheet: the reader may have moved on meanwhile.
-                let still_here = s
-                    .route
-                    .with_untracked(|route| route.sheet == Some(StudySheet::SaveBookmark));
-                if still_here {
-                    nav::close_sheet(s);
-                }
-            }
-            Err(err) => s.tell(sermon_error(&err)),
-        }
-        saving.set(false);
-    });
-}
-
-#[component]
-pub(super) fn SaveBookmarkSheet(s: Study) -> impl IntoView {
-    // `None` = untouched: the field shows the offered name until it is typed in.
-    let draft = RwSignal::new(None::<String>);
-    let saving = RwSignal::new(false);
-    let value = move || draft.get().or_else(|| offered(s)).unwrap_or_default();
-    // A name of spaces is refused by the server: no button to press for it.
-    let blank = move || value().trim().is_empty();
-    view! {
-        <Sheet
-            s=s
-            role="save-bookmark"
-            title=Signal::derive(|| "Uložiť záložku".to_string())
-            modal=true
-        >
-            <form
-                class="study-bookmark__save"
-                on:submit=move |ev| {
-                    ev.prevent_default();
-                    let name = untrack(value);
-                    if !saving.get_untracked() && !name.trim().is_empty() {
-                        save(s, saving, name);
-                    }
-                }
-            >
-                <label class="study-sheet__hint" for="study-bookmark-name">
-                    "Názov záložky"
-                </label>
-                <input
-                    id="study-bookmark-name"
-                    class="study-input"
-                    data-role="bookmark-new-name"
-                    type="text"
-                    maxlength="80"
-                    autocomplete="off"
-                    prop:value=value
-                    on:input=move |ev| draft.set(Some(event_target_value(&ev)))
-                />
-                <button
-                    type="submit"
-                    class="study-button study-button--primary"
-                    data-role="bookmark-save"
-                    disabled=move || saving.get() || blank()
-                >
-                    "Uložiť"
-                </button>
-            </form>
-        </Sheet>
-    }
 }

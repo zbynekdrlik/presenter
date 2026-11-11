@@ -130,23 +130,18 @@ mod tests {
     }
 
     #[test]
-    fn both_bookmark_sheets_have_a_url_and_the_save_sheet_needs_a_verse() {
+    fn the_bookmark_list_has_a_url_and_the_old_save_sheet_none() {
         let list = StudyRoute::reader("slk-seb", "HEB", 11).with_sheet(Some(StudySheet::Bookmarks));
         assert_eq!(list.to_url(), "/ui/study?t=slk-seb&p=HEB.11&s=zalozky");
         assert_eq!(
             StudyRoute::parse("?t=slk-seb&p=HEB.11&s=zalozky"),
             Some(list)
         );
-        let save = StudyRoute::reader("slk-seb", "HEB", 11)
-            .with_verses(Some((4, 4)))
-            .with_sheet(Some(StudySheet::SaveBookmark));
-        assert_eq!(save.to_url(), "/ui/study?t=slk-seb&p=HEB.11&v=4&s=zalozka");
-        assert_eq!(
-            StudyRoute::parse("?t=slk-seb&p=HEB.11&v=4&s=zalozka"),
-            Some(save)
-        );
-        let without_verse = StudyRoute::parse("?t=slk-seb&p=HEB.11&s=zalozka").expect("route");
-        assert_eq!(without_verse.sheet, None);
+        // #932: "Pridať záložku" adds at once; an old `s=zalozka` link opens the
+        // verse with no sheet.
+        let old_save = StudyRoute::parse("?t=slk-seb&p=HEB.11&v=4&s=zalozka").expect("route");
+        assert_eq!(old_save.sheet, None);
+        assert_eq!(old_save.verses, Some((4, 4)));
         // The list opens over any view, the sermon list too.
         let sermons = StudyRoute::parse("?view=sermons&s=zalozky").expect("route");
         assert_eq!(sermons.sheet, Some(StudySheet::Bookmarks));

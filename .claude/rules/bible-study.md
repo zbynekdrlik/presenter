@@ -94,7 +94,15 @@ preparation (the sermon views are in `sermon-prep.md`).
   (never Začiatok/Koniec), and `suggest_unresolved`: a reference gets a hint, only words naming no
   book may search, or the reader gets a false "Nič sa nenašlo".
 - **`touch-action: pan-y pinch-zoom`** on the reader: pan-y alone turned pinch-zoom off.
-- **Verse numbers are a 44 px gutter, not superscripts:** a number is a control (T3).
+- **A verse number is a control (T3), the first thing on its verse's line** (#932, owner 2026-11-11:
+  "zbytočne veľké odsadenie zľava a sprava"): `VerseBody`'s `lead` puts the button first in
+  `p.study-line`. Phone shell: 10 px edges, the lines after the first run to that edge, the first
+  starts at 40 px (`text-indent`, reset on the line's children); the button is a real 44 × 44 box,
+  absolutely placed on the first line's middle from the screen's edge (`assertMinTapTarget`). Never
+  a float with negative margins there: Chrome keeps it as an exclusion over the SECOND line too
+  (measured: line 2 at 31 px). Specs read the glyph lines with a `Range`, never the `p` box.
+  Desktop hangs it as a float in the 44 px gutter (negative margin, zero net width). Its click stops propagation: a number tap is never also a text tap. The
+  reader has no chapter title (#932): the header's `study-place` names it, the chip the translation.
 - **A translation lacking a place** answers no slides: `Chapter::Missing`, and `step_chapter` walks to
   its nearest chapter by the canonical book number, so the reader never gets stuck.
 - **The field keeps an opened reference** (`Field::opened`): while that chapter is read, in any
@@ -149,8 +157,12 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **Rules live in `state/study_bookmarks.rs`** (`BookmarkRefusal` → 422, Slovak): trimmed name 1–80 chars, ≤ 100 per
   list, a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
   structure with no request); the refusal names the book as the translation does. The row stores `book_name`.
-- **Sheets:** `s=zalozka` (needs a verse; the verse sheet REPLACES itself with it, like Odkazy) and `s=zalozky` (from
-  the header icon, hidden on the sermon views for the 360 px header). A save answer closes only the save sheet.
+- **"Pridať záložku" adds in ONE tap** (#932, owner 2026-11-11: "Načo je to dobré?!" about the naming sheet;
+  `bookmark-save` was pressed unchanged 5 of 6 times): `bookmarks::add_here` posts the place name
+  (`offered_name`, "Hebrejom 11:4"), closes the verse sheet, notice "Záložka pridaná: …". It is the verse
+  sheet's FIRST action; the rest follow the SNV phone counters. No `s=zalozka` any more (an old link opens
+  the verse, no sheet); naming = Premenovať in `s=zalozky` (the header icon, hidden on the sermon views for
+  the 360 px header).
 - **The list sheet starts every visit in `Loading`** and carries `data-state=loading|ready|error` (the spec's settle
   marker); its keyed `<For>` sits OUTSIDE the state match, so a reload after Späť keeps an open rename field.
 - **Späť after Zmazať** re-creates at the deleted `index` (POST `index`), the repository renumbers 0..n in one

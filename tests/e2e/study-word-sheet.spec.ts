@@ -792,7 +792,10 @@ test("a tap on a note is no tap on its verse", async ({ browser }) => {
   await note.tap();
 
   // A highlighted verse keeps its highlight, the open text lets nothing through.
-  await verse(page, 3).locator(".study-verse__text").tap({ position: { x: 2, y: 2 } });
+  // Bottom right: the top left is the verse number since #932.
+  const text3 = verse(page, 3).locator(".study-verse__text");
+  const box3 = await text3.boundingBox();
+  await text3.tap({ position: { x: (box3?.width ?? 4) - 2, y: (box3?.height ?? 4) - 2 } });
   await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
   await note.tap();
   await expect(role(page, "study-note-text")).toBeVisible();

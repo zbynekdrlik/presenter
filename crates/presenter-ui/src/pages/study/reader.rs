@@ -5,7 +5,6 @@
 
 use leptos::prelude::*;
 use presenter_core::bible::resolver::Step;
-use presenter_core::bible::sermon::translation_short_code;
 
 use super::markup_view::{NumbersChip, VerseBody};
 use super::scroll::{save_on_scroll, ScrollPlan};
@@ -100,6 +99,27 @@ pub(super) fn chapter_settled_untracked(s: Study) -> bool {
     leptos::prelude::untrack(|| chapter_settled(s))
 }
 
+/// The verse's number at the start of its line (#932), a control (T3): it
+/// opens the verse sheet and is never also a tap on the text around it.
+#[component]
+fn VerseNumber(s: Study, number: u16, settled: Memo<bool>) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            class="study-verse__number"
+            data-role="study-verse-number"
+            aria-label=format!("Verš {number}")
+            disabled=move || !settled.get()
+            on:click=move |ev| {
+                ev.stop_propagation();
+                on_verse_tap(s, number);
+            }
+        >
+            {number}
+        </button>
+    }
+}
+
 #[component]
 pub(super) fn Reader(s: Study) -> impl IntoView {
     let swipe = StoredValue::new(SwipeTracker::default());
@@ -128,15 +148,6 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
             Chapter::Ready(..) => "ready",
             Chapter::Missing(_) => "missing",
             Chapter::Failed(..) => "error",
-        })
-    };
-    let title = move || {
-        s.chapter.with(|chapter| match chapter {
-            Chapter::Ready(place, text) => Some((
-                format!("{} {}", text.book, place.chapter),
-                translation_short_code(&place.translation),
-            )),
-            _ => None,
         })
     };
     let verses = move || {
@@ -191,18 +202,9 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
                 data-loaded-for=move || loaded.get().map(|place| place.key())
                 data-state=state
             >
+                // No chapter title (#932): the header names the chapter on
+                // screen, the pressed chip its translation.
                 <div class="study-chapter__head">
-                    {move || {
-                        title()
-                            .map(|(name, code)| {
-                                view! {
-                                    <h2 class="study-chapter__title" data-role="study-title">
-                                        {name}
-                                        <span class="study-chapter__code">{code}</span>
-                                    </h2>
-                                }
-                            })
-                    }}
                     <NumbersChip s=s shown=numbered />
                 </div>
                 <For
@@ -225,21 +227,15 @@ pub(super) fn Reader(s: Study) -> impl IntoView {
                                 data-verse=number
                                 data-selected=move || if selected.get() { "true" } else { "false" }
                             >
-                                <button
-                                    type="button"
-                                    class="study-verse__number"
-                                    data-role="study-verse-number"
-                                    aria-label=format!("Verš {number}")
-                                    disabled=move || !settled.get()
-                                    on:click=move |_| on_verse_tap(s, number)
-                                >
-                                    {number}
-                                </button>
                                 <VerseBody
                                     s=s
                                     verse=verse
                                     class="study-verse__text"
                                     on_tap=Callback::new(move |on_word| on_text_tap(s, number, on_word))
+                                    lead=Box::new(move || {
+                                        view! { <VerseNumber s=s number=number settled=settled /> }
+                                            .into_any()
+                                    })
                                 />
                             </div>
                         }
