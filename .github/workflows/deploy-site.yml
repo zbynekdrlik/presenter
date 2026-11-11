@@ -15,6 +15,11 @@ on:
         type: string
         required: true
       deploy_user:
+        description: "the SSH login the deploy runs as (sudo) — never the process owner by itself"
+        type: string
+        required: true
+      service_user:
+        description: "#929: the system user the service runs as and that owns the deploy dir (dstack two-networks.md §3: a Dante app runs as its own user)"
         type: string
         required: true
       deploy_dir:
@@ -56,6 +61,7 @@ jobs:
       SERVICE_NAME: ${{ inputs.service_name }}
       DEPLOY_HOST: ${{ inputs.deploy_host }}
       DEPLOY_USER: ${{ inputs.deploy_user }}
+      SERVICE_USER: ${{ inputs.service_user }}
       UNIT_FILE: ${{ inputs.unit_file }}
       ETC_DIR: ${{ inputs.etc_dir }}
       HTTP_PORT: ${{ inputs.http_port }}
@@ -138,9 +144,21 @@ jobs:
             exit 1
           fi
 
+      # #929: the service runs as its own system user (dcontroller's dante-guard lets a Dante
+      # app onto the Dante leg by socket uid — the admin login must never be that uid). Its
+      # home is the deploy dir, so adb keeps its key under the unit's ReadWritePaths.
+      - name: Ensure the service user
+        run: |
+          set -euo pipefail
+          case "$SERVICE_USER" in *[!a-z0-9-]* | '') echo "::error::bad service_user '$SERVICE_USER'"; exit 1 ;; esac
+          ssh deploy-target "bash -s -- '$SERVICE_USER' '${{ env.DEPLOY_DIR }}' '${{ inputs.hardware }}'" < scripts/deploy/ensure_service_user.sh
+
+      # #929: an existing dir is left as it is — the OLD service is still running in it (on the
+      # first deploy as another user) and a chown now would take its own files away. The tree
+      # is handed to the service user in the swap step, while the service is stopped.
       - name: Create deploy directory
         run: |
-          ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
+          ssh deploy-target "test -d ${{ env.DEPLOY_DIR }} || sudo install -d -o ${{ env.SERVICE_USER }} -g ${{ env.SERVICE_USER }} ${{ env.DEPLOY_DIR }}"
 
       - name: Ensure ADB is installed
         if: ${{ inputs.hardware }}
@@ -227,7 +245,8 @@ jobs:
             --jq '.artifacts[] | select(.name=="build-artifacts") | .id')
           test -n "$ARTIFACT_ID" || { echo "::error::build-artifacts artifact not found for this run"; exit 1; }
           SUMS=$(cd _artifacts && sha256sum presenter-server import_propresenter ingest_bibles presenter-stage.apk)
-          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/staging.new"
+          # #929: the staging dir is the deploy user's own (the deploy dir is the service user's).
+          ssh deploy-target "sudo install -d -o ${{ env.DEPLOY_USER }} -g ${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}/staging.new"
           # The signed URL from the 302 redirect is valid ~1 minute — resolve it
           # LAST and hand it straight to prod's curl (no token leaves the runner).
           SIGNED_URL=$(curl -sI -H "Authorization: Bearer $GH_TOKEN" \
@@ -258,12 +277,14 @@ jobs:
           set -e
           DB_PATH="${{ env.DEPLOY_DIR }}/presenter.db"
           BACKUP_DIR="${{ env.DEPLOY_DIR }}/backups"
-          mkdir -p "$BACKUP_DIR"
+          # #929: the deploy dir is not the deploy user's — write as root (the swap step hands
+          # the copies to the service user); root's umask 022 keeps them readable by the admin login.
+          sudo mkdir -p "$BACKUP_DIR"
           if [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
             TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-            cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            sudo cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
             echo "Database backed up to ${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
-            ls -t "$BACKUP_DIR"/presenter-*.db 2>/dev/null | tail -n +6 | xargs -r rm --
+            ls -t "$BACKUP_DIR"/presenter-*.db 2>/dev/null | tail -n +6 | xargs -r sudo rm --
           else
             echo "No existing database to back up"
           fi
@@ -319,9 +340,11 @@ jobs:
           rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm" "$LOG_FILE"
           REMOTE_SCRIPT
 
+      # #929: scp lands in the deploy user's staging dir; `install` hands the files to the
+      # service user (the deploy dir is its own).
       - name: Deploy Bible files
         run: |
-          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/staging.new/bibles"
           scp -i ~/.ssh/id_deploy \
             data/bibles/kjv.usfm.zip \
             data/bibles-private/seb.bbl.mybible.zip \
@@ -332,14 +355,19 @@ jobs:
             data/bibles-private/ssv.usfm.zip \
             data/bibles-private/botek.usfm.zip \
             data/bibles-private/csp.usfm.zip \
-            deploy-target:${{ env.DEPLOY_DIR }}/bibles/
+            deploy-target:${{ env.DEPLOY_DIR }}/staging.new/bibles/
+          ssh deploy-target "set -euo pipefail
+            sudo install -d -o ${{ env.SERVICE_USER }} -g ${{ env.SERVICE_USER }} ${{ env.DEPLOY_DIR }}/bibles
+            sudo install -m 0644 -o ${{ env.SERVICE_USER }} -g ${{ env.SERVICE_USER }} ${{ env.DEPLOY_DIR }}/staging.new/bibles/* ${{ env.DEPLOY_DIR }}/bibles/
+            rm -rf ${{ env.DEPLOY_DIR }}/staging.new/bibles"
 
       - name: Sync ProPresenter libraries from git
         if: ${{ inputs.library_sync }}
         run: |
           command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
-          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
-          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+          ssh deploy-target "sudo install -d -o ${{ env.SERVICE_USER }} -g ${{ env.SERVICE_USER }} ${{ env.DEPLOY_DIR }}/libraries"
+          # #929: written as root on the host, owned by the service user.
+          rsync -avz --delete --rsync-path="sudo rsync" --chown=${{ env.SERVICE_USER }}:${{ env.SERVICE_USER }} -e "ssh -i ~/.ssh/id_deploy" \
             data/libraries/ \
             deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
@@ -353,7 +381,8 @@ jobs:
             echo "Fresh database - running ProPresenter import"
             # The STAGED tool: ${{ env.DEPLOY_DIR }}/import_propresenter is the previous
             # release's (absent on a first deploy) until the swap step.
-            PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
+            # #929: as the service user, so the new database is its own.
+            sudo -u ${{ env.SERVICE_USER }} env PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
               ${{ env.DEPLOY_DIR }}/staging.new/import_propresenter --root "${{ env.DEPLOY_DIR }}/libraries"
           else
             echo "Existing database found - preserving presentations"
@@ -389,6 +418,11 @@ jobs:
           case "$ACCESS_AUD" in *[!a-f0-9]* | '') echo "::error::access_aud must be the hex AUD tag"; exit 1 ;; esac
           printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' "$ACCESS_TEAM_DOMAIN" "$ACCESS_AUD" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
+          # #929: the site's service user. The committed presenter.service is also PP's
+          # (release.yml), so the user is a per-site drop-in like the stage URL (#538). The
+          # "Ensure the service user" step already rejected anything but [a-z0-9-].
+          printf '[Service]\nUser=%s\nGroup=%s\n' "$SERVICE_USER" "$SERVICE_USER" |
+            ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/service-user.conf >/dev/null && sudo systemctl daemon-reload"
           # #918: a site without devices (PRBA) has no encoder gate, no stage TVs and no
           # song-sync peer — the rest of this step is the hardware site's.
           if [ "${{ inputs.hardware }}" != "true" ]; then
@@ -490,8 +524,11 @@ jobs:
           cd "${{ env.DEPLOY_DIR }}"
           test -x staging.new/presenter-server || { echo "::error::staged presenter-server missing/not executable — aborting before touching the running service"; exit 1; }
           if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; fi
-          mv -f staging.new/presenter-server staging.new/import_propresenter staging.new/ingest_bibles staging.new/presenter-stage.apk .
-          rmdir staging.new 2>/dev/null || true
+          sudo mv -f staging.new/presenter-server staging.new/import_propresenter staging.new/ingest_bibles staging.new/presenter-stage.apk .
+          sudo rmdir staging.new 2>/dev/null || true
+          # #929: the only moment the service is stopped — hand the whole tree (DB + WAL,
+          # backups, libraries, adb key, recordings) to the user it runs as.
+          sudo chown -R ${{ env.SERVICE_USER }}:${{ env.SERVICE_USER }} "${{ env.DEPLOY_DIR }}"
           sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}
           REMOTE_SCRIPT
 
@@ -505,6 +542,15 @@ jobs:
             exit 1
           fi
           echo "Service is running"
+
+          # #929: the process must run as the site's service user (dante-guard keys on its uid).
+          UNIT_USER=$(systemctl show -p User --value ${{ env.SERVICE_NAME }})
+          PID_USER=$(ps -o user= -p "$(systemctl show -p MainPID --value ${{ env.SERVICE_NAME }})" | tr -d ' ')
+          if [ "$UNIT_USER" != "${{ env.SERVICE_USER }}" ] || [ "$PID_USER" != "${{ env.SERVICE_USER }}" ]; then
+            echo "::error::${{ env.SERVICE_NAME }} runs as '$PID_USER' (unit User='$UNIT_USER'), expected '${{ env.SERVICE_USER }}'"
+            exit 1
+          fi
+          echo "Service user: $PID_USER"
 
           # Poll /healthz until the port is bound. systemd reports the service
           # active before tokio finishes binding; a fixed sleep raced with
@@ -754,17 +800,19 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           echo "Importing Bible translations..."
-          export PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db
-          export PRESENTER_BIBLE_KJV=${{ env.DEPLOY_DIR }}/bibles/kjv.usfm.zip
-          export PRESENTER_BIBLE_SEB=${{ env.DEPLOY_DIR }}/bibles/seb.bbl.mybible.zip
-          export PRESENTER_BIBLE_ROHACEK=${{ env.DEPLOY_DIR }}/bibles/rohacek.bbl.mybible.zip
-          export PRESENTER_BIBLE_SEVP=${{ env.DEPLOY_DIR }}/bibles/sevp.obohu.mybible.zip
-          export PRESENTER_BIBLE_MILOST=${{ env.DEPLOY_DIR }}/bibles/milost.bbl.mybible.zip
-          export PRESENTER_BIBLE_AMPC=${{ env.DEPLOY_DIR }}/bibles/ampc.usfm.zip
-          export PRESENTER_BIBLE_SSV=${{ env.DEPLOY_DIR }}/bibles/ssv.usfm.zip
-          export PRESENTER_BIBLE_BOTEK=${{ env.DEPLOY_DIR }}/bibles/botek.usfm.zip
-          export PRESENTER_BIBLE_CSP=${{ env.DEPLOY_DIR }}/bibles/csp.usfm.zip
-          ${{ env.DEPLOY_DIR }}/ingest_bibles
+          # #929: the database belongs to the service user — import as it.
+          sudo -u ${{ env.SERVICE_USER }} env \
+            PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
+            PRESENTER_BIBLE_KJV=${{ env.DEPLOY_DIR }}/bibles/kjv.usfm.zip \
+            PRESENTER_BIBLE_SEB=${{ env.DEPLOY_DIR }}/bibles/seb.bbl.mybible.zip \
+            PRESENTER_BIBLE_ROHACEK=${{ env.DEPLOY_DIR }}/bibles/rohacek.bbl.mybible.zip \
+            PRESENTER_BIBLE_SEVP=${{ env.DEPLOY_DIR }}/bibles/sevp.obohu.mybible.zip \
+            PRESENTER_BIBLE_MILOST=${{ env.DEPLOY_DIR }}/bibles/milost.bbl.mybible.zip \
+            PRESENTER_BIBLE_AMPC=${{ env.DEPLOY_DIR }}/bibles/ampc.usfm.zip \
+            PRESENTER_BIBLE_SSV=${{ env.DEPLOY_DIR }}/bibles/ssv.usfm.zip \
+            PRESENTER_BIBLE_BOTEK=${{ env.DEPLOY_DIR }}/bibles/botek.usfm.zip \
+            PRESENTER_BIBLE_CSP=${{ env.DEPLOY_DIR }}/bibles/csp.usfm.zip \
+            ${{ env.DEPLOY_DIR }}/ingest_bibles
           REMOTE_SCRIPT
 
       # #850: the Companion module ships WITH the release (it used to be deployed by every

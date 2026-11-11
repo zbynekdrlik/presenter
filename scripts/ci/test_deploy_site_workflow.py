@@ -14,12 +14,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SITE = ROOT / ".github/workflows/deploy-site.yml"
 DEPLOY = ROOT / ".github/workflows/deploy.yml"
 
-# The SNV deploy job's steps before #918 (deploy.yml at d0381c73), in order.
+# The SNV deploy job's steps before #918 (deploy.yml at d0381c73), in order, plus
+# "Ensure the service user" (#929).
 SNV_STEPS = [
     "Check out the private Bible modules (#859)",
     "Download build artifacts",
     "Place binaries",
     "Setup SSH for deployment",
+    "Ensure the service user",
     "Create deploy directory",
     "Ensure ADB is installed",
     "Ensure NDI SDK and avahi-daemon are installed",
@@ -132,6 +134,125 @@ class DeploySiteWorkflowTest(unittest.TestCase):
         self.assertNotIn("PRESENTER_SYNC_PEER_URL", unit)
         self.assertIn("Environment=PRESENTER_COMPANION_ENABLED=0", unit)
         self.assertIn("Environment=PRESENTER_PORT=8081", unit)
+
+
+def step(name: str) -> dict:
+    return next(s for s in site_steps() if s.get("name") == name)
+
+
+def run_of(name: str) -> str:
+    return str(step(name)["run"])
+
+
+def code_lines(text: str) -> str:
+    return "\n".join(l for l in text.splitlines() if not l.strip().startswith("#"))
+
+
+def unit_values(text: str, key: str) -> list[str]:
+    """Every value of `key=` in a unit text, in order (a drop-in's later value wins)."""
+    return [l.split("=", 1)[1] for l in text.splitlines() if l.startswith(f"{key}=")]
+
+
+class ServiceUserTest(unittest.TestCase):
+    """#929: each site's service runs as its own system user (dstack two-networks.md §3)."""
+
+    def test_snv_runs_as_presenter_and_deploys_as_newlevel(self) -> None:
+        inputs = call_inputs("deploy")
+        self.assertEqual(inputs["service_user"], "presenter")
+        self.assertEqual(inputs["deploy_user"], "newlevel")
+
+    def test_prba_runs_as_its_own_account(self) -> None:
+        inputs = call_inputs("deploy-prba")
+        self.assertEqual(inputs["service_user"], inputs["deploy_user"])
+        self.assertEqual(inputs["service_user"], "presenter-prba")
+
+    def test_service_user_is_a_required_input(self) -> None:
+        inp = load(SITE)[True]["workflow_call"]["inputs"]["service_user"]
+        self.assertIs(inp["required"], True)
+
+    def test_snv_effective_unit_runs_as_presenter_with_gpu_and_port_80(self) -> None:
+        """The committed unit + the drop-in the deploy writes = what systemd runs on SNV."""
+        unit = (ROOT / "scripts/deploy/presenter.service").read_text(encoding="utf-8")
+        run = run_of("Deploy systemd service")
+        self.assertIn("printf '[Service]\\nUser=%s\\nGroup=%s\\n' \"$SERVICE_USER\" \"$SERVICE_USER\"", run)
+        self.assertIn("service.d/service-user.conf", run)
+        user = call_inputs("deploy")["service_user"]
+        effective = unit + f"\n[Service]\nUser={user}\nGroup={user}\n"
+        self.assertEqual(unit_values(effective, "User")[-1], "presenter")
+        self.assertEqual(unit_values(effective, "Group")[-1], "presenter")
+        self.assertEqual(unit_values(effective, "SupplementaryGroups"), ["render video"])
+        self.assertEqual(unit_values(effective, "AmbientCapabilities"), ["CAP_NET_BIND_SERVICE"])
+        self.assertEqual(unit_values(effective, "CapabilityBoundingSet"), ["CAP_NET_BIND_SERVICE"])
+        # HOME of the service user is the deploy dir (ensure_service_user.sh), which must be
+        # the unit's writable path — adb writes its key and server port file there.
+        self.assertEqual(unit_values(effective, "ReadWritePaths"), [call_inputs("deploy")["deploy_dir"]])
+        self.assertEqual(unit_values(effective, "WorkingDirectory"), [call_inputs("deploy")["deploy_dir"]])
+
+    def test_the_service_user_step_runs_the_script_before_anything_touches_the_dir(self) -> None:
+        names = [s["name"] for s in site_steps() if "name" in s]
+        self.assertLess(names.index("Setup SSH for deployment"), names.index("Ensure the service user"))
+        self.assertLess(names.index("Ensure the service user"), names.index("Create deploy directory"))
+        run = run_of("Ensure the service user")
+        self.assertIn("< scripts/deploy/ensure_service_user.sh", run)
+        self.assertIn("${{ inputs.hardware }}", run)
+
+    def test_no_recursive_chown_while_the_old_service_runs(self) -> None:
+        """A `chown -R` before the stop would take the database away from the running service."""
+        names = [s["name"] for s in site_steps() if "name" in s]
+        swap = names.index("Swap staged binaries and restart service")
+        for s in site_steps()[: swap + 1]:
+            if s.get("name") == "Swap staged binaries and restart service":
+                continue
+            self.assertNotIn("chown -R", code_lines(str(s.get("run", ""))), s.get("name"))
+        run = code_lines(run_of("Swap staged binaries and restart service"))
+        stop = run.index("systemctl stop")
+        chown = run.index("sudo chown -R ${{ env.SERVICE_USER }}:${{ env.SERVICE_USER }}")
+        start = run.index("systemctl start")
+        self.assertLess(stop, chown)
+        self.assertLess(chown, start)
+        self.assertIn("sudo mv -f staging.new/presenter-server", run)
+
+    def test_deploy_user_never_writes_into_the_deploy_dir_itself(self) -> None:
+        """Only staging.new is the deploy user's; every other write goes through sudo."""
+        for s in site_steps():
+            for line in code_lines(str(s.get("run", ""))).splitlines():
+                if "${{ env.DEPLOY_DIR }}" not in line:
+                    continue
+                for verb in ("mkdir -p", "cp ", "mv ", "rm "):
+                    idx = line.find(verb)
+                    if idx < 0 or "staging.new" in line or "gstreamer-registry" in line:
+                        continue
+                    self.assertIn("sudo", line[:idx], f"{s.get('name')}: {line.strip()}")
+
+    def test_an_existing_deploy_dir_keeps_its_owner_until_the_swap(self) -> None:
+        run = code_lines(run_of("Create deploy directory"))
+        self.assertIn("test -d ${{ env.DEPLOY_DIR }} ||", run)
+        self.assertNotIn("chown", run)
+
+    def test_staging_dir_belongs_to_the_deploy_user(self) -> None:
+        run = run_of("Stage binaries on prod (pull from GitHub, service keeps running)")
+        self.assertIn(
+            "sudo install -d -o ${{ env.DEPLOY_USER }} -g ${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}/staging.new",
+            run,
+        )
+
+    def test_database_writers_run_as_the_service_user(self) -> None:
+        for name in ("Import ProPresenter (first deploy or schema reset)", "Import Bible translations"):
+            self.assertIn("sudo -u ${{ env.SERVICE_USER }} env", run_of(name), name)
+
+    def test_files_from_the_runner_land_owned_by_the_service_user(self) -> None:
+        bibles = run_of("Deploy Bible files")
+        self.assertIn("deploy-target:${{ env.DEPLOY_DIR }}/staging.new/bibles/", bibles)
+        self.assertIn("sudo install -m 0644 -o ${{ env.SERVICE_USER }} -g ${{ env.SERVICE_USER }}", bibles)
+        libs = run_of("Sync ProPresenter libraries from git")
+        self.assertIn('--rsync-path="sudo rsync"', libs)
+        self.assertIn("--chown=${{ env.SERVICE_USER }}:${{ env.SERVICE_USER }}", libs)
+
+    def test_verify_fails_unless_the_process_runs_as_the_service_user(self) -> None:
+        run = run_of("Verify deployment")
+        self.assertIn("systemctl show -p User --value", run)
+        self.assertIn('"$PID_USER" != "${{ env.SERVICE_USER }}"', run)
+        self.assertIn("exit 1", run[run.index("PID_USER"):])
 
 
 if __name__ == "__main__":

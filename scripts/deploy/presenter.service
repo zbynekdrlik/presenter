@@ -14,6 +14,11 @@ After=network.target dev-dri-renderD128.device
 
 [Service]
 Type=simple
+# #929: PP's user (release.yml). A site deployed by deploy-site.yml runs as its own system user
+# from the `service-user.conf` drop-in (SNV: `presenter`) — dante-guard lets a Dante app onto
+# the Dante leg by uid, so the admin login must not be that uid (dstack two-networks.md §3).
+# Nothing below depends on the user: port 80 comes from the capability, the GPU from the
+# groups, and a site service user's HOME is this deploy dir (ReadWritePaths).
 User=newlevel
 Group=newlevel
 # #540: the GPU render node is root:render 0660, so an ordinary service user can

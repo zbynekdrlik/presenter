@@ -321,7 +321,33 @@ every_deploy_ships_the_gate_script() {
   done
 }
 
-echo "Deploy-config guards (#538, #539, #544, #547):"
+# ── #929: each deploy-site.yml site runs as its own service user ───────────────
+# dante-guard lets a Dante app onto the Dante leg by socket uid; the shared unit is also
+# PP's (release.yml), so the user is a per-site drop-in, and every site call names it.
+site_deploy_writes_the_service_user_dropin() {
+  local wf="$REPO_ROOT/.github/workflows/deploy-site.yml"
+  grep -qF "printf '[Service]\\nUser=%s\\nGroup=%s\\n' \"\$SERVICE_USER\" \"\$SERVICE_USER\"" "$wf" &&
+    grep -qF 'service.d/service-user.conf' "$wf"
+}
+
+every_site_call_names_its_service_user() {
+  local wf="$REPO_ROOT/.github/workflows/deploy.yml" calls users
+  calls=$(grep -c 'uses: ./.github/workflows/deploy-site.yml' "$wf")
+  users=$(grep -cE '^ *service_user: *[a-z0-9-]+ *$' "$wf")
+  [ "$calls" -ge 1 ] && [ "$calls" = "$users" ] &&
+    grep -qE '^ *service_user: *presenter *$' "$wf"
+}
+
+shared_unit_keeps_pp_user_and_needs_no_login_home() {
+  # PP is released by release.yml with no user migration: the committed unit must stay
+  # newlevel, and nothing in it may depend on a home under /home (the service user's home
+  # is the deploy dir).
+  grep -qE '^User=newlevel$' "$PROD_UNIT" &&
+    grep -qE '^ProtectHome=read-only$' "$PROD_UNIT" &&
+    ! grep -E '^[A-Za-z]+=' "$PROD_UNIT" | grep -q '/home/'
+}
+
+echo "Deploy-config guards (#538, #539, #544, #547, #929):"
 check "#538 shared unit does not hardcode a site stage URL" not_hardcoding_stage_url
 check "#538 prod deploy writes its own stage-url drop-in" prod_deploy_writes_stage_url_dropin
 check "#538 PP release writes its own stage-url drop-in" pp_release_writes_stage_url_dropin
@@ -337,6 +363,9 @@ check "#547 gate finds an encoder that registers late (#339)" finds_a_late_regis
 check "#547 gate bounds every probe (a wedged driver cannot hang the unit)" bounds_every_probe_so_a_wedged_driver_cannot_hang_the_unit
 check "#547 units hard-bound the gate with timeout + TimeoutStartSec" units_hard_bound_the_gate
 check "#547 every deploy ships the gate script" every_deploy_ships_the_gate_script
+check "#929 site deploy writes the service-user drop-in" site_deploy_writes_the_service_user_dropin
+check "#929 every site call names its service user (SNV = presenter)" every_site_call_names_its_service_user
+check "#929 shared unit keeps PP's user and needs no login home" shared_unit_keeps_pp_user_and_needs_no_login_home
 
 if [ "$failures" -ne 0 ]; then
   echo "Deploy-config guards: $failures FAILED"

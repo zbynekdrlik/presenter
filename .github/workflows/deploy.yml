@@ -140,6 +140,9 @@ jobs:
       site: SNV
       deploy_host: 10.77.9.205
       deploy_user: newlevel
+      # #929: the service's own user (dante-guard on the Dante leg keys on its uid —
+      # dcontroller#64); newlevel stays only the SSH login of the deploy.
+      service_user: presenter
       deploy_dir: /opt/presenter
       service_name: presenter
       unit_file: scripts/deploy/presenter.service
@@ -162,6 +165,7 @@ jobs:
       site: PRBA
       deploy_host: 100.104.8.125
       deploy_user: presenter-prba
+      service_user: presenter-prba
       deploy_dir: /opt/presenter-prba
       service_name: presenter-prba
       unit_file: scripts/deploy/presenter-prba.service
