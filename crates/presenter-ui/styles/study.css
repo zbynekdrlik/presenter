@@ -416,10 +416,14 @@
 }
 
 /* Phone (#932, owner 2026-11-11: "zbytočne veľké odsadenie zľava a sprava"):
-   10 px each side, the number one line high and only as wide as its digits.
-   Its tap target stays 44 x 44 px (T3) through the ::before. */
+   10 px each side, every line after the first runs under the number. The
+   number stays a 44 x 44 px box (T3) from the screen's edge, its digits
+   right-aligned at 26 px; negative margins shrink its float to one line and
+   let the first line start at 31 px. The line's glyphs paint over a float, so
+   a tap on a word in the overlap stays the text's. */
 body[data-shell="phone"] .study-verse {
-  padding-inline: 10px;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 body[data-shell="phone"] .study-verse__text {
@@ -427,22 +431,12 @@ body[data-shell="phone"] .study-verse__text {
 }
 
 body[data-shell="phone"] .study-verse__number {
-  position: relative;
-  width: auto;
-  height: calc(var(--study-text) * 1.6);
-  min-height: 0;
-  margin-left: 0;
-  padding-right: 6px;
-}
-
-body[data-shell="phone"] .study-verse__number::before {
-  content: "";
-  position: absolute;
-  top: calc(50% - 22px);
-  left: -10px;
-  right: -4px;
-  min-width: 44px;
+  width: 44px;
   height: 44px;
+  min-height: 0;
+  margin: calc((var(--study-text) * 1.6 - 44px) / 2) -13px
+    calc((var(--study-text) * 1.6 - 44px) / 2) -10px;
+  padding: 13px 18px 0 0;
 }
 
 .study-empty {
@@ -1009,8 +1003,7 @@ body[data-shell="phone"] .study-verse__number::before {
   padding: 0 8px;
 }
 
-.study-bookmark__rename,
-.study-bookmark__save {
+.study-bookmark__rename {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -1019,11 +1012,6 @@ body[data-shell="phone"] .study-verse__number::before {
 .study-bookmark__rename .study-input {
   flex: 1 1 160px;
   min-width: 0;
-}
-
-.study-bookmark__save .study-input,
-.study-bookmark__save .study-button {
-  width: 100%;
 }
 
 .study-icon__svg {

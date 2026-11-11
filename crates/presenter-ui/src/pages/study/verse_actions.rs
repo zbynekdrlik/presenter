@@ -87,19 +87,28 @@ fn passage(s: Study) -> Option<SermonPassage> {
     })
 }
 
-fn run(s: Study, action: VerseAction) {
+/// Runs the action; `true` = it closed the sheet (a history step, so the
+/// sheet stays on screen a moment longer and must not run it twice).
+fn run(s: Study, action: VerseAction) -> bool {
     match action {
         VerseAction::AddToSermon => {
             if let Some(passage) = passage(s) {
                 add_to_sermon::add(s, passage);
             }
+            false
         }
-        VerseAction::Compare => compare::open_from_selection(s),
-        VerseAction::CrossRefs => crossrefs::open(s),
+        VerseAction::Compare => {
+            compare::open_from_selection(s);
+            false
+        }
+        VerseAction::CrossRefs => {
+            crossrefs::open(s);
+            false
+        }
         VerseAction::SaveBookmark => bookmarks::add_here(s),
         VerseAction::Copy => {
             let Some((_, text)) = selection(s) else {
-                return;
+                return false;
             };
             s.notice.set(Some(
                 if copy_to_clipboard(&text) {
@@ -110,12 +119,16 @@ fn run(s: Study, action: VerseAction) {
                 .to_string(),
             ));
             nav::close_sheet(s);
+            true
         }
     }
 }
 
 #[component]
 pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
+    // An action that closes the sheet runs once: the close is a history step,
+    // so a quick second tap would add a second bookmark and step back twice.
+    let closing = StoredValue::new(false);
     let title = Signal::derive(move || selection(s).map(|(label, _)| label).unwrap_or_default());
     view! {
         <Sheet s=s role="verse-actions" title=title>
@@ -129,7 +142,11 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
                                 type="button"
                                 class="study-button study-button--primary"
                                 data-role=action.role()
-                                on:click=move |_| run(s, action)
+                                on:click=move |_| {
+                                    if !closing.get_value() && run(s, action) {
+                                        closing.set_value(true);
+                                    }
+                                }
                             >
                                 {move || action.label(s)}
                             </button>

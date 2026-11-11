@@ -129,7 +129,9 @@ test("a name of spaces cannot be saved; the server refuses it in Slovak too", as
   await page.locator('[data-role="verse-save-bookmark"]').tap();
   await expect(notice(page)).toContainText("Záložka pridaná: Hebrejom 11:2");
   await openList(page);
-  const row = bookmark(page, "Hebrejom 11:2");
+  // By id: an open rename field replaces the row's label.
+  const id = await bookmark(page, "Hebrejom 11:2").getAttribute("data-bookmark-id");
+  const row = sheet(page).locator(`[data-bookmark-id="${id}"]`);
   await row.locator('[data-role="bookmark-rename"]').tap();
   const nameField = sheet(page).locator('[data-role="bookmark-name"]');
   const save = sheet(page).locator('[data-role="bookmark-rename-save"]');

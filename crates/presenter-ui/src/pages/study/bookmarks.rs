@@ -77,14 +77,16 @@ fn here(s: Study) -> Option<ReadingPlace> {
 /// rovno pridala tak vyskočí ďalšie okno … Načo je to dobré?!"): one tap adds
 /// the first selected verse under the name the old sheet offered ("Hebrejom
 /// 11:4"); Premenovať in Záložky names it later. The verse sheet closes now, the
-/// answer is a notice.
-pub(super) fn add_here(s: Study) {
+/// answer is a notice. `true` = the sheet was closed.
+pub(super) fn add_here(s: Study) -> bool {
     let route = s.route.get_untracked();
     let (Some(place), Some(name)) = (
         reading_place(&route, s.translation().as_deref(), None),
         untrack(|| offered(s)),
     ) else {
-        return;
+        // The chapter on screen is not the route's yet: say so, no dead button.
+        s.tell("Verš sa ešte načítava, skús znova".to_string());
+        return false;
     };
     nav::close_sheet(s);
     leptos::task::spawn_local(async move {
@@ -93,6 +95,7 @@ pub(super) fn add_here(s: Study) {
             Err(err) => s.tell(sermon_error(&err)),
         }
     });
+    true
 }
 
 /// Späť on "Záložka zmazaná": it comes back where it stood.
@@ -147,7 +150,12 @@ fn move_here(s: Study, busy: RwSignal<bool>, id: i64) {
 fn delete(s: Study, busy: RwSignal<bool>, id: i64) {
     busy.set(true);
     leptos::task::spawn_local(async move {
-        match api::delete(id).await {
+        let answer = api::delete(id).await;
+        // Before the row goes: a row being renamed reads `busy` in its form,
+        // and a write after the row's removal reached its disposed field
+        // ("reactive value … already been disposed", #932's spec).
+        busy.set(false);
+        match answer {
             Ok(deleted) => {
                 s.bookmarks.update(|list| {
                     if let BookmarkList::Ready(rows) = list {
@@ -164,7 +172,6 @@ fn delete(s: Study, busy: RwSignal<bool>, id: i64) {
             }
             Err(err) => s.tell(sermon_error(&err)),
         }
-        busy.set(false);
     });
 }
 
