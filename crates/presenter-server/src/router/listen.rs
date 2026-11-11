@@ -228,12 +228,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dante_mic_stored_before_the_fixed_pair_is_left_out() {
+    async fn mics_stored_before_the_fixed_pair_are_left_out_quietly_and_warned_once() {
+        let capture = crate::tracing_capture::Capture::install();
         let (state, app) = app().await;
         let mut stored: Value = serde_json::from_str(SPEC_MICS).unwrap();
         stored[1] = json!({ "id": "interp", "name": "Tlmočník", "channel": "left",
             "language": "sk", "role": "interpreter", "transport": "dante",
             "dante": { "channel": "Host EN", "source": "Mic 1@stagebox-1" } });
+        let mut reserved = stored[0].clone();
+        reserved["id"] = json!("dante-x");
+        reserved["streamName"] = json!("OLD_ID");
+        stored.as_array_mut().unwrap().push(reserved);
         state
             .repository()
             .set_app_setting(LISTEN_MICS_KEY, &stored.to_string())
@@ -248,6 +253,18 @@ mod tests {
             .filter_map(|mic| mic["id"].as_str())
             .collect();
         assert_eq!(ids, ["guest"], "only the VBAN mic is read");
+        let _ = send(&app, Method::GET, "/listen/mics", None).await;
+        let warned = || capture.events_with_message("a stored mic is ignored").len();
+        assert_eq!(warned(), 0, "the polled GET stays quiet");
+        assert!(state.start_listen("127.0.0.1:0".parse().unwrap()).await);
+        assert_eq!(warned(), 2, "the startup read warns once per left-out mic");
+        let saved: Vec<String> = state
+            .listen_status()
+            .mics
+            .into_iter()
+            .map(|mic| mic.config.id)
+            .collect();
+        assert_eq!(saved, ["guest"], "the other saved mic still works");
     }
 
     #[tokio::test]

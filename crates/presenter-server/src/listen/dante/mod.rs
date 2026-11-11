@@ -13,8 +13,8 @@
 //! keeps the device in step with the Dante mics of the published list: no
 //! interface → no mics, no device, the status says why; otherwise one device
 //! whose plan (`LinkPlan`) changes only with the channels, the interface, the
-//! name or the rate. A failed start or a device that ended by itself is retried after
-//! 1, 2, 4 … 60 s, WARN on power-of-two attempts (#484). Every [`DRAIN`] the
+//! name or the rate. A failed start or a device that ended by itself is
+//! retried after 1, 2, 4 … 60 s, WARN on power-of-two attempts (#484). Every [`DRAIN`] the
 //! samples of each LIVE channel (its `written` count advanced within
 //! [`LIVE_WINDOW`]) go to its mic's chain as one block; a silent or
 //! unsubscribed channel's samples are dropped, so the mic reads "waiting" /

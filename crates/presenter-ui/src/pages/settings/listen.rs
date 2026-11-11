@@ -563,7 +563,7 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
                     <span class="settings__badge" data-role="listen-count">
                         {move || mics.with(Vec::len).to_string()}
                     </span>
-                    <span class="settings__badge-label">"Mikrofóny"</span>
+                    <span class="settings__badge-label">"VBAN mikrofóny"</span>
                 </div>
             </header>
             <p class="settings__list-meta" data-role="listen-socket">

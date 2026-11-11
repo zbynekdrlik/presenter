@@ -42,7 +42,8 @@ pub enum DanteState {
     /// The receiver was never started (validate mode, tests).
     #[default]
     NotStarted,
-    /// No Dante channel: the supervisor has not published the fixed mics yet.
+    /// No Dante channel. Since #933 a box with an interface always has the
+    /// two fixed channels, so this is not reached; kept for the wire format.
     Idle,
     /// The box names no Dante interface: no device and no Dante mics
     /// (dev, CI, PP).
