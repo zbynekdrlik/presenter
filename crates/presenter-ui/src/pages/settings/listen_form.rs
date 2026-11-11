@@ -1,9 +1,8 @@
 //! The microphone editor of the Počúvanie card (#852 C1b): [`MicDraft`] (what the
 //! editor holds) and [`MicForm`], the card's `host_editor::EditorForm` — name,
-//! the transport (VBAN or Dante, #852), for VBAN the stream, optional sender IP
-//! and channel, for Dante the RX channel's name and an optional source
-//! `kanál@zariadenie`, then language / role selects — and the option captions
-//! the row's aside shows. Split out of `listen.rs`, which keeps
+//! VBAN stream, optional sender IP, channel, language and role — and the
+//! option captions the row's aside shows. The editor saves VBAN mics only: the
+//! two Dante mics are fixed and never edited here (#933, `listen_dante.rs`). Split out of `listen.rs`, which keeps
 //! the card, its API calls and its rows.
 //!
 //! A new mic's id comes from its role (`mic_id_for_role` over the listed ids) and
@@ -13,7 +12,7 @@
 
 use leptos::prelude::*;
 use presenter_core::listen::mics::{
-    mic_id_for_role, DanteInput, MicChannel, MicConfig, MicLanguage, MicRole, MicTransport,
+    mic_id_for_role, MicChannel, MicConfig, MicLanguage, MicRole, MicTransport,
 };
 
 use super::host_editor::{EditorForm, EditorSpec};
@@ -35,15 +34,14 @@ const LANGUAGES: &[(MicLanguage, &str, &str)] = &[
     (MicLanguage::Sk, "sk", "slovenčina"),
     (MicLanguage::Off, "off", "neprepisovať"),
 ];
-const TRANSPORTS: &[(MicTransport, &str, &str)] = &[
-    (MicTransport::Vban, "vban", "VBAN"),
-    (MicTransport::Dante, "dante", "Dante"),
-];
 const ROLES: &[(MicRole, &str, &str)] = &[
     (MicRole::Guest, "guest", "hosť"),
     (MicRole::Interpreter, "interpreter", "tlmočník"),
     (MicRole::Preacher, "preacher", "kazateľ"),
 ];
+/// Captions of the roles only a fixed Dante mic has (never offered in the
+/// editor).
+const FIXED_ROLES: &[(MicRole, &str, &str)] = &[(MicRole::Moderator, "moderator", "moderátor")];
 
 /// What the microphone editor holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,11 +55,6 @@ pub(super) struct MicDraft {
     pub(super) channel: MicChannel,
     pub(super) language: MicLanguage,
     pub(super) role: MicRole,
-    pub(super) transport: MicTransport,
-    /// A Dante mic's RX channel name, as typed.
-    pub(super) dante_channel: String,
-    /// As typed; blank = set in Dante Controller.
-    pub(super) dante_source: String,
 }
 
 impl Default for MicDraft {
@@ -74,9 +67,6 @@ impl Default for MicDraft {
             channel: MicChannel::Left,
             language: MicLanguage::En,
             role: MicRole::Guest,
-            transport: MicTransport::Vban,
-            dante_channel: String::new(),
-            dante_source: String::new(),
         }
     }
 }
@@ -91,68 +81,32 @@ impl MicDraft {
             channel: mic.channel,
             language: mic.language,
             role: mic.role,
-            transport: mic.transport,
-            dante_channel: mic
-                .dante
-                .as_ref()
-                .map(|d| d.channel.clone())
-                .unwrap_or_default(),
-            dante_source: mic
-                .dante
-                .as_ref()
-                .and_then(|d| d.source.clone())
-                .unwrap_or_default(),
         }
     }
 
-    /// The mic with this draft's values; `id` names its recordings and stays.
-    /// A Dante draft carries no VBAN fields and a VBAN one no Dante input.
+    /// The (VBAN) mic with this draft's values; `id` names its recordings and
+    /// stays.
     pub(super) fn into_config(self, id: String) -> MicConfig {
-        let dante = self.transport == MicTransport::Dante;
         MicConfig {
             id,
             name: self.name,
-            stream_name: if dante {
-                String::new()
-            } else {
-                self.stream_name
-            },
-            sender_ip: Some(self.sender_ip).filter(|ip| !dante && !ip.is_empty()),
-            channel: if dante {
-                MicChannel::Left
-            } else {
-                self.channel
-            },
+            stream_name: self.stream_name,
+            sender_ip: Some(self.sender_ip).filter(|ip| !ip.is_empty()),
+            channel: self.channel,
             language: self.language,
             role: self.role,
-            transport: self.transport,
-            dante: dante.then(|| DanteInput {
-                channel: self.dante_channel,
-                source: Some(self.dante_source).filter(|source| !source.is_empty()),
-            }),
+            transport: MicTransport::Vban,
+            dante: None,
         }
     }
 }
 
-/// The editor's own checks: a name, and a stream name (VBAN) or a channel
-/// name (Dante). Every other rule is the server's (its 422 text shows in the
-/// same line).
+/// The editor's own checks: a name and a stream name. Every other rule is the
+/// server's (its 422 text shows in the same line).
 fn validate_mic(values: &MicDraft) -> Result<MicDraft, &'static str> {
     let name = values.name.trim();
     if name.is_empty() {
         return Err("Zadaj názov mikrofónu.");
-    }
-    if values.transport == MicTransport::Dante {
-        let channel = values.dante_channel.trim();
-        if channel.is_empty() {
-            return Err("Zadaj názov kanála Dante.");
-        }
-        return Ok(MicDraft {
-            name: name.to_string(),
-            dante_channel: channel.to_string(),
-            dante_source: values.dante_source.trim().to_string(),
-            ..values.clone()
-        });
     }
     let stream_name = values.stream_name.trim();
     if stream_name.is_empty() {
@@ -189,9 +143,6 @@ pub(super) struct MicForm {
     channel: RwSignal<MicChannel>,
     language: RwSignal<MicLanguage>,
     role: RwSignal<MicRole>,
-    transport: RwSignal<MicTransport>,
-    dante_channel: RwSignal<String>,
-    dante_source: RwSignal<String>,
     /// The listed ids ([`TakenIds`]; empty when no card provided them).
     taken: Signal<Vec<String>>,
 }
@@ -211,9 +162,6 @@ impl EditorForm for MicForm {
             channel: RwSignal::new(blank.channel),
             language: RwSignal::new(blank.language),
             role: RwSignal::new(blank.role),
-            transport: RwSignal::new(blank.transport),
-            dante_channel: RwSignal::new(blank.dante_channel),
-            dante_source: RwSignal::new(blank.dante_source),
             taken: use_context::<TakenIds>().map_or_else(|| Signal::derive(Vec::new), |ids| ids.0),
         }
     }
@@ -230,9 +178,6 @@ impl EditorForm for MicForm {
         self.channel.set(values.channel);
         self.language.set(values.language);
         self.role.set(values.role);
-        self.transport.set(values.transport);
-        self.dante_channel.set(values.dante_channel.clone());
-        self.dante_source.set(values.dante_source.clone());
     }
 
     fn values(self) -> MicDraft {
@@ -244,9 +189,6 @@ impl EditorForm for MicForm {
             channel: self.channel.get(),
             language: self.language.get(),
             role: self.role.get(),
-            transport: self.transport.get(),
-            dante_channel: self.dante_channel.get(),
-            dante_source: self.dante_source.get(),
         }
     }
 
@@ -259,9 +201,6 @@ impl EditorForm for MicForm {
             channel: self.channel.get_untracked(),
             language: self.language.get_untracked(),
             role: self.role.get_untracked(),
-            transport: self.transport.get_untracked(),
-            dante_channel: self.dante_channel.get_untracked(),
-            dante_source: self.dante_source.get_untracked(),
         }
     }
 
@@ -282,9 +221,6 @@ impl EditorForm for MicForm {
             self.taken
                 .with(|taken| id_line(id.as_deref(), mic_role, taken))
         };
-        // The transport `<Show>` and its two branches read only the form's own signals
-        // and the card-level `invalid`, never a Memo / signal made here: the branch
-        // effects outlive this editor's owner by one task (`ListEditor::invalid`).
         view! {
             <>
                 <div class="settings__form-row">
@@ -296,11 +232,8 @@ impl EditorForm for MicForm {
                             prop:value=move || self.name.get()
                             on:input=move |ev| self.name.set(event_target_value(&ev)) />
                     </label>
-                    {render_select("Prenos", role("transport"), spec.message_id, invalid, self.transport, TRANSPORTS)}
                 </div>
-                <Show when=move || self.transport.get() == MicTransport::Dante fallback=move || self.render_vban_fields(spec, invalid)>
-                    {self.render_dante_fields(spec, invalid)}
-                </Show>
+                {self.render_vban_fields(spec, invalid)}
                 <div class="settings__form-row">
                     {render_select("Jazyk", role("language"), spec.message_id, invalid, self.language, LANGUAGES)}
                     {render_select("Rola", role("role"), spec.message_id, invalid, self.role, ROLES)}
@@ -341,32 +274,6 @@ impl MicForm {
                             on:input=move |ev| self.sender_ip.set(event_target_value(&ev)) />
                     </label>
                     {render_select("Kanál", role("channel"), spec.message_id, invalid, self.channel, CHANNELS)}
-                </div>
-        }
-    }
-
-    /// A Dante mic's RX channel (named like Dante Controller lists it) and its
-    /// optional source.
-    fn render_dante_fields(self, spec: EditorSpec, invalid: Signal<bool>) -> impl IntoView {
-        let role = move |field: &str| format!("{}-{field}", spec.role);
-        let aria_invalid = move || invalid.get().to_string();
-        view! {
-                <div class="settings__form-row">
-                    <label>
-                        <span>"Kanál Dante (názov v Presenteri)"</span>
-                        <input type="text" data-role=role("dante-channel") placeholder="Hosť EN"
-                            required aria-required="true"
-                            aria-describedby=spec.message_id aria-invalid=aria_invalid
-                            prop:value=move || self.dante_channel.get()
-                            on:input=move |ev| self.dante_channel.set(event_target_value(&ev)) />
-                    </label>
-                    <label>
-                        <span>"Zdroj (nepovinné, kanál@zariadenie)"</span>
-                        <input type="text" data-role=role("dante-source") placeholder="nastaviť v Dante Controlleri"
-                            aria-describedby=spec.message_id aria-invalid=aria_invalid
-                            prop:value=move || self.dante_source.get()
-                            on:input=move |ev| self.dante_source.set(event_target_value(&ev)) />
-                    </label>
                 </div>
         }
     }
@@ -418,17 +325,26 @@ fn caption<T: PartialEq>(options: &[(T, &'static str, &'static str)], value: T) 
         .map_or("?", |(_, _, text)| *text)
 }
 
-/// The row's aside: language · role · channel (VBAN) or "Dante" · the id (its
-/// recordings' name).
+/// A role's caption, the fixed Dante mics' role included.
+pub(super) fn role_caption(role: MicRole) -> &'static str {
+    match caption(ROLES, role) {
+        "?" => caption(FIXED_ROLES, role),
+        text => text,
+    }
+}
+
+/// A language's caption.
+pub(super) fn language_caption(language: MicLanguage) -> &'static str {
+    caption(LANGUAGES, language)
+}
+
+/// The row's aside: language · role · channel · the id (its recordings' name).
 pub(super) fn mic_aside(mic: &MicConfig) -> String {
-    let channel = match mic.transport {
-        MicTransport::Vban => format!("kanál {}", caption(CHANNELS, mic.channel)),
-        MicTransport::Dante => "Dante".to_string(),
-    };
     format!(
-        "{} · {} · {channel} · id {}",
-        caption(LANGUAGES, mic.language),
-        caption(ROLES, mic.role),
+        "{} · {} · kanál {} · id {}",
+        language_caption(mic.language),
+        role_caption(mic.role),
+        caption(CHANNELS, mic.channel),
         mic.id
     )
 }
@@ -509,42 +425,14 @@ mod tests {
     }
 
     #[test]
-    fn a_dante_draft_needs_a_channel_and_saves_without_vban_fields() {
-        let dante = MicDraft {
-            transport: MicTransport::Dante,
-            dante_channel: "  ".into(),
-            ..draft("Hosť", "GUEST_EN", "192.0.2.10")
-        };
-        assert_eq!(validate_mic(&dante), Err("Zadaj názov kanála Dante."));
-        let valid = validate_mic(&MicDraft {
-            dante_channel: " Host EN ".into(),
-            dante_source: " Mic 1@stagebox ".into(),
-            stream_name: String::new(),
-            ..dante
-        })
-        .unwrap();
-        let saved = valid.clone().into_config("guest".into());
-        assert_eq!(
-            (
-                saved.transport,
-                saved.stream_name.as_str(),
-                saved.sender_ip.as_deref()
-            ),
-            (MicTransport::Dante, "", None)
+    fn a_draft_always_saves_a_vban_mic_and_the_moderator_role_has_a_caption() {
+        let saved = draft("Hosť", "GUEST_EN", "").into_config("guest".into());
+        assert_eq!((saved.transport, saved.dante), (MicTransport::Vban, None));
+        assert_eq!(role_caption(MicRole::Moderator), "moderátor");
+        assert_eq!(role_caption(MicRole::Guest), "hosť");
+        assert!(
+            ROLES.iter().all(|(role, _, _)| *role != MicRole::Moderator),
+            "the editor never offers the fixed Dante mics' role"
         );
-        assert_eq!(
-            saved.dante,
-            Some(DanteInput {
-                channel: "Host EN".into(),
-                source: Some("Mic 1@stagebox".into())
-            })
-        );
-        assert_eq!(MicDraft::of(&saved).dante_source, "Mic 1@stagebox");
-        let no_source = MicDraft {
-            dante_source: String::new(),
-            ..valid
-        }
-        .into_config("guest".into());
-        assert_eq!(no_source.dante.and_then(|d| d.source), None);
     }
 }

@@ -165,10 +165,9 @@ fn a_full_ring_drops_what_does_not_fit_and_counts_it() {
     assert_eq!(dropped, start - RING_SAMPLES as u64);
 }
 
-fn input(channel: &str, source: Option<&str>) -> DanteInput {
+fn input(channel: &str) -> DanteInput {
     DanteInput {
         channel: channel.to_string(),
-        source: source.map(str::to_string),
     }
 }
 
@@ -178,10 +177,7 @@ fn plan(rate: u32, device: &str) -> LinkPlan {
         interface: "enp2s0.70".to_string(),
         network_rate: rate,
         state_file: std::env::temp_dir().join("presenter-dante-test.toml"),
-        channels: vec![
-            input("Host EN", Some("Mic 1@stagebox-1")),
-            input("Tlmocnik", None),
-        ],
+        channels: vec![input("mic 1"), input("mic 2")],
     }
 }
 
@@ -277,7 +273,7 @@ impl RunningLink for FakeLink {
     }
 }
 
-fn dante(id: &str, name: &str, channel: &str, source: Option<&str>) -> MicConfig {
+fn dante(id: &str, name: &str, channel: &str) -> MicConfig {
     MicConfig {
         id: id.to_string(),
         name: name.to_string(),
@@ -289,7 +285,6 @@ fn dante(id: &str, name: &str, channel: &str, source: Option<&str>) -> MicConfig
         transport: MicTransport::Dante,
         dante: Some(DanteInput {
             channel: channel.to_string(),
-            source: source.map(str::to_string),
         }),
     }
 }
@@ -329,56 +324,79 @@ fn play(device: &FakeDevice, start: &mut u64, blocks: usize) {
     }
 }
 
+/// A VBAN mic of a saved list.
+fn vban(id: &str, stream: &str) -> MicConfig {
+    MicConfig {
+        transport: MicTransport::Vban,
+        dante: None,
+        stream_name: stream.to_string(),
+        ..dante(id, id, "x")
+    }
+}
+
+/// The published mics' ids, in order.
+fn mic_ids(service: &ListenService) -> Vec<String> {
+    service
+        .status()
+        .mics
+        .into_iter()
+        .map(|mic| mic.config.id)
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dante_mic_starts_a_device_and_its_audio_reaches_the_mics_frame_channel() {
+async fn the_device_starts_with_its_two_fixed_channels_and_no_saved_mic() {
     let service = ListenService::new();
     let device = Arc::new(FakeDevice::default());
     let backend: Arc<dyn DanteBackend> = Arc::new(FakeBackend(Arc::clone(&device)));
+    let mut frames = service.subscribe_frames("dante-mic-1");
+    let mut frames_2 = service.subscribe_frames("dante-mic-2");
     tokio::spawn(supervise(service.clone(), backend, env(Some("enp2s0.70"))));
-    wait_until("idle", || service.status().dante.state == DanteState::Idle).await;
-    assert_eq!(started(&device), 0, "no Dante mic → no device");
-
-    let mut frames = service.subscribe_frames("guest");
-    service.apply(vec![dante(
-        "guest",
-        "Hosť",
-        "Host EN",
-        Some("Mic 1@stagebox-1"),
-    )]);
+    // #933: the saved list stays empty, the device starts anyway
     wait_until("the device starts", || started(&device) == 1).await;
     let plan = lock(&device.starts)[0].clone();
-    assert_eq!(
-        plan.channels,
-        vec![input("Host EN", Some("Mic 1@stagebox-1"))]
-    );
+    assert_eq!(plan.channels, vec![input("mic 1"), input("mic 2")]);
     assert_eq!(
         (plan.interface.as_str(), plan.network_rate),
         ("enp2s0.70", 48_000)
     );
+    assert_eq!(mic_ids(&service), ["dante-mic-1", "dante-mic-2"]);
     wait_until("running", || {
         service.status().dante.state == DanteState::Running
     })
     .await;
+    let status = service.status();
+    assert!(status.mics.iter().all(|mic| mic.config.is_dante()
+        && mic.config.role == MicRole::Moderator
+        && mic.state == MicState::Waiting));
     assert_eq!(
-        service.status().mics[0].state,
-        MicState::Waiting,
-        "no flow yet"
+        status.recorder.mics.len(),
+        2,
+        "the recorder counts both fixed mics"
     );
 
     let mut start = 0;
-    let mut got = Vec::new();
+    let mut got = (Vec::new(), Vec::new());
     for _ in 0..200 {
         play(&device, &mut start, 9);
         tokio::time::sleep(Duration::from_millis(15)).await;
         while let Ok(frame) = frames.try_recv() {
-            got.push(frame);
+            got.0.push(frame);
         }
-        if got.len() >= 3 {
+        while let Ok(frame) = frames_2.try_recv() {
+            got.1.push(frame);
+        }
+        if got.0.len() >= 3 && got.1.len() >= 3 {
             break;
         }
     }
-    assert!(got.len() >= 3, "frames reached the channel: {}", got.len());
-    assert!(got.iter().all(|frame| frame.len() == 1_600));
+    assert!(
+        got.0.len() >= 3 && got.1.len() >= 3,
+        "both channels feed their own mic: {} / {}",
+        got.0.len(),
+        got.1.len()
+    );
+    assert!(got.0.iter().chain(&got.1).all(|frame| frame.len() == 1_600));
     let status = service.status();
     let mic = &status.mics[0];
     assert_eq!(mic.state, MicState::Receiving);
@@ -390,35 +408,24 @@ async fn a_dante_mic_starts_a_device_and_its_audio_reaches_the_mics_frame_channe
         "{mic:?}"
     );
 
-    service.apply(vec![dante(
-        "guest",
-        "Hosť (premenovaný)",
-        "Host EN",
-        Some("Mic 1@stagebox-1"),
-    )]);
+    // a saved VBAN list comes first and touches neither the device nor the
+    // Dante mics' counters; a Dante mic in a list is never taken
+    service.apply(vec![
+        vban("guest", "GUEST_EN"),
+        dante("interp", "Tlmočník", "Host EN"),
+    ]);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(started(&device), 1, "a rename keeps the device");
-    assert!(
-        service.status().mics[0].frames_out >= mic.frames_out,
-        "and the mic's counters"
-    );
-
-    service.apply(vec![dante("guest", "Hosť", "Guest 2", None)]);
-    wait_until("a new channel restarts the device", || {
-        started(&device) == 2
-    })
-    .await;
-    assert_eq!(device.stops.load(Ordering::SeqCst), 1);
-
+    assert_eq!(mic_ids(&service), ["guest", "dante-mic-1", "dante-mic-2"]);
+    assert_eq!(started(&device), 1, "the device keeps running");
+    assert!(service.status().mics[1].frames_out >= mic.frames_out);
     service.apply(Vec::new());
-    wait_until("the last Dante mic stops the device", || {
-        device.stops.load(Ordering::SeqCst) == 2
-    })
-    .await;
-    wait_until("idle again", || {
-        service.status().dante.state == DanteState::Idle
-    })
-    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(mic_ids(&service), ["dante-mic-1", "dante-mic-2"]);
+    assert_eq!(
+        (started(&device), device.stops.load(Ordering::SeqCst)),
+        (1, 0),
+        "an empty saved list never stops the device"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -430,7 +437,6 @@ async fn a_silent_channel_never_reads_as_receiving() {
         Arc::new(FakeBackend(Arc::clone(&device))),
         env(Some("enp2s0.70")),
     ));
-    service.apply(vec![dante("guest", "Hosť", "Host EN", None)]);
     wait_until("the device starts", || started(&device) == 1).await;
     // the pump runs without a flow: blocks arrive, `written` never advances
     let mut start = 0;
@@ -448,7 +454,7 @@ async fn a_silent_channel_never_reads_as_receiving() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_a_dante_interface_no_device_starts_and_the_mic_says_why() {
+async fn without_a_dante_interface_there_is_no_device_and_no_dante_mic() {
     let service = ListenService::new();
     let device = Arc::new(FakeDevice::default());
     tokio::spawn(supervise(
@@ -456,16 +462,18 @@ async fn without_a_dante_interface_no_device_starts_and_the_mic_says_why() {
         Arc::new(FakeBackend(Arc::clone(&device))),
         env(None),
     ));
-    service.apply(vec![dante("guest", "Hosť", "Host EN", None)]);
+    service.apply(vec![vban("guest", "GUEST_EN")]);
     wait_until("no interface", || {
         service.status().dante.state == DanteState::NoInterface
     })
     .await;
     let status = service.status();
-    assert!(status.mics[0]
+    assert!(status
+        .dante
         .error
         .as_deref()
         .is_some_and(|e| e.contains("PRESENTER_LISTEN_DANTE_IFACE")));
+    assert_eq!(mic_ids(&service), ["guest"], "only the saved VBAN mic");
     assert_eq!(started(&device), 0);
 }
 
@@ -479,7 +487,6 @@ async fn a_refused_start_is_retried_and_shown() {
         Arc::new(FakeBackend(Arc::clone(&device))),
         env(Some("eth9")),
     ));
-    service.apply(vec![dante("guest", "Hosť", "Host EN", None)]);
     wait_until("retrying", || {
         service.status().dante.state == DanteState::Retrying
     })
@@ -517,16 +524,13 @@ async fn a_vban_mic_beside_a_dante_mic_keeps_both_counters() {
         service.clone(),
         "127.0.0.1:0".parse().unwrap(),
     ));
-    let mut vban = dante("interp", "Tlmočník", "x", None);
-    vban.transport = MicTransport::Vban;
-    vban.dante = None;
-    vban.stream_name = "INTERP_SK".into();
-    service.apply(vec![vban.clone(), dante("guest", "Hosť", "Host EN", None)]);
+    let vban = vban("interp", "INTERP_SK");
+    service.apply(vec![vban.clone()]);
     wait_until("the device starts", || started(&device) == 1).await;
     assert_eq!(
         lock(&device.starts)[0].channels.len(),
-        1,
-        "only the Dante mic is a channel"
+        2,
+        "only the fixed pair are channels"
     );
     wait_until("the VBAN socket binds", || {
         service.status().socket.state == presenter_core::listen::status::SocketState::Bound
@@ -542,26 +546,26 @@ async fn a_vban_mic_beside_a_dante_mic_keeps_both_counters() {
             .find(|m| m.config.id == id)
             .map(|m| m.frames_out)
     };
-    let before = frames_of(&service, "guest").unwrap_or(0);
+    let before = frames_of(&service, "dante-mic-1").unwrap_or(0);
     assert!(before > 0);
     // the VBAN mic goes: its socket closes and ends its session
-    service.apply(vec![dante("guest", "Hosť", "Host EN", None)]);
+    service.apply(Vec::new());
     wait_until("the VBAN socket closes", || {
         service.status().socket.state == presenter_core::listen::status::SocketState::Idle
     })
     .await;
     assert!(
-        frames_of(&service, "guest").is_some_and(|n| n >= before),
+        frames_of(&service, "dante-mic-1").is_some_and(|n| n >= before),
         "a closed VBAN socket keeps the Dante mic's counters"
     );
     assert_eq!(started(&device), 1, "and the Dante device runs on");
     // the VBAN mic comes back beside the Dante mic: the device is not touched
-    service.apply(vec![vban, dante("guest", "Hosť", "Host EN", None)]);
+    service.apply(vec![vban]);
     wait_until("the VBAN socket binds again", || {
         service.status().socket.state == presenter_core::listen::status::SocketState::Bound
     })
     .await;
-    assert!(frames_of(&service, "guest").is_some_and(|n| n >= before));
+    assert!(frames_of(&service, "dante-mic-1").is_some_and(|n| n >= before));
     assert_eq!(frames_of(&service, "interp"), Some(0));
     assert_eq!(started(&device), 1);
 }
@@ -591,7 +595,7 @@ fn one_mic_id_switching_transport_is_owned_by_one_receiver_at_a_time() {
         );
         assert!(health.record_chain("guest", vban_gen, 1, None, None));
         health.record_dante_block("guest", 43, None, false, Instant::now());
-        let status = health.snapshot(&[dante("guest", "Hosť", "x", None)], Instant::now());
+        let status = health.snapshot(&[dante("guest", "Hosť", "x")], Instant::now());
         assert_eq!(status.mics[0].packets, 0, "a VBAN mic takes no Dante block");
     }
 }
@@ -605,7 +609,6 @@ async fn a_device_that_ends_by_itself_is_restarted_and_a_new_device_starts_silen
         Arc::new(FakeBackend(Arc::clone(&device))),
         env(Some("enp2s0.70")),
     ));
-    service.apply(vec![dante("guest", "Hosť", "Host EN", None)]);
     wait_until("the device starts", || started(&device) == 1).await;
     let mut start = 0;
     wait_until_frames(&service, &device, &mut start).await;
@@ -646,4 +649,24 @@ async fn wait_until_frames(service: &ListenService, device: &FakeDevice, start: 
         }
     }
     panic!("no frames");
+}
+
+#[test]
+fn the_real_device_refuses_an_interface_the_box_does_not_have() {
+    // the path the E2E server takes (settings-listen-dante.spec.ts): dlink itself
+    // refuses at once, so the supervisor shows `retrying` with dlink's reason
+    let dir = std::env::temp_dir().join(format!("presenter-dante-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut plan = plan(48_000, DEFAULT_DEVICE_NAME);
+    plan.interface = "e2e-no-dante".to_string();
+    plan.state_file = dir.join("dante-listen.toml");
+    let (tap, _outputs) = tap(plan.channels.len());
+    let started = std::time::Instant::now();
+    let refused = DlinkBackend.start(&plan, tap).err();
+    assert!(refused.is_some(), "a missing interface cannot start");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "refused without waiting for the start timeout"
+    );
+    let _removed = std::fs::remove_dir_all(&dir);
 }

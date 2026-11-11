@@ -8,7 +8,9 @@ use super::AppState;
 use crate::listen::recorder::RECORDER_TARGET;
 use crate::listen::{vban_bind_addr, MIC_TARGET};
 use chrono::NaiveDate;
-use presenter_core::listen::mics::{validate_mics, MicConfig, LISTEN_MICS_KEY};
+use presenter_core::listen::mics::{
+    validate_mics, MicConfig, DANTE_MIC_ID_PREFIX, LISTEN_MICS_KEY,
+};
 use presenter_core::listen::recorder::{RecorderSetting, LISTEN_RECORDER_KEY};
 use presenter_core::listen::status::ListenStatus;
 use presenter_persistence::SettingsAuditSource;
@@ -32,14 +34,28 @@ struct StoredMicsCorrupt(String);
 struct StoredRecorderCorrupt(String);
 
 impl AppState {
-    /// The stored list (empty when never saved).
+    /// The stored list (empty when never saved), without the mics it may
+    /// hold from before #933 (see [`Self::stored_mics`]). Quiet: the Settings
+    /// card polls it.
     pub(crate) async fn listen_mics(&self) -> anyhow::Result<Vec<MicConfig>> {
+        Ok(self.stored_mics().await?.0)
+    }
+
+    /// The stored list and the ids it holds from before #933 that are left
+    /// out: a Dante mic (the Dante mics are the two fixed channels now) and a
+    /// mic with a `dante-` id (theirs). The next save drops them from the row.
+    async fn stored_mics(&self) -> anyhow::Result<(Vec<MicConfig>, Vec<String>)> {
         let Some(raw) = self.repository.get_app_setting(LISTEN_MICS_KEY).await? else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         };
-        let mics: Vec<MicConfig> =
+        let stored: Vec<MicConfig> =
             serde_json::from_str(&raw).map_err(|err| StoredMicsCorrupt(err.to_string()))?;
-        validate_mics(mics).map_err(|err| anyhow::Error::new(StoredMicsCorrupt(err.to_string())))
+        let (dropped, mics): (Vec<MicConfig>, Vec<MicConfig>) = stored
+            .into_iter()
+            .partition(|mic| mic.is_dante() || mic.id.starts_with(DANTE_MIC_ID_PREFIX));
+        let mics = validate_mics(mics)
+            .map_err(|err| anyhow::Error::new(StoredMicsCorrupt(err.to_string())))?;
+        Ok((mics, dropped.into_iter().map(|mic| mic.id).collect()))
     }
 
     /// `PUT /listen/mics`: validate (→ `MicsValidationError`, 422), store, apply, audit.
@@ -214,8 +230,17 @@ impl AppState {
     pub(crate) async fn start_listen(&self, bind: SocketAddr) -> bool {
         {
             let _save = self.listen.save_guard().await;
-            match self.listen_mics().await {
-                Ok(mics) => self.listen.apply(mics),
+            match self.stored_mics().await {
+                Ok((mics, dropped)) => {
+                    for id in &dropped {
+                        tracing::warn!(
+                            target: MIC_TARGET,
+                            mic = id.as_str(),
+                            "a stored mic is ignored — the Dante mics are the two fixed channels now (#933)"
+                        );
+                    }
+                    self.listen.apply(mics);
+                }
                 Err(err) => tracing::warn!(
                     target: MIC_TARGET,
                     error = %err,

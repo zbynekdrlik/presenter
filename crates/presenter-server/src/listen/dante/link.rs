@@ -40,7 +40,7 @@ pub(crate) struct LinkPlan {
     pub(crate) network_rate: u32,
     /// Where the device keeps what Dante Controller sets.
     pub(crate) state_file: PathBuf,
-    /// One RX channel per Dante mic, in mic order (its name and source).
+    /// One RX channel per Dante mic, in mic order.
     pub(crate) channels: Vec<DanteInput>,
 }
 
@@ -74,26 +74,21 @@ pub(crate) trait DanteBackend: Send + Sync {
 }
 
 /// dlink's config of `plan`: RX only, the app at 16 kHz, the device at the
-/// network's rate, each source as the channel's default subscription (one
-/// Dante Controller sets is kept in the state file and wins).
+/// network's rate, no subscription of its own (#933: what feeds a channel is
+/// Dante patching; a subscription made in Dante Controller / by dstack is kept
+/// in the state file).
 pub(crate) fn dlink_config(plan: &LinkPlan) -> Config {
     let names: Vec<&str> = plan
         .channels
         .iter()
         .map(|input| input.channel.as_str())
         .collect();
-    let mut config = Config::new(plan.device.clone(), plan.state_file.clone())
+    Config::new(plan.device.clone(), plan.state_file.clone())
         .rx(names)
         .sample_rate(DANTE_APP_RATE_HZ)
         .network_rate(plan.network_rate)
         .product("Presenter", "presenter-listen")
-        .flow_slots(plan.channels.len().max(1));
-    for (index, input) in plan.channels.iter().enumerate() {
-        if let Some((channel, device)) = input.source_parts() {
-            config = config.subscribe(index + 1, channel, device);
-        }
-    }
-    config
+        .flow_slots(plan.channels.len().max(1))
 }
 
 /// A channel's flow as the device reports it.
