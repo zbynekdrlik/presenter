@@ -365,31 +365,19 @@
   opacity: 0.55;
 }
 
-.study-chapter__title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-  margin: 0 16px 14px var(--study-gutter);
-  font-family: Georgia, "Noto Serif", "Droid Serif", serif;
-  font-size: calc(var(--study-text) + 7px);
-  font-weight: 600;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-}
-
-.study-chapter__code {
-  color: var(--study-muted);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-
+/* A verse (#932): its number is the first thing on its line (`VerseBody`'s
+   `lead`), a float. Desktop hangs it in the 44 px gutter (zero net width, the
+   lines keep their place); the phone runs every line to a 10 px edge under it. */
 .study-verse {
-  display: grid;
-  grid-template-columns: var(--study-gutter) minmax(0, 1fr);
+  padding-left: var(--study-gutter);
   transition: background-color 0.12s linear;
+}
+
+/* Holds the number's float: a one-line verse is shorter than its 44 px. */
+.study-verse::after {
+  content: "";
+  display: table;
+  clear: both;
 }
 
 .study-verse[data-selected="true"] {
@@ -398,21 +386,19 @@
 }
 
 .study-verse__number {
-  align-self: start;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
+  float: left;
   width: var(--study-gutter);
   min-height: 44px;
+  margin-left: calc(-1 * var(--study-gutter));
   padding: calc((var(--study-text) * 1.6 - 18px) / 2 + 3px) 8px 0 0;
   border: 0;
   background: transparent;
   color: #7dabf0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
   font-weight: 600;
   line-height: 18px;
   text-align: right;
-  vertical-align: top;
   cursor: pointer;
 }
 
@@ -427,6 +413,36 @@
   font-size: var(--study-text);
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+/* Phone (#932, owner 2026-11-11: "zbytočne veľké odsadenie zľava a sprava"):
+   10 px each side, the number one line high and only as wide as its digits.
+   Its tap target stays 44 x 44 px (T3) through the ::before. */
+body[data-shell="phone"] .study-verse {
+  padding-inline: 10px;
+}
+
+body[data-shell="phone"] .study-verse__text {
+  padding-right: 0;
+}
+
+body[data-shell="phone"] .study-verse__number {
+  position: relative;
+  width: auto;
+  height: calc(var(--study-text) * 1.6);
+  min-height: 0;
+  margin-left: 0;
+  padding-right: 6px;
+}
+
+body[data-shell="phone"] .study-verse__number::before {
+  content: "";
+  position: absolute;
+  top: calc(50% - 22px);
+  left: -10px;
+  right: -4px;
+  min-width: 44px;
+  height: 44px;
 }
 
 .study-empty {
@@ -1578,6 +1594,16 @@
 
 .study-chapter__head .study-chip {
   flex: none;
+  margin-left: auto;
+}
+
+/* The reader's head holds only Čísla (#932: the header names the chapter). */
+.study-chapter > .study-chapter__head {
+  padding: 0 10px 6px;
+}
+
+.study-chapter > .study-chapter__head:empty {
+  display: none;
 }
 
 .study-chip[aria-pressed="true"] {

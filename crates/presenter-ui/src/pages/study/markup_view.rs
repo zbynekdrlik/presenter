@@ -143,7 +143,9 @@ fn inline_view(
 
 /// `class` = the reader's or compare's; `kind` = compare's `data-kind`;
 /// `on_tap` = the reader's: a tap on the text, told whether it hit a word
-/// (that word's sheet opens after it).
+/// (that word's sheet opens after it); `lead` = the reader's verse number, the
+/// first thing on the verse's line (#932: on a phone the line runs to the
+/// screen's edge under it, no number column).
 #[component]
 pub(super) fn VerseBody(
     s: Study,
@@ -151,6 +153,7 @@ pub(super) fn VerseBody(
     class: &'static str,
     #[prop(optional)] kind: Option<&'static str>,
     #[prop(optional)] on_tap: Option<Callback<bool>>,
+    #[prop(optional)] lead: Option<Children>,
 ) -> impl IntoView {
     let number = verse.verse;
     let active = Memo::new(move |_| {
@@ -208,7 +211,7 @@ pub(super) fn VerseBody(
     view! {
         <div class=class data-kind=kind on:click=on_click on:keydown=on_key>
             {headings}
-            <p class="study-line">{line}</p>
+            <p class="study-line">{lead.map(|lead| lead())}{line}</p>
         </div>
     }
 }

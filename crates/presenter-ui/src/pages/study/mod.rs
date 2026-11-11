@@ -61,7 +61,7 @@ use crate::state::study_history::StudyHistory;
 use crate::state::study_word::{KEY_NUMBERS, SCOPE_ALL};
 
 use add_to_sermon::AddToSermonSheet;
-use bookmarks::{BookmarkList, BookmarksSheet, SaveBookmarkSheet};
+use bookmarks::{BookmarkList, BookmarksSheet};
 use compare::{CompareCell, CompareView};
 use crossrefs::{CrossRefSheet, CrossRefs};
 use favourites::{FavouriteSheet, Favourites, TranslationsSheet};
@@ -691,7 +691,6 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::CrossRefs) => view! { <CrossRefSheet s=s /> }.into_any(),
         Some(StudySheet::Word) => view! { <WordSheet s=s /> }.into_any(),
         Some(StudySheet::Bookmarks) => view! { <BookmarksSheet s=s /> }.into_any(),
-        Some(StudySheet::SaveBookmark) => view! { <SaveBookmarkSheet s=s /> }.into_any(),
         Some(StudySheet::Preview) => open_editor(s)
             .map(|e| view! { <PreviewSheet e=e /> })
             .into_any(),

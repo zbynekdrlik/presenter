@@ -66,14 +66,12 @@ pub enum StudySheet {
     Word,
     /// The named bookmarks (#915), from the header.
     Bookmarks,
-    /// A name for a new bookmark at the first selected verse.
-    SaveBookmark,
 }
 
 impl StudySheet {
     /// A sheet about the selected verses.
     pub fn needs_verses(self) -> bool {
-        matches!(self, Self::Actions | Self::CrossRefs | Self::SaveBookmark)
+        matches!(self, Self::Actions | Self::CrossRefs)
     }
 
     /// `s=`. The word sheet has its own parameters (`w`, `wv`).
@@ -89,7 +87,6 @@ impl StudySheet {
             Self::Reorder => "poradie".to_string(),
             Self::CrossRefs => "odkazy".to_string(),
             Self::Bookmarks => "zalozky".to_string(),
-            Self::SaveBookmark => "zalozka".to_string(),
             Self::Word => return None,
         })
     }
@@ -103,7 +100,6 @@ impl StudySheet {
             "poradie" => Some(Self::Reorder),
             "odkazy" => Some(Self::CrossRefs),
             "zalozky" => Some(Self::Bookmarks),
-            "zalozka" => Some(Self::SaveBookmark),
             "preklady" => Some(Self::Translations),
             // `pridat` is no sheet of a URL: the passage it adds is gone.
             other => other

@@ -25,7 +25,7 @@ impl VerseAction {
             Self::AddToSermon => "Pridať do kázne".to_string(),
             Self::Compare => "Porovnať".to_string(),
             Self::CrossRefs => crossrefs::button_label(s),
-            Self::SaveBookmark => "Uložiť záložku".to_string(),
+            Self::SaveBookmark => "Pridať záložku".to_string(),
             Self::Copy => "Kopírovať".to_string(),
         }
     }
@@ -41,11 +41,14 @@ impl VerseAction {
     }
 }
 
+/// The order of use (#932): the owner's most used one first, then the SNV
+/// counters of the phone (`GET /ui/usage`, 90 days: compare 5, add to sermon 2,
+/// cross-references 1, copy 0).
 const VERSE_ACTIONS: [VerseAction; 5] = [
-    VerseAction::AddToSermon,
-    VerseAction::Compare,
-    VerseAction::CrossRefs,
     VerseAction::SaveBookmark,
+    VerseAction::Compare,
+    VerseAction::AddToSermon,
+    VerseAction::CrossRefs,
     VerseAction::Copy,
 ];
 
@@ -93,7 +96,7 @@ fn run(s: Study, action: VerseAction) {
         }
         VerseAction::Compare => compare::open_from_selection(s),
         VerseAction::CrossRefs => crossrefs::open(s),
-        VerseAction::SaveBookmark => bookmarks::open_save(s),
+        VerseAction::SaveBookmark => bookmarks::add_here(s),
         VerseAction::Copy => {
             let Some((_, text)) = selection(s) else {
                 return;
