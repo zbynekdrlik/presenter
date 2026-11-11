@@ -150,7 +150,7 @@ jobs:
       - name: Ensure the service user
         run: |
           set -euo pipefail
-          case "$SERVICE_USER" in *[!a-z0-9-]* | '') echo "::error::bad service_user '$SERVICE_USER'"; exit 1 ;; esac
+          case "$SERVICE_USER" in [!a-z]* | *[!a-z0-9-]* | '') echo "::error::bad service_user '$SERVICE_USER'"; exit 1 ;; esac
           ssh deploy-target "bash -s -- '$SERVICE_USER' '${{ env.DEPLOY_DIR }}' '${{ inputs.hardware }}'" < scripts/deploy/ensure_service_user.sh
 
       # #929: an existing dir is left as it is — the OLD service is still running in it (on the
@@ -246,7 +246,8 @@ jobs:
           test -n "$ARTIFACT_ID" || { echo "::error::build-artifacts artifact not found for this run"; exit 1; }
           SUMS=$(cd _artifacts && sha256sum presenter-server import_propresenter ingest_bibles presenter-stage.apk)
           # #929: the staging dir is the deploy user's own (the deploy dir is the service user's).
-          ssh deploy-target "sudo install -d -o ${{ env.DEPLOY_USER }} -g ${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}/staging.new"
+          # A leftover of an aborted deploy goes first: the swap would hand it to the service user.
+          ssh deploy-target "sudo rm -rf ${{ env.DEPLOY_DIR }}/staging.new && sudo install -d -o ${{ env.DEPLOY_USER }} -g ${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}/staging.new"
           # The signed URL from the 302 redirect is valid ~1 minute — resolve it
           # LAST and hand it straight to prod's curl (no token leaves the runner).
           SIGNED_URL=$(curl -sI -H "Authorization: Bearer $GH_TOKEN" \
@@ -382,6 +383,7 @@ jobs:
             # The STAGED tool: ${{ env.DEPLOY_DIR }}/import_propresenter is the previous
             # release's (absent on a first deploy) until the swap step.
             # #929: as the service user, so the new database is its own.
+            cd /
             sudo -u ${{ env.SERVICE_USER }} env PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
               ${{ env.DEPLOY_DIR }}/staging.new/import_propresenter --root "${{ env.DEPLOY_DIR }}/libraries"
           else
@@ -418,11 +420,6 @@ jobs:
           case "$ACCESS_AUD" in *[!a-f0-9]* | '') echo "::error::access_aud must be the hex AUD tag"; exit 1 ;; esac
           printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' "$ACCESS_TEAM_DOMAIN" "$ACCESS_AUD" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
-          # #929: the site's service user. The committed presenter.service is also PP's
-          # (release.yml), so the user is a per-site drop-in like the stage URL (#538). The
-          # "Ensure the service user" step already rejected anything but [a-z0-9-].
-          printf '[Service]\nUser=%s\nGroup=%s\n' "$SERVICE_USER" "$SERVICE_USER" |
-            ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/service-user.conf >/dev/null && sudo systemctl daemon-reload"
           # #918: a site without devices (PRBA) has no encoder gate, no stage TVs and no
           # song-sync peer — the rest of this step is the hardware site's.
           if [ "${{ inputs.hardware }}" != "true" ]; then
@@ -519,6 +516,14 @@ jobs:
       # → start. Seconds, not the length of a slow-bridge transfer.
       - name: Swap staged binaries and restart service
         run: |
+          set -euo pipefail
+          # #929: the site's service user, as a drop-in like the stage URL (#538) — the committed
+          # presenter.service is also PP's (release.yml). Written HERE, applied by the
+          # daemon-reload after the chown below, so a crash-restart of the old service earlier in
+          # this deploy can never start it as the new user on a tree it does not own yet. The
+          # "Ensure the service user" step already rejected anything but [a-z][a-z0-9-]*.
+          printf '[Service]\nUser=%s\nGroup=%s\n' "$SERVICE_USER" "$SERVICE_USER" |
+            ssh deploy-target "cat > /tmp/${{ env.SERVICE_NAME }}-service-user.conf"
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -euo pipefail
           cd "${{ env.DEPLOY_DIR }}"
@@ -529,6 +534,9 @@ jobs:
           # #929: the only moment the service is stopped — hand the whole tree (DB + WAL,
           # backups, libraries, adb key, recordings) to the user it runs as.
           sudo chown -R ${{ env.SERVICE_USER }}:${{ env.SERVICE_USER }} "${{ env.DEPLOY_DIR }}"
+          sudo install -m 0644 /tmp/${{ env.SERVICE_NAME }}-service-user.conf /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/service-user.conf
+          rm -f /tmp/${{ env.SERVICE_NAME }}-service-user.conf
+          sudo systemctl daemon-reload
           sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}
           REMOTE_SCRIPT
 
@@ -800,7 +808,9 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           echo "Importing Bible translations..."
-          # #929: the database belongs to the service user — import as it.
+          # #929: the database belongs to the service user — import as it (from `/`: the
+          # deploy user's home may be closed to it).
+          cd /
           sudo -u ${{ env.SERVICE_USER }} env \
             PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
             PRESENTER_BIBLE_KJV=${{ env.DEPLOY_DIR }}/bibles/kjv.usfm.zip \
@@ -838,7 +848,7 @@ jobs:
           expected=$(sed -n 's/^Environment=RUST_LOG=//p' ${{ env.UNIT_FILE }})
           # The process environment, not the unit's Environment property: systemd quotes entries
           # with special characters there, and an EnvironmentFile override never shows in it.
-          # The service runs as root, so reading its environ needs sudo (verified on SNV + PP).
+          # The service runs as another user (#929: SNV `presenter`), so reading its environ needs sudo.
           effective=$(ssh deploy-target 'pid=$(systemctl show -p MainPID --value ${{ env.SERVICE_NAME }}); sudo -n cat /proc/$pid/environ | tr "\0" "\n"' | sed -n 's/^RUST_LOG=//p')
           if [ "$effective" != "$expected" ]; then
             echo "::error::running RUST_LOG is '$effective', the unit sets '$expected' — a drop-in or EnvironmentFile overrides it"

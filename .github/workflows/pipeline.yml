@@ -1205,7 +1205,11 @@ jobs:
           # 2026-07-17 at an event). UNCOMPRESSED on purpose: rsync's delta
           # algorithm needs the stable on-disk page layout to match blocks
           # against the cache; compression happens in transit (-z).
-          if ! ssh -i ~/.ssh/id_prod prod-server "python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot.db'); s.backup(d); d.close(); s.close()\""; then
+          # #929: the prod DB (and its WAL/-shm) belong to the service user (`presenter` once
+          # deploy.yml migrated SNV) — the snapshot runs as the DB file's OWNER, so SQLite never
+          # creates a -wal/-shm the service cannot open, and works before and after the move.
+          # A leftover snapshot of another user is removed first (fs.protected_regular).
+          if ! ssh -i ~/.ssh/id_prod prod-server "sudo -n rm -f /tmp/prod-ci-snapshot.db && cd / && sudo -n -u \"\$(stat -c %U /opt/presenter/presenter.db)\" python3 -c \"import sqlite3; s=sqlite3.connect('/opt/presenter/presenter.db'); d=sqlite3.connect('/tmp/prod-ci-snapshot.db'); s.backup(d); d.close(); s.close()\""; then
             echo "::error::Could not snapshot the production database on prod-server (python3 sqlite3 backup). Fix prod SSH access / python3 before retrying."
             exit 1
           fi
@@ -1226,7 +1230,7 @@ jobs:
             sync_snapshot
             check_snapshot || { echo "::error::Prod DB snapshot is corrupt even after a full re-fetch. Cannot trust it for the migration test or the dev-DB refresh."; exit 1; }
           fi
-          ssh -i ~/.ssh/id_prod prod-server "rm -f /tmp/prod-ci-snapshot.db"
+          ssh -i ~/.ssh/id_prod prod-server "sudo -n rm -f /tmp/prod-ci-snapshot.db"
           SNAP_SIZE=$(stat -c %s "$CACHE_DB")
           if [ "$SNAP_SIZE" -lt 1048576 ]; then
             echo "::error::Production DB snapshot suspiciously small (${SNAP_SIZE} bytes). Aborting to avoid testing/deploying garbage."

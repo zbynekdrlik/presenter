@@ -91,10 +91,16 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   home loses its authorized_keys), and on a device site seeds `<deploy_dir>/.android/adbkey` from
   the deploy user's key: the stage TVs trust THAT key, a fresh one pops "Allow USB debugging?" on
   every TV after the next reboot.
-- **Ownership:** nothing chowns the deploy dir while the old service runs (it may still be another
-  user on the first deploy). `staging.new` is the deploy user's; every other write goes through
+- **Ownership:** nothing takes a file the running service WRITES away from it before the stop (on
+  the first deploy it still runs as the old user): no `chown -R` before the swap, and an existing
+  deploy dir keeps its owner (only `bibles/` + `libraries/`, which the server only reads, are
+  re-owned early). `staging.new` is the deploy user's; every other write goes through
   `sudo` (backups, Bible files via `staging.new/bibles` + `install`, rsync `--rsync-path="sudo rsync"
   --chown`); the swap step does `sudo mv` + `sudo chown -R <service_user>:` between stop and start;
   DB writers (`import_propresenter`, `ingest_bibles`) run `sudo -u <service_user> env …`. "Verify
   deployment" fails unless the unit User and the MainPID's user are the service user.
-
+- **Other writers of SNV's tree follow it:** `import-data.yml` (production `service_user=presenter`,
+  PP/dev `newlevel`) uses the same sudo / `sudo -u … env` shapes; pipeline.yml's prod-DB snapshot
+  for dev runs as the DB file's OWNER (`sudo -n -u "$(stat -c %U …)"`) — never as root (a -wal/-shm
+  created by root locks the service out) and never as newlevel (no write on the -shm). A command
+  run via `sudo -u` starts with `cd /` (the deploy user's home may be closed to the service user).

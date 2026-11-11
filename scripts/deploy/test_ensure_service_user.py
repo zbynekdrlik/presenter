@@ -56,16 +56,18 @@ class EnsureServiceUserTests(unittest.TestCase):
         self.assertEqual(
             self.calls(),
             [f"useradd --system --user-group --home-dir {self.deploy_dir} --no-create-home "
-             f"--shell /usr/sbin/nologin {MISSING_USER}"],
+             f"--shell /usr/sbin/nologin {MISSING_USER}",
+             f"test -d {self.deploy_dir}"],
         )
 
-    def test_existing_user_with_the_right_home_is_left_alone(self) -> None:
-        me = getpass.getuser()
-        home = pwd.getpwnam(me).pw_dir
-        result = self.run_script(me, hardware="false", deploy_dir=home)
+    def test_a_new_site_gets_its_deploy_dir_owned_by_the_service_user(self) -> None:
+        new_dir = self.deploy_dir.parent / "opt-presenter-new"
+        result = self.run_script(MISSING_USER, hardware="false", deploy_dir=str(new_dir))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [])
-        self.assertIn("exists", result.stdout)
+        self.assertEqual(
+            self.calls()[1:],
+            [f"test -d {new_dir}", f"install -d -o {MISSING_USER} -g {MISSING_USER} {new_dir}"],
+        )
 
     def test_existing_account_is_never_modified(self) -> None:
         """PRBA's service user is also its SSH login (home /home/presenter-prba): a usermod
@@ -73,14 +75,15 @@ class EnsureServiceUserTests(unittest.TestCase):
         me = getpass.getuser()
         result = self.run_script(me, hardware="false")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.calls(), [f"test -d {self.deploy_dir}"])
+        self.assertIn(f"home {pwd.getpwnam(me).pw_dir}", result.stdout)
 
     def test_device_site_refuses_a_user_homed_outside_the_deploy_dir(self) -> None:
         (self.deploy_home / ".android/adbkey").write_text("PRIVATE")
         result = self.run_script(getpass.getuser())
         self.assertEqual(result.returncode, 1)
         self.assertIn("a device site needs", result.stderr)
-        self.assertEqual(self.calls(), [])
+        self.assertFalse(any(c.startswith("install") for c in self.calls()), self.calls())
 
     def test_hardware_site_seeds_the_adb_key_the_tvs_already_trust(self) -> None:
         (self.deploy_home / ".android/adbkey").write_text("PRIVATE")
@@ -93,6 +96,7 @@ class EnsureServiceUserTests(unittest.TestCase):
         self.assertEqual(
             self.calls()[1:],
             [
+                f"test -d {self.deploy_dir}",
                 f"test -s {key_dir}/adbkey",
                 f"install -d -m 0700 {own} {key_dir}",
                 f"install -m 0600 {own} {src}/adbkey {key_dir}/adbkey",
@@ -123,6 +127,7 @@ class EnsureServiceUserTests(unittest.TestCase):
 
     def test_bad_user_name_or_relative_dir_is_refused(self) -> None:
         self.assertEqual(self.run_script("Presenter;rm").returncode, 1)
+        self.assertEqual(self.run_script("-presenter").returncode, 1)  # useradd would read an option
         self.assertEqual(self.run_script(MISSING_USER, deploy_dir="opt/presenter").returncode, 1)
         self.assertEqual(self.calls(), [])
 

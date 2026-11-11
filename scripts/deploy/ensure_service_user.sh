@@ -21,11 +21,11 @@ set -euo pipefail
 SERVICE_USER="${1:?service user}"
 DEPLOY_DIR="${2:?deploy dir}"
 HARDWARE="${3:?hardware true|false}"
-# Overridable only by the shell guard (tests/deploy/service-user.test.sh), never in a deploy.
+# Overridable only by scripts/deploy/test_ensure_service_user.py, never in a deploy.
 SUDO="${SUDO_CMD:-sudo}"
 DEPLOY_HOME="${DEPLOY_USER_HOME:-$HOME}"
 
-case "$SERVICE_USER" in *[!a-z0-9-]* | '') echo "::error::bad service user '$SERVICE_USER'" >&2; exit 1 ;; esac
+case "$SERVICE_USER" in [!a-z]* | *[!a-z0-9-]* | '') echo "::error::bad service user '$SERVICE_USER'" >&2; exit 1 ;; esac
 case "$DEPLOY_DIR" in /*) ;; *) echo "::error::deploy dir must be absolute: '$DEPLOY_DIR'" >&2; exit 1 ;; esac
 
 if entry=$(getent passwd "$SERVICE_USER"); then
@@ -38,6 +38,12 @@ else
     --shell /usr/sbin/nologin "$SERVICE_USER"
   echo "Service user $SERVICE_USER created"
   home="$DEPLOY_DIR"
+fi
+
+# A new site: the deploy dir is the service user's from the start (an existing one is handed
+# over in the swap step, while the service is stopped — never here).
+if ! $SUDO test -d "$DEPLOY_DIR"; then
+  $SUDO install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$DEPLOY_DIR"
 fi
 
 if [ "$HARDWARE" != "true" ]; then

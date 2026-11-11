@@ -120,6 +120,9 @@ sudo apt-get install -y "${APT_PACKAGES[@]}"
 # `adb keygen` overwrites the target file with a fresh key on every call, so it
 # is guarded to run ONLY when the key is absent — an already-keyed host (prod,
 # dev) keeps its existing keypair and its established device authorizations.
+# #929: a site whose service runs as its own user (SNV `presenter`) gets THIS key copied into
+# <deploy_dir>/.android by the deploy (scripts/deploy/ensure_service_user.sh), so the TVs that
+# trust it keep trusting the service.
 ADB_KEY="$HOME/.android/adbkey"
 if [ ! -f "$ADB_KEY" ]; then
   printf '[bootstrap] Generating adb keypair at %s...\n' "$ADB_KEY"
