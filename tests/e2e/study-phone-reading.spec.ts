@@ -46,6 +46,32 @@ async function textGaps(page: Page, number: number): Promise<{ left: number; rig
     });
 }
 
+/**
+ * The left edge of each rendered line of a verse's text (the number left out),
+ * read from the glyphs with a Range: the `p` box says nothing about a line a
+ * float or an indent pushes in.
+ */
+async function lineStarts(page: Page, number: number): Promise<number[]> {
+  return verse(page, number)
+    .locator(".study-line")
+    .evaluate((line) => {
+      const range = document.createRange();
+      range.selectNodeContents(line);
+      const button = line.querySelector('[data-role="study-verse-number"]');
+      if (button) range.setStartAfter(button);
+      const starts = new Map<number, number>();
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width === 0) continue;
+        const row = Math.round(rect.top + rect.height / 2);
+        const key = Array.from(starts.keys()).find((top) => Math.abs(top - row) < 8) ?? row;
+        starts.set(key, Math.min(starts.get(key) ?? Infinity, rect.left));
+      }
+      return Array.from(starts.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, left]) => left);
+    });
+}
+
 type Bookmark = { id: number; name: string; verse: number; bookCode: string; chapter: number };
 
 async function bookmarks(page: Page): Promise<Bookmark[]> {
@@ -65,6 +91,13 @@ for (const [label, profile] of [
       expect(gaps.right, `verse ${number} right`).toBeLessThanOrEqual(12);
       expect(gaps.left, `verse ${number} left`).toBeGreaterThanOrEqual(6);
       expect(gaps.right, `verse ${number} right`).toBeGreaterThanOrEqual(6);
+      // Every line after the first starts at the edge; the first right after the number.
+      const starts = await lineStarts(page, number);
+      expect(starts.length, `verse ${number} lines`).toBeGreaterThanOrEqual(2);
+      expect(starts[0], `verse ${number} first line`).toBeLessThanOrEqual(44);
+      for (const [index, left] of starts.slice(1).entries()) {
+        expect(left, `verse ${number} line ${index + 2}`).toBeLessThanOrEqual(12);
+      }
     }
     // The number is a real 44 x 44 box from the screen's edge, on the verse's first line (T3).
     const number = verseNumber(page, 4);
