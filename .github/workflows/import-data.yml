@@ -52,18 +52,22 @@ jobs:
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.9.205" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
+            # #929: SNV's service runs as its own user (deploy.yml `service_user`), which owns the tree.
+            echo "service_user=presenter" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           elif [ "${{ inputs.environment }}" = "pp" ]; then
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=companion-pp.lan" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
+            echo "service_user=newlevel" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_PP" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           else
             echo "deploy_dir=/opt/presenter-dev" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.8.134" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter-dev" >> "$GITHUB_OUTPUT"
+            echo "service_user=newlevel" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_DEV" >> "$GITHUB_OUTPUT"
             echo "health_port=8080" >> "$GITHUB_OUTPUT"
           fi
@@ -99,10 +103,12 @@ jobs:
           set -e
           DB_PATH="${{ steps.env.outputs.deploy_dir }}/presenter.db"
           BACKUP_DIR="${{ steps.env.outputs.deploy_dir }}/backups"
-          mkdir -p "$BACKUP_DIR"
+          # #929: the tree may be the service user's — write as root (0644, readable).
+          sudo mkdir -p "$BACKUP_DIR"
           if [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
             TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-            cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            sudo cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            sudo chown ${{ steps.env.outputs.service_user }}: "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
             echo "Database backed up to ${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
           else
             echo "No existing database to back up"
@@ -117,8 +123,10 @@ jobs:
         if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
         run: |
           command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
-          ssh deploy-target "mkdir -p ${{ steps.env.outputs.deploy_dir }}/libraries"
-          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+          SU=${{ steps.env.outputs.service_user }}
+          ssh deploy-target "sudo install -d -o $SU -g $SU ${{ steps.env.outputs.deploy_dir }}/libraries"
+          # #929: written as root on the host, owned by the service user.
+          rsync -avz --delete --rsync-path="sudo rsync" --chown=$SU:$SU -e "ssh -i ~/.ssh/id_deploy" \
             data/libraries/ \
             deploy-target:${{ steps.env.outputs.deploy_dir }}/libraries/
 
@@ -130,7 +138,9 @@ jobs:
             KEEP_FLAG="--keep"
           fi
           DEPLOY_DIR="${{ steps.env.outputs.deploy_dir }}"
-          ssh deploy-target "set -e; echo 'Importing ProPresenter libraries (purge=${{ inputs.purge }})...'; PRESENTER_DB_URL=sqlite://${DEPLOY_DIR}/presenter.db ${DEPLOY_DIR}/import_propresenter --root '${DEPLOY_DIR}/libraries' ${KEEP_FLAG}"
+          SU=${{ steps.env.outputs.service_user }}
+          # #929: as the service user — the database is its own.
+          ssh deploy-target "set -e; cd /; echo 'Importing ProPresenter libraries (purge=${{ inputs.purge }})...'; sudo -u $SU env PRESENTER_DB_URL=sqlite://${DEPLOY_DIR}/presenter.db ${DEPLOY_DIR}/import_propresenter --root '${DEPLOY_DIR}/libraries' ${KEEP_FLAG}"
 
       - name: Import Bible translations
         if: inputs.import_type == 'all' || inputs.import_type == 'bibles'
@@ -205,7 +215,11 @@ jobs:
             echo "Using Milosť MySword file at $MILOST_PATH"
           fi
 
-          ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
+          # #929: as the service user (the database is its own), with the variables set above.
+          cd /
+          # shellcheck disable=SC2046 # one word per NAME=value (paths without spaces)
+          sudo -u ${{ steps.env.outputs.service_user }} env $(env | grep -E '^PRESENTER_(DB_URL|BIBLE_[A-Z]+)=') \
+            ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
           REMOTE_SCRIPT
 
       - name: Start service

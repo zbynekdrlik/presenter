@@ -71,10 +71,36 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   `library_sync: true`), then PRBA on dev1 (`needs: [build, deploy]`, `hardware: false`,
   `library_sync: false`). Every SNV path/port/service is an input (`/opt/presenter`, `80`,
   `presenter`, `/etc/presenter`), so a step edit lands in `deploy-site.yml`, never deploy.yml.
-- `scripts/ci/test_deploy_site_workflow.py` pins SNV's exact 27-step list and PRBA's skips; the
+- `scripts/ci/test_deploy_site_workflow.py` pins SNV's exact 28-step list and PRBA's skips; the
   shell guards `tests/ci/adb-install-set-e.test.sh` and `tests/deploy/deploy-config.test.sh` read
   `deploy-site.yml` (a guard that greps deploy.yml for a step finds nothing since #918).
 - PRBA without the library sync must already hold its seeded DB (`require_seeded_db.sh`, seed:
   `scripts/ops/seed_prba_from_snv.sh`, run once). Its tunnel is `cloudflared-prba.service` (never
   `cloudflared service install` on dev1). A Cloudflare firewall rule blocks non-GET requests to
   the device / AI / sync routes on `prba.newlevel.media` — dev1 sits on the SNV LAN.
+
+## Service user per site (#929)
+
+- **The service runs as `service_user`, the deploy SSHs in as `deploy_user`** (SNV: `presenter` /
+  `newlevel`; PRBA: `presenter-prba` for both). dcontroller's dante-guard lets a Dante app (dlink)
+  onto the Dante leg by socket uid, so the admin login must never be the process (dstack
+  two-networks.md §3). The committed `presenter.service` is also PP's (release.yml) and keeps
+  `User=newlevel`; deploy-site.yml writes the site's `service-user.conf` drop-in.
+- **`scripts/deploy/ensure_service_user.sh`** creates the system user (home = deploy dir, the unit's
+  only `ReadWritePaths`), never modifies an existing account (PRBA's is its SSH login — a moved
+  home loses its authorized_keys), and on a device site seeds `<deploy_dir>/.android/adbkey` from
+  the deploy user's key: the stage TVs trust THAT key, a fresh one pops "Allow USB debugging?" on
+  every TV after the next reboot.
+- **Ownership:** nothing takes a file the running service WRITES away from it before the stop (on
+  the first deploy it still runs as the old user): no `chown -R` before the swap, and an existing
+  deploy dir keeps its owner (only `bibles/` + `libraries/`, which the server only reads, are
+  re-owned early). `staging.new` is the deploy user's; every other write goes through
+  `sudo` (backups, Bible files via `staging.new/bibles` + `install`, rsync `--rsync-path="sudo rsync"
+  --chown`); the swap step does `sudo mv` + `sudo chown -R <service_user>:` between stop and start;
+  DB writers (`import_propresenter`, `ingest_bibles`) run `sudo -u <service_user> env …`. "Verify
+  deployment" fails unless the unit User and the MainPID's user are the service user.
+- **Other writers of SNV's tree follow it:** `import-data.yml` (production `service_user=presenter`,
+  PP/dev `newlevel`) uses the same sudo / `sudo -u … env` shapes; pipeline.yml's prod-DB snapshot
+  for dev runs as the DB file's OWNER (`sudo -n -u "$(stat -c %U …)"`) — never as root (a -wal/-shm
+  created by root locks the service out) and never as newlevel (no write on the -shm). A command
+  run via `sudo -u` starts with `cd /` (the deploy user's home may be closed to the service user).
