@@ -416,11 +416,11 @@
 }
 
 /* Phone (#932, owner 2026-11-11: "zbytočne veľké odsadenie zľava a sprava"):
-   10 px each side, every line after the first runs under the number. The
-   number stays a 44 x 44 px box (T3) from the screen's edge, its digits
-   right-aligned at 26 px; negative margins shrink its float to one line and
-   let the first line start at 31 px. The line's glyphs paint over a float, so
-   a tap on a word in the overlap stays the text's. */
+   10 px each side, every line after the first runs to that edge; the first
+   one starts at 40 px (text-indent) after the number. The number is a real
+   44 x 44 px box (T3) from the screen's edge, placed on the first line's
+   middle, digits ending at 34 px. Not a float: Chrome keeps a float with
+   negative margins as an exclusion over the second line too. */
 body[data-shell="phone"] .study-verse {
   padding-left: 10px;
   padding-right: 10px;
@@ -430,13 +430,25 @@ body[data-shell="phone"] .study-verse__text {
   padding-right: 0;
 }
 
+body[data-shell="phone"] .study-verse .study-line {
+  position: relative;
+  text-indent: 30px;
+}
+
+body[data-shell="phone"] .study-verse .study-line > * {
+  text-indent: 0;
+}
+
 body[data-shell="phone"] .study-verse__number {
+  position: absolute;
+  top: calc((var(--study-text) * 1.6 - 44px) / 2);
+  left: -10px;
+  float: none;
   width: 44px;
   height: 44px;
   min-height: 0;
-  margin: calc((var(--study-text) * 1.6 - 44px) / 2) -13px
-    calc((var(--study-text) * 1.6 - 44px) / 2) -10px;
-  padding: 13px 18px 0 0;
+  margin: 0;
+  padding: 13px 10px 0 0;
 }
 
 .study-empty {

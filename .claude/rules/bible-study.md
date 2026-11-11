@@ -96,12 +96,12 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **`touch-action: pan-y pinch-zoom`** on the reader: pan-y alone turned pinch-zoom off.
 - **A verse number is a control (T3), the first thing on its verse's line** (#932, owner 2026-11-11:
   "zbytočne veľké odsadenie zľava a sprava"): `VerseBody`'s `lead` puts the button first in
-  `p.study-line` as a float. Phone shell: 10 px edges, the lines after the first run under the
-  number; the button is a real 44 × 44 box from the screen's edge (`assertMinTapTarget`), digits
-  right-aligned at 26 px, negative margins shrink its float to one line (first line from 31 px).
-  Never an absolutely positioned hit area: it paints over the words, a float paints under them, so a
-  tap on a word in the overlap stays the text's. Desktop hangs it in the 44 px gutter (negative
-  margin, zero net width). Its click stops propagation: a number tap is never also a text tap. The
+  `p.study-line`. Phone shell: 10 px edges, the lines after the first run to that edge, the first
+  starts at 40 px (`text-indent`, reset on the line's children); the button is a real 44 × 44 box,
+  absolutely placed on the first line's middle from the screen's edge (`assertMinTapTarget`). Never
+  a float with negative margins there: Chrome keeps it as an exclusion over the SECOND line too
+  (measured: line 2 at 31 px). Specs read the glyph lines with a `Range`, never the `p` box.
+  Desktop hangs it as a float in the 44 px gutter (negative margin, zero net width). Its click stops propagation: a number tap is never also a text tap. The
   reader has no chapter title (#932): the header's `study-place` names it, the chip the translation.
 - **A translation lacking a place** answers no slides: `Chapter::Missing`, and `step_chapter` walks to
   its nearest chapter by the canonical book number, so the reader never gets stuck.
