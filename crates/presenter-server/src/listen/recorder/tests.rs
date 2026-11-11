@@ -332,6 +332,8 @@ fn mic(id: &str, stream: &str) -> MicConfig {
         channel: MicChannel::Left,
         language: MicLanguage::En,
         role: MicRole::Guest,
+        transport: presenter_core::listen::mics::MicTransport::Vban,
+        dante: None,
     }
 }
 

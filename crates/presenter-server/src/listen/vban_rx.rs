@@ -95,7 +95,7 @@ pub(super) async fn supervise(service: ListenService, bind: SocketAddr) {
     let mut config = service.config_receiver();
     let mut streak = Streak::default();
     loop {
-        if config.borrow_and_update().is_empty() {
+        if !config.borrow_and_update().iter().any(is_vban) {
             streak = Streak::default();
             service.with_health(|health| health.set_socket(SocketState::Idle, None, None));
             if config.changed().await.is_err() {
@@ -158,7 +158,7 @@ async fn bound_session(
     service.with_health(ListenHealth::end_session);
     match end {
         SocketEnd::NoMic => {
-            info!(target: MIC_TARGET, %bind, "VBAN socket closed — no microphone is configured");
+            info!(target: MIC_TARGET, %bind, "VBAN socket closed — no VBAN microphone is configured");
             None
         }
         SocketEnd::Failed { received, error } => {
@@ -174,7 +174,7 @@ pub(super) async fn receive(
     socket: &UdpSocket,
     config: &mut ConfigRx,
 ) -> SocketEnd {
-    let mics = config.borrow_and_update().clone();
+    let mics = vban_mics(&config.borrow_and_update());
     if mics.is_empty() {
         // emptied between `supervise`'s idle check and the bind (review 1b)
         return SocketEnd::NoMic;
@@ -197,7 +197,7 @@ pub(super) async fn receive(
                 if changed.is_err() {
                     return SocketEnd::NoMic;
                 }
-                let mics = config.borrow_and_update().clone();
+                let mics = vban_mics(&config.borrow_and_update());
                 if mics.is_empty() {
                     return SocketEnd::NoMic;
                 }
@@ -208,7 +208,17 @@ pub(super) async fn receive(
     }
 }
 
-/// The receive side of every configured mic.
+fn is_vban(mic: &MicConfig) -> bool {
+    !mic.is_dante()
+}
+
+/// The mics this socket receives: the VBAN ones (a Dante mic is
+/// `dante`'s, #852). No VBAN mic = no socket.
+fn vban_mics(mics: &[MicConfig]) -> Vec<MicConfig> {
+    mics.iter().filter(|mic| is_vban(mic)).cloned().collect()
+}
+
+/// The receive side of every configured VBAN mic.
 pub(super) struct MicRouter {
     service: ListenService,
     mics: Vec<MicInput>,

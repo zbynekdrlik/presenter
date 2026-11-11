@@ -93,6 +93,9 @@ Everything else is shared: put a new list behaviour or guard in `list_card.rs` /
 `host_editor.rs`, never in one card. A failed save / delete line is
 `failure_text` (the server's own message for `ApiError::Refused` / `NotFound`).
 
+- The editor `<form>` is `novalidate` (#852): every form's own `validate` answers an empty
+  field in the message line; a native `required` bubble would block the submit and the line
+  would stay empty. Keep `required` / `aria-required` on the inputs for assistive tech.
 - **Edit** renders the editor IN the row; "+ Add …" renders it as the first `<li>`
   (`<role>-new-item`). `EditTarget` = Closed / New / Item(id). The draft lives at
   CARD level (`ListEditor`), outside the keyed rows, so a poll can never reset typing.
@@ -148,6 +151,14 @@ rule; split out so `listen.rs` can grow the health / switch lines under 800).
   list exists, so the signal reads a cell `ListenCard` fills right after the card;
   the save still assigns the id from the list it just read.
 - `GET /listen/mics` is a quiet GET (`request_log.rs`): the card's 5 s list poll.
+- Transport (#852): `MicForm` has a "Prenos" select (`listen-transport`, VBAN / Dante) and a
+  `<Show>` that swaps the VBAN fields (`listen-stream`, `listen-sender-ip`, `listen-channel`) for
+  the Dante ones (`listen-dante-channel`, `listen-dante-source`); `into_config` writes no VBAN field
+  for Dante and no Dante input for VBAN. The row key carries `transport` + `dante`; the address reads
+  `Dante kanál „X“ · zo zdroja …`; the card's `listen-dante` line is `dante_line(status.dante)`
+  (empty while idle). The `<Show>` reads `self.transport` directly and its branches only the
+  form's signals + `ListEditor::invalid` (made under the card's owner): a nested branch's effects
+  outlive the editor's owner by one task (ui skill, #852 WASM panic on every editor close).
 - E2E `settings-listen.spec.ts` drives the three selects with real `selectOption`
   (a broken `on_change` must fail it), reads the stored list back through the API
   (a whole-list PUT must leave the other mic unchanged) and measures `.settings-layout`

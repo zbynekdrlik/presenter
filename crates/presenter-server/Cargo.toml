@@ -57,6 +57,14 @@ read-fonts = "0.44"
 # MIT OR Apache-2.0 (and its deps realfft / rustfft / audioadapter*, MIT or
 # MIT OR Apache-2.0 — all on deny.toml's allow list).
 rubato = "=5.0.1"
+# #852: the listening mic over Dante, received in-process — dstack's `dlink`
+# (the Dante device an app embeds: discovery, ARC/CMC, RX flows, the PTP
+# follower, the rate conversion to 16 kHz on the device clock). Public, our own
+# (MIT OR Apache-2.0); no C dependency. Pinned to a release tag.
+dlink = { git = "https://github.com/zbynekdrlik/dstack", tag = "v0.6.73" }
+# The wait-free single-producer ring between dlink's media thread (which must
+# not lock or allocate) and the tokio side (MIT OR Apache-2.0, no deps).
+rtrb = "0.3"
 
 [features]
 default = []

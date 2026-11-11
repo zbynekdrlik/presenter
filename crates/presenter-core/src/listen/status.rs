@@ -33,6 +33,35 @@ pub struct SocketStatus {
     pub error: Option<String>,
 }
 
+/// The Dante device's life cycle (#852): Presenter's own `dlink` device that
+/// carries every Dante mic as one RX channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DanteState {
+    /// The receiver was never started (validate mode, tests).
+    #[default]
+    NotStarted,
+    /// No Dante mic configured: no device.
+    Idle,
+    /// Dante mics are configured, but the box names no Dante interface.
+    NoInterface,
+    Running,
+    /// Starting failed or the device ended; retried with a growing pause.
+    Retrying,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DanteStatus {
+    pub state: DanteState,
+    /// The device's name in Dante Controller.
+    pub device: Option<String>,
+    /// The network interface it runs on.
+    pub interface: Option<String>,
+    /// Slovak, for the operator.
+    pub error: Option<String>,
+}
+
 /// One configured mic's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,13 +136,16 @@ pub struct ListenStatus {
     pub rejected: Vec<RejectedSender>,
     /// The recorder (#852 C1b): the per-day toggle, the folder, each mic's file.
     pub recorder: RecorderStatus,
+    /// The Dante device (#852): absent from a status written before it.
+    #[serde(default)]
+    pub dante: DanteStatus,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audio::vban::VbanSampleType;
-    use crate::listen::mics::{MicChannel, MicLanguage, MicRole};
+    use crate::listen::mics::{MicChannel, MicLanguage, MicRole, MicTransport};
     use serde_json::json;
 
     /// The guest mic of the wire test.
@@ -127,6 +159,8 @@ mod tests {
                 channel: MicChannel::Left,
                 language: MicLanguage::En,
                 role: MicRole::Guest,
+                transport: MicTransport::Vban,
+                dante: None,
             },
             state: MicState::NoAudio,
             sender: Some("192.0.2.10:6980".into()),
@@ -182,6 +216,12 @@ mod tests {
                 last_packet_age_ms: 10,
             }],
             recorder: RecorderStatus::default(),
+            dante: DanteStatus {
+                state: DanteState::Running,
+                device: Some("presenter-listen".into()),
+                interface: Some("enp2s0.70".into()),
+                error: None,
+            },
         };
         let wire = serde_json::to_value(&status).unwrap();
         assert_eq!(
@@ -204,7 +244,9 @@ mod tests {
                 "rejected": [{"sender": "198.51.100.7", "notVban": 1, "nonAudio": 2,
                     "unsupportedCodec": 0, "unsupportedType": 0, "corrupt": 0,
                     "lastPacketAgeMs": 10}],
-                "recorder": {"enabled": false, "enabledFor": null, "root": "", "mics": []}
+                "recorder": {"enabled": false, "enabledFor": null, "root": "", "mics": []},
+                "dante": {"state": "running", "device": "presenter-listen",
+                    "interface": "enp2s0.70", "error": null}
             })
         );
         let back: ListenStatus = serde_json::from_value(wire).unwrap();
@@ -216,6 +258,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(MicState::Error).unwrap(),
             json!("error")
+        );
+        assert_eq!(
+            serde_json::to_value(DanteState::NoInterface).unwrap(),
+            json!("no_interface")
+        );
+        let mut older = serde_json::to_value(&status).unwrap();
+        older.as_object_mut().unwrap().remove("dante");
+        let read: ListenStatus = serde_json::from_value(older).unwrap();
+        assert_eq!(
+            read.dante,
+            DanteStatus::default(),
+            "a status without the Dante part reads"
         );
     }
 }

@@ -579,6 +579,8 @@ mod tests {
             channel: MicChannel::Left,
             language: MicLanguage::En,
             role: MicRole::Guest,
+            transport: presenter_core::listen::mics::MicTransport::Vban,
+            dante: None,
         }
     }
 

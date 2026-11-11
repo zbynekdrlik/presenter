@@ -9,15 +9,18 @@
 //! §5.6 ids) and never changes: it names the mic's recordings. Each row's
 //! health and recorder line, the socket line and the recorder's per-day switch
 //! come from `GET /listen/status`, polled every 2 s while the card is on screen
-//! (C1b-7). All copy is Slovak.
+//! (C1b-7), and so does the Dante device's line (#852: a Dante mic is one RX
+//! channel of Presenter's own Dante device). All copy is Slovak.
 
 use leptos::prelude::*;
-use presenter_core::listen::mics::{mic_id_for_role, MicChannel, MicConfig, MicLanguage, MicRole};
+use presenter_core::listen::mics::{
+    mic_id_for_role, DanteInput, MicChannel, MicConfig, MicLanguage, MicRole, MicTransport,
+};
 use presenter_core::listen::recorder::{
     MicRecording, RecorderStatus, RecordingState, RECORDING_RETENTION_DAYS,
 };
 use presenter_core::listen::status::{
-    ListenStatus, MicState, MicStatus, SocketState, SocketStatus,
+    DanteState, DanteStatus, ListenStatus, MicState, MicStatus, SocketState, SocketStatus,
 };
 
 use super::host_editor::EditorSpec;
@@ -72,6 +75,8 @@ type MicKey = (
     MicChannel,
     MicLanguage,
     MicRole,
+    MicTransport,
+    Option<DanteInput>,
 );
 
 /// A row's `<For>` key: the id plus every field the row shows or edits — never
@@ -85,6 +90,8 @@ fn row_key(mic: &MicConfig) -> MicKey {
         mic.channel,
         mic.language,
         mic.role,
+        mic.transport,
+        mic.dante.clone(),
     )
 }
 
@@ -107,6 +114,13 @@ impl CardItem for MicConfig {
     }
 
     fn address(&self) -> (String, String) {
+        if let Some(dante) = &self.dante {
+            let from = match &dante.source {
+                Some(source) => format!(" · zo zdroja {source}"),
+                None => " · zdroj sa nastaví v Dante Controlleri".to_string(),
+            };
+            return (format!("Dante kanál „{}“", dante.channel), from);
+        }
         let from = match &self.sender_ip {
             Some(ip) => format!(" · od {ip}"),
             None => " · od ktoréhokoľvek odosielateľa".to_string(),
@@ -275,6 +289,23 @@ fn socket_line(socket: &SocketStatus) -> String {
         SocketState::Retrying => format!(
             "Port sa nedá otvoriť — skúšam znova. {}",
             socket.error.as_deref().unwrap_or_default()
+        ),
+    }
+}
+
+/// The Dante device's line (#852); empty while no Dante mic needs it.
+fn dante_line(dante: &DanteStatus) -> String {
+    let device = dante.device.as_deref().unwrap_or("?");
+    match dante.state {
+        DanteState::NotStarted | DanteState::Idle => String::new(),
+        DanteState::NoInterface => format!("Dante: {}", dante.error.as_deref().unwrap_or_default()),
+        DanteState::Running => format!(
+            "Dante: zariadenie {device} beží na {}.",
+            dante.interface.as_deref().unwrap_or("?")
+        ),
+        DanteState::Retrying => format!(
+            "Dante: zariadenie {device} nebeží — skúšam znova. {}",
+            dante.error.as_deref().unwrap_or_default()
         ),
     }
 }
@@ -548,7 +579,7 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
             <header class="settings__card-header">
                 <div>
                     <h2>"Počúvanie"</h2>
-                    <p>"Mikrofóny hosťa a tlmočníka cez VBAN (prepis kázne). Bez mikrofónu Presenter nepočúva a neotvorí žiadny port."</p>
+                    <p>"Mikrofóny hosťa a tlmočníka cez VBAN alebo Dante (prepis kázne). Bez mikrofónu Presenter nepočúva a neotvorí žiadny port."</p>
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="listen-count">
@@ -559,6 +590,9 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
             </header>
             <p class="settings__list-meta" data-role="listen-socket">
                 {move || status.with(|s| s.as_ref().map(|s| socket_line(&s.socket)).unwrap_or_default())}
+            </p>
+            <p class="settings__list-meta" data-role="listen-dante">
+                {move || status.with(|s| s.as_ref().map(|s| dante_line(&s.dante)).unwrap_or_default())}
             </p>
             <div class="settings__form-row settings__form-row--inline">
                 <label class="settings__form-checkbox">
@@ -591,6 +625,8 @@ mod tests {
             channel: MicChannel::Left,
             language: MicLanguage::En,
             role,
+            transport: MicTransport::Vban,
+            dante: None,
         }
     }
 
@@ -603,6 +639,7 @@ mod tests {
             channel: MicChannel::Right,
             language: MicLanguage::Sk,
             role,
+            ..MicDraft::default()
         }
     }
 
@@ -692,6 +729,7 @@ mod tests {
             unmatched: Vec::new(),
             rejected: Vec::new(),
             recorder,
+            dante: DanteStatus::default(),
         }
     }
 
@@ -832,6 +870,48 @@ mod tests {
             after_poll(None, 2, Some(first.clone())),
             (Some(first), 0),
             "back"
+        );
+    }
+
+    #[test]
+    fn the_dante_line_names_the_device_and_why_it_does_not_run() {
+        let mut dante = DanteStatus::default();
+        assert_eq!(dante_line(&dante), "", "no Dante mic: nothing to say");
+        dante = DanteStatus {
+            state: DanteState::Running,
+            device: Some("presenter-listen".into()),
+            interface: Some("enp2s0.70".into()),
+            error: None,
+        };
+        assert_eq!(
+            dante_line(&dante),
+            "Dante: zariadenie presenter-listen beží na enp2s0.70."
+        );
+        dante.state = DanteState::Retrying;
+        dante.error = Some("no such interface".into());
+        assert!(dante_line(&dante).ends_with("skúšam znova. no such interface"));
+    }
+
+    #[test]
+    fn a_dante_mics_row_names_its_channel_and_source() {
+        let mut dante = mic("guest", "Hosť", MicRole::Guest);
+        dante.transport = MicTransport::Dante;
+        dante.stream_name = String::new();
+        dante.dante = Some(DanteInput {
+            channel: "Host EN".into(),
+            source: Some("Mic 1@stagebox".into()),
+        });
+        assert_eq!(
+            dante.address(),
+            (
+                "Dante kanál „Host EN“".to_string(),
+                " · zo zdroja Mic 1@stagebox".to_string()
+            )
+        );
+        assert!(mic_aside(&dante).contains("· Dante ·"));
+        assert_ne!(
+            row_key(&dante),
+            row_key(&mic("guest", "Hosť", MicRole::Guest))
         );
     }
 }
