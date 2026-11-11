@@ -131,10 +131,10 @@ test("the sheet offers only what works today", async ({ browser }) => {
   const { page } = opened;
   await verseNumber(page, 1).tap();
   await expect(actions(page).locator("button:not([data-role=study-sheet-close])")).toHaveText([
-    "Pridať do kázne",
+    "Pridať záložku",
     "Porovnať",
+    "Pridať do kázne",
     /^Odkazy \(\d+\)$/,
-    "Uložiť záložku",
     "Kopírovať",
   ]);
   await finish(opened);

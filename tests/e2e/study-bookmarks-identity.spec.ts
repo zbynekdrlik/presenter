@@ -112,7 +112,8 @@ async function identity(page: Page): Promise<unknown> {
 }
 
 test("a bookmark saved at home is on the same phone at church, and nobody else's list", async ({ browser }) => {
-  const name = `Doma ${Date.now()}`;
+  // #932: one tap adds it under the verse's place.
+  const name = "Hebrejom 11:3";
 
   // At home: Cloudflare Access logged the preacher in and sends its token.
   const home = await openStudy(browser, baseURL, {
@@ -122,9 +123,7 @@ test("a bookmark saved at home is on the same phone at church, and nobody else's
   expect(await identity(home.page)).toEqual({ email: "preacher@example.org" });
   await verseNumber(home.page, 3).tap();
   await home.page.locator('[data-role="verse-save-bookmark"]').tap();
-  await home.page.locator('[data-role="bookmark-new-name"]').fill(name);
-  await home.page.locator('[data-role="bookmark-save"]').tap();
-  await expect(home.page.locator('[data-role="study-notice"]')).toContainText(`Záložka uložená: ${name}`);
+  await expect(home.page.locator('[data-role="study-notice"]')).toContainText(`Záložka pridaná: ${name}`);
 
   // The server remembered this phone: an httpOnly cookie, not readable by the page.
   const cookies = await home.context.cookies(baseURL);

@@ -72,14 +72,14 @@ test("a first visit opens John 1 in the first favourite and fixes the URL", asyn
 test("one tap switches the translation at the same place, and Back returns", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
-  await expect(page.locator('[data-role="study-title"]')).toContainText("Hebrejom 11");
+  await expect(page.locator('[data-role="study-place"]')).toHaveText("Hebrejom 11");
   await expect(verse(page, 1)).toContainText("Viera");
 
   await favourite(page, "eng-kjv").tap();
   await expectChapter(page, "eng-kjv:HEB.11");
   await expect(favourite(page, "eng-kjv")).toHaveAttribute("aria-pressed", "true");
   await expect(favourite(page, "slk-seb")).toHaveAttribute("aria-pressed", "false");
-  await expect(page.locator('[data-role="study-title"]')).toContainText("Hebrews 11");
+  await expect(page.locator('[data-role="study-place"]')).toHaveText("Hebrews 11");
   await expect(verse(page, 1)).toContainText("faith");
   await expect(page).toHaveURL(/t=eng-kjv&p=HEB\.11/);
 
@@ -190,7 +190,7 @@ test("the header always names the chapter on screen (#913)", async ({ browser })
   const place = page.locator('[data-role="study-place"]');
   await expect(place).toHaveText("Hebrejom 11");
   await scrollToVerse(page, 20);
-  await expect(page.locator('[data-role="study-title"]')).not.toBeInViewport();
+  await expect(verse(page, 1)).not.toBeInViewport();
   await expect(place).toBeInViewport();
   await expect(place).toHaveText("Hebrejom 11");
 
