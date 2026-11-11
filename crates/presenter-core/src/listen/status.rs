@@ -33,17 +33,19 @@ pub struct SocketStatus {
     pub error: Option<String>,
 }
 
-/// The Dante device's life cycle (#852): Presenter's own `dlink` device that
-/// carries every Dante mic as one RX channel.
+/// The Dante device's life cycle (#852, #933): Presenter's own `dlink` device
+/// with the two fixed RX channels `mic 1` / `mic 2`, always on while the box
+/// names a Dante interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DanteState {
     /// The receiver was never started (validate mode, tests).
     #[default]
     NotStarted,
-    /// No Dante mic configured: no device.
+    /// No Dante channel: the supervisor has not published the fixed mics yet.
     Idle,
-    /// Dante mics are configured, but the box names no Dante interface.
+    /// The box names no Dante interface: no device and no Dante mics
+    /// (dev, CI, PP).
     NoInterface,
     Running,
     /// Starting failed or the device ended; retried with a growing pause.

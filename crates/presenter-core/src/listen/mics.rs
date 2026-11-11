@@ -2,12 +2,15 @@
 //! `listen.mics`, a JSON list edited through `GET|PUT /listen/mics` (the C1b
 //! Settings card). An empty list = listening idle, no socket (PP, C-S8).
 //!
-//! A mic arrives over VBAN (the default) or Dante (#852, dstack's `dlink`). A
-//! VBAN mic is selected by its stream name (exact, 1–16 printable ASCII) and
-//! optionally the sender IP; two mics that could both receive one packet are
-//! refused. A Dante mic is one RX channel of Presenter's own Dante device,
-//! named like Dante names it, optionally subscribed to `channel@device`. The
-//! server is the only validator.
+//! A saved mic arrives over VBAN, selected by its stream name (exact, 1–16
+//! printable ASCII) and optionally the sender IP; two mics that could both
+//! receive one packet are refused. The server is the only validator.
+//!
+//! The Dante mics are NOT settings (#933, owner 2026-11-11): Presenter's own
+//! Dante device has two fixed mono RX channels, `mic 1` and `mic 2`
+//! ([`fixed_dante_mics`]), on every box that names a Dante interface; which
+//! source feeds them is Dante patching (dstack), never a Presenter choice. So
+//! `listen.mics` holds no Dante mic and no id of theirs.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -22,11 +25,14 @@ pub const MIC_ID_MAX_CHARS: usize = 20;
 pub const MIC_NAME_MAX_CHARS: usize = 40;
 /// = the VBAN stream-name field.
 pub const MIC_STREAM_NAME_MAX_CHARS: usize = 16;
-/// A Dante channel or device name (dstack `device::MAX_NAME`).
-pub const DANTE_NAME_MAX_CHARS: usize = 31;
+/// The RX channels of Presenter's Dante device, in order (#933: neutral
+/// names; both moderator mics are patched there).
+pub const DANTE_MIC_CHANNELS: [&str; 2] = ["mic 1", "mic 2"];
+/// The ids of the fixed Dante mics start with this; no saved mic may.
+pub const DANTE_MIC_ID_PREFIX: &str = "dante-";
 
 /// How the mic's audio reaches Presenter. Absent on the wire = `vban` (every
-/// list stored before #852's Dante slice).
+/// saved mic); `dante` = one of the fixed Dante mics (#933).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MicTransport {
@@ -42,25 +48,13 @@ impl MicTransport {
     }
 }
 
-/// A Dante mic's input: one RX channel of Presenter's Dante device.
+/// A Dante mic's input: one RX channel of Presenter's Dante device. What
+/// feeds it is Dante patching, not Presenter's (#933).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DanteInput {
     /// Our RX channel's name, as Dante Controller lists it.
     pub channel: String,
-    /// `channel@device` it subscribes to; `None` = set in Dante Controller.
-    #[serde(default)]
-    pub source: Option<String>,
-}
-
-impl DanteInput {
-    /// The source split into (channel, device); `None` without one (a
-    /// validated list holds only valid sources).
-    pub fn source_parts(&self) -> Option<(&str, &str)> {
-        self.source
-            .as_deref()
-            .and_then(|source| source.split_once('@'))
-    }
 }
 
 /// Which channel of the stream the mic is (spec §5.4): `left` = channel 1,
@@ -82,13 +76,16 @@ pub enum MicLanguage {
     Off,
 }
 
-/// Who speaks into the mic (spec §5.6).
+/// Who speaks into the mic (spec §5.6). `moderator` = a fixed Dante mic
+/// (#933): one of the two moderator mics, the guest preacher's or the
+/// interpreter's — which one is told later by the language spoken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MicRole {
     Guest,
     Interpreter,
     Preacher,
+    Moderator,
 }
 
 /// One microphone of `listen.mics`.
@@ -108,7 +105,7 @@ pub struct MicConfig {
     pub role: MicRole,
     #[serde(default, skip_serializing_if = "MicTransport::is_vban")]
     pub transport: MicTransport,
-    /// A Dante mic's channel (and source); `None` for a VBAN mic.
+    /// A Dante mic's RX channel; `None` for a VBAN mic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dante: Option<DanteInput>,
 }
@@ -142,12 +139,33 @@ pub enum MicsValidationError {
     BadSenderIp(String),
     #[error("Mikrofóny „{0}“ a „{1}“ by dostávali ten istý VBAN stream.")]
     Ambiguous(String, String),
-    #[error("Mikrofón „{0}“: názov kanála Dante môže mať 1–31 znakov ASCII, bez „=“, „.“ a „@“.")]
-    BadDanteChannel(String),
-    #[error("Mikrofón „{0}“: zdroj Dante má tvar kanál@zariadenie (zariadenie: 1–31 znakov A–Z, a–z, 0–9 a „-“).")]
-    BadDanteSource(String),
-    #[error("Mikrofóny „{0}“ a „{1}“ majú ten istý kanál Dante.")]
-    DuplicateDanteChannel(String, String),
+    #[error("Mikrofón „{0}“: mikrofóny Dante sa nenastavujú — Presenter má dva pevné kanály Dante „mic 1“ a „mic 2“, zdroj sa zapojí v Dante.")]
+    DanteNotConfigurable(String),
+    #[error("Identifikátor „{0}“ patrí pevnému mikrofónu Dante („dante-…“).")]
+    ReservedId(String),
+}
+
+/// The two fixed Dante mics (#933), in channel order: ids `dante-mic-1` /
+/// `dante-mic-2` (they name the recordings), one mono RX channel each, not
+/// transcribed until the language step picks the preacher.
+pub fn fixed_dante_mics() -> Vec<MicConfig> {
+    DANTE_MIC_CHANNELS
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| MicConfig {
+            id: format!("{DANTE_MIC_ID_PREFIX}mic-{}", index + 1),
+            name: format!("Dante mic {}", index + 1),
+            stream_name: String::new(),
+            sender_ip: None,
+            channel: MicChannel::Left,
+            language: MicLanguage::Off,
+            role: MicRole::Moderator,
+            transport: MicTransport::Dante,
+            dante: Some(DanteInput {
+                channel: (*channel).to_string(),
+            }),
+        })
+        .collect()
 }
 
 /// Validate and normalize a whole list: names trimmed, the sender IP in its
@@ -168,12 +186,6 @@ pub fn validate_mics(mics: Vec<MicConfig>) -> Result<Vec<MicConfig>, MicsValidat
         if let Some(other) = valid.iter().find(|other| streams_overlap(other, &mic)) {
             return Err(MicsValidationError::Ambiguous(other.id.clone(), mic.id));
         }
-        if let Some(other) = valid.iter().find(|other| dante_overlap(other, &mic)) {
-            return Err(MicsValidationError::DuplicateDanteChannel(
-                other.id.clone(),
-                mic.id,
-            ));
-        }
         valid.push(mic);
     }
     Ok(valid)
@@ -189,6 +201,7 @@ pub fn mic_id_for_role(role: MicRole, taken: &[&str]) -> String {
         MicRole::Guest => "guest",
         MicRole::Interpreter => "interp",
         MicRole::Preacher => "preacher",
+        MicRole::Moderator => "moderator",
     };
     (1..=taken.len() + 1)
         .map(|n| match n {
@@ -203,47 +216,19 @@ fn normalize_mic(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
     if !is_valid_mic_id(&mic.id) {
         return Err(MicsValidationError::BadId(mic.id));
     }
+    if mic.id.starts_with(DANTE_MIC_ID_PREFIX) {
+        return Err(MicsValidationError::ReservedId(mic.id));
+    }
+    if mic.is_dante() {
+        return Err(MicsValidationError::DanteNotConfigurable(mic.id));
+    }
     let name = mic.name.trim();
     let chars = name.chars().count();
     if chars == 0 || chars > MIC_NAME_MAX_CHARS || name.chars().any(char::is_control) {
         return Err(MicsValidationError::BadName(mic.id));
     }
     mic.name = name.to_string();
-    match mic.transport {
-        MicTransport::Vban => normalize_vban(mic),
-        MicTransport::Dante => normalize_dante(mic),
-    }
-}
-
-/// A Dante mic: a valid RX channel name, an optional valid source, no VBAN
-/// fields; one mono channel, so `channel` is `left`.
-fn normalize_dante(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
-    let Some(mut dante) = mic.dante.take() else {
-        return Err(MicsValidationError::BadDanteChannel(mic.id));
-    };
-    dante.channel = dante.channel.trim().to_string();
-    if !is_valid_dante_channel_name(&dante.channel) {
-        return Err(MicsValidationError::BadDanteChannel(mic.id));
-    }
-    dante.source = dante
-        .source
-        .as_deref()
-        .map(str::trim)
-        .filter(|source| !source.is_empty())
-        .map(str::to_string);
-    if let Some(source) = dante.source.as_deref() {
-        let valid = source.split_once('@').is_some_and(|(channel, device)| {
-            is_valid_dante_channel_name(channel) && is_valid_dante_device_name(device)
-        });
-        if !valid {
-            return Err(MicsValidationError::BadDanteSource(mic.id));
-        }
-    }
-    mic.dante = Some(dante);
-    mic.stream_name = String::new();
-    mic.sender_ip = None;
-    mic.channel = MicChannel::Left;
-    Ok(mic)
+    normalize_vban(mic)
 }
 
 fn normalize_vban(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
@@ -280,38 +265,9 @@ fn is_valid_stream_name(name: &str) -> bool {
         && name.trim() == name
 }
 
-/// A Dante channel name (dstack `device::valid_channel_name`): 1–31 printable
-/// ASCII characters, none of `=`, `.` and `@`.
-pub fn is_valid_dante_channel_name(name: &str) -> bool {
-    (1..=DANTE_NAME_MAX_CHARS).contains(&name.len())
-        && name.trim() == name
-        && name
-            .bytes()
-            .all(|b| (0x20..=0x7e).contains(&b) && !matches!(b, b'=' | b'.' | b'@'))
-}
-
-/// A Dante device name (dstack `device::valid_device_name`): 1–31 of A–Z,
-/// a–z, 0–9 and `-`, no `-` at either end.
-pub fn is_valid_dante_device_name(name: &str) -> bool {
-    (1..=DANTE_NAME_MAX_CHARS).contains(&name.len())
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-}
-
-/// Two Dante mics on one RX channel (Dante compares names case aside).
-fn dante_overlap(a: &MicConfig, b: &MicConfig) -> bool {
-    match (&a.dante, &b.dante) {
-        (Some(x), Some(y)) => x.channel.eq_ignore_ascii_case(&y.channel),
-        _ => false,
-    }
-}
-
-/// Whether one packet could match both mics (VBAN mics only).
+/// Whether one packet could match both mics.
 fn streams_overlap(a: &MicConfig, b: &MicConfig) -> bool {
-    !a.is_dante()
-        && !b.is_dante()
-        && a.stream_name == b.stream_name
+    a.stream_name == b.stream_name
         && match (&a.sender_ip, &b.sender_ip) {
             (Some(x), Some(y)) => x == y,
             _ => true,
@@ -557,17 +513,6 @@ mod tests {
         assert_eq!(id, "guest-6");
     }
 
-    fn dante_mic(id: &str, channel: &str, source: Option<&str>) -> MicConfig {
-        MicConfig {
-            transport: MicTransport::Dante,
-            dante: Some(DanteInput {
-                channel: channel.to_string(),
-                source: source.map(str::to_string),
-            }),
-            ..mic(id, "", None)
-        }
-    }
-
     #[test]
     fn a_stored_vban_list_reads_and_writes_exactly_as_before() {
         let parsed: Vec<MicConfig> = serde_json::from_str(SPEC_EXAMPLE).unwrap();
@@ -583,124 +528,81 @@ mod tests {
     }
 
     #[test]
-    fn a_dante_mic_round_trips_without_vban_fields() {
-        let json = r#"[{"id":"guest","name":"Hosť","channel":"mix","language":"en",
-            "role":"guest","transport":"dante","streamName":"LEFTOVER","senderIp":"192.0.2.1",
-            "dante":{"channel":" Hosť EN ","source":" Mic 1@stagebox-1 "}}]"#
-            .replace("Hosť EN", "Guest EN");
-        let mics = validate_mics(serde_json::from_str(&json).unwrap()).unwrap();
-        let m = &mics[0];
-        assert_eq!(m.transport, MicTransport::Dante);
-        assert_eq!(
-            m.dante,
-            Some(DanteInput {
-                channel: "Guest EN".into(),
-                source: Some("Mic 1@stagebox-1".into())
+    fn the_two_fixed_dante_mics_are_mono_rx_channels_mic_1_and_mic_2() {
+        let mics = fixed_dante_mics();
+        let shape: Vec<(&str, &str, MicTransport, MicChannel, MicRole, MicLanguage)> = mics
+            .iter()
+            .map(|m| {
+                (
+                    m.id.as_str(),
+                    m.dante.as_ref().map_or("", |d| d.channel.as_str()),
+                    m.transport,
+                    m.channel,
+                    m.role,
+                    m.language,
+                )
             })
-        );
+            .collect();
+        let fixed = |id, channel| {
+            (
+                id,
+                channel,
+                MicTransport::Dante,
+                MicChannel::Left,
+                MicRole::Moderator,
+                MicLanguage::Off,
+            )
+        };
         assert_eq!(
-            (m.stream_name.as_str(), m.sender_ip.as_deref(), m.channel),
-            ("", None, MicChannel::Left)
+            shape,
+            vec![fixed("dante-mic-1", "mic 1"), fixed("dante-mic-2", "mic 2")]
         );
-        assert_eq!(
-            m.dante.as_ref().unwrap().source_parts(),
-            Some(("Mic 1", "stagebox-1"))
-        );
-        let back = serde_json::to_value(&mics).unwrap();
-        assert_eq!(back[0]["transport"], "dante");
-        assert!(back[0].get("streamName").is_none() && back[0]["senderIp"].is_null());
-        let again: Vec<MicConfig> = serde_json::from_value(back).unwrap();
-        assert_eq!(again, mics);
+        assert!(mics
+            .iter()
+            .all(|m| is_valid_mic_id(&m.id) && m.stream_name.is_empty() && m.sender_ip.is_none()));
+        let wire = serde_json::to_value(&mics[0]).unwrap();
+        assert_eq!(wire["dante"], serde_json::json!({ "channel": "mic 1" }));
+        assert_eq!(wire["role"], "moderator");
     }
 
     #[test]
-    fn dante_mics_have_their_own_refusals() {
-        use MicsValidationError::*;
-        let mut missing = dante_mic("guest", "Mic", None);
-        missing.dante = None;
-        let cases = [
-            (vec![missing], BadDanteChannel("guest".into())),
-            (
-                vec![dante_mic("guest", "", None)],
-                BadDanteChannel("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "a.b", None)],
-                BadDanteChannel("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "a@b", None)],
-                BadDanteChannel("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", &"a".repeat(32), None)],
-                BadDanteChannel("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "Hosť", None)],
-                BadDanteChannel("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "Mic", Some("Mic 1"))],
-                BadDanteSource("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "Mic", Some("Mic 1@-box"))],
-                BadDanteSource("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "Mic", Some("Mic=1@box"))],
-                BadDanteSource("guest".into()),
-            ),
-            (
-                vec![dante_mic("guest", "Mic", Some("@box"))],
-                BadDanteSource("guest".into()),
-            ),
-            (
-                vec![
-                    dante_mic("guest", "Mic 1", None),
-                    dante_mic("interp", "MIC 1", None),
-                ],
-                DuplicateDanteChannel("guest".into(), "interp".into()),
-            ),
-        ];
-        for (mics, expected) in cases {
-            assert_eq!(validate_mics(mics.clone()), Err(expected), "{mics:?}");
-        }
-        assert!(
-            validate_mics(vec![dante_mic("guest", &"a".repeat(31), Some("Mic 1@box"))]).is_ok(),
-            "31 chars and a source"
+    fn a_saved_list_takes_no_dante_mic_and_no_fixed_mic_id() {
+        let mut dante = mic("guest", "", None);
+        dante.transport = MicTransport::Dante;
+        dante.dante = Some(DanteInput {
+            channel: "mic 1".into(),
+        });
+        assert_eq!(
+            validate_mics(vec![mic("interp", "INTERP_SK", None), dante]),
+            Err(MicsValidationError::DanteNotConfigurable("guest".into()))
         );
-        assert!(
-            validate_mics(vec![dante_mic("guest", "Mic", Some("   "))]).is_ok_and(|m| m[0]
-                .dante
-                .as_ref()
-                .unwrap()
-                .source
-                .is_none()),
-            "a blank source = set in Dante Controller"
+        assert_eq!(
+            validate_mics(fixed_dante_mics()),
+            Err(MicsValidationError::ReservedId("dante-mic-1".into())),
+            "the fixed mics themselves can never be saved"
         );
-    }
-
-    #[test]
-    fn a_dante_mic_never_collides_with_a_vban_stream() {
-        let mixed = vec![
-            mic("guest", "GUEST_EN", None),
-            dante_mic("interp", "GUEST_EN", None),
-            mic("preacher", "PASTOR", None),
-        ];
-        let mics = validate_mics(mixed).unwrap();
-        assert_eq!(mics.iter().filter(|m| m.is_dante()).count(), 1);
+        assert_eq!(
+            validate_mics(vec![mic("dante-x", "GUEST_EN", None)]),
+            Err(MicsValidationError::ReservedId("dante-x".into()))
+        );
+        let text = MicsValidationError::DanteNotConfigurable("guest".into()).to_string();
+        assert!(
+            text.contains("„mic 1“") && text.contains("„guest“"),
+            "{text}"
+        );
         let mut vban_with_dante = mic("guest", "GUEST_EN", None);
         vban_with_dante.dante = Some(DanteInput {
             channel: "x".into(),
-            source: None,
         });
-        assert_eq!(validate_mics(vec![vban_with_dante]).unwrap()[0].dante, None);
-        assert!(
-            MicsValidationError::DuplicateDanteChannel("a".into(), "b".into())
-                .to_string()
-                .contains("Dante")
+        assert_eq!(
+            validate_mics(vec![vban_with_dante]).unwrap()[0].dante,
+            None,
+            "a VBAN mic carries no Dante input"
         );
+    }
+
+    #[test]
+    fn a_moderator_mics_id_is_moderator() {
+        assert_eq!(mic_id_for_role(MicRole::Moderator, &[]), "moderator");
     }
 }

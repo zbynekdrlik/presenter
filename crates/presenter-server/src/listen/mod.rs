@@ -10,8 +10,10 @@
 //! (`recorder`, `recording_file`) has its own supervisor task, started with the
 //! socket task: it keeps one writer per configured mic while the per-day toggle
 //! names today and deletes day folders older than 30 days once per local date.
-//! A Dante mic (#852, `dante`) arrives through Presenter's own in-process
-//! Dante device (dstack's `dlink`) and feeds the same chain.
+//! The two fixed Dante mics (#852, #933, `dante`) arrive through Presenter's
+//! own in-process Dante device (dstack's `dlink`) and feed the same chain:
+//! the mic list every consumer reads ([`ListenService::mics`]) is the saved
+//! VBAN list followed by those two, whenever the box names a Dante interface.
 
 mod dante;
 pub(crate) mod health;
@@ -31,7 +33,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use presenter_core::audio::vban::VBAN_DEFAULT_PORT;
-use presenter_core::listen::mics::MicConfig;
+use presenter_core::listen::mics::{fixed_dante_mics, MicConfig};
 use presenter_core::listen::recorder::RecorderSetting;
 use presenter_core::listen::status::ListenStatus;
 use tokio::sync::{broadcast, watch};
@@ -65,7 +67,10 @@ pub(crate) struct ListenService {
 }
 
 struct Inner {
+    /// The published mic list: [`Mics::published`].
     config: watch::Sender<Arc<Vec<MicConfig>>>,
+    /// Its two sources, changed together under this lock.
+    sources: Mutex<Mics>,
     health: Mutex<ListenHealth>,
     started: AtomicBool,
     save_lock: tokio::sync::Mutex<()>,
@@ -82,6 +87,22 @@ struct Inner {
     recorder_cleared: watch::Sender<Option<NaiveDate>>,
 }
 
+/// Where the published mic list comes from (#933).
+#[derive(Default)]
+struct Mics {
+    /// The saved list (`listen.mics`): VBAN mics only.
+    saved: Vec<MicConfig>,
+    /// The fixed Dante mics; empty on a box without a Dante interface.
+    dante: Vec<MicConfig>,
+}
+
+impl Mics {
+    /// The saved mics, then the fixed Dante mics.
+    fn published(&self) -> Vec<MicConfig> {
+        self.saved.iter().chain(&self.dante).cloned().collect()
+    }
+}
+
 impl ListenService {
     pub(crate) fn new() -> Self {
         let (config, _) = watch::channel(Arc::new(Vec::new()));
@@ -90,6 +111,7 @@ impl ListenService {
         Self {
             inner: Arc::new(Inner {
                 config,
+                sources: Mutex::new(Mics::default()),
                 health: Mutex::new(ListenHealth::default()),
                 started: AtomicBool::new(false),
                 save_lock: tokio::sync::Mutex::new(()),
@@ -101,14 +123,41 @@ impl ListenService {
         }
     }
 
-    /// The mics the receiver uses now.
+    /// The mics the receivers use now: the saved ones, then the fixed Dante
+    /// mics (#933).
     pub(crate) fn mics(&self) -> Arc<Vec<MicConfig>> {
         Arc::clone(&self.inner.config.borrow())
     }
 
-    /// Hand a validated list to the receiver; it updates its mics at once.
+    /// Hand a validated (VBAN) list to the receivers; they update their mics
+    /// at once. A Dante mic in it is never taken: the Dante mics are fixed.
     pub(crate) fn apply(&self, mics: Vec<MicConfig>) {
-        let _previous = self.inner.config.send_replace(Arc::new(mics));
+        self.change_mics(|sources| {
+            sources.saved = mics.into_iter().filter(|mic| !mic.is_dante()).collect();
+        });
+    }
+
+    /// Publish the two fixed Dante mics (`true`: the box names a Dante
+    /// interface) or none (#933: independent of the saved list).
+    pub(crate) fn set_dante_mics(&self, on: bool) {
+        self.change_mics(|sources| {
+            sources.dante = if on { fixed_dante_mics() } else { Vec::new() };
+        });
+    }
+
+    /// Change a source and publish the list, both under the sources' lock, so
+    /// two changes can never publish out of order.
+    fn change_mics(&self, change: impl FnOnce(&mut Mics)) {
+        let mut sources = self
+            .inner
+            .sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        change(&mut sources);
+        let _previous = self
+            .inner
+            .config
+            .send_replace(Arc::new(sources.published()));
     }
 
     /// Hand the stored recorder toggle to the recorder (`None` = off).
@@ -139,10 +188,10 @@ impl ListenService {
         status
     }
 
-    /// Start the socket task, the Dante device's supervisor (#852: a device
-    /// only while a Dante mic is configured and the box names its Dante
-    /// interface) and the recorder's supervisor once; `false` when they were
-    /// already started.
+    /// Start the socket task, the Dante device's supervisor (#933: the device
+    /// with its two fixed channels whenever the box names a Dante interface)
+    /// and the recorder's supervisor once; `false` when they were already
+    /// started.
     pub(crate) fn start(&self, bind: SocketAddr) -> bool {
         if self.inner.started.swap(true, Ordering::SeqCst) {
             return false;

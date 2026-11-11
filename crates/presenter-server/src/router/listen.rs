@@ -194,10 +194,18 @@ mod tests {
         bad_stream[0]["streamName"] = json!("HOSŤ_EN");
         let mut ambiguous = base.clone();
         ambiguous[1]["streamName"] = json!("GUEST_EN");
+        // #933: the Dante mics are fixed, never part of the saved list
+        let mut dante = base.clone();
+        dante[1]["transport"] = json!("dante");
+        dante[1]["dante"] = json!({ "channel": "mic 1" });
+        let mut fixed_id = base.clone();
+        fixed_id[0]["id"] = json!("dante-mic-1");
         for (body, needle) in [
             (duplicate, "dvakrát"),
             (bad_stream, "VBAN streamu"),
             (ambiguous, "ten istý VBAN stream"),
+            (dante, "mikrofóny Dante sa nenastavujú"),
+            (fixed_id, "pevnému mikrofónu Dante"),
         ] {
             let (status, reply) = send(&app, Method::PUT, "/listen/mics", Some(body)).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
@@ -217,6 +225,29 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn a_dante_mic_stored_before_the_fixed_pair_is_left_out() {
+        let (state, app) = app().await;
+        let mut stored: Value = serde_json::from_str(SPEC_MICS).unwrap();
+        stored[1] = json!({ "id": "interp", "name": "Tlmočník", "channel": "left",
+            "language": "sk", "role": "interpreter", "transport": "dante",
+            "dante": { "channel": "Host EN", "source": "Mic 1@stagebox-1" } });
+        state
+            .repository()
+            .set_app_setting(LISTEN_MICS_KEY, &stored.to_string())
+            .await
+            .unwrap();
+        let (status, reply) = send(&app, Method::GET, "/listen/mics", None).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let ids: Vec<&str> = reply
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|mic| mic["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["guest"], "only the VBAN mic is read");
     }
 
     #[tokio::test]

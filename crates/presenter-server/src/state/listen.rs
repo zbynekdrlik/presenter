@@ -32,13 +32,25 @@ struct StoredMicsCorrupt(String);
 struct StoredRecorderCorrupt(String);
 
 impl AppState {
-    /// The stored list (empty when never saved).
+    /// The stored list (empty when never saved). A Dante mic saved before
+    /// #933 is left out with a WARN (the Dante mics are fixed now; the next
+    /// save drops it from the row).
     pub(crate) async fn listen_mics(&self) -> anyhow::Result<Vec<MicConfig>> {
         let Some(raw) = self.repository.get_app_setting(LISTEN_MICS_KEY).await? else {
             return Ok(Vec::new());
         };
-        let mics: Vec<MicConfig> =
+        let mut mics: Vec<MicConfig> =
             serde_json::from_str(&raw).map_err(|err| StoredMicsCorrupt(err.to_string()))?;
+        mics.retain(|mic| {
+            if mic.is_dante() {
+                tracing::warn!(
+                    target: MIC_TARGET,
+                    mic = mic.id.as_str(),
+                    "a stored Dante mic is ignored — the Dante mics are the two fixed channels now"
+                );
+            }
+            !mic.is_dante()
+        });
         validate_mics(mics).map_err(|err| anyhow::Error::new(StoredMicsCorrupt(err.to_string())))
     }
 

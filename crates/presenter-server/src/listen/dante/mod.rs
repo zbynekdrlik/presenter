@@ -1,16 +1,19 @@
-//! The Dante microphones (#852, dstack FINDING 2026-11-10): Presenter's own
-//! Dante device, embedded in-process through dstack's `dlink`, carries every
-//! Dante mic as one RX channel. Its audio feeds the SAME per-mic chain as a
-//! VBAN mic (`mic_chain::BlockQueue` → `run_chain`: 100 ms frames, level, the
-//! mic's one frame channel → recorder / ASR).
+//! The Dante microphones (#852, #933): Presenter's own Dante device, embedded
+//! in-process through dstack's `dlink`, with two FIXED mono RX channels
+//! `mic 1` / `mic 2` (core `fixed_dante_mics`: ids `dante-mic-1` /
+//! `dante-mic-2`). Which source feeds them is Dante patching (dstack), never a
+//! Presenter setting: the device subscribes to nothing. Their audio feeds the
+//! SAME per-mic chain as a VBAN mic (`mic_chain::BlockQueue` → `run_chain`:
+//! 100 ms frames, level, the mic's one frame channel → recorder / ASR).
 //!
 //! [`supervise`] (started by `ListenService::start` only, so validate mode
-//! never starts a device) keeps the device in step with the Dante mics of
-//! `listen.mics`: none → no device; the box names no Dante interface
-//! (`PRESENTER_LISTEN_DANTE_IFACE`, a per-site setting like `DANTE_SUBNET`) →
-//! no device, each Dante mic shows why; otherwise one device whose plan
-//! (`LinkPlan`) changes only with the channels, the interface, the name or the
-//! rate. A failed start or a device that ended by itself is retried after
+//! never starts a device) first publishes the two fixed mics when the box
+//! names a Dante interface (`PRESENTER_LISTEN_DANTE_IFACE`, a per-site setting
+//! like `DANTE_SUBNET`) — independent of the saved `listen.mics` — and then
+//! keeps the device in step with the Dante mics of the published list: no
+//! interface → no mics, no device, the status says why; otherwise one device
+//! whose plan (`LinkPlan`) changes only with the channels, the interface, the
+//! name or the rate. A failed start or a device that ended by itself is retried after
 //! 1, 2, 4 … 60 s, WARN on power-of-two attempts (#484). Every [`DRAIN`] the
 //! samples of each LIVE channel (its `written` count advanced within
 //! [`LIVE_WINDOW`]) go to its mic's chain as one block; a silent or
@@ -63,7 +66,7 @@ const DRAIN: Duration = Duration::from_millis(20);
 /// A channel whose `written` count advanced this recently is live.
 pub(crate) const LIVE_WINDOW: Duration = Duration::from_secs(1);
 const NO_INTERFACE: &str =
-    "Na tomto počítači nie je nastavené rozhranie Dante (PRESENTER_LISTEN_DANTE_IFACE).";
+    "Na tomto počítači nie je nastavené rozhranie Dante (PRESENTER_LISTEN_DANTE_IFACE) — kanály „mic 1“ a „mic 2“ tu nie sú.";
 
 /// The box's Dante settings (env; tests set their own).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,8 +115,8 @@ impl DanteEnv {
         }
     }
 
-    /// The device for `mics` (the Dante ones, in order); `None` without one
-    /// or without an interface.
+    /// The device for `mics` (the Dante ones, in order: the fixed pair);
+    /// `None` without one or without an interface.
     fn plan(&self, mics: &[MicConfig]) -> Option<LinkPlan> {
         let channels: Vec<DanteInput> = mics.iter().filter_map(|mic| mic.dante.clone()).collect();
         if channels.is_empty() {
@@ -164,6 +167,7 @@ pub(crate) async fn supervise(
     backend: Arc<dyn DanteBackend>,
     env: DanteEnv,
 ) {
+    service.set_dante_mics(env.interface.is_some());
     let mut config = service.config_receiver();
     let mut inputs = DanteInputs::default();
     let mut running: Option<Running> = None;
@@ -177,7 +181,7 @@ pub(crate) async fn supervise(
         }
         let Some(plan) = plan else {
             failures = 0;
-            set_idle(&service, &env, &inputs, mics.is_empty());
+            set_idle(&service, &env);
             if config.changed().await.is_err() {
                 return;
             }
@@ -334,20 +338,19 @@ fn set_dante(service: &ListenService, plan: &LinkPlan, state: DanteState, error:
     });
 }
 
-/// No device: no Dante mic (idle), or no interface on this box.
-fn set_idle(service: &ListenService, env: &DanteEnv, inputs: &DanteInputs, no_mic: bool) {
-    let (state, error) = if no_mic {
-        (DanteState::Idle, None)
-    } else {
-        (DanteState::NoInterface, Some(NO_INTERFACE.to_string()))
+/// No device: no interface on this box (no Dante mics then), or no Dante
+/// channel published yet.
+fn set_idle(service: &ListenService, env: &DanteEnv) {
+    let (state, error) = match env.interface {
+        None => (DanteState::NoInterface, Some(NO_INTERFACE.to_string())),
+        Some(_) => (DanteState::Idle, None),
     };
     service.with_health(|health| {
         health.dante = DanteStatus {
             state,
             device: Some(env.device.clone()),
             interface: env.interface.clone(),
-            error: error.clone(),
+            error,
         };
     });
-    inputs.set_error(service, error.as_deref());
 }
