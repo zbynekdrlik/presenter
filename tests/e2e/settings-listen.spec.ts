@@ -181,83 +181,39 @@ test("a microphone is added, refused inline, saved and removed", async ({ page }
   assertOnly422(errors, 1);
 });
 
-test("a Dante microphone is chosen in the editor, saved without VBAN fields and says why it gets no audio", async ({ page }) => {
-  // #852: the transport select swaps the VBAN fields for the Dante channel and
-  // source. The test server names no Dante interface (PRESENTER_LISTEN_DANTE_IFACE
-  // unset, as on dev and CI), so no Dante device starts and the card says why.
+test("the editor saves VBAN mics only and a box without a Dante interface shows no Dante mic", async ({ page }) => {
+  // #933: the Dante mics are two fixed channels, never a setting — the editor has
+  // no transport choice and no Dante fields. The test server names no Dante
+  // interface (PRESENTER_LISTEN_DANTE_IFACE unset, as on dev and CI): no Dante
+  // device, no Dante mic, and the card says why. The fixed pair on a box WITH an
+  // interface: settings-listen-dante.spec.ts.
   const errors: string[] = [];
   attachConsoleErrorCollector(page, errors);
   await openSettings(page);
   const card = page.locator('[data-role="listen-card"]');
   await card.locator('[data-role="listen-add"]').click();
   const editor = card.locator('[data-role="listen-new-item"] [data-role="listen-editor"]');
-  await editor.locator('[data-role="listen-name"]').fill("Hosť Dante");
   await expect(editor.locator('[data-role="listen-stream"]')).toBeVisible();
+  await expect(editor.locator('[data-role="listen-transport"]')).toHaveCount(0);
   await expect(editor.locator('[data-role="listen-dante-channel"]')).toHaveCount(0);
-  await editor.locator('[data-role="listen-transport"]').selectOption("dante");
-  await expect(editor.locator('[data-role="listen-stream"]')).toHaveCount(0);
-  await expect(editor.locator('[data-role="listen-sender-ip"]')).toHaveCount(0);
-  await expect(editor.locator('[data-role="listen-channel"]')).toHaveCount(0);
-
-  // the editor's own check, then the server's Dante rule (a "." is not allowed)
-  await editor.locator('[data-role="listen-submit"]').click();
-  const message = card.locator('[data-role="listen-form-status"]');
-  await expect(message).toContainText("Zadaj názov kanála Dante.");
-  await editor.locator('[data-role="listen-dante-channel"]').fill("Host.EN");
-  await editor.locator('[data-role="listen-submit"]').click();
-  await expect(message).toHaveAttribute("data-state", "error");
-  await expect(message).toContainText("Mikrofón „guest“: názov kanála Dante môže mať 1–31 znakov");
-  expect(await storedMics(page)).toEqual([]);
-
-  await editor.locator('[data-role="listen-dante-channel"]').fill("Host EN");
-  await editor.locator('[data-role="listen-dante-source"]').fill("Mic 1@stagebox-1");
+  await expect(editor.locator('[data-role="listen-dante-source"]')).toHaveCount(0);
+  await expect(editor.locator('[data-role="listen-role"] option')).toHaveText(["hosť", "tlmočník", "kazateľ"]);
+  await editor.locator('[data-role="listen-name"]').fill("Hosť");
+  await editor.locator('[data-role="listen-stream"]').fill("GUEST_EN");
   await editor.locator('[data-role="listen-submit"]').click();
   const row = card.locator('[data-role="listen-mic-list"] li[data-id="guest"]');
-  await expect(row.locator(".settings__host-label")).toHaveText("Hosť Dante");
-  await expect(row.locator('[data-role="listen-config"]')).toHaveText("angličtina · hosť · Dante · id guest");
-  await expect(row).toContainText("Dante kanál „Host EN“");
-  await expect(row).toContainText("zo zdroja Mic 1@stagebox-1");
+  await expect(row.locator('[data-role="listen-config"]')).toHaveText("angličtina · hosť · kanál ľavý (1) · id guest");
   expect(await storedMics(page)).toEqual([
-    {
-      id: "guest",
-      name: "Hosť Dante",
-      senderIp: null,
-      channel: "left",
-      language: "en",
-      role: "guest",
-      transport: "dante",
-      dante: { channel: "Host EN", source: "Mic 1@stagebox-1" },
-    },
+    { id: "guest", name: "Hosť", streamName: "GUEST_EN", senderIp: null, channel: "left", language: "en", role: "guest" },
   ]);
 
-  // no Dante interface on this box: the device line and the mic say so; the
-  // VBAN socket stays idle (no VBAN mic)
   await expect(card.locator('[data-role="listen-dante"]')).toContainText("PRESENTER_LISTEN_DANTE_IFACE");
-  await expect(row.locator('[data-role="listen-error"]')).toContainText("rozhranie Dante");
-  await expect(card.locator('[data-role="listen-socket"]')).toContainText("nečinný");
+  await expect(card.locator('[data-role="listen-dante-mics"]')).toHaveCount(0);
+  const status = await (await page.request.get(url("/listen/status"))).json();
+  expect(status.dante.state).toBe("no_interface");
+  expect(status.mics.map((mic: { id: string }) => mic.id)).toEqual(["guest"]);
 
-  // edited in place: the editor opens on the Dante fields with the stored values
-  await row.locator('[data-role="listen-edit"]').click();
-  const edit = row.locator('[data-role="listen-editor"]');
-  await expect(edit.locator('[data-role="listen-dante-channel"]')).toHaveValue("Host EN");
-  await expect(edit.locator('[data-role="listen-dante-source"]')).toHaveValue("Mic 1@stagebox-1");
-  await edit.locator('[data-role="listen-dante-source"]').fill("");
-  await edit.locator('[data-role="listen-submit"]').click();
-  await expect(row).toContainText("zdroj sa nastaví v Dante Controlleri");
-  expect(await storedMics(page)).toEqual([
-    {
-      id: "guest",
-      name: "Hosť Dante",
-      senderIp: null,
-      channel: "left",
-      language: "en",
-      role: "guest",
-      transport: "dante",
-      dante: { channel: "Host EN", source: null },
-    },
-  ]);
-
-  assertOnly422(errors, 1);
+  expect(errors).toEqual([]);
 });
 
 test("a second guest shows the id it will get and a refusal names that id", async ({ page }) => {
