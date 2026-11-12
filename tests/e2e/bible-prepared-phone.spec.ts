@@ -161,6 +161,16 @@ test("a finger on a sermon's slides scrolls the page both ways and the page stil
     );
   expect(await onCard(650)).toBe(true);
 
+  // No long task blocks the page while the finger works (the owner saw a
+  // "frozen" page; on SNV it was the scroll trap, never a busy main thread).
+  await page.evaluate(() => {
+    const seen: number[] = [];
+    (window as unknown as { __longTasks: number[] }).__longTasks = seen;
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) seen.push(Math.round(entry.duration));
+    }).observe({ type: "longtask" });
+  });
+
   // Down through the slides…
   const cdp = await context.newCDPSession(page);
   const before = await panelScroll(page);
@@ -176,6 +186,8 @@ test("a finger on a sermon's slides scrolls the page both ways and the page stil
   // The page still answers a tap.
   await page.locator('[data-role="bible-tab"][data-tab="live"]').tap();
   await expect(page.locator('[data-role="bible-tab"][data-tab="live"]')).toHaveAttribute("data-active", "true");
+  const longTasks = await page.evaluate(() => (window as unknown as { __longTasks: number[] }).__longTasks);
+  expect(longTasks.filter((ms) => ms > 500), "a task over 500 ms blocked the page").toEqual([]);
 
   expect(errors).toEqual([]);
   await context.close();
