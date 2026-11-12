@@ -58,6 +58,16 @@ async function drag(page: Page, dx: number, dy: number): Promise<void> {
   await touchDrag(page, from, { x: from.x + dx, y: from.y + dy }, 8);
 }
 
+/** A swipe on the text above an open sheet: the sheet's height follows the
+ *  fonts (CI's are wider), so the start point is read from its top edge. */
+async function dragAboveSheet(page: Page, dx: number): Promise<void> {
+  const box = await page.locator(".study-sheet").boundingBox();
+  expect(box).not.toBeNull();
+  const y = Math.min(420, (box?.y ?? 0) - 60);
+  expect(y).toBeGreaterThan(120);
+  await touchDrag(page, { x: 195, y }, { x: 195 + dx, y }, 8);
+}
+
 /** Press and hold through CDP touch events until `shown` is on screen. */
 async function longPress(page: Page, x: number, y: number, shown: () => Promise<void>) {
   await touchDrag(page, { x, y }, { x, y }, 1, shown);
@@ -211,7 +221,7 @@ test("a closed sheet lights no ▶ and a chapter step leaves no sheet behind", a
 
   // The sheet covers the bar on a phone; a swipe on the text still turns.
   await verseNumber(page, 1).tap();
-  await drag(page, -120, 0);
+  await dragAboveSheet(page, -120);
   await expectChapter(page, "slk-seb:HEB.12");
   await expect(actions(page)).toHaveCount(0);
   const listed = await page.evaluate(() => {
@@ -493,7 +503,7 @@ test("a highlight on a closed sheet's step makes it no second row", async ({ bro
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
   await verseNumber(page, 1).tap();
-  await drag(page, -120, 0);
+  await dragAboveSheet(page, -120);
   await expectChapter(page, "slk-seb:HEB.12");
   await page.goBack();
   await expectChapter(page, "slk-seb:HEB.11");
@@ -513,7 +523,7 @@ test("a list that starts on a sheet keeps a row for its place", async ({ browser
   const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?t=slk-seb&p=HEB.11&v=3&s=akcie");
   const { page } = opened;
   await expect(actions(page)).toBeVisible();
-  await drag(page, -120, 0);
+  await dragAboveSheet(page, -120);
   await expectChapter(page, "slk-seb:HEB.12");
   const listed = await page.evaluate(() => {
     const stored = sessionStorage.getItem("presenter:study.history") ?? '""';
