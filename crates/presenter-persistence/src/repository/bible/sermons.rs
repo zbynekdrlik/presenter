@@ -245,6 +245,33 @@ impl Repository {
         sermon_ids(rows)
     }
 
+    /// #940: the sermons still in the active list whose service date is before
+    /// `cutoff`, oldest first, with that date (the automatic archive's input).
+    #[instrument(skip_all)]
+    pub async fn active_sermons_before(
+        &self,
+        cutoff: NaiveDate,
+    ) -> anyhow::Result<Vec<(BiblePresentationId, NaiveDate)>> {
+        let archived = Query::select()
+            .column(bible_presentation::Column::Id)
+            .from(bible_presentation::Entity)
+            .and_where(bible_presentation::Column::ArchivedAt.is_not_null())
+            .to_owned();
+        let rows = bible_sermon::Entity::find()
+            .filter(bible_sermon::Column::ServiceDate.lt(cutoff.format(DATE_FORMAT).to_string()))
+            .filter(bible_sermon::Column::PresentationId.not_in_subquery(archived))
+            .order_by_asc(bible_sermon::Column::ServiceDate)
+            .all(&self.db)
+            .await?;
+        let mut sermons = Vec::with_capacity(rows.len());
+        for row in rows {
+            let date = parse_date(&row.service_date)?;
+            let id = BiblePresentationId::from_uuid(parse_uuid(&row.presentation_id)?);
+            sermons.push((id, date));
+        }
+        Ok(sermons)
+    }
+
     /// The sermons whose service date is `date` or later, by date.
     #[instrument(skip_all)]
     pub async fn sermon_ids_from(

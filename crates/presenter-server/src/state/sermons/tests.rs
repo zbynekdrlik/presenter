@@ -1426,3 +1426,91 @@ async fn a_sermon_slide_whose_item_carries_the_pastors_cuts_is_not_deleted() {
         .expect("sermon");
     assert_eq!(after.items.len(), 1);
 }
+
+/// #940: the injected "today" decides: 31 days past → archived (logged, the
+/// lists told), 30 and 29 → kept, an already archived one keeps its archive
+/// time; nothing is deleted.
+#[tokio::test]
+async fn sermons_more_than_a_month_past_go_to_the_archive() {
+    let state = hebrews().await;
+    let today = date("2026-11-12");
+    let dated = |days: u64| today.checked_sub_days(Days::new(days)).expect("a date");
+    let create = |service_date| {
+        let state = state.clone();
+        async move {
+            let draft = SermonDraft {
+                service_date: Some(service_date),
+                default_translation: Some("slk-seb".to_string()),
+                ..SermonDraft::default()
+            };
+            state
+                .create_sermon(draft, service_date, &preacher())
+                .await
+                .expect("create")
+                .sermon
+                .id
+        }
+    };
+    let old = create(dated(31)).await;
+    let month = create(dated(30)).await;
+    let recent = create(dated(29)).await;
+    let done = create(dated(60)).await;
+    state
+        .archive_bible_presentation(done)
+        .await
+        .expect("archive");
+    let archived_before = state
+        .list_archived_bible_presentations()
+        .await
+        .expect("archive list");
+    let mut events = state.live_hub().subscribe();
+    let capture = Capture::install();
+
+    let count = state.archive_old_sermons(today).await.expect("pass");
+
+    assert_eq!(count, 1);
+    let archived: Vec<_> = state
+        .list_archived_bible_presentations()
+        .await
+        .expect("archive list")
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect();
+    assert_eq!(archived.len(), 2, "{archived:?}");
+    assert!(archived.contains(&old) && archived.contains(&done));
+    let active: Vec<_> = state
+        .list_bible_presentations()
+        .await
+        .expect("active list")
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect();
+    assert!(
+        active.contains(&month) && active.contains(&recent),
+        "{active:?}"
+    );
+    assert!(!active.contains(&old));
+    // The already archived one is no input of the pass (count 1, and the
+    // only event names `old`); the repository keeps its archive time anyway.
+    assert_eq!(archived_before.len(), 1);
+    assert!(state
+        .repository()
+        .fetch_sermon(old)
+        .await
+        .expect("fetch")
+        .is_some());
+    let mut changed = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let LiveEvent::BibleSlidesChanged { presentation_id } = event {
+            changed.push(presentation_id);
+        }
+    }
+    assert_eq!(changed, [old.to_string()]);
+    let lines = capture.events_with_message("sermon archived automatically");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].level, tracing::Level::INFO);
+    assert_eq!(lines[0].field("sermon_id"), Some(old.to_string().as_str()));
+    assert_eq!(lines[0].field("service_date"), Some("2026-10-12"));
+
+    assert_eq!(state.archive_old_sermons(today).await.expect("again"), 0);
+}

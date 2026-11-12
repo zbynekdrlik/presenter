@@ -8,6 +8,7 @@
 //! Bible re-import never changes a sermon (spec §5.7).
 
 mod append;
+mod archive;
 mod commit;
 mod generate;
 mod guard;

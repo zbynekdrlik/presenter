@@ -123,6 +123,9 @@ impl AppState {
 
         self.spawn_trash_prune_task();
 
+        // #940: sermons more than a month past go to the archive (startup + daily).
+        self.spawn_sermon_archive_task();
+
         // #843: the playback element's Drive mirror (startup pass, every 5 min,
         // on stream config changes and on refresh).
         self.spawn_playback_sync_task();
