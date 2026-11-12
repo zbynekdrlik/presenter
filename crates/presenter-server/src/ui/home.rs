@@ -1,8 +1,10 @@
 //! The home page `/` (#938): the way in on a phone. The most used surfaces
 //! first as big tiles, the rest as full-width rows below, Slovak labels. The
 //! order of the tiles was read from SNV's `GET /ui/usage` (90 days, 2026-11-12:
-//! operator 440 presses + its tabs, study 302, the AI tab used from a phone,
-//! tablet 69); read it again before reordering (`ui-usage.md`).
+//! operator 440 presses + its tabs, study 302, tablet 69). The AI tab (19
+//! presses, 15 of them from a phone) sits above the tablet because the owner
+//! asked for it on the phone (#938); read the counters again before reordering
+//! (`ui-usage.md`).
 
 use axum::response::Html;
 use leptos::prelude::*;
