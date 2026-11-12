@@ -275,6 +275,23 @@ fn stage_tools() -> Vec<Value> {
     ]
 }
 
+/// One verse/emphasis item of `create_bible_presentation` and
+/// `update_bible_presentation` (#939) — one schema for both tools.
+fn bible_item_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["verse", "emphasis"]},
+            "number": {"type": "integer", "description": "[verse] Verse number"},
+            "text": {"type": "string", "description": "Verse text (with any uppercase ##word## transformations applied) or the emphasis phrase"},
+            "book": {"type": "string", "description": "[verse] Full book name (e.g. Ján)"},
+            "chapter": {"type": "integer", "description": "[verse] Chapter number"},
+            "translation": {"type": "string", "description": "[verse] Short translation code (e.g. SEB, MIL, ROH)"}
+        },
+        "required": ["kind", "text"]
+    })
+}
+
 fn bible_presentation_tools() -> Vec<Value> {
     vec![
         tool_def(
@@ -295,7 +312,7 @@ fn bible_presentation_tools() -> Vec<Value> {
         ),
         tool_def(
             "create_bible_presentation",
-            "[BIBLE only] Create a Bible presentation from a stream of typed items. The server composes slides from your items — you do NOT decide where slide breaks happen. Emphasis items and translation/book/chapter changes force slide breaks; otherwise consecutive verse items pack together until the character limit. Always call load_bible_verses first to get DB verse text, edit the text to match the sermon where needed, then assemble items[] in sermon order.",
+            "[BIBLE only] Create a NEW Bible presentation from a stream of typed items. The server composes slides from your items — you do NOT decide where slide breaks happen. Emphasis items and a new passage force slide breaks: another translation/book/chapter, or a gap in the verse numbers (1Sa 4:1-11 then 1Sa 4:20-22 are two passages with two references, 4:1-11 and 4:20-22). Otherwise consecutive verse items pack together until the character limit. Always call load_bible_verses first to get DB verse text, edit the text to match the sermon where needed, then assemble items[] in sermon order. Call it ONCE per request: to fix or change a presentation you already made, use update_bible_presentation on it — never create a second, test or experiment presentation.",
             json!({
                 "type": "object",
                 "properties": {
@@ -303,21 +320,27 @@ fn bible_presentation_tools() -> Vec<Value> {
                     "items": {
                         "type": "array",
                         "description": "Ordered stream of verse and emphasis items. The server composes slides respecting the character limit.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "kind": {"type": "string", "enum": ["verse", "emphasis"]},
-                                "number": {"type": "integer", "description": "[verse] Verse number"},
-                                "text": {"type": "string", "description": "Verse text (with any uppercase ##word## transformations applied) or the emphasis phrase"},
-                                "book": {"type": "string", "description": "[verse] Full book name (e.g. Ján)"},
-                                "chapter": {"type": "integer", "description": "[verse] Chapter number"},
-                                "translation": {"type": "string", "description": "[verse] Short translation code (e.g. SEB, MIL, ROH)"}
-                            },
-                            "required": ["kind", "text"]
-                        }
+                        "items": bible_item_schema()
                     }
                 },
                 "required": ["name", "items"]
+            }),
+        ),
+        tool_def(
+            "update_bible_presentation",
+            "[BIBLE only] Correct an EXISTING Bible presentation: replaces ALL its slides with slides composed from items[] (same items and rules as create_bible_presentation), optionally renaming it. Use this whenever the user asks to fix, change or redo a presentation you created — the presentation keeps its id, no new presentation appears.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "UUID of the Bible presentation to correct"},
+                    "name": {"type": "string", "description": "Optional new name"},
+                    "items": {
+                        "type": "array",
+                        "description": "The COMPLETE ordered item stream of the corrected presentation (verse and emphasis items, as for create_bible_presentation).",
+                        "items": bible_item_schema()
+                    }
+                },
+                "required": ["presentation_id", "items"]
             }),
         ),
         tool_def(

@@ -2,7 +2,7 @@
 //! and the AI item-stream composer (`compose_bible_items_into_slides`), plus the
 //! data types and private formatting helpers they share. No `AppState` access.
 
-use presenter_core::bible::sermon::translation_short_code;
+use presenter_core::bible::sermon::{translation_short_code, verse_suffix, VerseMark};
 use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef, SlideMetadata};
 use presenter_core::{BiblePassage, BibleTranslation, Slide, SlideContent, SlideGroup, SlideText};
 use std::collections::{BTreeSet, HashMap};
@@ -40,38 +40,99 @@ pub struct ComposedBibleSlide {
     pub main_reference: String,
 }
 
-/// Format a sorted set of verse numbers as a reference suffix.
-///
-/// - Empty set → "" (caller skips the reference entirely).
-/// - Single verse → "17".
-/// - Contiguous range → "17-20".
-/// - Non-contiguous → "1, 3, 5" (flat comma-list, no mixed range syntax).
+/// Format a sorted set of verse numbers as a reference suffix through the core
+/// label formatter (#939): runs of consecutive verses (`"17"`, `"17-20"`,
+/// `"1-11, 20-22"`), never a verse-by-verse comma list. Empty set → "".
 fn format_verse_range(verses: &BTreeSet<u32>) -> String {
-    let v: Vec<u32> = verses.iter().copied().collect();
-    if v.is_empty() {
-        return String::new();
+    let marks: Vec<VerseMark> = verses
+        .iter()
+        .map(|n| VerseMark::plain(u16::try_from(*n).unwrap_or(u16::MAX)))
+        .collect();
+    verse_suffix(&marks)
+}
+
+/// One passage of an items stream: its book, chapter and translation and the
+/// verse numbers it holds.
+struct Passage {
+    book: String,
+    chapter: u32,
+    translation: String,
+    verses: BTreeSet<u32>,
+}
+
+impl Passage {
+    /// "1. Samuelova 4:1-11 (SEB)" — the label every slide of the passage shows.
+    fn reference(&self) -> String {
+        format!(
+            "{} {}:{} ({})",
+            self.book,
+            self.chapter,
+            format_verse_range(&self.verses),
+            self.translation
+        )
     }
-    let min = v[0];
-    let max = v[v.len() - 1];
-    let count = v.len() as u32;
-    if min == max {
-        format!("{}", min)
-    } else if max - min + 1 == count {
-        format!("{}-{}", min, max)
-    } else {
-        v.iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+
+    /// True when `number` of `book`/`chapter`/`translation` continues this
+    /// passage: the same verse again (a #394 continuation fragment) or the
+    /// next one.
+    fn continues_with(&self, number: u32, book: &str, chapter: u32, translation: &str) -> bool {
+        let Some(last) = self.verses.last().copied() else {
+            return false;
+        };
+        self.book == book
+            && self.chapter == chapter
+            && self.translation == translation
+            && (number == last || last.checked_add(1) == Some(number))
     }
+}
+
+/// Pass 1 (#939): split the stream into passages. A passage is a run of verse
+/// items of one book, chapter and translation whose numbers repeat or step by
+/// one; an emphasis item between them does not end it (#292). A gap or a step
+/// back starts a NEW passage — the owner's 1Sa 4:1-11 + 4:20-22 are two
+/// passages, never one "4:1, 2, …, 22" label. Returns the passage index of
+/// every item (`None` for an emphasis) and the passages.
+fn split_passages(items: &[BibleItem]) -> (Vec<Option<usize>>, Vec<Passage>) {
+    let mut passages: Vec<Passage> = Vec::new();
+    let mut index_of_item: Vec<Option<usize>> = Vec::with_capacity(items.len());
+    for item in items {
+        let BibleItem::Verse {
+            number,
+            book,
+            chapter,
+            translation,
+            ..
+        } = item
+        else {
+            index_of_item.push(None);
+            continue;
+        };
+        let continues = passages
+            .last()
+            .is_some_and(|p| p.continues_with(*number, book, *chapter, translation));
+        if !continues {
+            passages.push(Passage {
+                book: book.clone(),
+                chapter: *chapter,
+                translation: translation.clone(),
+                verses: BTreeSet::new(),
+            });
+        }
+        let index = passages.len() - 1;
+        if let Some(passage) = passages.get_mut(index) {
+            passage.verses.insert(*number);
+        }
+        index_of_item.push(Some(index));
+    }
+    (index_of_item, passages)
 }
 
 /// Compose a stream of `BibleItem` into slides. The greedy-packing rule of
 /// `compose_bible_slides`, on the main text only (AI slides have no
 /// translation text): accumulate verses into one slide until the next verse
 /// would overflow the character limit (characters, never bytes — #828), then
-/// flush. Emphasis items and translation/book/chapter changes force a slide
-/// break.
+/// flush. Emphasis items and a new passage (translation/book/chapter change or
+/// a gap in the verse numbers, #939) force a slide break.
 ///
 /// A verse is NEVER split mid-text (issue #394): consecutive `Verse` items that
 /// share the same verse number are merged back into one whole verse, and a lone
@@ -85,51 +146,28 @@ pub fn compose_bible_items_into_slides(
     let limit = character_limit as usize;
     let mut slides: Vec<ComposedBibleSlide> = Vec::new();
 
-    // Pass 1: collect every verse number per (book, chapter, translation)
-    // group across the whole items[] stream. Slides flushed in pass 2 use
-    // this group's full verse list for the reference label, so all slides
-    // of one passage display the same reference (issue #292).
-    let mut group_verses: HashMap<(String, u32, String), BTreeSet<u32>> = HashMap::new();
-    for item in items {
-        if let BibleItem::Verse {
-            number,
-            book,
-            chapter,
-            translation,
-            ..
-        } = item
-        {
-            group_verses
-                .entry((book.clone(), *chapter, translation.clone()))
-                .or_default()
-                .insert(*number);
-        }
-    }
+    // Pass 1: split the stream into passages (#939). Slides flushed in pass 2
+    // use their passage's full verse set for the reference label, so all
+    // slides of one passage display the same reference (issue #292).
+    let (passage_of_item, passages) = split_passages(items);
 
     // Accumulator for the current verse slide.
     let mut acc = VerseAccumulator::default();
 
-    for item in items {
+    for (item, passage) in items.iter().zip(passage_of_item) {
         match item {
             BibleItem::Emphasis { text } => {
-                acc.flush(&mut slides, &group_verses);
+                acc.flush(&mut slides, &passages);
                 slides.push(ComposedBibleSlide {
                     main: text.clone(),
                     main_reference: String::new(),
                 });
             }
-            BibleItem::Verse {
-                number,
-                text,
-                book,
-                chapter,
-                translation,
-            } => {
-                // Translation / book / chapter change forces a slide break.
-                if let Some((cur_book, cur_chapter, cur_tr)) = &acc.group {
-                    if cur_book != book || cur_chapter != chapter || cur_tr != translation {
-                        acc.flush(&mut slides, &group_verses);
-                    }
+            BibleItem::Verse { number, text, .. } => {
+                // A new passage (another translation / book / chapter, or a
+                // gap in the verse numbers — #939) forces a slide break.
+                if acc.group.is_some() && acc.group != passage {
+                    acc.flush(&mut slides, &passages);
                 }
 
                 // Issue #394: the LLM's oversized-single-verse recovery path may
@@ -146,39 +184,40 @@ pub fn compose_bible_items_into_slides(
                     // is a no-op when the verse is alone on the slide, so no extra
                     // line-count guard is needed here.)
                     if acc.would_overflow_merge(text.chars().count(), limit) {
-                        acc.flush_keeping_last(&mut slides, &group_verses);
+                        acc.flush_keeping_last(&mut slides, &passages);
                     }
                     if let Some(last) = acc.lines.last_mut() {
                         last.push(' ');
                         last.push_str(text);
-                        acc.group = Some((book.clone(), *chapter, translation.clone()));
+                        acc.group = passage;
                         continue;
                     }
                 }
 
                 let line = format!("{number}. {text}");
                 if acc.would_overflow(line.chars().count(), limit) {
-                    acc.flush(&mut slides, &group_verses);
+                    acc.flush(&mut slides, &passages);
                 }
 
                 acc.lines.push(line);
                 acc.numbers.push(*number);
-                acc.group = Some((book.clone(), *chapter, translation.clone()));
+                acc.group = passage;
             }
         }
     }
 
-    acc.flush(&mut slides, &group_verses);
+    acc.flush(&mut slides, &passages);
     slides
 }
 
 /// Mutable accumulator for the verses being packed onto the current slide.
-/// `group` is `(book, chapter, translation)` for the in-progress slide.
+/// `group` is the index (into the pass-1 passages) of the in-progress slide's
+/// passage.
 #[derive(Default)]
 struct VerseAccumulator {
     lines: Vec<String>,
     numbers: Vec<u32>,
-    group: Option<(String, u32, String)>,
+    group: Option<usize>,
 }
 
 impl VerseAccumulator {
@@ -213,37 +252,23 @@ impl VerseAccumulator {
         prospective > limit
     }
 
-    /// Build the reference label for the current group from its full verse set.
-    fn group_reference(
-        group: &(String, u32, String),
-        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
-    ) -> String {
-        let (book, chapter, translation) = group;
-        match group_verses.get(group) {
-            Some(verses) => format!(
-                "{} {}:{} ({})",
-                book,
-                chapter,
-                format_verse_range(verses),
-                translation
-            ),
-            None => String::new(),
-        }
+    /// Build the reference label for a passage from its full verse set.
+    fn group_reference(group: usize, passages: &[Passage]) -> String {
+        passages
+            .get(group)
+            .map(Passage::reference)
+            .unwrap_or_default()
     }
 
     /// Flush every accumulated line EXCEPT the last into one slide, keeping the
     /// last line (and its verse number) in the accumulator. Used when a
     /// same-number continuation fragment would overflow a slide that also holds
     /// earlier verses: the earlier verses flush, the growing verse stays.
-    fn flush_keeping_last(
-        &mut self,
-        slides: &mut Vec<ComposedBibleSlide>,
-        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
-    ) {
+    fn flush_keeping_last(&mut self, slides: &mut Vec<ComposedBibleSlide>, passages: &[Passage]) {
         if self.lines.len() < 2 {
             return;
         }
-        let Some(group) = self.group.clone() else {
+        let Some(group) = self.group else {
             return;
         };
         let last_line = self.lines.pop().unwrap_or_default();
@@ -251,7 +276,7 @@ impl VerseAccumulator {
         let main = self.lines.join("\n");
         slides.push(ComposedBibleSlide {
             main,
-            main_reference: Self::group_reference(&group, group_verses),
+            main_reference: Self::group_reference(group, passages),
         });
         self.lines.clear();
         self.numbers.clear();
@@ -263,22 +288,18 @@ impl VerseAccumulator {
     }
 
     /// Flush the accumulated verses into one slide. The reference is derived
-    /// from the GROUP's full verse set (pass 1), not from `numbers`, so every
+    /// from the PASSAGE's full verse set (pass 1), not from `numbers`, so every
     /// slide of one passage displays the same label.
     ///
     /// Uses let-else so there is no panic path — if an invariant is broken by a
     /// future refactor (e.g., group set without lines), the flush is a no-op
     /// rather than a crash.
-    fn flush(
-        &mut self,
-        slides: &mut Vec<ComposedBibleSlide>,
-        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
-    ) {
+    fn flush(&mut self, slides: &mut Vec<ComposedBibleSlide>, passages: &[Passage]) {
         if self.lines.is_empty() {
             self.group = None;
             return;
         }
-        let Some((book, chapter, translation)) = self.group.take() else {
+        let Some(group) = self.group.take() else {
             self.lines.clear();
             self.numbers.clear();
             return;
@@ -288,7 +309,7 @@ impl VerseAccumulator {
             return;
         }
         let main = self.lines.join("\n");
-        let reference = Self::group_reference(&(book, chapter, translation), group_verses);
+        let reference = Self::group_reference(group, passages);
         slides.push(ComposedBibleSlide {
             main,
             main_reference: reference,

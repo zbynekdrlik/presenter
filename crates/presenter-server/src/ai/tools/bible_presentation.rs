@@ -144,31 +144,34 @@ pub fn parse_bible_items(
     Ok(Ok(items))
 }
 
-pub(super) async fn create_bible_presentation(
+/// Outcome of turning a tool call's `items` into stored slides: the slides, or
+/// the `(json_body, preview)` error response to hand back to the LLM.
+type SlidesOrRejection = Result<Vec<BiblePresentationSlide>, (String, String)>;
+
+/// Parse `args["items"]`, compose the slides server-side with the configured
+/// character limit and validate every composed slide — the ONE path both
+/// `create_bible_presentation` and `update_bible_presentation` (#939) use, so
+/// a correction gets exactly the slides a fresh create would.
+fn compose_validated_slides(
     args: &Value,
-    state: &AppState,
     default_char_limit: u32,
-) -> anyhow::Result<(String, String)> {
-    let name = str_field(args, "name")?;
-    let items_arr = match args["items"].as_array() {
-        Some(arr) => arr,
-        None => {
-            return Ok((
-                json!({
-                    "error": "missing_items",
-                    "expected": "items must be an array of verse/emphasis objects",
-                })
-                .to_string(),
-                "Missing items array".to_string(),
-            ));
-        }
+) -> anyhow::Result<SlidesOrRejection> {
+    let Some(items_arr) = args["items"].as_array() else {
+        return Ok(Err((
+            json!({
+                "error": "missing_items",
+                "expected": "items must be an array of verse/emphasis objects",
+            })
+            .to_string(),
+            "Missing items array".to_string(),
+        )));
     };
 
     // Parse items into typed BibleItem values. Fail fast on any malformed item
     // — the LLM sees the error response and retries.
     let items = match parse_bible_items(items_arr)? {
         Ok(items) => items,
-        Err(error_response) => return Ok(error_response),
+        Err(error_response) => return Ok(Err(error_response)),
     };
 
     // Compose slides server-side using the configured character limit.
@@ -177,21 +180,64 @@ pub(super) async fn create_bible_presentation(
 
     // Validate each composed slide, and WRITE BACK the canonical reference
     // `validate_bible_slide` returns (#784) so Resolume gets one canonical form
-    // and a well-formed non-contiguous passage (e.g. Daniel 10:2-3, 12-14) is
-    // NORMALISED instead of rejected — the PP loop that ended in a 120 s
-    // timeout. A remaining Err is still a genuine malformation: with a correct
-    // composer a MainExceedsCharacterLimit here signals a real packing
-    // regression (a lone oversized verse is accepted whole, autofit shrinks it —
-    // issue #394), and a bold-marker / verse-prefix failure is a real content bug.
+    // and a well-formed reference is NORMALISED instead of rejected — the PP
+    // loop that ended in a 120 s timeout. A remaining Err is still a genuine
+    // malformation: with a correct composer a MainExceedsCharacterLimit here
+    // signals a real packing regression (a lone oversized verse is accepted
+    // whole, autofit shrinks it — issue #394), and a bold-marker / verse-prefix
+    // failure is a real content bug.
     for (idx, slide) in composed.iter_mut().enumerate() {
         match validate_bible_slide(&slide.main, &slide.main_reference, default_char_limit) {
             Ok(normalized) => slide.main_reference = normalized,
             Err(mut err) => {
                 err.got = format!("composed_slide[{idx}]: {}", err.got);
-                return Ok(validation_error_response(err));
+                return Ok(Err(validation_error_response(err)));
             }
         }
     }
+
+    // SlideText::new only fails at ~4000 chars. A lone oversized verse can
+    // exceed default_char_limit (issue #394 — the validator accepts it), but
+    // the longest real Bible verse (~530 chars) is far below the ~4000
+    // SlideText cap, so this is unreachable in practice. Propagate the error
+    // anyway so a future limit/content change does not silently drop slide
+    // content through an unwrap_or fallback.
+    let mut slides: Vec<BiblePresentationSlide> = Vec::with_capacity(composed.len());
+    for c in composed {
+        let main = SlideText::new(&c.main)
+            .map_err(|e| anyhow::anyhow!("composed slide main SlideText failed: {e}"))?;
+        slides.push(BiblePresentationSlide {
+            id: BibleSlideId::new(),
+            order: 0,
+            main,
+            main_reference: c.main_reference,
+            secondary: SlideText::from_stored_unchecked(""),
+            secondary_reference: String::new(),
+            metadata: None,
+        });
+    }
+    Ok(Ok(slides))
+}
+
+fn presentation_answer(id: BiblePresentationId, name: &str, slide_count: usize) -> String {
+    json!({
+        "id": id.to_string(),
+        "name": name,
+        "slide_count": slide_count,
+    })
+    .to_string()
+}
+
+pub(super) async fn create_bible_presentation(
+    args: &Value,
+    state: &AppState,
+    default_char_limit: u32,
+) -> anyhow::Result<(String, String)> {
+    let name = str_field(args, "name")?;
+    let slides = match compose_validated_slides(args, default_char_limit)? {
+        Ok(slides) => slides,
+        Err(error_response) => return Ok(error_response),
+    };
 
     // Persist. Empty items[] produces an empty presentation, which
     // is used intentionally by some tests (and by the operator UI
@@ -200,33 +246,11 @@ pub(super) async fn create_bible_presentation(
     // there is no explicit rejection because the prompt guides it
     // and an empty presentation is harmless.
     let presentation = state.create_bible_presentation(&name).await?;
-    let final_presentation = if composed.is_empty() {
+    let final_presentation = if slides.is_empty() {
         presentation
     } else {
-        // SlideText::new only fails at ~4000 chars. A lone oversized verse can
-        // now exceed default_char_limit (issue #394 — the validator accepts it),
-        // but the longest real Bible verse (~530 chars) is far below the ~4000
-        // SlideText cap, so this is unreachable in practice. Propagate the error
-        // anyway so a future limit/content change does not silently drop slide
-        // content through an unwrap_or fallback.
-        let mut new_slides: Vec<BiblePresentationSlide> = Vec::with_capacity(composed.len());
-        for c in composed {
-            let main = SlideText::new(&c.main)
-                .map_err(|e| anyhow::anyhow!("composed slide main SlideText failed: {e}"))?;
-            let secondary =
-                SlideText::new("").map_err(|e| anyhow::anyhow!("empty SlideText failed: {e}"))?;
-            new_slides.push(BiblePresentationSlide {
-                id: BibleSlideId::new(),
-                order: 0,
-                main,
-                main_reference: c.main_reference,
-                secondary,
-                secondary_reference: String::new(),
-                metadata: None,
-            });
-        }
         state
-            .append_bible_presentation_slides(presentation.id, new_slides)
+            .append_bible_presentation_slides(presentation.id, slides)
             .await?
     };
 
@@ -236,14 +260,59 @@ pub(super) async fn create_bible_presentation(
         final_presentation.slides.len()
     );
     Ok((
-        json!({
-            "id": final_presentation.id.to_string(),
-            "name": final_presentation.name,
-            "slide_count": final_presentation.slides.len(),
-        })
-        .to_string(),
+        presentation_answer(
+            final_presentation.id,
+            &final_presentation.name,
+            final_presentation.slides.len(),
+        ),
         preview,
     ))
+}
+
+/// Correct an existing Bible presentation (#939): the items are composed and
+/// validated exactly like `create_bible_presentation`, then they REPLACE every
+/// slide of that presentation (one transaction); `name`, when given, renames
+/// it. A sermon refuses (its slides come from its items). This is what the AI
+/// calls when the user asks it to fix a presentation it made — never a new
+/// presentation.
+pub(super) async fn update_bible_presentation(
+    args: &Value,
+    state: &AppState,
+    default_char_limit: u32,
+) -> anyhow::Result<(String, String)> {
+    let pres_id = BiblePresentationId::from_uuid(uuid_field(args, "presentation_id")?);
+    let new_name = args["name"]
+        .as_str()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let slides = match compose_validated_slides(args, default_char_limit)? {
+        Ok(slides) => slides,
+        Err(error_response) => return Ok(error_response),
+    };
+    let slide_count = slides.len();
+    state
+        .replace_bible_presentation_slides(pres_id, slides)
+        .await?;
+    // Rename only after the slides were accepted and stored: a sermon or an
+    // unknown id has already refused above, so a rename never lands alone.
+    let name = match new_name {
+        Some(name) => {
+            state.rename_bible_presentation(pres_id, name).await?;
+            name.to_string()
+        }
+        None => state
+            .bible_presentation_detail(pres_id)
+            .await?
+            .map(|p| p.name)
+            .unwrap_or_default(),
+    };
+    tracing::info!(
+        presentation_id = %pres_id,
+        slides = slide_count,
+        "AI replaced the slides of a bible presentation"
+    );
+    let preview = format!("Updated bible presentation '{name}' to {slide_count} slides");
+    Ok((presentation_answer(pres_id, &name, slide_count), preview))
 }
 
 pub(super) async fn rename_bible_presentation(

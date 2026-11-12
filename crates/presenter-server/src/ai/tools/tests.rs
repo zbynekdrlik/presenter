@@ -775,3 +775,99 @@ async fn load_bible_verses_reads_the_translations_own_book_name_first() {
         .unwrap();
     assert!(body.contains("Videnie"), "load_bible_verses: {body}");
 }
+
+fn samuel_verse(number: u32) -> Value {
+    json!({"kind": "verse", "number": number, "text": format!("Verš {number}."),
+           "book": "1. Samuelova", "chapter": 4, "translation": "SEB"})
+}
+
+/// #939: a correction rewrites the presentation the AI already made instead of
+/// creating a new one — same id, slides replaced, nothing else created.
+#[tokio::test]
+async fn update_bible_presentation_replaces_the_slides_of_the_same_presentation() {
+    let state = AppState::in_memory().await.unwrap();
+    let (created, _) = execute_tool(
+        "create_bible_presentation",
+        &json!({"name": "Kázeň", "items": [samuel_verse(1), samuel_verse(2)]}).to_string(),
+        &state,
+        320,
+    )
+    .await
+    .unwrap();
+    let created: Value = serde_json::from_str(&created).unwrap();
+    let pres_id = created["id"].as_str().unwrap().to_string();
+
+    let items = json!([
+        samuel_verse(1),
+        samuel_verse(2),
+        samuel_verse(20),
+        samuel_verse(21)
+    ]);
+    let args = json!({"presentation_id": pres_id, "name": "Kázeň opravená", "items": items});
+    let (updated, preview) =
+        execute_tool("update_bible_presentation", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+    let updated: Value = serde_json::from_str(&updated).unwrap();
+    assert_eq!(updated["id"], pres_id.as_str(), "update answer: {updated}");
+    assert_eq!(updated["slide_count"], 2);
+    assert!(preview.contains("Kázeň opravená"), "preview: {preview}");
+
+    let list = state.list_bible_presentations().await.unwrap();
+    assert_eq!(list.len(), 1, "a correction must not create a presentation");
+    let id = BiblePresentationId::from_uuid(Uuid::parse_str(&pres_id).unwrap());
+    let detail = state.bible_presentation_detail(id).await.unwrap().unwrap();
+    assert_eq!(detail.name, "Kázeň opravená");
+    let references: Vec<&str> = detail
+        .slides
+        .iter()
+        .map(|s| s.main_reference.as_str())
+        .collect();
+    assert_eq!(
+        references,
+        vec!["1. Samuelova 4:1-2 (SEB)", "1. Samuelova 4:20-21 (SEB)"]
+    );
+}
+
+#[tokio::test]
+async fn update_bible_presentation_with_rejected_items_keeps_the_old_slides() {
+    // Compose + validate happen BEFORE the write: a rejected correction must
+    // leave the presentation exactly as it was.
+    let state = AppState::in_memory().await.unwrap();
+    let (created, _) = execute_tool(
+        "create_bible_presentation",
+        &json!({"name": "Kázeň", "items": [samuel_verse(1)]}).to_string(),
+        &state,
+        320,
+    )
+    .await
+    .unwrap();
+    let created: Value = serde_json::from_str(&created).unwrap();
+    let pres_id = created["id"].as_str().unwrap().to_string();
+
+    let bad = json!({"kind": "verse", "number": 2, "text": "##bad## text",
+                     "book": "1. Samuelova", "chapter": 4, "translation": "SEB"});
+    let args = json!({"presentation_id": pres_id, "name": "Iné", "items": [bad]});
+    let (body, _) = execute_tool("update_bible_presentation", &args.to_string(), &state, 320)
+        .await
+        .unwrap();
+    assert!(body.contains("unprocessed_bold_markers"), "body: {body}");
+
+    let id = BiblePresentationId::from_uuid(Uuid::parse_str(&pres_id).unwrap());
+    let detail = state.bible_presentation_detail(id).await.unwrap().unwrap();
+    assert_eq!(detail.name, "Kázeň");
+    assert_eq!(detail.slides.len(), 1);
+    assert_eq!(detail.slides[0].main_reference, "1. Samuelova 4:1 (SEB)");
+}
+
+#[tokio::test]
+async fn update_bible_presentation_of_an_unknown_id_creates_nothing() {
+    let state = AppState::in_memory().await.unwrap();
+    let args = json!({"presentation_id": Uuid::new_v4().to_string(), "items": [samuel_verse(1)]});
+    let result = execute_tool("update_bible_presentation", &args.to_string(), &state, 320).await;
+    assert!(
+        result.is_err(),
+        "unknown presentation must be an error: {result:?}"
+    );
+    assert!(state.list_bible_presentations().await.unwrap().is_empty());
+}

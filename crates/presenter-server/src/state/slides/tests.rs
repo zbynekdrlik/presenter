@@ -803,29 +803,29 @@ fn compose_two_distinct_passages_get_independent_ranges() {
 }
 
 #[test]
-fn compose_non_contiguous_verses_render_as_comma_list() {
-    // Pastor cited only verses 1, 3, 5 — non-contiguous. Reference
-    // must show the explicit list, not a misleading 1-5 range.
+fn compose_non_contiguous_verses_are_separate_passages() {
+    // #939 (owner 12.11.2026) reverses the #292 comma list: verses 1, 3, 5
+    // are three passages, each labelled by its own verse — never "1, 3, 5".
     let items = vec![
         verse_full(1, "First cited verse content here", "Numeri", 13, "SEB"),
         verse_full(3, "Third cited verse content here", "Numeri", 13, "SEB"),
         verse_full(5, "Fifth cited verse content here", "Numeri", 13, "SEB"),
     ];
-    let slides = compose_bible_items_into_slides(&items, 60);
-    assert!(!slides.is_empty(), "at least one slide");
-    for (i, slide) in slides.iter().enumerate() {
-        assert_eq!(
-            slide.main_reference, "Numeri 13:1, 3, 5 (SEB)",
-            "slide {} must show comma-list of cited verses",
-            i
-        );
-    }
+    let slides = compose_bible_items_into_slides(&items, 320);
+    let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
+    assert_eq!(
+        references,
+        vec![
+            "Numeri 13:1 (SEB)",
+            "Numeri 13:3 (SEB)",
+            "Numeri 13:5 (SEB)"
+        ]
+    );
 }
 
 #[test]
-fn compose_mixed_gap_renders_as_comma_list() {
-    // Mixed gap (skip verse 3): 1, 2, 4, 5. Not perfectly contiguous,
-    // so the reference is a flat comma-list — no mixed "1-2, 4-5" syntax.
+fn compose_mixed_gap_splits_into_two_passages() {
+    // #939: 1, 2, 4, 5 are the passages 1-2 and 4-5, each on its own slides.
     let items = vec![
         verse_full(1, "Verse one", "Numeri", 13, "SEB"),
         verse_full(2, "Verse two", "Numeri", 13, "SEB"),
@@ -833,14 +833,11 @@ fn compose_mixed_gap_renders_as_comma_list() {
         verse_full(5, "Verse five", "Numeri", 13, "SEB"),
     ];
     let slides = compose_bible_items_into_slides(&items, 320);
-    assert!(!slides.is_empty(), "at least one slide");
-    for (i, slide) in slides.iter().enumerate() {
-        assert_eq!(
-            slide.main_reference, "Numeri 13:1, 2, 4, 5 (SEB)",
-            "slide {} must show flat comma-list",
-            i
-        );
-    }
+    let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
+    assert_eq!(
+        references,
+        vec!["Numeri 13:1-2 (SEB)", "Numeri 13:4-5 (SEB)"]
+    );
 }
 
 fn bible(slide: &presenter_core::Slide) -> &presenter_core::slide::BibleSlideMetadata {
@@ -924,4 +921,77 @@ fn labelled_composer_splits_by_the_longer_text_and_keeps_a_lone_verse_whole() {
     assert_eq!(split.len(), 2);
     assert_eq!(lone.len(), 1);
     assert_eq!(lone[0].content.main.value(), "2. Krátky verš.");
+}
+
+// --- #939: separate passages of one chapter stay separate ---
+
+/// The owner's input from 12.11.2026 (#939): 1Sa 4:1-11 + 1Sa 4:20-22 +
+/// Ef 1:16-23 + Ef 3:14-16, one verse item per DB verse, in sermon order.
+fn owner_939_items() -> Vec<BibleItem> {
+    let mut items = Vec::new();
+    let passages: [(&str, u32, std::ops::RangeInclusive<u32>); 4] = [
+        ("1. Samuelova", 4, 1..=11),
+        ("1. Samuelova", 4, 20..=22),
+        ("Efezanom", 1, 16..=23),
+        ("Efezanom", 3, 14..=16),
+    ];
+    for (book, chapter, verses) in passages {
+        for number in verses {
+            items.push(verse_full(
+                number,
+                &format!("Text verša {number} kapitoly {chapter}."),
+                book,
+                chapter,
+                "SEB",
+            ));
+        }
+    }
+    items
+}
+
+#[test]
+fn owner_939_two_passages_of_one_chapter_get_their_own_references() {
+    let slides = compose_bible_items_into_slides(&owner_939_items(), 320);
+    let mut references: Vec<&str> = Vec::new();
+    for slide in &slides {
+        if references.last() != Some(&slide.main_reference.as_str()) {
+            references.push(&slide.main_reference);
+        }
+    }
+    assert_eq!(
+        references,
+        vec![
+            "1. Samuelova 4:1-11 (SEB)",
+            "1. Samuelova 4:20-22 (SEB)",
+            "Efezanom 1:16-23 (SEB)",
+            "Efezanom 3:14-16 (SEB)",
+        ]
+    );
+}
+
+#[test]
+fn owner_939_no_slide_mixes_verses_of_two_passages() {
+    // A limit large enough to hold all 14 Samuel verses on one slide, so only
+    // the passage break (not a full slide) can keep 4:11 and 4:20 apart.
+    let slides = compose_bible_items_into_slides(&owner_939_items(), 2000);
+    let mixed = slides
+        .iter()
+        .find(|slide| slide.main.contains("11. Text") && slide.main.contains("20. Text"));
+    assert_eq!(mixed, None, "4:11 and 4:20 must not share a slide");
+}
+
+#[test]
+fn a_reference_is_never_a_verse_by_verse_list() {
+    // Two runs of one chapter (5-7, then a gap to 16-17) are two passages,
+    // labelled by runs, never "1, 2, 3, …".
+    let items = vec![
+        verse_full(5, "Päť.", "Ján", 3, "SEB"),
+        verse_full(6, "Šesť.", "Ján", 3, "SEB"),
+        verse_full(7, "Sedem.", "Ján", 3, "SEB"),
+        verse_full(16, "Šestnásť.", "Ján", 3, "SEB"),
+        verse_full(17, "Sedemnásť.", "Ján", 3, "SEB"),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 320);
+    let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
+    assert_eq!(references, vec!["Ján 3:5-7 (SEB)", "Ján 3:16-17 (SEB)"]);
 }
