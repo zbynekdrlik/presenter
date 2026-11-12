@@ -803,29 +803,25 @@ fn compose_two_distinct_passages_get_independent_ranges() {
 }
 
 #[test]
-fn compose_non_contiguous_verses_render_as_comma_list() {
-    // Pastor cited only verses 1, 3, 5 — non-contiguous. Reference
-    // must show the explicit list, not a misleading 1-5 range.
+fn compose_non_contiguous_verses_are_separate_passages() {
+    // #939 (owner 12.11.2026) reverses the #292 comma list: verses 1, 3, 5
+    // are three passages, each labelled by its own verse — never "1, 3, 5".
     let items = vec![
         verse_full(1, "First cited verse content here", "Numeri", 13, "SEB"),
         verse_full(3, "Third cited verse content here", "Numeri", 13, "SEB"),
         verse_full(5, "Fifth cited verse content here", "Numeri", 13, "SEB"),
     ];
-    let slides = compose_bible_items_into_slides(&items, 60);
-    assert!(!slides.is_empty(), "at least one slide");
-    for (i, slide) in slides.iter().enumerate() {
-        assert_eq!(
-            slide.main_reference, "Numeri 13:1, 3, 5 (SEB)",
-            "slide {} must show comma-list of cited verses",
-            i
-        );
-    }
+    let slides = compose_bible_items_into_slides(&items, 320);
+    let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
+    assert_eq!(
+        references,
+        vec!["Numeri 13:1 (SEB)", "Numeri 13:3 (SEB)", "Numeri 13:5 (SEB)"]
+    );
 }
 
 #[test]
-fn compose_mixed_gap_renders_as_comma_list() {
-    // Mixed gap (skip verse 3): 1, 2, 4, 5. Not perfectly contiguous,
-    // so the reference is a flat comma-list — no mixed "1-2, 4-5" syntax.
+fn compose_mixed_gap_splits_into_two_passages() {
+    // #939: 1, 2, 4, 5 are the passages 1-2 and 4-5, each on its own slides.
     let items = vec![
         verse_full(1, "Verse one", "Numeri", 13, "SEB"),
         verse_full(2, "Verse two", "Numeri", 13, "SEB"),
@@ -833,14 +829,8 @@ fn compose_mixed_gap_renders_as_comma_list() {
         verse_full(5, "Verse five", "Numeri", 13, "SEB"),
     ];
     let slides = compose_bible_items_into_slides(&items, 320);
-    assert!(!slides.is_empty(), "at least one slide");
-    for (i, slide) in slides.iter().enumerate() {
-        assert_eq!(
-            slide.main_reference, "Numeri 13:1, 2, 4, 5 (SEB)",
-            "slide {} must show flat comma-list",
-            i
-        );
-    }
+    let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
+    assert_eq!(references, vec!["Numeri 13:1-2 (SEB)", "Numeri 13:4-5 (SEB)"]);
 }
 
 fn bible(slide: &presenter_core::Slide) -> &presenter_core::slide::BibleSlideMetadata {
