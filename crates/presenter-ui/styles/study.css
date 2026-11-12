@@ -975,6 +975,31 @@ body[data-shell="phone"] .study-verse__number {
   font-size: 14px;
 }
 
+/* #936: the selected range is said and stepped right in the verse sheet. */
+.study-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 8px;
+}
+
+.study-range__count {
+  flex: 1 1 auto;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.study-range .study-button {
+  min-width: 80px;
+  min-height: 44px;
+}
+
+.study-add__passage {
+  margin: 0 4px 12px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
 .study-sheet__actions {
   display: flex;
   flex-direction: column;

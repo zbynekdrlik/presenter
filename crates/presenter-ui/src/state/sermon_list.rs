@@ -64,6 +64,14 @@ pub fn split_sermons(
     (upcoming, older)
 }
 
+/// The "Pridať do kázne" choice (#936): every upcoming sermon and the 20 newest
+/// older ones, the newest service date first, so the sermon being prepared
+/// sits right under "Nová kázeň".
+pub fn add_choices(sermons: &[SermonSummary], today: NaiveDate) -> Vec<SermonSummary> {
+    let (upcoming, older) = split_sermons(sermons, today);
+    upcoming.into_iter().rev().chain(older).collect()
+}
+
 /// "Moje": only the sermons this Access e-mail wrote.
 pub fn only_mine(sermons: &[SermonSummary], email: &str) -> Vec<SermonSummary> {
     sermons
@@ -134,6 +142,22 @@ mod tests {
         assert_eq!(older.len(), 20);
         assert_eq!(older[0].title, "25");
         assert_eq!(older[19].title, "6");
+    }
+
+    #[test]
+    fn the_add_choice_lists_the_newest_service_date_first() {
+        let today = date(2026, 11, 12);
+        let list = [
+            sermon("včera", date(2026, 11, 8), None),
+            sermon("nedeľa", date(2026, 11, 15), None),
+            sermon("dávno", date(2026, 1, 1), None),
+            sermon("o dva týždne", date(2026, 11, 22), None),
+        ];
+        let titles: Vec<_> = add_choices(&list, today)
+            .into_iter()
+            .map(|row| row.title)
+            .collect();
+        assert_eq!(titles, ["o dva týždne", "nedeľa", "včera", "dávno"]);
     }
 
     #[test]

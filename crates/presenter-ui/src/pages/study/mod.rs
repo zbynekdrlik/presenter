@@ -171,10 +171,14 @@ struct Study {
     undo: RwSignal<Option<Undo>>,
     /// A message waiting for the toast with Späť to end.
     later: StoredValue<Option<String>>,
-    /// The sermon "Pridať do kázne" goes to (`study.activeSermon`).
+    /// The sermon last chosen or opened (`study.activeSermon`): marked
+    /// "naposledy" in the add sheet, never chosen for the preacher (#936).
     active_sermon: RwSignal<Option<String>>,
     /// The passage the add sheet is asking about.
     pending_passage: RwSignal<Option<SermonPassage>>,
+    /// The sheet the add sheet replaced and returns to after the add (only the
+    /// cross-references list).
+    add_return: StoredValue<Option<StudySheet>>,
     /// Wide enough for the sermon beside the text.
     wide: RwSignal<bool>,
     /// The phone shell: compare stacks one verse.
@@ -573,6 +577,7 @@ pub fn StudyPage() -> impl IntoView {
         later: StoredValue::new(None),
         active_sermon: RwSignal::new(session::get_persistent(KEY_ACTIVE_SERMON)),
         pending_passage: RwSignal::new(None),
+        add_return: StoredValue::new(None),
         wide: RwSignal::new(false),
         phone,
         narrow,

@@ -38,7 +38,7 @@ pub(super) fn follow_width(s: Study) {
             return;
         };
         if let StudyView::Sermon { id } = &route.view {
-            // What the reader adds goes to the sermon beside it.
+            // The sermon beside the text is the add sheet's "naposledy" (#936).
             set_active(s, Some(id.clone()));
             let verse = saved_verse(&next);
             s.scroll_plan

@@ -1,7 +1,10 @@
-//! Pridať do kázne (spec §7.6): a passage goes to the end of the device's
-//! active sermon (`study.activeSermon`); with none, a sheet asks which one.
-//! The page read the sermon just now, so the revision is fresh; another device
-//! moving it in between is answered by one more try.
+//! Pridať do kázne (spec §7.6): a passage goes to the end of the sermon the
+//! preacher picks in the sheet, EVERY time (#936, owner 2026-11-12: "Musí mi
+//! vždy dať na výber a ponúknuť vytvoriť novú") — "Nová kázeň" first, then the
+//! sermons by the newest service date. `study.activeSermon` only marks the last
+//! one used ("naposledy"), it never picks. The page read the sermon just now,
+//! so the revision is fresh; another device moving it in between is answered
+//! by one more try.
 
 use leptos::prelude::*;
 
@@ -9,9 +12,9 @@ use super::sheet::Sheet;
 use super::{nav, sermon_error, snapshot_translation, Study, Undo};
 use crate::api::sermons::{self, is_conflict, is_not_found, SermonDetail, SermonPassage};
 use crate::api::ApiError;
-use crate::state::sermon_list::{short_date, split_sermons};
+use crate::state::sermon_list::{add_choices, short_date};
 use crate::state::session;
-use crate::state::study::{StudySheet, KEY_ACTIVE_SERMON};
+use crate::state::study::{verse_reference, StudySheet, KEY_ACTIVE_SERMON};
 
 pub(super) fn set_active(s: Study, id: Option<String>) {
     match &id {
@@ -21,26 +24,49 @@ pub(super) fn set_active(s: Study, id: Option<String>) {
     s.active_sermon.set(id);
 }
 
-/// Add `passage`, asking where when no sermon is active.
+/// Add `passage`: the sheet always asks which sermon (#936).
 pub(super) fn add(s: Study, passage: SermonPassage) {
     if snapshot_translation(&passage.translation).is_none() {
         s.tell("Z prekladu NLT sa do kázne pridať nedá — prepni preklad".to_string());
         return;
     }
-    match s.active_sermon.get_untracked() {
-        Some(id) => add_to(s, id, passage),
-        None => ask_where(s, passage),
-    }
+    ask_where(s, passage);
 }
 
 fn ask_where(s: Study, passage: SermonPassage) {
     s.pending_passage.set(Some(passage));
+    let open = s.route.with_untracked(|route| route.sheet);
+    // The cross-references list comes back after the add: a preacher adds
+    // several references from it.
+    if open == Some(StudySheet::CrossRefs) {
+        s.add_return.set_value(open);
+    } else if open != Some(StudySheet::AddToSermon) {
+        s.add_return.set_value(None);
+    }
     let route = nav::sheet_route(s, StudySheet::AddToSermon);
-    if s.route.with_untracked(|route| route.sheet.is_some()) {
+    if open.is_some() {
         nav::replace(s, route);
     } else {
         nav::open_sheet(s, route);
     }
+}
+
+/// "1 Samuelova 4:1-11 (SEB)": the passage as its translation names the book.
+fn passage_label(s: Study, passage: &SermonPassage) -> String {
+    let book = s
+        .structures
+        .with(|map| {
+            map.get(&passage.translation)
+                .and_then(|structure| structure.book(&passage.book_code))
+                .map(|book| book.name.clone())
+        })
+        .unwrap_or_else(|| passage.book_code.clone());
+    verse_reference(
+        &book,
+        passage.chapter,
+        (passage.verse_start, passage.verse_end),
+        &passage.translation,
+    )
 }
 
 /// The sermon's answer and the new item's id. `position` is kept inside the
@@ -86,10 +112,12 @@ async fn add_now(s: Study, id: String, passage: SermonPassage) {
                 format!("Pridané do kázne „{}“", sermon.title),
                 Undo::Added { sermon: id, item },
             );
-            // The list stays: a preacher adds several references from it.
             let sheet = s.route.with_untracked(|route| route.sheet);
-            if sheet.is_some() && sheet != Some(StudySheet::CrossRefs) {
-                nav::close_sheet(s);
+            if sheet == Some(StudySheet::AddToSermon) {
+                match s.add_return.try_update_value(Option::take).flatten() {
+                    Some(back) => nav::replace(s, nav::sheet_route(s, back)),
+                    None => nav::close_sheet(s),
+                }
             }
         }
         // The sermon was deleted elsewhere: this device must choose again.
@@ -143,23 +171,43 @@ pub(super) fn AddToSermonSheet(s: Study) -> impl IntoView {
             s.adding.set_value(None);
         });
     };
+    let passage = move || {
+        s.pending_passage
+            .with(|held| held.as_ref().map(|passage| passage_label(s, passage)))
+            .unwrap_or_default()
+    };
+    let last = move |id: &str| s.active_sermon.with(|active| active.as_deref() == Some(id));
     view! {
         <Sheet s=s role="add-to-sermon" title=Signal::derive(|| "Pridať do kázne".to_string())>
+            <p class="study-add__passage" data-role="add-to-sermon-passage">{passage}</p>
             {move || {
                 list.get()
                     .map(|answer| match answer {
                         Ok(answer) => {
-                            let (upcoming, _) = split_sermons(&answer.sermons, answer.today);
+                            let choices = add_choices(&answer.sermons, answer.today);
                             let new_label = format!(
-                                "Nová kázeň ({})",
+                                "+ Nová kázeň ({})",
                                 short_date(answer.default_service_date),
                             );
                             view! {
                                 <div class="study-list">
-                                    {upcoming
+                                    <button
+                                        type="button"
+                                        class="study-button study-button--primary"
+                                        data-role="add-to-new-sermon"
+                                        on:click=on_new
+                                    >
+                                        {new_label}
+                                    </button>
+                                    {choices
                                         .into_iter()
                                         .map(|sermon| {
                                             let id = sermon.id.clone();
+                                            let detail = if last(&sermon.id) {
+                                                format!("{} · naposledy", short_date(sermon.service_date))
+                                            } else {
+                                                short_date(sermon.service_date)
+                                            };
                                             view! {
                                                 <button
                                                     type="button"
@@ -169,21 +217,11 @@ pub(super) fn AddToSermonSheet(s: Study) -> impl IntoView {
                                                     on:click=move |_| choose(id.clone())
                                                 >
                                                     <span class="study-row__label">{sermon.title.clone()}</span>
-                                                    <span class="study-row__detail">
-                                                        {short_date(sermon.service_date)}
-                                                    </span>
+                                                    <span class="study-row__detail">{detail}</span>
                                                 </button>
                                             }
                                         })
                                         .collect_view()}
-                                    <button
-                                        type="button"
-                                        class="study-button study-button--primary"
-                                        data-role="add-to-new-sermon"
-                                        on:click=on_new
-                                    >
-                                        {new_label}
-                                    </button>
                                 </div>
                             }
                                 .into_any()
