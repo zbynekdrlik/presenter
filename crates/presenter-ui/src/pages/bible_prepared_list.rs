@@ -200,8 +200,48 @@ pub(crate) fn PresentationList() -> impl IntoView {
     }
 }
 
-/// Open a presentation: its slides go to the slide column.
-fn open_presentation(bs: BibleState, id: String) {
+/// #941: on a phone the slide column sits under the whole list, so opening a
+/// presentation changed nothing on screen. Once its slides are in the DOM, the
+/// one scrolling column moves the slide column's top (its toolbar and the
+/// sermon bar) to the top of the screen; scrolling up returns to the list.
+/// Only while this presentation is still the open one on the Pripravené tab
+/// of a phone: a tap on Naživo during the load hides the column (`display:
+/// none`, a zero rect) and must not move the console.
+fn show_slides_on_phone(bs: BibleState, phone: RwSignal<bool>, id: String) {
+    request_animation_frame(move || {
+        let still_here = phone.try_get_untracked() == Some(true)
+            && bs.bible_tab.try_get_untracked().as_deref() == Some("prepared")
+            && bs
+                .active_presentation_id
+                .try_get_untracked()
+                .flatten()
+                .as_ref()
+                == Some(&id);
+        if !still_here {
+            return;
+        }
+        let Some(column) = crate::utils::window::document()
+            .query_selector("[data-role=\"slides-column\"]")
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let Some(panel) = column.closest(".operator__panel--bible").ok().flatten() else {
+            return;
+        };
+        let rect = column.get_bounding_client_rect();
+        if rect.height() <= 0.0 {
+            return;
+        }
+        let offset = rect.top() - panel.get_bounding_client_rect().top();
+        panel.set_scroll_top(panel.scroll_top() + offset as i32);
+    });
+}
+
+/// Open a presentation: its slides go to the slide column (and, on a phone,
+/// on screen).
+fn open_presentation(bs: BibleState, id: String, phone: RwSignal<bool>) {
     let active_id = bs.active_presentation_id;
     let active_slides = bs.active_presentation_slides;
     // Cards of the previous presentation must not stay clickable under the
@@ -217,6 +257,7 @@ fn open_presentation(bs: BibleState, id: String) {
         }
         if let Ok(detail) = answer {
             active_slides.set(detail.slides);
+            show_slides_on_phone(bs, phone, id);
         }
     });
 }
@@ -261,7 +302,8 @@ fn PresentationCard(presentation: BiblePresentationSummary) -> impl IntoView {
 
     let on_click = {
         let id = id.clone();
-        move |_| open_presentation(bs, id.clone())
+        let phone = ctx.phone_shell;
+        move |_| open_presentation(bs, id.clone(), phone)
     };
     let on_edit = {
         let id = id.clone();

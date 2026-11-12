@@ -1,62 +1,104 @@
+/* The home page `/` (#938): a phone page first. Every link is a full-width
+   row of at least 48 px; the most used surfaces are bigger tiles on top. */
 body.home {
     margin: 0;
     min-height: 100vh;
     font-family: "Inter", "Segoe UI", system-ui, sans-serif;
     background: linear-gradient(180deg, #111827 0%, #1f2937 100%);
     color: #f8fafc;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding: 4rem 1.5rem;
+    -webkit-text-size-adjust: 100%;
+}
+
+.home *,
+.home *::before,
+.home *::after {
+    box-sizing: border-box;
 }
 
 .home__container {
-    width: min(960px, 100%);
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 20px 16px 32px;
     display: flex;
     flex-direction: column;
-    gap: 2rem;
+    gap: 24px;
 }
 
 .home__header h1 {
-    margin: 0 0 0.5rem;
-    font-size: 2rem;
-}
-
-.home__header p {
     margin: 0;
-    color: #cbd5f5;
+    font-size: 1.6rem;
 }
 
 .home__section h2 {
-    margin: 0 0 0.6rem;
-    font-size: 1.15rem;
+    margin: 0 0 10px;
+    font-size: 0.85rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #93c5fd;
 }
 
+.home__tiles,
 .home__links {
     list-style: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
     margin: 0;
     padding: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
 }
 
-.home__links a {
-    display: inline-flex;
-    align-items: center;
+.home__tile,
+.home__link {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 16px;
+    border-radius: 12px;
     background: rgba(148, 163, 184, 0.18);
     color: #f8fafc;
-    padding: 0.75rem 1.2rem;
-    border-radius: 12px;
     text-decoration: none;
-    font-size: 0.95rem;
-    transition: background 0.2s ease, transform 0.2s ease;
+    -webkit-tap-highlight-color: rgba(59, 130, 246, 0.3);
 }
 
-.home__links a:hover {
-    background: rgba(59, 130, 246, 0.3);
-    transform: translateY(-2px);
+.home__tile {
+    min-height: 64px;
+    background: rgba(59, 130, 246, 0.22);
+    border: 1px solid rgba(147, 197, 253, 0.35);
+}
+
+.home__label {
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.home__tile .home__label {
+    font-size: 1.2rem;
+}
+
+.home__hint {
+    font-size: 0.85rem;
+    color: #cbd5e1;
+}
+
+.home__tile:hover,
+.home__link:hover,
+.home__tile:focus-visible,
+.home__link:focus-visible {
+    background: rgba(59, 130, 246, 0.35);
+}
+
+/* A wider screen: two columns of rows. */
+@media (min-width: 640px) {
+    .home__container {
+        padding: 48px 24px;
+    }
+
+    .home__tiles,
+    .home__links {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }

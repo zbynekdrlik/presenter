@@ -223,6 +223,14 @@ body.operator.operator--bible[data-shell="phone"] .operator__slides-column {
   max-height: none;
   overflow: visible;
 }
+/* #941: the slide grid is part of that one column too. With the desktop's own
+   scroller (`overflow-y: auto` + `overscroll-behavior: contain`) it grew to its
+   content, had nothing to scroll and kept every touch scroll that started on a
+   slide card — the page stuck until a reload. */
+body.operator.operator--bible[data-shell="phone"] .operator__slides {
+  overflow: visible;
+  overscroll-behavior: auto;
+}
 
 /* ── "Viac" sheet (#850 §6.3) ── */
 .operator__more {
