@@ -183,8 +183,9 @@ test("a finger on a sermon's slides scrolls the page both ways and the page stil
 });
 
 
-test("an ordinary prepared presentation scrolls under a finger on its slides too", async ({ browser }) => {
-  const { id } = await json<{ id: string }>("/bible/presentations", "POST", { name: "Dlhá prezentácia" });
+/** A plain presentation of eight long slides. */
+async function longPresentation(name: string): Promise<string> {
+  const { id } = await json<{ id: string }>("/bible/presentations", "POST", { name });
   await json(`/bible/presentations/${id}/append`, "POST", {
     slides: Array.from({ length: 8 }, (_, index) => ({
       bibleMain: `${index + 1}. ${"Slovo na stene ".repeat(14)}`,
@@ -192,11 +193,25 @@ test("an ordinary prepared presentation scrolls under a finger on its slides too
       bibleMainReference: `Test ${index + 1} (SEB)`,
     })),
   });
+  return id;
+}
+
+test("an ordinary prepared presentation: slides on screen, no inner scroller, a finger scrolls", async ({
+  browser,
+}) => {
+  const id = await longPresentation("Dlhá prezentácia");
   const { context, page, errors } = await openPhoneOperator(browser);
   await page.locator('[data-role="bible-tab"][data-tab="prepared"]').tap();
   await page.locator(`[data-role="presentation-card"][data-presentation-id="${id}"]`).tap();
   await expect(role(page, "slide-card")).toHaveCount(8);
   await expect.poll(() => slidesOnScreen(page)).toBe("on screen");
+  const grid = await role(page, "slides")
+    .filter({ has: role(page, "slide-card") })
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return `${style.overflowY} ${style.overscrollBehaviorY}`;
+    });
+  expect(grid, "the phone's slide grid must not be a scroller of its own").toBe("visible auto");
 
   const cdp = await context.newCDPSession(page);
   const card = await role(page, "slide-card").first().boundingBox();
@@ -206,4 +221,51 @@ test("an ordinary prepared presentation scrolls under a finger on its slides too
   await expect.poll(() => panelScroll(page)).toBeGreaterThan(before + 600);
   expect(errors).toEqual([]);
   await context.close();
+});
+
+/** Two animation frames: a scroll planned for the next frame has landed. */
+const twoFrames = (page: Page) =>
+  page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+
+test("the open never moves the page once the operator left Pripravené, nor on a desktop", async ({
+  browser,
+}) => {
+  const id = await longPresentation("Pomalá prezentácia");
+  // A phone: Naživo tapped while the presentation is still loading.
+  const { context, page, errors } = await openPhoneOperator(browser);
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(`**/bible/presentations/${id}`, async (route) => {
+    if (route.request().method() === "GET") await held;
+    await route.continue();
+  });
+  await page.locator('[data-role="bible-tab"][data-tab="prepared"]').tap();
+  const answered = page.waitForResponse((response) => response.url().endsWith(`/bible/presentations/${id}`));
+  await page.locator(`[data-role="presentation-card"][data-presentation-id="${id}"]`).tap();
+  await page.locator('[data-role="bible-tab"][data-tab="live"]').tap();
+  await expect(page.locator('[data-role="bible-tab"][data-tab="live"]')).toHaveAttribute("data-active", "true");
+  const before = await panelScroll(page);
+  release();
+  await answered;
+  await twoFrames(page);
+  expect(await panelScroll(page)).toBe(before);
+  expect(errors).toEqual([]);
+  await context.close();
+
+  // A desktop: the panel never scrolls, the slide column keeps its own place.
+  const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 }, baseURL });
+  const wide = await desktop.newPage();
+  const wideErrors: string[] = [];
+  attachConsoleErrorCollector(wide, wideErrors);
+  await wide.goto("/ui/operator/bible");
+  await wide.waitForSelector('body[data-wasm-ready="true"]', { state: "attached", timeout: 30_000 });
+  await wide.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+  await wide.locator(`[data-role="presentation-card"][data-presentation-id="${id}"]`).click();
+  await expect(role(wide, "slide-card")).toHaveCount(8);
+  await twoFrames(wide);
+  expect(await panelScroll(wide)).toBe(0);
+  expect(wideErrors).toEqual([]);
+  await desktop.close();
 });
