@@ -12,6 +12,8 @@ paths:
   - "crates/presenter-ui/src/pages/study/sermon*.rs"
   - "crates/presenter-ui/src/pages/study/add_to_sermon.rs"
   - "crates/presenter-ui/src/state/sermon_*.rs"
+  - "crates/presenter-ui/src/state/study_range.rs"
+  - "crates/presenter-ui/src/pages/study/verse_actions.rs"
   - "crates/presenter-ui/src/api/sermons.rs"
   - "tests/e2e/sermon-*.spec.ts"
   - "crates/presenter-ui/src/pages/bible_console/prepared.rs"
@@ -98,8 +100,12 @@ paths:
 - **Slide ids are `Uuid::new_v5(item_id, "slide/{n}")`** (`stable_slide_id`): unchanged items keep
   their ids across every regeneration, so a tablet/console selection survives an edit elsewhere;
   `SermonItemView::slide_ids` / the slide → item map are derived from `slide_count`, not stored.
-- **Secondary line** = the sermon's `secondary_translation_code` (default at creation: the Bible
-  preference's secondary): the FULL verses of the KEPT verse numbers (no deletions mapped
+- **Secondary line** = the sermon's `secondary_translation_code` — NONE at creation unless the
+  request names one (#937, owner 2026-11-12: unwanted bilingual slides; `SermonDraft.secondary_translation:
+  Option<String>`, the Bible preference's secondary is the live console's and never a sermon's
+  default); the editor's `sermon-secondary` select ("žiadny" first, `sermon_secondary.rs`) is the
+  one place it is chosen, a PATCH through `run_write`. Old rows keep what they hold (no migration).
+  It carries the FULL verses of the KEPT verse numbers (no deletions mapped
   across languages), label = the SECONDARY translation's book name + plain-number runs
   ("Hebrews 11:1, 3 (KJV)"). Read through `AppState::secondary_verse_lookup` (`pub(super)`):
   an unavailable NLT → slides without the line + a `warnings` entry, never a failed write; NLT
@@ -185,7 +191,7 @@ paths:
 
 ## Secondary line and outages (review of the server stack, 2026-11-01)
 
-- Prod's Bible preference has the NLT as secondary, so its paths are the normal case. Lookups run
+- Prod's three early sermons (before #937) carry the NLT as secondary, so its paths stay a normal case. Lookups run
   concurrently over the item's FULL range (stable remote cache key), kept verses are filtered after.
 - An outage never takes a stored line: `stored_secondary` reads the sermon's slides back
   (`"{verse}. {text}"` lines, book from the stored label) and fills what the lookup lost; the
@@ -202,7 +208,17 @@ paths:
 
 - Views: `StudyView::{Sermons, Sermon { id }}`. The add sheet `s=pridat` never comes from a URL: the
   passage it asks about lives only in `Study::pending_passage`.
-- `study.activeSermon` (localStorage) = where "Pridať do kázne" goes. A 404 forgets it and asks.
+- **"Pridať do kázne" ALWAYS asks** (#936, owner 2026-11-12: "Musí mi vždy dať na výber a ponúknuť
+  vytvoriť novú"; a remembered old sermon had silently taken 1Sa 4:1-11): every entry (verse sheet,
+  search hit, cross-reference) opens `s=pridat` — the passage label, "+ Nová kázeň" first, then
+  `sermon_list::add_choices` (newest service date first). `study.activeSermon` (localStorage) only
+  marks the last used row "naposledy"; it never picks. From the cross-references sheet the add returns
+  to that list (`Study::add_return`). The verse sheet's `verse-range` row says the count and steps the
+  END with − / + (`state::study_range`), the add button names the count; one range = one item.
+- **Archive after a month** (#940, `state/sermons/archive.rs`): a sermon whose service date is more
+  than 30 days before the server's today is archived (`archived_at`, never deleted) by the startup pass
+  and once a day (hourly check of `local_today()`); one INFO `presenter::bible::sermon` line per sermon,
+  `BibleSlidesChanged` through `archive_bible_presentation`. Restore = the Prepared tab's archive.
 - **All writes share the sermon's revision, so they run one at a time** (`Editor::busy`): an edit 300 ms
   after the last tap, a structural write through `write()`, which first waits for the edits
   (`settle_saves`). `Editor::apply` keeps a dirty item's local taps when the server's answer arrives.
