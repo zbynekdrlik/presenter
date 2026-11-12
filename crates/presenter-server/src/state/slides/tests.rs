@@ -971,7 +971,9 @@ fn owner_939_two_passages_of_one_chapter_get_their_own_references() {
 
 #[test]
 fn owner_939_no_slide_mixes_verses_of_two_passages() {
-    let slides = compose_bible_items_into_slides(&owner_939_items(), 320);
+    // A limit large enough to hold all 14 Samuel verses on one slide, so only
+    // the passage break (not a full slide) can keep 4:11 and 4:20 apart.
+    let slides = compose_bible_items_into_slides(&owner_939_items(), 2000);
     let mixed = slides
         .iter()
         .find(|slide| slide.main.contains("11. Text") && slide.main.contains("20. Text"));
