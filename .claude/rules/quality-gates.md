@@ -299,3 +299,12 @@ Section "playwright show-report" runs `rg` with only `-g` globs and no path. Wit
 stdin, `rg` searches stdin instead of the tree and waits forever (a background agent shell hung
 10+ minutes on it, 2026-11-05). CI has a closed stdin, so it never hangs there:
 `./scripts/dev/quality-check.sh --strict --against origin/main < /dev/null`.
+
+## `ld.lld` crashes linking a gst plugin cdylib after a killed build (#939)
+
+Killing a `cargo test` mid-build (e.g. to restart with new sources) can leave the
+`gst-plugin-rtp` / `gst-plugin-webrtc` cdylib inputs broken: the next build fails with
+`linking with clang failed` — `version script assignment ... symbol not defined` or an
+`ld.lld` stack dump in `MergeInputSection::splitNonStrings`. It is not your change. Fix:
+`cargo clean -p gst-plugin-rtp -p gst-plugin-webrtc`, then rebuild (on a loaded shared box
+add `-j 4`). Prefer letting a stale build finish over killing it.

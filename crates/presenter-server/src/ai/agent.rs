@@ -314,6 +314,45 @@ pub async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (Stri
     (prompt, char_limit)
 }
 
+/// The system prompt's tail with no live values: the correction rule (#939),
+/// the general rules and the response format. A plain constant (no `format!`
+/// escapes) so `format_system_prompt` stays under the 120-line cap.
+const PROMPT_RULES: &str = r#"10. Corrections: when the user asks to fix, change or redo a Bible
+    presentation you made (in this conversation or listed above), call
+    update_bible_presentation(presentation_id, items, name?) on THAT
+    presentation with the complete corrected items[]. It keeps the
+    presentation and replaces its slides. NEVER create another
+    presentation to correct one, and NEVER create test, trial or
+    experiment presentations (no "test-…" names) — every presentation you
+    create appears in the operator's list. update_bible_presentation
+    REPLACES every slide, so use it only on a presentation you created in
+    this conversation or one the user explicitly names to be changed —
+    never on another presentation the operator prepared by hand.
+
+## Rules
+
+1. For Bible content (verses, passages, sermon slides) use bible_* tools.
+   Bible presentations are a SEPARATE concept from worship libraries and
+   live in their own dedicated storage. Never create a worship library
+   named "Bible".
+2. For songs, hymns, band content use worship tools (create_presentation,
+   add_slide, etc.) targeting a worship library from the list above.
+3. If you need detailed secondary reference material (Slovak book name
+   abbreviations, translation code mapping table), call get_style_guide
+   once — the bible slide creation rules above are authoritative, this
+   is just a lookup aid.
+4. Destructive operations (delete_*) require explicit user intent. If
+   the user hasn't said "delete", "remove", "vymazať", "odstrániť",
+   "zmazať", or equivalent in their most recent message, ask them to
+   confirm before calling any delete tool. The server will block delete
+   calls that lack explicit user intent.
+
+## Response format
+
+Respond in the user's language (typically Slovak). Keep responses
+concise. Summarize what you actually did based on tool results. Do not
+claim success for tools that errored."#;
+
 /// Format the static system-prompt template, interpolating the live-context
 /// strings and the character limit. Pure (no DB / async) so it is unit-tested
 /// directly. Extracted from `build_system_prompt` to keep that function under
@@ -387,9 +426,13 @@ how many slides they become.
 
 7. Call create_bible_presentation(name, items). The server greedy-packs
    consecutive verse items into slides until the character limit ({char_limit}
-   chars) would overflow, then flushes. Emphasis items and translation,
-   book, or chapter changes force slide breaks. The server auto-computes
-   reference labels like "Ján 1:1-2 (SEB)".
+   chars) would overflow, then flushes. Emphasis items and a new passage
+   force slide breaks. A new passage = another translation, book or
+   chapter, OR a gap in the verse numbers: 1Sa 4:1-11 followed by
+   1Sa 4:20-22 are TWO passages with two references ("1. Samuelova 4:1-11
+   (SEB)" and "1. Samuelova 4:20-22 (SEB)"). Just submit every passage's
+   verses in sermon order — the server computes each reference; never
+   split passages into several presentations to get correct references.
 
 8. If a single verse is longer than the character limit on its own
    (rare), DO NOTHING SPECIAL — submit it as one normal verse item. A lone
@@ -408,29 +451,8 @@ how many slides they become.
    reference_format_requires_parens, missing_verse_number_prefix).
    Read the rule and expected fields, fix the item, and retry.
 
-## Rules
-
-1. For Bible content (verses, passages, sermon slides) use bible_* tools.
-   Bible presentations are a SEPARATE concept from worship libraries and
-   live in their own dedicated storage. Never create a worship library
-   named "Bible".
-2. For songs, hymns, band content use worship tools (create_presentation,
-   add_slide, etc.) targeting a worship library from the list above.
-3. If you need detailed secondary reference material (Slovak book name
-   abbreviations, translation code mapping table), call get_style_guide
-   once — the bible slide creation rules above are authoritative, this
-   is just a lookup aid.
-4. Destructive operations (delete_*) require explicit user intent. If
-   the user hasn't said "delete", "remove", "vymazať", "odstrániť",
-   "zmazať", or equivalent in their most recent message, ask them to
-   confirm before calling any delete tool. The server will block delete
-   calls that lack explicit user intent.
-
-## Response format
-
-Respond in the user's language (typically Slovak). Keep responses
-concise. Summarize what you actually did based on tool results. Do not
-claim success for tools that errored."#,
+{rules}"#,
+        rules = PROMPT_RULES,
         libraries = libraries,
         bibles = bibles,
         translations = translations,
@@ -1272,6 +1294,21 @@ mod tests {
             lower.contains("merged") || lower.contains("merge"),
             "system prompt must state same-number continuation items are merged (post-#394)"
         );
+    }
+
+    #[test]
+    fn system_prompt_sends_corrections_to_the_same_presentation() {
+        // #939: the AI created five presentations (one named "test-grouping")
+        // to correct one. The prompt names the edit tool for a correction,
+        // forbids test presentations and explains that two passages of one
+        // chapter get two references on their own.
+        let prompt = format_system_prompt("(none)", "(none yet)", "SEB", 320);
+        let flat = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("call update_bible_presentation(presentation_id, items, name?)"));
+        assert!(flat.contains("NEVER create test, trial or experiment presentations"));
+        assert!(flat.contains("\"1. Samuelova 4:1-11 (SEB)\" and \"1. Samuelova 4:20-22 (SEB)\""));
+        assert!(flat.contains("never on another presentation the operator prepared by hand"));
+        assert!(flat.contains("Respond in the user's language"));
     }
 
     // --- coverage for the run_agent helpers extracted in #434 ---

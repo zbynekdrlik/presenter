@@ -210,14 +210,43 @@ async fn home_route_returns_menu() {
         .await
         .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("Presenter Demo Environment"));
-    assert!(body.contains("Operator UI"));
-    assert!(body.contains("Tablet UI"));
-    assert!(body.contains("Bible Control"));
-    // #737: stream-graphics links — output PROMINENTLY first among all sections.
-    assert!(body.contains("Stream Output (OBS)"));
+    // #938: a phone page — laid out at the phone's width, in Slovak.
+    assert!(body.contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1""#));
+    assert!(body.contains(r#"<html lang="sk""#));
+    for label in [
+        "Operátor",
+        "Štúdium",
+        "AI asistent",
+        "Tablet",
+        "Stream výstup (OBS)",
+        "Nastavenia",
+    ] {
+        assert!(body.contains(label), "home page must name {label}");
+    }
     assert!(body.contains("\"/stream/stream\""));
     assert!(body.contains("\"/ui/stream\""));
+    // #938: the most used surfaces first (SNV's /ui/usage), the AI tab one tap
+    // away. This replaces #737's "stream output first": OBS opens
+    // /stream/stream from its own browser source, not from this page.
+    let at = |href: &str| {
+        body.find(&format!("href=\"{href}\""))
+            .unwrap_or_else(|| panic!("home page must link {href}"))
+    };
+    let order = [
+        "/ui/operator",
+        "/ui/study",
+        "/ui/operator/ai",
+        "/ui/tablet",
+        "/stream/stream",
+    ];
+    for pair in order.windows(2) {
+        assert!(
+            at(pair[0]) < at(pair[1]),
+            "{} must come before {}",
+            pair[0],
+            pair[1]
+        );
+    }
 }
 
 #[tokio::test]
@@ -252,6 +281,8 @@ async fn home_route_links_match_live_routes() {
 
     for path in [
         "/ui/operator",
+        "/ui/operator/ai",
+        "/ui/study",
         "/ui/tablet",
         "/ui/camera",
         "/ui/bible",

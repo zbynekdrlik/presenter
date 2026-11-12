@@ -13,9 +13,13 @@ paths:
 ## The bible reference the validator sees is COMPOSED server-side, not typed by the model
 
 `create_bible_presentation` takes verse ITEMS (number/text/book/chapter/translation) and calls
-`state/slides/compose.rs::compose_bible_items_into_slides` → `format_verse_range`, which renders a
-NON-contiguous verse set as a comma-list (`Numeri 13:1, 3, 5`) and a contiguous one as a range
-(`13:1-5`). It then runs `validate_bible_slide` on every COMPOSED slide. So a validator that
+`state/slides/compose.rs::compose_bible_items_into_slides` → `format_verse_range`. Since #939 a
+PASSAGE is a run of verse items of one book/chapter/translation whose numbers repeat or step by
+one (an emphasis between them does not end it); a gap or a step back starts a NEW passage with its
+own slides and label — the owner's 1Sa 4:1-11 + 4:20-22 are `4:1-11` and `4:20-22`, never the
+old flat `4:1, 2, …, 22` that would fill the LED wall. The label goes through the core
+`presenter_core::bible::sermon::verse_suffix` (runs, `5-7, 9`), the sermon formatter — never a
+private comma list. It then runs `validate_bible_slide` on every COMPOSED slide. So a validator that
 rejects a legitimate composed form loops the agent on the composer's OWN output — the PP incident
 (#784): a non-contiguous passage → composed `Daniel 10:2, 3, 12, 13, 14 (ROH)` → rejected 8× →
 24 agent iterations → 120 s client timeout. **Before changing `bible_validator`, check what
@@ -58,3 +62,14 @@ failure with exactly `"posledné AI volanie zlyhalo"`. `presenter-ui/components/
 `LAST_CALL_FAILED_PREFIX` must match that literal byte-for-byte to render the softer
 "AI: posledné volanie zlyhalo" (yellow) state instead of "AI nedostupná" (red, a genuine probe
 outage). Change one, change both — they are in different crates with no shared constant.
+
+## A correction edits the presentation the AI made — `update_bible_presentation` (#939)
+
+`create_bible_presentation` makes a NEW presentation; `update_bible_presentation(presentation_id,
+items, name?)` composes + validates through the SAME `compose_validated_slides` and replaces every
+slide (`AppState::replace_bible_presentation_slides`: `refuse_if_sermon` first, one repository
+transaction, `BibleSlidesChanged`). It is not a `delete_*` tool, so the delete-intent gate does not
+block it — before it existed the AI's only way to "fix" was another create (#939: five junk
+presentations incl. `test-grouping`). The system prompt (`PROMPT_RULES`, rule 10) sends every
+correction there and forbids test/experiment presentations; `format_system_prompt` sits near the
+120-line cap, so new static prompt text goes into `PROMPT_RULES`, not the `format!` template.

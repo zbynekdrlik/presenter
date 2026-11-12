@@ -260,6 +260,25 @@ impl AppState {
         Ok(())
     }
 
+    /// Replace every slide of a plain Bible presentation in one transaction
+    /// (#939: the AI corrects the presentation it made instead of creating
+    /// another). A sermon refuses first — its slides are generated from its
+    /// items; an unknown id is `NotFound`.
+    pub async fn replace_bible_presentation_slides(
+        &self,
+        id: BiblePresentationId,
+        slides: Vec<BiblePresentationSlide>,
+    ) -> anyhow::Result<()> {
+        self.refuse_if_sermon(id).await?;
+        self.repository
+            .replace_bible_presentation_slides(id, &slides)
+            .await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: id.to_string(),
+        });
+        Ok(())
+    }
+
     pub async fn append_bible_presentation_slides(
         &self,
         id: BiblePresentationId,

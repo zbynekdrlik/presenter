@@ -188,9 +188,9 @@ static REF_DASH_WS_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\
 /// text with [`ValidationRule::ReferenceFormatRequiresParens`] (#784).
 ///
 /// Accepts and normalises every reference the domain produces — including the
-/// composer's own non-contiguous comma-list output
-/// (`state/slides/compose.rs::format_verse_range`, e.g. `Numeri 13:1, 3, 5`) and
-/// the loose forms the model emitted at PP:
+/// composer's run labels (`state/slides/compose.rs::format_verse_range`, e.g.
+/// `Numeri 13:1-11`; since #939 one composed passage is always one run),
+/// older stored comma lists and the loose forms the model emitted at PP:
 ///
 /// - `Daniel 10:2, 3, 12, 13, 14 (ROH)` → unchanged (already canonical)
 /// - `Daniel 10:2-3 (roh)` → `Daniel 10:2-3 (ROH)` (code upper-cased)
@@ -481,7 +481,7 @@ mod tests {
     // -- Rule 1 NORMALISATION (#784) --
     //
     // The PP loop (2026-09-20) was the validator REJECTING well-formed refs the
-    // composer (`state/slides/compose.rs::format_verse_range`) and Gemini
+    // composer (`state/slides/compose.rs::format_verse_range`, before #939) and Gemini
     // actually produce: non-contiguous comma-lists, a lowercase code, a stray
     // duplicated chapter token. They must now NORMALISE to one canonical form,
     // not reject — while genuine garbage still fails.

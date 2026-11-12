@@ -18,6 +18,7 @@ use super::sermon_add::AddVerse;
 use super::sermon_item::SermonItemCard;
 use super::sermon_live::listen_live;
 use super::sermon_reorder::{order_moved, send_order};
+use super::sermon_secondary::SecondaryChoice;
 use super::{ensure_structure, nav, sermon_error, Study, Undo};
 use crate::api::sermons::{
     self, is_conflict, is_not_found, is_refused_edit, SermonDetail, SermonItem,
@@ -689,6 +690,9 @@ pub(super) fn SermonEditor(s: Study, id: String) -> impl IntoView {
                         }}
                     </span>
                 </div>
+                <Show when=move || e.detail.with(Option::is_some)>
+                    <SecondaryChoice e=e />
+                </Show>
                 {move || {
                     (e.save.get() == SaveState::Error)
                         .then(|| {

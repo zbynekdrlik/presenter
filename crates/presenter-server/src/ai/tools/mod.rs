@@ -128,6 +128,9 @@ pub async fn execute_tool(
         "create_bible_presentation" => {
             bible_presentation::create_bible_presentation(&args, state, default_char_limit).await
         }
+        "update_bible_presentation" => {
+            bible_presentation::update_bible_presentation(&args, state, default_char_limit).await
+        }
         "rename_bible_presentation" => {
             bible_presentation::rename_bible_presentation(&args, state).await
         }

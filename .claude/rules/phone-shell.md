@@ -64,6 +64,15 @@ fields were 13.6 px (iOS zooms) and the Bible page was a 153 px nested scroll bo
 - **E2E:** profiles `PHONE_360` (360×740), `PHONE_390`, `PHONE_LANDSCAPE` in `support.ts`;
   `(pointer: coarse)` needs `hasTouch` (ui skill #569); tap with `.tap()`.
 
+- **One scrolling column means ONE scroller (#941).** On a phone's Biblia the panel scrolls; nothing
+  inside it may keep a desktop scroller (`overflow-y: auto` + `overscroll-behavior: contain`, like
+  `.operator__slides`): grown to its content it has no room, yet Chrome on SNV's data latched the
+  finger onto it and `contain` never passed the scroll on — the page "froze" over the slide cards
+  until a reload (scrollTop stuck at 880 of 5870). The suite's headless Chromium chains the scroll
+  on the test data anyway, so a spec pins the computed `overflow-y` / `overscroll-behavior` of the
+  inner element too, never only a drag. Reproduce on SNV read-only with MCP Playwright (abort every
+  non-GET) and CDP `Input.dispatchTouchEvent` drags. Opening a Pripravené presentation on a phone
+  scrolls the slide column to the top (`show_slides_on_phone`, after the slides land).
 - **Toasts (#875):** the `Toast` component owns the lifetime (one restarting 3.5 s timer), callers only set the message. On the phone's Bible Live tab the toast sits above `.console-bar` (`bible_console.css`), never over its buttons.
 
 ## Desktop header (#875)

@@ -123,7 +123,150 @@ test("a verse goes from the reader to a new sermon and is cut into a truthful sl
   await finish(opened);
 });
 
-test("the active sermon takes the next verse at once and Späť takes it back", async ({ browser }) => {
+/** #936: the add sheet's row of the sermon `id`. */
+const addRow = (page: Page, id: string) =>
+  page.locator(`[data-role="add-to-sermon-row"][data-sermon-id="${id}"]`);
+
+test("a selected range goes into a new sermon as one item, and the next add asks again (#936)", async ({ browser }) => {
+  const older = await newSermon("Stará kázeň", "2026-01-04");
+  await addVerse(older, 3, 3);
+  const opened = await openStudy(browser, baseURL, PHONE_390, undefined, undefined, async (page) => {
+    // The prod case: a remembered old sermon must not take the passage.
+    await page.addInitScript((sermon) => {
+      localStorage.setItem("presenter:study.activeSermon", JSON.stringify(sermon));
+    }, older);
+  });
+  const { page } = opened;
+  await verseNumber(page, 1).tap();
+  const range = role(page, "verse-range");
+  await expect(range).toBeVisible();
+  await expect(role(page, "verse-range-count")).toHaveText("1 verš");
+  await expect(role(page, "verse-range-shrink")).toBeDisabled();
+  for (let step = 0; step < 10; step += 1) {
+    await role(page, "verse-range-grow").tap();
+  }
+  await expect(role(page, "verse-range-count")).toHaveText("11 veršov");
+  await expect(page).toHaveURL(/v=1-11(&|$)/);
+  await expect(role(page, "verse-actions")).toContainText("Hebrejom 11:1-11 (SEB)");
+  await expect(role(page, "verse-add-to-sermon")).toHaveText("Pridať do kázne (11 veršov)");
+  await role(page, "verse-range-shrink").tap();
+  await expect(role(page, "verse-range-count")).toHaveText("10 veršov");
+  await role(page, "verse-range-grow").tap();
+
+  await role(page, "verse-add-to-sermon").tap();
+  const sheet = role(page, "add-to-sermon");
+  await expect(sheet).toBeVisible();
+  await expect(role(page, "add-to-sermon-passage")).toHaveText("Hebrejom 11:1-11 (SEB)");
+  // "Nová kázeň" comes first, then the newest service date.
+  await expect(sheet.locator(".study-list > *").first()).toHaveAttribute("data-role", "add-to-new-sermon");
+  await expect(addRow(page, older)).toContainText("naposledy");
+  expect((await sermonOf(older)).items).toHaveLength(1);
+  await assertNoHorizontalOverflow(page);
+  const created = page.waitForResponse(
+    (response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/bible/sermons",
+  );
+  await role(page, "add-to-new-sermon").tap();
+  const id = ((await (await created).json()) as { id: string }).id;
+  await expect(role(page, "study-notice")).toContainText("Pridané do kázne");
+  await expect(sheet).toHaveCount(0);
+  const fresh = (await (await fetch(`${baseURL}/bible/sermons/${id}`)).json()) as {
+    secondaryTranslation: string | null;
+    items: { label: string }[];
+    slides: { secondaryText: string }[];
+  };
+  expect(fresh.items.map((item) => item.label)).toEqual(["Hebrejom 11:1-11 (SEB)"]);
+  // #937: nobody picked a second language, so no slide carries one.
+  expect(fresh.secondaryTranslation).toBeNull();
+  expect(fresh.slides.length).toBeGreaterThan(0);
+  expect(fresh.slides.every((slide) => slide.secondaryText === "")).toBe(true);
+  expect((await sermonOf(older)).items).toHaveLength(1);
+
+  // The next add asks again; the new sermon is now the one marked.
+  await verseNumber(page, 12).tap();
+  await role(page, "verse-add-to-sermon").tap();
+  await expect(sheet).toBeVisible();
+  await expect(addRow(page, id)).toContainText("naposledy");
+  await addRow(page, id).tap();
+  await expect(role(page, "study-notice")).toContainText("Pridané do kázne");
+  expect((await sermonOf(id)).items).toHaveLength(2);
+  expect((await sermonOf(older)).items).toHaveLength(1);
+  await finish(opened);
+});
+
+test("a sermon deleted while the sheet is open: the tap says so and its row goes (#936)", async ({ browser }) => {
+  const gone = await newSermon("Zmazaná medzitým");
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await verseNumber(page, 2).tap();
+  await role(page, "verse-add-to-sermon").tap();
+  await expect(addRow(page, gone)).toBeVisible();
+  const deleted = await fetch(`${baseURL}/bible/sermons/${gone}`, { method: "DELETE" });
+  expect(deleted.status).toBe(204);
+
+  await addRow(page, gone).tap();
+  await expect(role(page, "study-notice")).toContainText("Kázeň už neexistuje");
+  await expect(addRow(page, gone)).toHaveCount(0);
+  await expect(role(page, "add-to-sermon")).toBeVisible();
+  // The deliberate 404 of the deleted sermon's own read.
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("404")));
+  await finish(opened);
+});
+
+test("the second language is the preacher's visible choice, none by default (#937)", async ({ browser }) => {
+  const id = await newSermon("Druhý preklad");
+  await addVerse(id, 1, 1);
+  const opened = await openStudy(browser, baseURL, PHONE_390, `/ui/study?view=sermon&id=${id}`, null);
+  const { page } = opened;
+  await expect(role(page, "sermon-editor")).toHaveAttribute("data-state", "ready");
+  const choice = role(page, "sermon-secondary");
+  await expect(choice).toHaveValue("");
+  await expect(choice.locator("option:checked")).toHaveText("žiadny");
+  const detail = async () =>
+    (await (await fetch(`${baseURL}/bible/sermons/${id}`)).json()) as {
+      secondaryTranslation: string | null;
+      slides: { secondaryText: string; secondaryReference: string }[];
+    };
+  expect((await detail()).slides[0].secondaryText).toBe("");
+  const secondaryLine = page.locator('[data-role="sermon-slide"] .sermon-slide__text--secondary');
+
+  // A write that fails (a malformed answer) puts the choice back.
+  await page.route(`**/bible/sermons/${id}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    } else {
+      await route.fallback();
+    }
+  });
+  await choice.selectOption("eng-kjv");
+  await expect(choice).toHaveValue("");
+  expect((await detail()).secondaryTranslation).toBeNull();
+  await page.unroute(`**/bible/sermons/${id}`);
+
+  await choice.selectOption("eng-kjv");
+  await saved(page);
+  await expect.poll(async () => (await detail()).secondaryTranslation).toBe("eng-kjv");
+  const bilingual = await detail();
+  expect(bilingual.slides[0].secondaryText).toContain("faith");
+  expect(bilingual.slides[0].secondaryReference).toContain("(KJV)");
+  // What the preacher sees in Náhľad: the second line under the verse.
+  await role(page, "sermon-preview-open").tap();
+  await expect(secondaryLine.first()).toContainText("faith");
+  await page.goBack();
+  await expect(role(page, "sermon-preview-open")).toBeVisible();
+
+  await page.reload();
+  await expect(role(page, "sermon-secondary")).toHaveValue("eng-kjv");
+  await role(page, "sermon-secondary").selectOption("");
+  await saved(page);
+  await expect.poll(async () => (await detail()).secondaryTranslation).toBeNull();
+  expect((await detail()).slides[0].secondaryText).toBe("");
+  await role(page, "sermon-preview-open").tap();
+  await expect(page.locator('[data-role="sermon-slide"]').first()).toBeVisible();
+  await expect(secondaryLine).toHaveCount(0);
+  await finish(opened);
+});
+
+test("the last sermon is only marked in the sheet, never chosen, and Späť takes the verse back", async ({ browser }) => {
   const id = await newSermon("Aktívna");
   await addVerse(id, 3, 3);
   const opened = await openStudy(browser, baseURL, PHONE_390, undefined, undefined, async (page) => {
@@ -134,6 +277,12 @@ test("the active sermon takes the next verse at once and Späť takes it back", 
   const { page } = opened;
   await verseNumber(page, 2).tap();
   await role(page, "verse-add-to-sermon").tap();
+  // #936 (owner 2026-11-12): "Musí mi vždy dať na výber" — nothing is added
+  // before the preacher picks.
+  await expect(role(page, "add-to-sermon")).toBeVisible();
+  await expect(addRow(page, id)).toContainText("naposledy");
+  expect((await sermonOf(id)).items).toHaveLength(1);
+  await addRow(page, id).tap();
   await expect(role(page, "study-notice")).toContainText("Pridané do kázne „Aktívna“");
   expect((await sermonOf(id)).items).toHaveLength(2);
 
@@ -143,7 +292,7 @@ test("the active sermon takes the next verse at once and Späť takes it back", 
   await finish(opened);
 });
 
-test("a search hit adds to the active sermon, words from the editor lead there", async ({ browser }) => {
+test("a search hit adds to the sermon picked in the sheet, words from the editor lead there", async ({ browser }) => {
   const id = await newSermon("Hľadanie");
   const opened = await openStudy(browser, baseURL, PHONE_390, `/ui/study?view=sermon&id=${id}`, null);
   const { page } = opened;
@@ -157,6 +306,8 @@ test("a search hit adds to the active sermon, words from the editor lead there",
   await role(page, "sermon-add-field").press("Enter");
   await expect(role(page, "search-results")).toHaveAttribute("data-state", "ready");
   await role(page, "search-hit-add").first().tap();
+  await expect(addRow(page, id)).toContainText("naposledy");
+  await addRow(page, id).tap();
   await expect(role(page, "study-notice")).toContainText("Pridané do kázne „Hľadanie“");
   expect((await sermonOf(id)).items).toHaveLength(2);
   await expect(field(page)).toBeVisible();
@@ -344,7 +495,8 @@ test("a double tap creates one sermon and adds one verse", async ({ browser }) =
 
   await page.goto(`${baseURL}/ui/study?view=search&q=viera&t=slk-seb`);
   await expect(role(page, "search-results")).toHaveAttribute("data-state", "ready");
-  await role(page, "search-hit-add").first().dblclick();
+  await role(page, "search-hit-add").first().tap();
+  await addRow(page, id).dblclick();
   await expect(role(page, "study-notice")).toContainText("Pridané do kázne „Dvojité“");
   await written(/\/items$/, 2);
   expect((await sermonOf(id)).items).toHaveLength(2);
@@ -398,6 +550,7 @@ test("Späť on an added verse reaches the open editor", async ({ browser }) => 
   const { page } = opened;
   await verseNumber(page, 2).tap();
   await role(page, "verse-add-to-sermon").tap();
+  await addRow(page, id).tap();
   await expect(role(page, "study-notice-undo")).toBeVisible();
   await role(page, "study-sermons").tap();
   await openRow(page, id);

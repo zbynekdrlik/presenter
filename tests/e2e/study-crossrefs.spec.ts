@@ -158,8 +158,12 @@ test("adding a reference leaves the list open for the next one", async ({ browse
   const { page } = opened;
   await openReferences(page, 16);
   await items(page).first().locator('[data-role="crossref-add"]').tap();
+  // #936: the sheet asks which sermon, then the list comes back.
+  await page.locator(`[data-role="add-to-sermon-row"][data-sermon-id="${id}"]`).tap();
   await expect(page.locator('[data-role="study-notice"]')).toContainText("Pridané do kázne „Odkazy“");
+  await expect(page.locator('[data-role="add-to-sermon"]')).toHaveCount(0);
   await expect(items(page)).toHaveCount(10);
+  await expect(page).toHaveURL(/s=odkazy/);
   const sermon = (await (await fetch(`${baseURL}/bible/sermons/${id}`)).json()) as { items: unknown[] };
   expect(sermon.items).toHaveLength(1);
   await finish(opened);

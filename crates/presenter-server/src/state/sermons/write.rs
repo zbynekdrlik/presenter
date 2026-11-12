@@ -33,8 +33,10 @@ pub(crate) struct SermonDraft {
     pub(crate) title: Option<String>,
     pub(crate) service_date: Option<NaiveDate>,
     pub(crate) default_translation: Option<String>,
-    /// `None` = the Bible preference's secondary; `Some(None)` = no line.
-    pub(crate) secondary_translation: Option<Option<String>>,
+    /// `None` = no second language (#937: never the Bible preference's
+    /// secondary, which is the live console's; the preacher picks one in the
+    /// editor).
+    pub(crate) secondary_translation: Option<String>,
 }
 
 pub(super) fn check_revision(snapshot: &SermonSnapshot, expected: i64) -> anyhow::Result<()> {
@@ -101,7 +103,8 @@ impl AppState {
     }
 
     /// A new, empty sermon (revision 0) with the spec §7.6 defaults: the next
-    /// Sunday, "Kázeň D. M. YYYY", the Bible preference's translations.
+    /// Sunday, "Kázeň D. M. YYYY", the Bible preference's MAIN translation and
+    /// no second language unless the request names one (#937).
     pub(crate) async fn create_sermon(
         &self,
         draft: SermonDraft,
@@ -125,13 +128,9 @@ impl AppState {
                 })
                 .ok_or_else(|| SermonRefusal::new("Žiadny preklad nie je nainštalovaný"))?,
         };
-        let secondary = match draft.secondary_translation {
-            Some(Some(code)) => Some(installed(&translations, &code, true)?),
-            Some(None) => None,
-            None => preferences
-                .secondary_translation
-                .as_deref()
-                .and_then(|code| installed(&translations, code, true).ok()),
+        let secondary = match draft.secondary_translation.as_deref() {
+            Some(code) => Some(installed(&translations, code, true)?),
+            None => None,
         };
         let service_date = draft
             .service_date

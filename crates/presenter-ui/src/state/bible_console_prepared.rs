@@ -160,6 +160,7 @@ mod tests {
             title: format!("Kázeň {id}"),
             service_date: chrono::NaiveDate::default(),
             default_translation: "slk-seb".to_string(),
+            secondary_translation: None,
             revision,
             items,
             slides: slides.iter().map(|id| slide(id)).collect(),

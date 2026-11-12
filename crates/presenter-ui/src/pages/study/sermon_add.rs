@@ -11,8 +11,8 @@ use crate::api::sermons::{self, SermonPassage};
 use crate::state::study::{suggest, StudyRoute};
 
 /// `+ Pridať verš`: a reference is added here, words go to the text search,
-/// whose hits add to this (active) sermon. The field keeps what was typed until
-/// the verse is in.
+/// whose hits ask where to add, this sermon marked "naposledy" (#936). The
+/// field keeps what was typed until the verse is in.
 fn add_from_field(e: Editor, text: RwSignal<String>) {
     let input = text.get_untracked();
     let Some(translation) = e
