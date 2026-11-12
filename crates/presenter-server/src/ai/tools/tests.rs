@@ -797,7 +797,12 @@ async fn update_bible_presentation_replaces_the_slides_of_the_same_presentation(
     let created: Value = serde_json::from_str(&created).unwrap();
     let pres_id = created["id"].as_str().unwrap().to_string();
 
-    let items = json!([samuel_verse(1), samuel_verse(2), samuel_verse(20), samuel_verse(21)]);
+    let items = json!([
+        samuel_verse(1),
+        samuel_verse(2),
+        samuel_verse(20),
+        samuel_verse(21)
+    ]);
     let args = json!({"presentation_id": pres_id, "name": "Kázeň opravená", "items": items});
     let (updated, preview) =
         execute_tool("update_bible_presentation", &args.to_string(), &state, 320)
@@ -825,10 +830,44 @@ async fn update_bible_presentation_replaces_the_slides_of_the_same_presentation(
 }
 
 #[tokio::test]
+async fn update_bible_presentation_with_rejected_items_keeps_the_old_slides() {
+    // Compose + validate happen BEFORE the write: a rejected correction must
+    // leave the presentation exactly as it was.
+    let state = AppState::in_memory().await.unwrap();
+    let (created, _) = execute_tool(
+        "create_bible_presentation",
+        &json!({"name": "Kázeň", "items": [samuel_verse(1)]}).to_string(),
+        &state,
+        320,
+    )
+    .await
+    .unwrap();
+    let created: Value = serde_json::from_str(&created).unwrap();
+    let pres_id = created["id"].as_str().unwrap().to_string();
+
+    let bad = json!({"kind": "verse", "number": 2, "text": "##bad## text",
+                     "book": "1. Samuelova", "chapter": 4, "translation": "SEB"});
+    let args = json!({"presentation_id": pres_id, "name": "Iné", "items": [bad]});
+    let (body, _) = execute_tool("update_bible_presentation", &args.to_string(), &state, 320)
+        .await
+        .unwrap();
+    assert!(body.contains("unprocessed_bold_markers"), "body: {body}");
+
+    let id = BiblePresentationId::from_uuid(Uuid::parse_str(&pres_id).unwrap());
+    let detail = state.bible_presentation_detail(id).await.unwrap().unwrap();
+    assert_eq!(detail.name, "Kázeň");
+    assert_eq!(detail.slides.len(), 1);
+    assert_eq!(detail.slides[0].main_reference, "1. Samuelova 4:1 (SEB)");
+}
+
+#[tokio::test]
 async fn update_bible_presentation_of_an_unknown_id_creates_nothing() {
     let state = AppState::in_memory().await.unwrap();
     let args = json!({"presentation_id": Uuid::new_v4().to_string(), "items": [samuel_verse(1)]});
     let result = execute_tool("update_bible_presentation", &args.to_string(), &state, 320).await;
-    assert!(result.is_err(), "unknown presentation must be an error: {result:?}");
+    assert!(
+        result.is_err(),
+        "unknown presentation must be an error: {result:?}"
+    );
     assert!(state.list_bible_presentations().await.unwrap().is_empty());
 }

@@ -591,19 +591,25 @@ async fn sermon_slides_are_read_only_on_the_presentation_paths() {
     let slide_id = slides[0].slide.id;
 
     // #917: append, delete and reorder map to the items (tests below); a slide's
-    // text is still generated from its item.
-    let refusals = [state
-        .update_bible_slide(
-            id,
-            slide_id,
-            "x".into(),
-            "y".into(),
-            String::new(),
-            String::new(),
-            None,
-        )
-        .await
-        .map(|_| ())];
+    // text is still generated from its item. #939: the AI's
+    // update_bible_presentation (replace every slide) is refused the same way.
+    let refusals = [
+        state
+            .update_bible_slide(
+                id,
+                slide_id,
+                "x".into(),
+                "y".into(),
+                String::new(),
+                String::new(),
+                None,
+            )
+            .await
+            .map(|_| ()),
+        state
+            .replace_bible_presentation_slides(id, Vec::new())
+            .await,
+    ];
 
     for refused in refusals {
         let err = refused.expect_err("a sermon's slides are generated");

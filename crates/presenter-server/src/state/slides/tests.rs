@@ -815,7 +815,11 @@ fn compose_non_contiguous_verses_are_separate_passages() {
     let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
     assert_eq!(
         references,
-        vec!["Numeri 13:1 (SEB)", "Numeri 13:3 (SEB)", "Numeri 13:5 (SEB)"]
+        vec![
+            "Numeri 13:1 (SEB)",
+            "Numeri 13:3 (SEB)",
+            "Numeri 13:5 (SEB)"
+        ]
     );
 }
 
@@ -830,7 +834,10 @@ fn compose_mixed_gap_splits_into_two_passages() {
     ];
     let slides = compose_bible_items_into_slides(&items, 320);
     let references: Vec<&str> = slides.iter().map(|s| s.main_reference.as_str()).collect();
-    assert_eq!(references, vec!["Numeri 13:1-2 (SEB)", "Numeri 13:4-5 (SEB)"]);
+    assert_eq!(
+        references,
+        vec!["Numeri 13:1-2 (SEB)", "Numeri 13:4-5 (SEB)"]
+    );
 }
 
 fn bible(slide: &presenter_core::Slide) -> &presenter_core::slide::BibleSlideMetadata {
@@ -973,7 +980,7 @@ fn owner_939_no_slide_mixes_verses_of_two_passages() {
 
 #[test]
 fn a_reference_is_never_a_verse_by_verse_list() {
-    // A passage that steps back (a repeated verse after a jump) is still
+    // Two runs of one chapter (5-7, then a gap to 16-17) are two passages,
     // labelled by runs, never "1, 2, 3, …".
     let items = vec![
         verse_full(5, "Päť.", "Ján", 3, "SEB"),
