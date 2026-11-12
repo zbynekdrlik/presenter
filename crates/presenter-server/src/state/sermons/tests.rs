@@ -488,7 +488,6 @@ async fn new_sermon(state: &AppState) -> SermonDetail {
     let draft = SermonDraft {
         service_date: Some(local_today()),
         default_translation: Some("slk-seb".to_string()),
-        secondary_translation: Some(None),
         ..SermonDraft::default()
     };
     state
@@ -518,10 +517,9 @@ async fn create_takes_the_server_dates_and_the_bible_preferences() {
     assert_eq!(sermon.service_date, date("2026-10-18"));
     assert_eq!(sermon.title, "Kázeň 18. 10. 2026");
     assert_eq!(sermon.default_translation_code, "slk-seb");
-    assert_eq!(
-        sermon.secondary_translation_code.as_deref(),
-        Some("eng-kjv")
-    );
+    // #937: the preference's secondary is the live console's, never a new
+    // sermon's — nobody chose a bilingual sermon.
+    assert_eq!(sermon.secondary_translation_code, None);
     assert_eq!(sermon.author_email.as_deref(), Some("preacher@example.org"));
     assert_eq!(sermon.revision, 0);
     let nlt = SermonDraft {
@@ -536,6 +534,40 @@ async fn create_takes_the_server_dates_and_the_bible_preferences() {
         refusal(&err).as_deref(),
         Some("NLT sa do kázne neukladá — vyber iný preklad")
     );
+}
+
+/// #937 (owner 2026-11-12: "vyrobilo to nejake dvojjazicne slidy"): a sermon
+/// made with no secondary has single-language slides even while the Bible
+/// preference names one.
+#[tokio::test]
+async fn a_new_sermon_has_no_secondary_line_unless_one_is_picked() {
+    let state = hebrews().await;
+    state
+        .set_bible_preferences(
+            BiblePreferences::default()
+                .with_main_translation(Some("slk-seb".to_string()))
+                .with_secondary_translation(Some("eng-kjv".to_string())),
+        )
+        .await
+        .expect("preferences");
+    let created = state
+        .create_sermon(SermonDraft::default(), date("2026-10-14"), &preacher())
+        .await
+        .expect("create");
+    assert_eq!(created.sermon.secondary_translation_code, None);
+    let added = state
+        .add_sermon_item(
+            created.sermon.id,
+            created.sermon.revision,
+            None,
+            &range("slk-seb", "HEB", 1..=2),
+            &preacher(),
+        )
+        .await
+        .expect("add");
+    assert_eq!(added.slides.len(), 1);
+    assert_eq!(added.slides[0].slide.secondary.value(), "");
+    assert_eq!(added.slides[0].slide.secondary_reference, "");
 }
 
 #[tokio::test]
