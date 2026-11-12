@@ -59,6 +59,10 @@ pub struct SermonDetail {
     pub title: String,
     pub service_date: NaiveDate,
     pub default_translation: String,
+    /// The second language under every slide; `None` = none (#937: only
+    /// when the preacher picks one).
+    #[serde(default)]
+    pub secondary_translation: Option<String>,
     pub revision: i64,
     pub items: Vec<SermonItem>,
     pub slides: Vec<SermonSlide>,
@@ -115,6 +119,15 @@ struct NewItem<'a> {
 struct ItemOrder<'a> {
     expected_revision: i64,
     item_ids: &'a [String],
+}
+
+/// `PATCH /bible/sermons/{id}` with only the secondary translation: `null`
+/// is "žiadny" (the server reads an explicit `null` as no line).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SecondaryPatch<'a> {
+    expected_revision: i64,
+    secondary_translation: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -210,6 +223,22 @@ pub async fn reorder_items(
         SAVE_TIMEOUT_MS,
     );
     finish_json(started).await
+}
+
+/// The sermon's secondary translation; `None` = no second language (#937).
+pub async fn set_secondary(
+    id: &str,
+    revision: i64,
+    secondary: Option<&str>,
+) -> Result<SermonDetail, ApiError> {
+    patch_json_refusal(
+        &format!("/bible/sermons/{id}"),
+        &SecondaryPatch {
+            expected_revision: revision,
+            secondary_translation: secondary,
+        },
+    )
+    .await
 }
 
 pub async fn regenerate(id: &str, revision: i64) -> Result<SermonDetail, ApiError> {

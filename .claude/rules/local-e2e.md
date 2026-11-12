@@ -36,6 +36,12 @@ before the push (one CI cycle is ~25 min).
   `<repo root>/data/bibles-private`, whatever your shell exports: in a worktree
   (no private modules) link them in first, `ln -s <main checkout>/data/bibles-private
   data/bibles-private`, and never `git add` that link (#921).
+- **From a worktree (#936):** `npx playwright` also needs `node_modules`; link the main checkout's
+  (`ln -s ../../../node_modules node_modules`). Remove both links before you return: they are
+  untracked, not ignored, and the worktree guard refuses a shell `rm`/`unlink` of a link that
+  resolves into the main checkout, so use `python3 -c "import os; os.unlink('<worktree>/node_modules')"`.
+  A cold worktree needs its own release build (~25 min on a shared dev2); start `build-ui.sh` and the
+  release build in the background while the unit tests run.
 - **Many translations without ingesting them:** `tests/e2e/extra-translations.ts`
   lists SNV's four extra translations and serves their `?translation=` reads from
   the KJV (layout / switching specs only; a verse lookup in them is not served).

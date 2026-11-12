@@ -132,8 +132,9 @@ struct CreateSermonRequest {
     service_date: Option<NaiveDate>,
     #[serde(default)]
     default_translation: Option<String>,
-    #[serde(default, deserialize_with = "double_option")]
-    secondary_translation: Option<Option<String>>,
+    /// Absent or `null` = no second language (#937).
+    #[serde(default)]
+    secondary_translation: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

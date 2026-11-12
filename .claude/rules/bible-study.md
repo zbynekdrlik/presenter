@@ -140,8 +140,10 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **Local E2E of a UI change:** the server EMBEDS `presenter-ui/dist` (`include_dir!`), so a CI or
   `/opt/presenter-dev` binary runs the OLD UI. Build it (`cargo build --release -p presenter-server
   --features mock-integrations,test-helpers`, ~11 min) and stop `presenter-dev` for the run (the mock
-  Resolume binds 8091). That cargo build re-runs trunk unpatched: the `integrity` console warnings
-  in `finish()` are this local dist only.
+  Resolume binds 8091). Run `bash scripts/build-ui.sh` FIRST: the server's `build.rs` never runs
+  trunk, it only embeds `presenter-ui/dist` (re-run when `dist/index.html` changes), so a dist from
+  build-ui.sh is patched and `finish()` sees no `integrity` warnings (#936, 2026-11-12: 159 study /
+  sermon tests clean locally). A bare `trunk build` dist still gives those warnings.
 - **Local UI builds need nightly and `--release`** (`.cargo/config.toml` has `build-std`):
   `RUSTUP_TOOLCHAIN=nightly trunk build --release`; on stable, wasm-bindgen fails with
   `__wbindgen_externref_table_alloc`, and a debug build floods the console with reactive warnings.
