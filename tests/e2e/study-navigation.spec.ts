@@ -130,13 +130,15 @@ test("the sheet offers only what works today", async ({ browser }) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
   await verseNumber(page, 1).tap();
-  await expect(actions(page).locator("button:not([data-role=study-sheet-close])")).toHaveText([
+  // #936: the range row's − / + sit above the actions; the actions are the list.
+  await expect(actions(page).locator(".study-sheet__actions button")).toHaveText([
     "Pridať záložku",
     "Porovnať",
     "Pridať do kázne",
     /^Odkazy \(\d+\)$/,
     "Kopírovať",
   ]);
+  await expect(actions(page).locator('[data-role="verse-range"] button')).toHaveText(["− verš", "+ verš"]);
   await finish(opened);
 });
 
