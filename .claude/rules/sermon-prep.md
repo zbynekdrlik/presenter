@@ -214,11 +214,23 @@ paths:
   `sermon_list::add_choices` (newest service date first). `study.activeSermon` (localStorage) only
   marks the last used row "naposledy"; it never picks. From the cross-references sheet the add returns
   to that list (`Study::add_return`). The verse sheet's `verse-range` row says the count and steps the
-  END with − / + (`state::study_range`), the add button names the count; one range = one item.
+  END with − / + (`state::study_range`: inside the route's settled chapter and `MAX_ITEM_VERSES`, `+`
+  never shrinks a too-long link range), the add button names the count; one range = one item.
 - **Archive after a month** (#940, `state/sermons/archive.rs`): a sermon whose service date is more
   than 30 days before the server's today is archived (`archived_at`, never deleted) by the startup pass
-  and once a day (hourly check of `local_today()`); one INFO `presenter::bible::sermon` line per sermon,
-  `BibleSlidesChanged` through `archive_bible_presentation`. Restore = the Prepared tab's archive.
+  and once a day (hourly check of `local_today()`); per sermon the `presenter::bible::prepared`
+  "archived" line of `archive_bible_presentation` (+ `BibleSlidesChanged`) and one INFO
+  `presenter::bible::sermon` "archived automatically" line. Each sermon is archived ONCE, as its date
+  crosses the cutoff: app setting `sermons.autoArchivedThrough` holds the last complete pass's cutoff
+  and the next pass takes only `[mark, cutoff)` (`active_sermons_dated`), so a sermon restored in the
+  Prepared tab stays restored; a failed archive leaves the mark for the retry, an unreadable mark
+  starts over once.
+- **The add sheet re-reads the list whenever it asks anew** (an Effect on `pending_passage`, newest
+  answer only): a sermon deleted meanwhile → toast "Kázeň už neexistuje — vyber inú", its row goes.
+  Accepted: the cross-references list comes back unexpanded (first ten) after an add.
+- **"Druhý preklad" select** (`sermon_secondary.rs`): Memos for the options and the value (an edit
+  save must not rebuild an open picker), and an Effect on `detail` that writes the server's value
+  back into the `<select>` after a failed write (the Memo does not notify when nothing changed).
 - **All writes share the sermon's revision, so they run one at a time** (`Editor::busy`): an edit 300 ms
   after the last tap, a structural write through `write()`, which first waits for the edits
   (`settle_saves`). `Editor::apply` keeps a dirty item's local taps when the server's answer arrives.

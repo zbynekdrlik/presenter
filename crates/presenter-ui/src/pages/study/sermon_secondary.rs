@@ -39,27 +39,30 @@ fn pick(e: Editor, value: String) {
 
 #[component]
 pub(super) fn SecondaryChoice(e: Editor) -> impl IntoView {
-    let current = move || {
+    let select_ref = NodeRef::<leptos::html::Select>::new();
+    // Memos: an edit save or a socket event changes `detail` without touching
+    // these, and must not rebuild the options under an open picker.
+    let current = Memo::new(move |_| {
         e.detail.with(|detail| {
             detail
                 .as_ref()
                 .and_then(|held| held.secondary_translation.clone())
                 .unwrap_or_default()
         })
-    };
-    let main = move || {
+    });
+    let main = Memo::new(move |_| {
         e.detail.with(|detail| {
             detail
                 .as_ref()
                 .map(|held| held.default_translation.clone())
                 .unwrap_or_default()
         })
-    };
+    });
     // The sermon's own translation is no second language; a stored code no
     // longer installed still shows, or the select would claim "žiadny".
-    let options = move || {
-        let main = main();
-        let held = current();
+    let options = Memo::new(move |_| {
+        let main = main.get();
+        let held = current.get();
         let mut list: Vec<(String, String)> = e.s.translations.with(|all| {
             all.iter()
                 .filter(|translation| translation.code != main)
@@ -70,27 +73,41 @@ pub(super) fn SecondaryChoice(e: Editor) -> impl IntoView {
             list.push((held.clone(), held));
         }
         list
-    };
+    });
+    // A failed write leaves `current` as it was, so the Memo does not notify:
+    // `detail`'s own change (`show_held` / the reload) puts the shown option
+    // back to what the server holds.
+    Effect::new(move |_| {
+        e.detail.track();
+        let held = current.get_untracked();
+        if let Some(select) = select_ref.get_untracked() {
+            if select.value() != held {
+                select.set_value(&held);
+            }
+        }
+    });
     view! {
         <label class="sermon-secondary">
             <span class="sermon-secondary__label">"Druhý preklad"</span>
             <select
                 class="study-input sermon-secondary__select"
                 data-role="sermon-secondary"
+                node_ref=select_ref
                 on:change=move |ev| pick(e, event_target_value(&ev))
             >
-                <option value=NONE prop:selected=move || current().is_empty()>
+                <option value=NONE prop:selected=move || current.with(String::is_empty)>
                     "žiadny"
                 </option>
                 {move || {
-                    options()
+                    options
+                        .get()
                         .into_iter()
                         .map(|(code, name)| {
                             let selected = code.clone();
                             view! {
                                 <option
                                     value=code.clone()
-                                    prop:selected=move || current() == selected
+                                    prop:selected=move || current.with(|held| *held == selected)
                                 >
                                     {name}
                                 </option>

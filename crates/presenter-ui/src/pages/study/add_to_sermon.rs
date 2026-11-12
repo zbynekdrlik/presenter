@@ -120,9 +120,11 @@ async fn add_now(s: Study, id: String, passage: SermonPassage) {
                 }
             }
         }
-        // The sermon was deleted elsewhere: this device must choose again.
+        // The sermon was deleted elsewhere: this device must choose again, and
+        // the sheet reads the list again (`ask_where` sets the passage).
         Err(err) if is_not_found(&err) => {
             set_active(s, None);
+            s.tell("Kázeň už neexistuje — vyber inú".to_string());
             ask_where(s, passage);
         }
         Err(err) => s.tell(sermon_error(&err)),
@@ -141,9 +143,19 @@ fn add_to(s: Study, id: String, passage: SermonPassage) {
 #[component]
 pub(super) fn AddToSermonSheet(s: Study) -> impl IntoView {
     let list = RwSignal::new(None);
-    leptos::task::spawn_local(async move {
-        let answer = sermons::list_sermons().await;
-        list.set(Some(answer.map_err(|err| sermon_error(&err))));
+    // Read again whenever the sheet asks anew (a sermon gone meanwhile); only
+    // the newest answer lands.
+    let ticket = StoredValue::new(0_u32);
+    Effect::new(move |_| {
+        s.pending_passage.track();
+        let mine = ticket.get_value().wrapping_add(1);
+        ticket.set_value(mine);
+        leptos::task::spawn_local(async move {
+            let answer = sermons::list_sermons().await;
+            if ticket.try_get_value() == Some(mine) {
+                list.set(Some(answer.map_err(|err| sermon_error(&err))));
+            }
+        });
     });
     let choose = move |id: String| {
         if let Some(passage) = s.pending_passage.get_untracked() {

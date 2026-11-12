@@ -193,6 +193,25 @@ test("a selected range goes into a new sermon as one item, and the next add asks
   await finish(opened);
 });
 
+test("a sermon deleted while the sheet is open: the tap says so and its row goes (#936)", async ({ browser }) => {
+  const gone = await newSermon("Zmazaná medzitým");
+  const opened = await openStudy(browser, baseURL, PHONE_390);
+  const { page } = opened;
+  await verseNumber(page, 2).tap();
+  await role(page, "verse-add-to-sermon").tap();
+  await expect(addRow(page, gone)).toBeVisible();
+  const deleted = await fetch(`${baseURL}/bible/sermons/${gone}`, { method: "DELETE" });
+  expect(deleted.status).toBe(204);
+
+  await addRow(page, gone).tap();
+  await expect(role(page, "study-notice")).toContainText("Kázeň už neexistuje");
+  await expect(addRow(page, gone)).toHaveCount(0);
+  await expect(role(page, "add-to-sermon")).toBeVisible();
+  // The deliberate 404 of the deleted sermon's own read.
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((line) => !line.includes("404")));
+  await finish(opened);
+});
+
 test("the second language is the preacher's visible choice, none by default (#937)", async ({ browser }) => {
   const id = await newSermon("Druhý preklad");
   await addVerse(id, 1, 1);
@@ -208,6 +227,20 @@ test("the second language is the preacher's visible choice, none by default (#93
       slides: { secondaryText: string; secondaryReference: string }[];
     };
   expect((await detail()).slides[0].secondaryText).toBe("");
+  const secondaryLine = page.locator('[data-role="sermon-slide"] .sermon-slide__text--secondary');
+
+  // A write that fails (a malformed answer) puts the choice back.
+  await page.route(`**/bible/sermons/${id}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "not-json" });
+    } else {
+      await route.fallback();
+    }
+  });
+  await choice.selectOption("eng-kjv");
+  await expect(choice).toHaveValue("");
+  expect((await detail()).secondaryTranslation).toBeNull();
+  await page.unroute(`**/bible/sermons/${id}`);
 
   await choice.selectOption("eng-kjv");
   await saved(page);
@@ -215,6 +248,11 @@ test("the second language is the preacher's visible choice, none by default (#93
   const bilingual = await detail();
   expect(bilingual.slides[0].secondaryText).toContain("faith");
   expect(bilingual.slides[0].secondaryReference).toContain("(KJV)");
+  // What the preacher sees in Náhľad: the second line under the verse.
+  await role(page, "sermon-preview-open").tap();
+  await expect(secondaryLine.first()).toContainText("faith");
+  await page.goBack();
+  await expect(role(page, "sermon-preview-open")).toBeVisible();
 
   await page.reload();
   await expect(role(page, "sermon-secondary")).toHaveValue("eng-kjv");
@@ -222,6 +260,9 @@ test("the second language is the preacher's visible choice, none by default (#93
   await saved(page);
   await expect.poll(async () => (await detail()).secondaryTranslation).toBeNull();
   expect((await detail()).slides[0].secondaryText).toBe("");
+  await role(page, "sermon-preview-open").tap();
+  await expect(page.locator('[data-role="sermon-slide"]').first()).toBeVisible();
+  await expect(secondaryLine).toHaveCount(0);
   await finish(opened);
 });
 

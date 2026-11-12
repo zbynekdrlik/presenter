@@ -7,11 +7,11 @@
 use leptos::prelude::*;
 
 use super::sheet::Sheet;
-use super::{add_to_sermon, bookmarks, compare, crossrefs, nav, Chapter, Study};
+use super::{add_to_sermon, bookmarks, compare, crossrefs, nav, reader, Chapter, Study};
 use crate::api::sermons::SermonPassage;
 use crate::components::timer_panel::copy_to_clipboard;
 use crate::state::study::{copy_text, verse_reference};
-use crate::state::study_range::{range_len, step_range_end, verse_count_text};
+use crate::state::study_range::{range_len, range_limit, step_range_end, verse_count_text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerseAction {
@@ -87,8 +87,12 @@ fn selected_len(s: Study) -> Option<u16> {
     s.route.with(|route| route.verses).map(range_len)
 }
 
-/// The last verse of the chapter on screen.
+/// The last verse of the route's chapter; `None` while another one is on
+/// screen (a load), so nothing is bounded by the wrong chapter.
 fn last_verse(s: Study) -> Option<u16> {
+    if !reader::chapter_settled(s) {
+        return None;
+    }
     s.chapter.with(|chapter| match chapter {
         Chapter::Ready(_, text) => text.verses.last().map(|verse| verse.verse),
         _ => None,
@@ -118,8 +122,11 @@ fn RangeRow(s: Study) -> impl IntoView {
             .with(|route| route.verses.is_none_or(|(a, b)| a == b))
     };
     let at_end = move || {
-        let end = s.route.with(|route| route.verses.map(|(_, end)| end));
-        end.is_none() || end == last_verse(s)
+        let verses = s.route.with(|route| route.verses);
+        match (verses, last_verse(s)) {
+            (Some((start, end)), Some(last)) => end >= range_limit(start, last),
+            _ => true,
+        }
     };
     view! {
         <div class="study-range" data-role="verse-range">
