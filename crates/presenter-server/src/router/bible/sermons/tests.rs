@@ -239,6 +239,29 @@ async fn create_records_the_author_and_delete_is_204_then_404() {
     );
 }
 
+/// #937: an absent `secondaryTranslation` is no second language even while
+/// the Bible preference names one; a named one is kept.
+#[tokio::test]
+async fn create_takes_a_secondary_only_when_the_request_names_one() {
+    let state = seeded_state().await;
+    state
+        .set_bible_preferences(
+            presenter_core::BiblePreferences::default()
+                .with_secondary_translation(Some("slk-seb".to_string())),
+        )
+        .await
+        .expect("preferences");
+    let app = build_router(state);
+    let plain = json!({ "defaultTranslation": "slk-seb" });
+    let (status, created) = call(&app, "POST", "/bible/sermons", Some(plain), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["secondaryTranslation"], Value::Null);
+    let picked = json!({ "defaultTranslation": "slk-seb", "secondaryTranslation": "slk-seb" });
+    let (status, created) = call(&app, "POST", "/bible/sermons", Some(picked), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["secondaryTranslation"], "slk-seb");
+}
+
 #[tokio::test]
 async fn a_sermons_slides_refuse_the_presentation_slide_routes() {
     let (app, id) = app_with_sermon().await;
