@@ -28,6 +28,7 @@ mod sermon_live;
 mod sermon_pane;
 mod sermon_preview;
 mod sermon_reorder;
+mod sermon_secondary;
 mod sermon_undo;
 mod sermons;
 mod sheet;
