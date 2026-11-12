@@ -1513,4 +1513,69 @@ async fn sermons_more_than_a_month_past_go_to_the_archive() {
     assert_eq!(lines[0].field("service_date"), Some("2026-10-12"));
 
     assert_eq!(state.archive_old_sermons(today).await.expect("again"), 0);
+
+    // A sermon the preacher restored stays restored: the same day, the next
+    // day and after a restart (the mark is stored). The next day takes only
+    // the sermon that crossed the cutoff since.
+    state
+        .restore_bible_presentation(old)
+        .await
+        .expect("restore");
+    assert_eq!(state.archive_old_sermons(today).await.expect("same day"), 0);
+    let tomorrow = today.checked_add_days(Days::new(1)).expect("a date");
+    assert_eq!(
+        state.archive_old_sermons(tomorrow).await.expect("next day"),
+        1
+    );
+    let active: Vec<_> = state
+        .list_bible_presentations()
+        .await
+        .expect("active list")
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect();
+    assert!(active.contains(&old), "restored stays: {active:?}");
+    assert!(!active.contains(&month), "crossed the cutoff: {active:?}");
+    assert!(active.contains(&recent));
+}
+
+/// #940: an unreadable mark looks at every older sermon once more.
+#[tokio::test]
+async fn an_unreadable_archive_mark_starts_from_the_beginning() {
+    let state = hebrews().await;
+    let today = date("2026-11-12");
+    let draft = SermonDraft {
+        service_date: Some(date("2026-09-01")),
+        default_translation: Some("slk-seb".to_string()),
+        ..SermonDraft::default()
+    };
+    let old = state
+        .create_sermon(draft, today, &preacher())
+        .await
+        .expect("create")
+        .sermon
+        .id;
+    state
+        .repository()
+        .set_app_setting(super::archive::ARCHIVED_THROUGH_KEY, "not a date")
+        .await
+        .expect("mark");
+    assert_eq!(state.archive_old_sermons(today).await.expect("pass"), 1);
+    let archived: Vec<_> = state
+        .list_archived_bible_presentations()
+        .await
+        .expect("archive")
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect();
+    assert_eq!(archived, [old]);
+    assert_eq!(
+        state
+            .repository()
+            .get_app_setting(super::archive::ARCHIVED_THROUGH_KEY)
+            .await
+            .expect("read")
+            .as_deref(),
+        Some("2026-10-13")
+    );
 }

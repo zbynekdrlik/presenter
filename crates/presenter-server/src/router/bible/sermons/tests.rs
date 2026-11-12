@@ -256,6 +256,10 @@ async fn create_takes_a_secondary_only_when_the_request_names_one() {
     let (status, created) = call(&app, "POST", "/bible/sermons", Some(plain), &[]).await;
     assert_eq!(status, StatusCode::OK, "{created}");
     assert_eq!(created["secondaryTranslation"], Value::Null);
+    let null = json!({ "defaultTranslation": "slk-seb", "secondaryTranslation": null });
+    let (status, created) = call(&app, "POST", "/bible/sermons", Some(null), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["secondaryTranslation"], Value::Null);
     let picked = json!({ "defaultTranslation": "slk-seb", "secondaryTranslation": "slk-seb" });
     let (status, created) = call(&app, "POST", "/bible/sermons", Some(picked), &[]).await;
     assert_eq!(status, StatusCode::OK, "{created}");
