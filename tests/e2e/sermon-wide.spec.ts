@@ -85,6 +85,8 @@ test("the sermon sits beside the last place, and a verse goes across", async ({ 
 
   await verseNumber(page, 1).click();
   await role(page, "verse-add-to-sermon").click();
+  // #936: even with the sermon beside the text, the sheet asks.
+  await page.locator(`[data-role="add-to-sermon-row"][data-sermon-id="${id}"]`).click();
   await expect(role(page, "study-notice")).toContainText("Pridané do kázne");
   const item = role(page, "study-sermon-pane").locator('[data-role="sermon-item"]');
   await expect(item).toHaveAttribute("data-label", "Hebrejom 11:1 (SEB)");
