@@ -200,17 +200,15 @@ fn dlink_accepts_the_device_presenter_asks_for() {
 }
 
 #[test]
-fn the_rx_flows_bind_inside_the_dante_guard_audio_window() {
-    // #933: companion-snv's `inet dante_guard` input chain accepts Dante audio
-    // only on udp 30000-30199; RX flows on OS-chosen ports were granted by the
-    // FOH card but every audio packet was dropped (2026-11-13).
+fn the_rx_flows_take_the_device_slot_ports() {
+    // #947 (dstack#264, dlink v0.6.117+): every device binds fixed flow ports
+    // from its slot inside dstack's range, which the generic Dante-leg filter
+    // accepts on every PC. presenter sets no port base of its own (a fixed
+    // base would overlap another slot's block).
     let device = dlink_config(&plan(96_000, DEFAULT_DEVICE_NAME))
         .device()
         .expect("device");
-    let base = device.rx_port_base.expect("an explicit RX port base");
-    assert_eq!(base, 30_000);
-    // dlink uses base .. base + 31 for the RX flows.
-    assert!(u32::from(base) + 31 <= 30_199, "{base}");
+    assert_eq!(device.rx_port_base, None);
 }
 
 #[test]
