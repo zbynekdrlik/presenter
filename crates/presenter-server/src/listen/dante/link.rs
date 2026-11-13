@@ -89,15 +89,7 @@ pub(crate) fn dlink_config(plan: &LinkPlan) -> Config {
         .network_rate(plan.network_rate)
         .product("Presenter", "presenter-listen")
         .flow_slots(plan.channels.len().max(1))
-        .rx_port_base(DANTE_RX_PORT_BASE)
 }
-
-/// The first port of the RX flows (dlink binds `base .. base + 31`). The
-/// sites' `inet dante_guard` firewall accepts Dante audio only on udp
-/// 30000-30199; flows on OS-chosen ports were granted by the transmitter and
-/// then dropped there (#933, SNV 2026-11-13). Nothing else on companion-snv
-/// binds this window.
-pub(crate) const DANTE_RX_PORT_BASE: u16 = 30_000;
 
 /// A channel's flow as the device reports it.
 fn channel_flow(channel: &RxChannel) -> ChannelFlow {
