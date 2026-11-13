@@ -1,4 +1,5 @@
 pub mod ai_status;
+pub mod catalog_resizer;
 pub mod header;
 pub mod header_menus;
 pub mod info_popover;
