@@ -256,7 +256,7 @@ paths:
   keeps the saved list and the fixed pair apart (`Mics`) and publishes `saved ++ dante` on its ONE
   config watch (`change_mics`, under one lock) — so health / status, the recorder and the supervisor
   take the pair through the existing path; `dante::supervise` calls `set_dante_mics(iface set)` first,
-  so the device starts with no saved mic at all. ONE in-process `dlink` device (git tag v0.6.118 since 2026-11-13; RX flows on the device SLOT's fixed ports — dlink v0.6.117+, dstack#264 — slot 0 = udp 29800-29831 on companion-snv, accepted by the generic `inet dstack_dante_leg` filter (29800-31847); never set `rx_port_base`: a fixed base overlaps another slot's block; #933 / #947;
+  so the device starts with no saved mic at all. ONE in-process `dlink` device (git tag v0.6.121 since 2026-11-13 (#949: reads an ARC 2.7 card's TX flow list, op 0x2200, after 0x2600 is refused); RX flows on the device SLOT's fixed ports — dlink v0.6.117+, dstack#264 — slot 0 = udp 29800-29831 on companion-snv, accepted by the generic `inet dstack_dante_leg` filter (29800-31847); never set `rx_port_base`: a fixed base overlaps another slot's block; #933 / #947;
   `deny.toml` `allow-git`) with those two RX channels and NO `Config::subscribe` (dstack patches it;
   a subscription made in Dante Controller is kept in `dante-listen.toml` next to the DB). dlink facts read from its source (correcting the dstack
   FINDING): the app rate `16_000` needs `.network_rate(<site rate>)` too or the DEVICE runs at 16 kHz;
