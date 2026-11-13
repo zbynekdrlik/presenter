@@ -97,7 +97,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -108,7 +108,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1042,8 +1042,8 @@ dependencies = [
 
 [[package]]
 name = "dlink"
-version = "0.6.73"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.73#2617e10000a69d3dfd8136a383133eb195bfb8c7"
+version = "0.6.115"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.115#9f57850c68592c73dad8a20afecb71992d40762a"
 dependencies = [
  "dstack",
  "dstack-audio-io",
@@ -1066,8 +1066,8 @@ checksum = "669a445ee724c5c69b1b06fe0b63e70a1c84bc9bb7d9696cd4f4e3ec45050408"
 
 [[package]]
 name = "dstack"
-version = "0.6.73"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.73#2617e10000a69d3dfd8136a383133eb195bfb8c7"
+version = "0.6.115"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.115#9f57850c68592c73dad8a20afecb71992d40762a"
 dependencies = [
  "dstack-audio-io",
  "dsync-ptp",
@@ -1089,21 +1089,21 @@ dependencies = [
 
 [[package]]
 name = "dstack-audio-io"
-version = "0.6.73"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.73#2617e10000a69d3dfd8136a383133eb195bfb8c7"
+version = "0.6.115"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.115#9f57850c68592c73dad8a20afecb71992d40762a"
 
 [[package]]
 name = "dstack-resample"
-version = "0.6.73"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.73#2617e10000a69d3dfd8136a383133eb195bfb8c7"
+version = "0.6.115"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.115#9f57850c68592c73dad8a20afecb71992d40762a"
 dependencies = [
  "rubato",
 ]
 
 [[package]]
 name = "dsync-ptp"
-version = "1.28.0"
-source = "git+https://github.com/zbynekdrlik/dsync?tag=v1.28.0#98f8b35d7a14102f5ae3aa4366f0c7320c50d11b"
+version = "1.33.1"
+source = "git+https://github.com/zbynekdrlik/dsync?tag=v1.33.1#f45090fb0be4eb756441f9eed3ed0c10d6ffeb0e"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -1169,7 +1169,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1498,7 +1498,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2991,7 +2991,7 @@ dependencies = [
 [[package]]
 name = "mdns-sd"
 version = "0.21.6"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.73#2617e10000a69d3dfd8136a383133eb195bfb8c7"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.115#9f57850c68592c73dad8a20afecb71992d40762a"
 dependencies = [
  "fastrand",
  "flume 0.12.0",
@@ -3176,7 +3176,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4558,7 +4558,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5215,7 +5215,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5647,7 +5647,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6543,7 +6543,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -190,13 +190,27 @@ fn dlink_accepts_the_device_presenter_asks_for() {
         let device = config.device();
         assert!(device.is_ok(), "{rate}: {device:?}");
         let split = config.split().unwrap();
-        assert!(split.rx_path_ns <= dlink::BUDGET_NS, "{split:?}");
+        assert!(split.rx_path_ns <= dlink::REFERENCE_PATH_NS, "{split:?}");
     }
     let refused = dlink_config(&plan(48_000, "bad name!")).device();
     assert!(
         refused.is_err_and(|problems| problems.iter().any(|p| p.contains("name"))),
         "dlink names the problem of a bad device name"
     );
+}
+
+#[test]
+fn the_rx_flows_bind_inside_the_dante_guard_audio_window() {
+    // #933: companion-snv's `inet dante_guard` input chain accepts Dante audio
+    // only on udp 30000-30199; RX flows on OS-chosen ports were granted by the
+    // FOH card but every audio packet was dropped (2026-11-13).
+    let device = dlink_config(&plan(96_000, DEFAULT_DEVICE_NAME))
+        .device()
+        .expect("device");
+    let base = device.rx_port_base.expect("an explicit RX port base");
+    assert_eq!(base, 30_000);
+    // dlink uses base .. base + 31 for the RX flows.
+    assert!(u32::from(base) + 31 <= 30_199, "{base}");
 }
 
 #[test]
