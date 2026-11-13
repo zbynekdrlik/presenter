@@ -1042,8 +1042,8 @@ dependencies = [
 
 [[package]]
 name = "dlink"
-version = "0.6.118"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.118#a6fe1509becfa3d1dc17b1b0c4a64711b6b9bde6"
+version = "0.6.122"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.122#3bc9a9a816e841ef70e5bafd53519200943eab71"
 dependencies = [
  "dstack",
  "dstack-audio-io",
@@ -1066,8 +1066,8 @@ checksum = "669a445ee724c5c69b1b06fe0b63e70a1c84bc9bb7d9696cd4f4e3ec45050408"
 
 [[package]]
 name = "dstack"
-version = "0.6.118"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.118#a6fe1509becfa3d1dc17b1b0c4a64711b6b9bde6"
+version = "0.6.122"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.122#3bc9a9a816e841ef70e5bafd53519200943eab71"
 dependencies = [
  "dstack-audio-io",
  "dsync-ptp",
@@ -1089,13 +1089,13 @@ dependencies = [
 
 [[package]]
 name = "dstack-audio-io"
-version = "0.6.118"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.118#a6fe1509becfa3d1dc17b1b0c4a64711b6b9bde6"
+version = "0.6.122"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.122#3bc9a9a816e841ef70e5bafd53519200943eab71"
 
 [[package]]
 name = "dstack-resample"
-version = "0.6.118"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.118#a6fe1509becfa3d1dc17b1b0c4a64711b6b9bde6"
+version = "0.6.122"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.122#3bc9a9a816e841ef70e5bafd53519200943eab71"
 dependencies = [
  "rubato",
 ]
@@ -2346,7 +2346,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2991,7 +2991,7 @@ dependencies = [
 [[package]]
 name = "mdns-sd"
 version = "0.21.6"
-source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.118#a6fe1509becfa3d1dc17b1b0c4a64711b6b9bde6"
+source = "git+https://github.com/zbynekdrlik/dstack?tag=v0.6.122#3bc9a9a816e841ef70e5bafd53519200943eab71"
 dependencies = [
  "fastrand",
  "flume 0.12.0",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-bible"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "anyhow",
  "presenter-core",
@@ -3606,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-core"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3624,7 +3624,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-importer"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3646,7 +3646,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-migration"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3662,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-ndi"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "anyhow",
  "axum",
@@ -3687,7 +3687,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-persistence"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3708,7 +3708,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-server"
-version = "0.4.376"
+version = "0.4.377"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3944,7 +3944,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3982,9 +3982,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
