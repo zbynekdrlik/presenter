@@ -204,11 +204,26 @@ pub fn clamp_list_height(height: f64) -> f64 {
     }
 }
 
+/// The phone's libraries + playlists box height: the old resizer's bounds.
+pub fn clamp_catalog_top_height(height: f64) -> f64 {
+    height.clamp(200.0, 520.0)
+}
+
+/// A stored list height; `default` when there is none or it is not a
+/// number ("NaN" and "inf" parse as f64 but are not a size).
+fn parse_list_height(stored: Option<&str>, default: f64) -> f64 {
+    stored
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .map_or(default, clamp_list_height)
+}
+
 /// The stored list height under `key`, or `default` when there is none.
 fn stored_list_height(key: &str, default: f64) -> f64 {
-    crate::state::session::get_persistent(key)
-        .and_then(|v| v.parse::<f64>().ok())
-        .map_or(default, clamp_list_height)
+    parse_list_height(
+        crate::state::session::get_persistent(key).as_deref(),
+        default,
+    )
 }
 
 impl OperatorState {
@@ -296,6 +311,23 @@ mod tests {
         assert_eq!(clamp_list_height(5000.0), LIST_MAX_HEIGHT);
         assert_eq!(clamp_list_height(f64::NAN), LIST_MIN_HEIGHT);
         assert_eq!(clamp_list_height(f64::INFINITY), LIST_MIN_HEIGHT);
+    }
+
+    #[test]
+    fn stored_list_height_falls_back_to_the_default() {
+        assert_eq!(parse_list_height(None, 98.0), 98.0);
+        assert_eq!(parse_list_height(Some("132"), 98.0), 132.0);
+        assert_eq!(parse_list_height(Some("2"), 98.0), LIST_MIN_HEIGHT);
+        assert_eq!(parse_list_height(Some("NaN"), 98.0), 98.0);
+        assert_eq!(parse_list_height(Some("inf"), 98.0), 98.0);
+        assert_eq!(parse_list_height(Some("tall"), 98.0), 98.0);
+    }
+
+    #[test]
+    fn the_phone_box_keeps_the_old_bounds() {
+        assert_eq!(clamp_catalog_top_height(100.0), 200.0);
+        assert_eq!(clamp_catalog_top_height(320.0), 320.0);
+        assert_eq!(clamp_catalog_top_height(900.0), 520.0);
     }
 
     #[test]

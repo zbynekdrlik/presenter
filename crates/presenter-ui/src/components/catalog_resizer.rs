@@ -11,7 +11,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 use crate::state::operator::{
-    clamp_list_height, OperatorState, LIBRARIES_HEIGHT_KEY, PLAYLISTS_HEIGHT_KEY,
+    clamp_catalog_top_height, clamp_list_height, OperatorState, LIBRARIES_HEIGHT_KEY,
+    PLAYLISTS_HEIGHT_KEY,
 };
 use crate::state::AppContext;
 
@@ -25,10 +26,6 @@ struct ResizeTarget {
     /// `None` = start from the stored value.
     measured: Option<&'static str>,
     clamp: fn(f64) -> f64,
-}
-
-fn clamp_catalog_top(height: f64) -> f64 {
-    height.clamp(200.0, 520.0)
 }
 
 /// The height of the first element matching `selector`, if it is shown.
@@ -68,7 +65,7 @@ pub fn CatalogResizer() -> impl IntoView {
         size: op.catalog_top_height,
         storage_key: "catalogTopHeight",
         measured: None,
-        clamp: clamp_catalog_top,
+        clamp: clamp_catalog_top_height,
     };
     view! { <SectionResizer role="catalog-resizer" desktop=desktop phone=Some(phone) /> }
 }
@@ -111,7 +108,9 @@ fn SectionResizer(
         let on_move_fn_for_cleanup = on_move_fn.clone();
         let handle_for_cleanup = handle.clone();
 
-        // One-shot pointerup: store the size, remove the move listener.
+        // The drag ends when the handle loses the pointer: after pointerup,
+        // and also when the browser cancels the gesture (a touch screen),
+        // which fires no pointerup. Store the size, remove the move listener.
         let on_up = Closure::once_into_js(move |_ev: web_sys::PointerEvent| {
             let height = target.size.get_untracked();
             crate::state::session::set_persistent(target.storage_key, &height.to_string());
@@ -128,7 +127,7 @@ fn SectionResizer(
             let opts = web_sys::AddEventListenerOptions::new();
             opts.set_once(true);
             let _ = el.add_event_listener_with_callback_and_add_event_listener_options(
-                "pointerup",
+                "lostpointercapture",
                 on_up.unchecked_ref(),
                 &opts,
             );

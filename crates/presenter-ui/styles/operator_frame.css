@@ -112,14 +112,15 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__s
 /* As tall as its two sections (`!important` beats the inline `height` the
    phone uses). Each section has its own size (#944): the inline
    `--catalog-libraries-max` / `--catalog-playlists-max` cap its list, set by
-   the handle under it and remembered per browser. */
+   the handle under it and remembered per browser. Under a tall preview it
+   never goes below a heading + one row of each section (8 + 64 + 16 + 64). */
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-top {
   display: flex;
   flex-direction: column;
   flex: 0 1 auto;
   gap: 4px;
   height: auto !important;
-  max-height: none;
+  min-height: 152px;
   box-sizing: border-box;
   padding: 8px 8px 0;
   overflow: hidden;
@@ -127,18 +128,19 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__c
 
 /* Libraries and playlists each keep their heading and scroll their own rows;
    neither collapses below a heading + one row. When the column is short, the
-   libraries (the least used, /ui/usage 2026-11-13) give way, never the
-   playlists (#944). */
+   libraries (the least used, /ui/usage 2026-11-13) give way first: their
+   shrink factor is so much larger that the playlists lose rows only once the
+   libraries are down to one row (#944). */
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-height: 64px;
 }
 
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group--playlists {
-  flex-shrink: 0;
+  flex-shrink: 1;
 }
 
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] [data-role="library-list"] {
@@ -170,12 +172,19 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__f
   list-style: none;
 }
 
-/* The resizer between the two halves: an 8 px gap that shows a line on hover. */
+/* The resize handles: an 8 px band that shows a line on hover. The one
+   between Knižnice and Playlisty (#944) eats the column gap around it, so the
+   sections stay the mockup's 4 px apart. A drag is never a touch scroll. */
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-resizer {
   flex: 0 0 8px;
   margin: 0;
   border-radius: 0;
   background: transparent;
+  touch-action: none;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] [data-role="library-resizer"] {
+  margin: -4px 0;
 }
 
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-resizer:hover {

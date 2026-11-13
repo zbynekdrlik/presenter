@@ -27,6 +27,9 @@ import {
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
+/** The rows each list shows: what the dev data had, topped up to SNV's. */
+let libraryRows = 0;
+let playlistRows = 0;
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -50,12 +53,15 @@ test.beforeAll(async ({}, testInfo) => {
   // SNV-like: six favourite libraries (the list shows the favourites), four
   // playlists on the dashboard.
   const favorites: { ids: string[] } = await send("GET", "/libraries/favorites");
+  libraryRows = Math.max(favorites.ids.length, 6);
   for (let i = favorites.ids.length; i < 6; i++) {
     const library = await send("POST", "/libraries", { name: `_E2E Knižnica ${i + 1}` });
     await send("POST", `/libraries/${library.id}/favorite`, { favorite: true });
   }
   const playlists: { showInDashboard?: boolean }[] = await send("GET", "/playlists");
-  for (let i = playlists.filter((p) => p.showInDashboard).length; i < 4; i++) {
+  const dashboard = playlists.filter((p) => p.showInDashboard).length;
+  playlistRows = Math.max(dashboard, 4);
+  for (let i = dashboard; i < 4; i++) {
     await send("POST", "/playlists", { name: `_E2E Playlist ${i + 1}`, showInDashboard: true });
   }
 });
@@ -71,8 +77,8 @@ async function open(page: Page) {
   await page.goto(`${baseURL}/ui/operator`);
   await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
   await expect(page.locator("body")).toHaveAttribute("data-shell", "desktop");
-  await expect(page.locator(`${LIBRARY_LIST} .operator__list-row`)).toHaveCount(6);
-  await expect(page.locator(`${PLAYLIST_LIST} .operator__list-row`)).toHaveCount(4);
+  await expect(page.locator(`${LIBRARY_LIST} .operator__list-row`)).toHaveCount(libraryRows);
+  await expect(page.locator(`${PLAYLIST_LIST} .operator__list-row`)).toHaveCount(playlistRows);
 }
 
 /** The list's height and how many of its rows are WHOLLY visible in it. */
@@ -153,12 +159,34 @@ test("each section resizes on its own and keeps its size after a reload", async 
   expect((await section(page, LIBRARY_LIST)).height, "the libraries keep their size").toBe(libsAfter.height);
 
   // Remembered by this browser.
-  await page.reload();
-  await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached" });
-  await expect(page.locator(`${PLAYLIST_LIST} .operator__list-row`)).toHaveCount(4);
-  await expect(page.locator(`${LIBRARY_LIST} .operator__list-row`)).toHaveCount(6);
+  await open(page);
   expect(Math.abs((await section(page, LIBRARY_LIST)).height - libsAfter.height), "libraries after reload").toBeLessThanOrEqual(1);
   expect(Math.abs((await section(page, PLAYLIST_LIST)).height - plsAfter.height), "playlists after reload").toBeLessThanOrEqual(1);
+
+  // Never below the heading + one row.
+  await drag(page, "library-resizer", -500);
+  const smallest = await section(page, LIBRARY_LIST);
+  expect(smallest.rows, "one library row left").toBe(1);
+  expect(Math.abs(smallest.height - 30), "one row high").toBeLessThanOrEqual(1);
+  await expect(page.locator('[data-view-panel="worship"] .operator__group--libraries h2')).toBeVisible();
+
+  expect(errors).toEqual([]);
+});
+
+test("a short window takes room from the libraries first, the songs keep theirs", async ({ page }) => {
+  const errors: string[] = [];
+  attachConsoleErrorCollector(page, errors);
+  // A laptop browser window: the stage preview takes the column's bottom.
+  await page.setViewportSize({ width: 1366, height: 657 });
+  await open(page);
+
+  const libraries = await section(page, LIBRARY_LIST);
+  expect(libraries.rows, "libraries gave way").toBeLessThan(3);
+  expect(libraries.rows, "libraries keep a row").toBeGreaterThanOrEqual(1);
+  // The playlists still show all their default rows (5, or fewer playlists).
+  expect((await section(page, PLAYLIST_LIST)).rows, "playlists untouched").toBe(Math.min(playlistRows, 5));
+  const songs = await page.locator('[data-view-panel="worship"] [data-role="catalog-bottom"]').boundingBox();
+  expect(songs?.height ?? 0, "song list").toBeGreaterThanOrEqual(140);
 
   expect(errors).toEqual([]);
 });
