@@ -109,28 +109,44 @@ body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__s
 
 /* ── Lists column (mockup `.lists`: padding 8, gap 4) ── */
 
-/* As tall as its rows, at most the resizer's height (the inline
-   `--catalog-top-max`; `!important` beats the inline `height` the phone uses). */
+/* As tall as its two sections (`!important` beats the inline `height` the
+   phone uses). Each section has its own size (#944): the inline
+   `--catalog-libraries-max` / `--catalog-playlists-max` cap its list, set by
+   the handle under it and remembered per browser. */
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__catalog-top {
   display: flex;
   flex-direction: column;
   flex: 0 1 auto;
   gap: 4px;
   height: auto !important;
-  max-height: var(--catalog-top-max, 320px);
+  max-height: none;
   box-sizing: border-box;
   padding: 8px 8px 0;
   overflow: hidden;
 }
 
 /* Libraries and playlists each keep their heading and scroll their own rows;
-   neither collapses below a heading + one row. */
+   neither collapses below a heading + one row. When the column is short, the
+   libraries (the least used, /ui/usage 2026-11-13) give way, never the
+   playlists (#944). */
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group {
   display: flex;
   flex-direction: column;
   gap: 4px;
   flex: 0 1 auto;
-  min-height: 0;
+  min-height: 64px;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__group--playlists {
+  flex-shrink: 0;
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] [data-role="library-list"] {
+  max-height: var(--catalog-libraries-max, 98px);
+}
+
+body.operator:not([data-shell="phone"]) [data-view-panel="worship"] [data-role="playlist-list"] {
+  max-height: var(--catalog-playlists-max, 166px);
 }
 
 body.operator:not([data-shell="phone"]) [data-view-panel="worship"] .operator__list {

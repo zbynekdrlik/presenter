@@ -76,7 +76,13 @@ pub struct OperatorState {
     /// #832: this browser's slides-per-row choice (1–8); `None` = the CSS
     /// default (3, or 2 on a phone).
     pub slide_columns: RwSignal<Option<u8>>,
+    /// The phone's libraries + playlists box height (localStorage
+    /// `catalogTopHeight`). A desktop sizes the two sections on its own (#944).
     pub catalog_top_height: RwSignal<f64>,
+    /// #944, desktop: the most the library list may take (px), per browser.
+    pub catalog_libraries_height: RwSignal<f64>,
+    /// #944, desktop: the most the playlist list may take (px), per browser.
+    pub catalog_playlists_height: RwSignal<f64>,
     /// #850 §6.3: the phone header's "Viac" sheet is open.
     pub more_sheet_open: RwSignal<bool>,
     /// A closed sheet still catches taps for a moment (`more_sheet.rs`).
@@ -177,6 +183,34 @@ pub struct OperatorState {
     pub paste_in_flight: RwSignal<bool>,
 }
 
+/// #944: localStorage keys of the desktop section sizes (the list heights).
+pub const LIBRARIES_HEIGHT_KEY: &str = "catalogLibrariesHeight";
+pub const PLAYLISTS_HEIGHT_KEY: &str = "catalogPlaylistsHeight";
+/// Desktop list rows are 30 px, 4 px apart: n rows = 34 n - 4 px. Libraries
+/// are the least used section (`/ui/usage`, 2026-11-13): 3 rows.
+pub const LIBRARIES_DEFAULT_HEIGHT: f64 = 98.0;
+/// The playlists get real room: 5 rows.
+pub const PLAYLISTS_DEFAULT_HEIGHT: f64 = 166.0;
+/// A list never goes below one row (its heading stays above it).
+pub const LIST_MIN_HEIGHT: f64 = 30.0;
+pub const LIST_MAX_HEIGHT: f64 = 800.0;
+
+/// A list height the bounds allow: anything else (a typo, NaN) is clamped.
+pub fn clamp_list_height(height: f64) -> f64 {
+    if height.is_finite() {
+        height.clamp(LIST_MIN_HEIGHT, LIST_MAX_HEIGHT)
+    } else {
+        LIST_MIN_HEIGHT
+    }
+}
+
+/// The stored list height under `key`, or `default` when there is none.
+fn stored_list_height(key: &str, default: f64) -> f64 {
+    crate::state::session::get_persistent(key)
+        .and_then(|v| v.parse::<f64>().ok())
+        .map_or(default, clamp_list_height)
+}
+
 impl OperatorState {
     pub fn new() -> Self {
         // Use persistent storage (localStorage) for settings that should survive tab close
@@ -187,6 +221,10 @@ impl OperatorState {
         let catalog_top_height = crate::state::session::get_persistent("catalogTopHeight")
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(320.0);
+        let catalog_libraries_height =
+            stored_list_height(LIBRARIES_HEIGHT_KEY, LIBRARIES_DEFAULT_HEIGHT);
+        let catalog_playlists_height =
+            stored_list_height(PLAYLISTS_HEIGHT_KEY, PLAYLISTS_DEFAULT_HEIGHT);
 
         Self {
             focused_slide_id: RwSignal::new(crate::state::session::get("focusedSlideId")),
@@ -203,6 +241,8 @@ impl OperatorState {
                 .as_deref(),
             )),
             catalog_top_height: RwSignal::new(catalog_top_height),
+            catalog_libraries_height: RwSignal::new(catalog_libraries_height),
+            catalog_playlists_height: RwSignal::new(catalog_playlists_height),
             more_sheet_open: RwSignal::new(false),
             more_sheet_shield: RwSignal::new(false),
             submitting: RwSignal::new(false),
@@ -241,5 +281,28 @@ impl OperatorState {
 impl Default for OperatorState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_height_stays_within_one_row_and_the_cap() {
+        assert_eq!(clamp_list_height(166.0), 166.0);
+        assert_eq!(clamp_list_height(4.0), LIST_MIN_HEIGHT);
+        assert_eq!(clamp_list_height(-50.0), LIST_MIN_HEIGHT);
+        assert_eq!(clamp_list_height(5000.0), LIST_MAX_HEIGHT);
+        assert_eq!(clamp_list_height(f64::NAN), LIST_MIN_HEIGHT);
+        assert_eq!(clamp_list_height(f64::INFINITY), LIST_MIN_HEIGHT);
+    }
+
+    #[test]
+    fn defaults_are_three_library_rows_and_five_playlist_rows() {
+        // Rows are 30 px, 4 px apart.
+        let rows = |n: f64| 34.0 * n - 4.0;
+        assert_eq!(LIBRARIES_DEFAULT_HEIGHT, rows(3.0));
+        assert_eq!(PLAYLISTS_DEFAULT_HEIGHT, rows(5.0));
     }
 }

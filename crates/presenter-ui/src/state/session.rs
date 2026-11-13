@@ -55,13 +55,13 @@ pub fn remove(key: &str) {
 }
 
 /// Get a value from local storage (persistent across sessions).
-/// Use for settings like lineLimit, catalogTopHeight and slide columns.
+/// Use for settings like lineLimit, the catalog section sizes and slide columns.
 pub fn get_persistent(key: &str) -> Option<String> {
     read(local_storage(), key)
 }
 
 /// Set a value in local storage (persistent across sessions).
-/// Use for settings like lineLimit, catalogTopHeight and slide columns.
+/// Use for settings like lineLimit, the catalog section sizes and slide columns.
 pub fn set_persistent(key: &str, value: &str) {
     write(local_storage(), key, value);
 }

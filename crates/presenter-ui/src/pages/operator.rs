@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+use crate::components::catalog_resizer::{CatalogResizer, LibraryResizer};
 use crate::components::header::Header;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
@@ -163,12 +164,17 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     // Expose test helpers
     crate::utils::test_helpers::expose_globals(&ctx, &op);
 
-    // Catalog resizer. A desktop (#875 mockup v3) lets the libraries +
-    // playlists take only the rows they have, up to this height
-    // (`--catalog-top-max`, operator_frame.css); the phone keeps `height`.
+    // The left column's sizes. A phone sizes the libraries + playlists box
+    // (`height`); a desktop (#944) caps each list on its own, so a list takes
+    // only the rows it has up to its size (operator_frame.css).
     let catalog_top_style = move || {
         let height = op.catalog_top_height.get();
-        format!("height: {height}px; --catalog-top-max: {height}px")
+        let libraries = op.catalog_libraries_height.get();
+        let playlists = op.catalog_playlists_height.get();
+        format!(
+            "height: {height}px; --catalog-libraries-max: {libraries}px; \
+             --catalog-playlists-max: {playlists}px"
+        )
     };
 
     // #850 S8: Settings and AI mount the first time their view opens and then
@@ -190,6 +196,9 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                         style=catalog_top_style
                     >
                         <LibraryList />
+                        <Show when=move || !ctx.phone_shell.get()>
+                            <LibraryResizer />
+                        </Show>
                         <PlaylistList />
                     </div>
                     <CatalogResizer />
@@ -234,76 +243,6 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         <footer class="operator__version">
             <VersionLabel />
         </footer>
-    }
-}
-
-#[component]
-fn CatalogResizer() -> impl IntoView {
-    let op = use_ctx!(OperatorState);
-
-    let on_pointerdown = move |ev: web_sys::PointerEvent| {
-        let start_y = ev.client_y() as f64;
-        let start_height = op.catalog_top_height.get_untracked();
-        let pointer_id = ev.pointer_id();
-
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
-        if let Some(el) = &target {
-            let _ = el.set_pointer_capture(pointer_id);
-        }
-
-        // Create move handler and convert to JS value (ownership transferred to JS GC)
-        let on_move: Closure<dyn Fn(web_sys::PointerEvent)> =
-            Closure::new(move |ev: web_sys::PointerEvent| {
-                let dy = ev.client_y() as f64 - start_y;
-                let new_height = (start_height + dy).clamp(200.0, 520.0);
-                op.catalog_top_height.set(new_height);
-            });
-        let on_move_fn = on_move.into_js_value();
-
-        // Clone for cleanup in pointerup handler
-        let on_move_fn_for_cleanup = on_move_fn.clone();
-        let target_for_cleanup = target.clone();
-
-        // Create one-shot pointerup handler that cleans up the pointermove listener
-        // Closure::once_into_js auto-cleans after being called once
-        let on_up = Closure::once_into_js(move |_ev: web_sys::PointerEvent| {
-            let height = op.catalog_top_height.get_untracked();
-            // Use persistent storage so setting survives tab close
-            crate::state::session::set_persistent("catalogTopHeight", &height.to_string());
-
-            // Remove the pointermove listener to allow GC of that closure
-            if let Some(el) = target_for_cleanup {
-                let _ = el.remove_event_listener_with_callback(
-                    "pointermove",
-                    on_move_fn_for_cleanup.unchecked_ref(),
-                );
-            }
-            // on_move_fn_for_cleanup dropped here, allowing GC
-        });
-
-        if let Some(el) = &target {
-            let _ = el.add_event_listener_with_callback("pointermove", on_move_fn.unchecked_ref());
-            // Use once:true option so the pointerup listener is auto-removed after firing
-            let opts = web_sys::AddEventListenerOptions::new();
-            opts.set_once(true);
-            let _ = el.add_event_listener_with_callback_and_add_event_listener_options(
-                "pointerup",
-                on_up.unchecked_ref(),
-                &opts,
-            );
-        }
-        // No forget() needed - closures are converted to JS values and managed by GC
-    };
-
-    view! {
-        <div
-            class="operator__catalog-resizer"
-            data-role="catalog-resizer"
-            aria-hidden="true"
-            on:pointerdown=on_pointerdown
-        ></div>
     }
 }
 
