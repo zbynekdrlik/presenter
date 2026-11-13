@@ -216,7 +216,7 @@ paths:
   to that list (`Study::add_return`). The verse sheet's `verse-range` row says the count and steps the
   END with − / + (`state::study_range`: inside the route's settled chapter and `MAX_ITEM_VERSES`, `+`
   never shrinks a too-long link range), the add button names the count; one range = one item.
-- **Archive after a month** (#940, `state/sermons/archive.rs`): a sermon whose service date is more
+- **Archive after a month** (#940, `state/sermons/archive.rs`; an archived sermon leaves `list_sermon_summaries`, so the study list and the add choice, never the Prepared archive): a sermon whose service date is more
   than 30 days before the server's today is archived (`archived_at`, never deleted) by the startup pass
   and once a day (hourly check of `local_today()`); per sermon the `presenter::bible::prepared`
   "archived" line of `archive_bible_presentation` (+ `BibleSlidesChanged`) and one INFO

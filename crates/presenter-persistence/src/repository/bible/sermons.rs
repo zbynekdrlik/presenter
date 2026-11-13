@@ -188,7 +188,10 @@ impl Repository {
         }))
     }
 
-    /// Every sermon, by service date, with its item and slide counts.
+    /// Every sermon not archived, by service date, with its item and slide
+    /// counts. An archived sermon (by hand or after a month, #940) leaves the
+    /// study's list and its „Pridať do kázne“ choice; the Prepared tab's
+    /// archive brings it back.
     #[instrument(skip_all)]
     pub async fn list_sermon_summaries(&self) -> anyhow::Result<Vec<SermonSummary>> {
         let rows = bible_sermon::Entity::find()
@@ -201,6 +204,7 @@ impl Repository {
                 bible_presentation::Column::Id
                     .is_in(rows.iter().map(|row| row.presentation_id.clone())),
             )
+            .filter(bible_presentation::Column::ArchivedAt.is_null())
             .all(&self.db)
             .await?
             .into_iter()
@@ -211,7 +215,10 @@ impl Repository {
         for row in rows {
             let (item_count, slide_count) =
                 totals.get(&row.presentation_id).copied().unwrap_or((0, 0));
-            let title = names.get(&row.presentation_id).cloned().unwrap_or_default();
+            // Not among the names = its presentation is archived.
+            let Some(title) = names.get(&row.presentation_id).cloned() else {
+                continue;
+            };
             let sermon = sermon_from_model(row, title)?;
             summaries.push(SermonSummary {
                 id: sermon.id,

@@ -477,3 +477,43 @@ async fn an_archived_sermon_is_not_handed_off_for_its_day() {
         vec![kept.id, archived.id]
     );
 }
+
+#[tokio::test]
+async fn an_archived_sermon_leaves_the_summaries() {
+    // #940: the study's list and its „Pridať do kázne“ choice read the
+    // summaries; an archived sermon (by hand or after a month) must leave them.
+    let repo = repo().await;
+    let kept = repo
+        .create_sermon(&new_sermon("Ostáva", "2026-11-08"))
+        .await
+        .expect("create");
+    let archived = repo
+        .create_sermon(&new_sermon("Archív", "2026-11-08"))
+        .await
+        .expect("create");
+    repo.archive_bible_presentation(archived.id)
+        .await
+        .expect("archive");
+
+    let titles: Vec<String> = repo
+        .list_sermon_summaries()
+        .await
+        .expect("summaries")
+        .into_iter()
+        .map(|summary| summary.title)
+        .collect();
+    assert_eq!(titles, ["Ostáva"]);
+
+    repo.restore_bible_presentation(archived.id)
+        .await
+        .expect("restore");
+    let restored: Vec<String> = repo
+        .list_sermon_summaries()
+        .await
+        .expect("summaries")
+        .into_iter()
+        .map(|summary| summary.title)
+        .collect();
+    assert_eq!(restored, ["Ostáva", "Archív"]);
+    assert!(repo.fetch_sermon(kept.id).await.expect("fetch").is_some());
+}
