@@ -49,3 +49,15 @@ paths:
 - **What delays the console, measured by holding a request 3 s:** `/libraries/summary`, `/playlists`
   and `/libraries/favorites` change nothing, so deferring them saves nothing. Hold a request before
   designing a saving (`perf-hold` idea: `page.route`, 5 runs, median).
+
+## Measuring a change against the budget locally (#944)
+
+A local `build-ui.sh` is NOT comparable with CI's numbers: dev2's nightly (rustc 1.96.0-nightly
+2026-03-29) builds the same tree ~64 kB raw / ~17 kB br LARGER than CI (main efced913: CI
+5 727 835 raw vs local 5 792 250), so a local `check_ui_size_budget.py` fails on an untouched
+tree. Measure the DELTA instead: build the parent commit locally
+(`git checkout <parent> -- crates/presenter-ui/src crates/presenter-ui/styles`, build, read the
+JSON line, `git checkout HEAD -- crates/presenter-ui/src crates/presenter-ui/styles`), build the
+change, and add the difference to the CI build job's "check_ui_size_budget" line. A generic
+`#[component]` over a closure type is monomorphised per caller; plain `Copy` props keep a shared
+component one copy.
