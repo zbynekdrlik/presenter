@@ -82,8 +82,22 @@ fn heb(verse: u16) -> Value {
     json!({ "name": "Kázeň", "translation": "slk-seb", "bookCode": "HEB", "chapter": 11, "verse": verse })
 }
 
+async fn list(app: &Router, headers: &[(&str, &str)], lan: bool) -> Value {
+    let (status, list) = call(app, "GET", "/bible/study/bookmarks", None, headers, lan).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    list
+}
+
+fn verses(list: &Value) -> Vec<i64> {
+    list.as_array()
+        .expect("array")
+        .iter()
+        .map(|row| row["verse"].as_i64().expect("verse"))
+        .collect()
+}
+
 #[tokio::test]
-async fn save_list_rename_move_and_delete_answer_camel_case() {
+async fn save_list_reorder_and_delete_answer_camel_case_newest_first() {
     let app = app().await;
     let (status, made) = call(
         &app,
@@ -103,59 +117,95 @@ async fn save_list_rename_move_and_delete_answer_camel_case() {
         (made["chapter"].clone(), made["verse"].clone()),
         (json!(11), json!(4))
     );
-    let id = made["id"].as_i64().expect("id");
+    // A write answers no text; the list carries it.
+    assert_eq!(made["text"], Value::Null);
+    let mut ids = vec![made["id"].as_i64().expect("id")];
+    for verse in [1, 2] {
+        let (_, row) = call(
+            &app,
+            "POST",
+            "/bible/study/bookmarks",
+            Some(heb(verse)),
+            &[email()],
+            false,
+        )
+        .await;
+        ids.push(row["id"].as_i64().expect("id"));
+    }
+    let shown = list(&app, &[email()], false).await;
+    assert_eq!(verses(&shown), [2, 1, 4]);
+    assert_eq!(shown[2]["text"], "verš 4");
+    assert_eq!(shown[2]["id"], made["id"]);
 
-    let (status, list) = call(
+    // Reorder: the whole list, top-first.
+    let order = json!({ "ids": [ids[0], ids[2], ids[1]] });
+    let (status, _) = call(
         &app,
-        "GET",
-        "/bible/study/bookmarks",
-        None,
+        "PUT",
+        "/bible/study/bookmarks/order",
+        Some(order),
         &[email()],
         false,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(list, json!([made]));
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(verses(&list(&app, &[email()], false).await), [4, 2, 1]);
+    // A stale set: 409 with the Slovak sentence, nothing changed.
+    let (status, answer) = call(
+        &app,
+        "PUT",
+        "/bible/study/bookmarks/order",
+        Some(json!({ "ids": [ids[0], ids[1]] })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        answer["message"],
+        "Záložky sa medzitým zmenili — skús znova"
+    );
 
-    let uri = format!("/bible/study/bookmarks/{id}");
-    let (status, renamed) = call(
+    // Delete two at once: each with its old index, ascending.
+    let (status, deleted) = call(
+        &app,
+        "POST",
+        "/bible/study/bookmarks/delete",
+        Some(json!({ "ids": [ids[1], ids[0]] })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted[0]["index"], 0);
+    assert_eq!(deleted[0]["bookmark"]["verse"], 4);
+    assert_eq!(deleted[1]["index"], 2);
+    assert_eq!(deleted[1]["bookmark"]["verse"], 1);
+    assert_eq!(verses(&list(&app, &[email()], false).await), [2]);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/bible/study/bookmarks/delete",
+        Some(json!({ "ids": [ids[0]] })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // The rename / move route is gone (#951).
+    let (status, _) = call(
         &app,
         "PATCH",
-        &uri,
-        Some(json!({ "name": "Nedeľa" })),
+        &format!("/bible/study/bookmarks/{}", ids[2]),
+        Some(json!({ "name": "x" })),
         &[email()],
         false,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{renamed}");
-    assert_eq!(
-        (renamed["name"].clone(), renamed["verse"].clone()),
-        (json!("Nedeľa"), json!(4))
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
+        "{status}"
     );
-    let place = json!({ "place": { "translation": "slk-seb", "bookCode": "HEB", "chapter": 11, "verse": 2 } });
-    let (status, moved) = call(&app, "PATCH", &uri, Some(place), &[email()], false).await;
-    assert_eq!(status, StatusCode::OK, "{moved}");
-    assert_eq!(
-        (moved["name"].clone(), moved["verse"].clone()),
-        (json!("Nedeľa"), json!(2))
-    );
-
-    let (status, deleted) = call(&app, "DELETE", &uri, None, &[email()], false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(deleted["index"], 0);
-    assert_eq!(deleted["bookmark"]["name"], "Nedeľa");
-    let (status, _) = call(&app, "DELETE", &uri, None, &[email()], false).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    let (_, empty) = call(
-        &app,
-        "GET",
-        "/bible/study/bookmarks",
-        None,
-        &[email()],
-        false,
-    )
-    .await;
-    assert_eq!(empty, json!([]));
 }
 
 #[tokio::test]
@@ -170,30 +220,29 @@ async fn the_lan_has_its_own_shared_list_and_cannot_reach_a_tunnel_list() {
         false,
     )
     .await;
-    let mine_uri = format!("/bible/study/bookmarks/{}", mine["id"]);
     // The LAN may send the header itself: it is not trusted from a LAN peer.
-    let (status, lan) = call(
-        &app,
-        "GET",
-        "/bible/study/bookmarks",
-        None,
-        &[email()],
-        true,
-    )
-    .await;
-    assert_eq!((status, lan), (StatusCode::OK, json!([])));
+    assert_eq!(list(&app, &[email()], true).await, json!([]));
+    let ids = json!({ "ids": [mine["id"]] });
     let (status, _) = call(
         &app,
-        "PATCH",
-        &mine_uri,
-        Some(json!({ "name": "x" })),
-        &[email()],
+        "POST",
+        "/bible/study/bookmarks/delete",
+        Some(ids.clone()),
+        &[],
         true,
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = call(&app, "DELETE", &mine_uri, None, &[], true).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &app,
+        "PUT",
+        "/bible/study/bookmarks/order",
+        Some(ids),
+        &[],
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
     let (status, shared) = call(
         &app,
         "POST",
@@ -204,18 +253,12 @@ async fn the_lan_has_its_own_shared_list_and_cannot_reach_a_tunnel_list() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, lan) = call(&app, "GET", "/bible/study/bookmarks", None, &[], true).await;
-    assert_eq!(lan, json!([shared]));
-    let (_, tunnel) = call(
-        &app,
-        "GET",
-        "/bible/study/bookmarks",
-        None,
-        &[email()],
-        false,
-    )
-    .await;
-    assert_eq!(tunnel, json!([mine]));
+    let lan = list(&app, &[], true).await;
+    assert_eq!(lan[0]["id"], shared["id"]);
+    assert_eq!(lan.as_array().map(Vec::len), Some(1));
+    let tunnel = list(&app, &[email()], false).await;
+    assert_eq!(tunnel[0]["id"], mine["id"]);
+    assert_eq!(tunnel.as_array().map(Vec::len), Some(1));
 }
 
 #[tokio::test]
@@ -248,29 +291,17 @@ async fn a_refusal_is_422_with_the_slovak_sentence() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
         assert_eq!(answer["message"], message);
     }
-    let (_, made) = call(
+    let (status, answer) = call(
         &app,
         "POST",
-        "/bible/study/bookmarks",
-        Some(heb(1)),
+        "/bible/study/bookmarks/delete",
+        Some(json!({ "ids": [] })),
         &[],
         true,
     )
     .await;
-    let uri = format!("/bible/study/bookmarks/{}", made["id"]);
-    let (status, answer) = call(&app, "PATCH", &uri, Some(json!({})), &[], true).await;
     assert_eq!(
         (status, answer["message"].clone()),
-        (StatusCode::UNPROCESSABLE_ENTITY, json!("Nie je čo zmeniť"))
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("Nie je čo zmazať"))
     );
-    let (status, _) = call(
-        &app,
-        "PATCH",
-        "/bible/study/bookmarks/999",
-        Some(json!({ "name": "x" })),
-        &[],
-        true,
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
 }

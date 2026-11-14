@@ -28,7 +28,9 @@ pub use sermons::{
     NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,
     SERMON_CONFLICT, SERMON_NOT_FOUND,
 };
-pub use study_bookmarks::{BookmarkPlace, StudyBookmarkRecord, BOOKMARK_NOT_FOUND};
+pub use study_bookmarks::{
+    BookmarkPlace, DeletedStudyBookmark, StudyBookmarkRecord, BOOKMARK_NOT_FOUND,
+};
 
 #[cfg(test)]
 mod tests;
