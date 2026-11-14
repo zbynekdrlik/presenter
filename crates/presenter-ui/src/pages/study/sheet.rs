@@ -19,6 +19,12 @@ pub(super) fn Sheet(
     /// The word sheet's `data-strongs`.
     #[prop(optional, into)]
     strongs: Option<Signal<String>>,
+    /// A control in the head beside ✕ (Záložky's "Vybrať", #951).
+    #[prop(optional, into)]
+    action: Option<ViewFn>,
+    /// A row fixed under the scrolling body (Záložky's "Zmazať (N)", #951).
+    #[prop(optional, into)]
+    footer: Option<ViewFn>,
     children: Children,
 ) -> impl IntoView {
     // Only a press that STARTED here closes: the finger of the long press that
@@ -51,6 +57,7 @@ pub(super) fn Sheet(
         >
             <div class="study-sheet__head">
                 <h2 class="study-sheet__title">{move || title.get()}</h2>
+                {action.map(|action| action.run())}
                 <button
                     type="button"
                     class="study-icon"
@@ -62,6 +69,7 @@ pub(super) fn Sheet(
                 </button>
             </div>
             <div class="study-sheet__body">{children()}</div>
+            {footer.map(|footer| view! { <div class="study-sheet__foot">{footer.run()}</div> })}
         </section>
     }
 }

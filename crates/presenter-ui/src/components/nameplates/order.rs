@@ -5,8 +5,6 @@
 //! every new order here holds every id exactly once. A plate's position is its
 //! Stream Deck button (#870), so the order is what the operator rearranges.
 
-use presenter_core::Nameplate;
-
 /// The id list after moving `id` one step up or down, or `None` when it cannot
 /// move (already first / last, or not in the list).
 pub fn reorder_one_step<T: PartialEq + Clone>(ids: &[T], id: &T, up: bool) -> Option<Vec<T>> {
@@ -59,12 +57,14 @@ pub fn drop_marker(from: usize, slot: usize, pos: usize, len: usize) -> Option<&
 }
 
 /// Put the local list into the order of `ids` (an order the page just chose,
-/// shown at once while the PUT is on its way). Plates missing from `ids` keep
-/// their relative order at the end.
-pub fn apply_order(list: &mut [Nameplate], ids: &[i64]) {
-    list.sort_by_key(|plate| {
+/// shown at once while the PUT is on its way). Rows missing from `ids` keep
+/// their relative order at the end. `id_of` names a row's id (plates, the
+/// study bookmarks of #951).
+pub fn apply_order<T>(list: &mut [T], ids: &[i64], id_of: impl Fn(&T) -> i64) {
+    list.sort_by_key(|row| {
+        let id = id_of(row);
         ids.iter()
-            .position(|id| *id == plate.id)
+            .position(|held| *held == id)
             .unwrap_or(usize::MAX)
     });
 }
@@ -72,7 +72,7 @@ pub fn apply_order(list: &mut [Nameplate], ids: &[i64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use presenter_core::NameplateKind;
+    use presenter_core::{Nameplate, NameplateKind};
 
     #[test]
     fn a_plate_moves_one_step_and_keeps_the_full_id_set() {
@@ -144,9 +144,9 @@ mod tests {
     #[test]
     fn the_local_list_takes_the_new_order() {
         let mut list = vec![plate(1), plate(2), plate(3)];
-        apply_order(&mut list, &[3, 1, 2]);
+        apply_order(&mut list, &[3, 1, 2], |plate| plate.id);
         assert_eq!(list.iter().map(|p| p.id).collect::<Vec<_>>(), vec![3, 1, 2]);
-        apply_order(&mut list, &[2]);
+        apply_order(&mut list, &[2], |plate| plate.id);
         assert_eq!(list.iter().map(|p| p.id).collect::<Vec<_>>(), vec![2, 3, 1]);
     }
 }

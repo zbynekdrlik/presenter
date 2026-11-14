@@ -62,9 +62,9 @@ mod video_source;
 mod video_source_tests;
 
 pub use bible::{
-    BookmarkPlace, NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary,
-    SermonWrite, StrongsVerse, StudyBookmarkRecord, BOOKMARK_NOT_FOUND, SERMON_CONFLICT,
-    SERMON_NOT_FOUND,
+    BookmarkPlace, DeletedStudyBookmark, NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot,
+    SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkRecord, BOOKMARK_NOT_FOUND,
+    SERMON_CONFLICT, SERMON_NOT_FOUND,
 };
 pub use interpreter_tips::NewInterpreterTip;
 pub use library::TrashedLibrary;

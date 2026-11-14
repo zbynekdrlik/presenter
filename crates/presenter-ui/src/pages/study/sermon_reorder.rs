@@ -4,15 +4,13 @@
 //! list's (`components/nameplates/drag.rs`); the decisions are `order`'s.
 
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
 use super::sermon_editor::{refuse, run_write, Editor, OrderDraft, WriteEnd};
 use super::sheet::Sheet;
 use crate::api::{sermons, ApiError};
-use crate::components::nameplates::order::{
-    drop_marker, drop_slot, reorder_one_step, reorder_to_slot,
-};
+use crate::components::drag_rows;
+use crate::components::nameplates::order::{drop_marker, reorder_one_step, reorder_to_slot};
 
 const PRIMARY_BUTTON: i16 = 0;
 
@@ -88,32 +86,16 @@ fn settle_order(e: Editor, stored: &[String]) {
     }
 }
 
-fn handle_of(ev: &PointerEvent) -> Option<web_sys::Element> {
-    ev.target()
-        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())?
-        .closest("[data-role=\"sermon-drag-handle\"]")
-        .ok()
-        .flatten()
-}
+const HANDLE: &str = "[data-role=\"sermon-drag-handle\"]";
 
 /// The slot under the pointer, measured on the rows on screen.
 fn slot_under(ev: &PointerEvent) -> Option<usize> {
-    let list = handle_of(ev)?
-        .closest("[data-role=\"sermon-order\"]")
-        .ok()
-        .flatten()?;
-    let rows = list
-        .query_selector_all(":scope > [data-role=\"sermon-order-row\"]")
-        .ok()?;
-    let middles: Vec<f64> = (0..rows.length())
-        .filter_map(|i| rows.item(i))
-        .filter_map(|node| node.dyn_into::<web_sys::Element>().ok())
-        .map(|row| {
-            let rect = row.get_bounding_client_rect();
-            rect.top() + rect.height() / 2.0
-        })
-        .collect();
-    Some(drop_slot(&middles, f64::from(ev.client_y())))
+    drag_rows::slot_under(
+        ev,
+        HANDLE,
+        "[data-role=\"sermon-order\"]",
+        "[data-role=\"sermon-order-row\"]",
+    )
 }
 
 fn ids_now(e: Editor) -> Vec<String> {
@@ -175,7 +157,7 @@ fn OrderRow(e: Editor, id: String, drag: RwSignal<Option<(String, usize)>>) -> i
         if ev.button() != PRIMARY_BUTTON {
             return;
         }
-        let Some(handle) = handle_of(&ev) else {
+        let Some(handle) = drag_rows::handle_of(&ev, HANDLE) else {
             return;
         };
         ev.prevent_default();

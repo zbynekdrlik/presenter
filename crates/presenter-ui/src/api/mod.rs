@@ -425,6 +425,20 @@ pub async fn delete_json_refusal<T: DeserializeOwned>(path: &str) -> Result<T, A
     response.json().await.map_err(ApiError::Deserialize)
 }
 
+/// PUT with no answer body, with the [`post_json_refusal`] error shape.
+pub async fn put_refusal<B: serde::Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
+    let response = Request::put(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(status_with_refusal(response).await);
+    }
+    Ok(())
+}
+
 /// DELETE with no answer body, with the [`post_json_refusal`] error shape.
 pub async fn delete_refusal(path: &str) -> Result<(), ApiError> {
     let response = Request::delete(&api_url(path))

@@ -99,7 +99,7 @@ const sheet = (page: Page): Locator => page.locator('[data-role="bookmarks"]');
 const bookmark = (page: Page, name: string): Locator =>
   sheet(page)
     .locator('[data-role="bookmark-row"]')
-    .filter({ has: page.locator('[data-role="bookmark-open"] .study-row__label', { hasText: name }) });
+    .filter({ has: page.locator(".study-bookmark__label", { hasText: name }) });
 
 async function openList(page: Page): Promise<void> {
   await page.locator('[data-role="study-bookmarks"]').tap();
@@ -140,7 +140,7 @@ test("a bookmark saved at home is on the same phone at church, and nobody else's
   });
   expect(await identity(church.page)).toEqual({ email: "preacher@example.org" });
   await openList(church.page);
-  await expect(bookmark(church.page, name).locator(".study-row__detail")).toHaveText("Hebrejom 11:3 (SEB)");
+  await expect(bookmark(church.page, name).locator(".study-bookmark__tag")).toHaveText("SEB");
 
   // Another phone, never logged in (or the LAN address): the shared list.
   const other: OpenedStudy = await openStudy(browser, baseURL, PHONE_390);
@@ -155,9 +155,11 @@ test("a bookmark saved at home is on the same phone at church, and nobody else's
   expect(forged).toEqual({ email: null });
   await finish(other);
 
-  // Clean up at church: the preacher deletes it from his own list.
-  await bookmark(church.page, name).locator('[data-role="bookmark-delete"]').tap();
+  // Clean up at church: the preacher deletes it from his own list (#951: Vybrať → Zmazať (1)).
+  await sheet(church.page).locator('[data-role="bookmarks-choose"]').tap();
+  await bookmark(church.page, name).locator('[data-role="bookmark-pick"]').tap();
+  await sheet(church.page).locator('[data-role="bookmarks-delete"]').tap();
   await expect(bookmark(church.page, name)).toHaveCount(0);
-  await expect(church.page.locator('[data-role="study-notice"]')).toContainText(`Zmazané: ${name}`);
+  await expect(church.page.locator('[data-role="study-notice"]')).toContainText("Zmazaná 1 záložka");
   await finish(church);
 });

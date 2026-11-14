@@ -1,14 +1,17 @@
-//! The study page's named bookmarks (#915, the owner's option 2 of 2026-11-08):
-//! a list per reader, kept on the server so the phone and the PC show the same
-//! one. The reader is the Cloudflare Access e-mail (`None` = the shared list of
+//! The study page's bookmarks (#915, the owner's option 2 of 2026-11-08;
+//! reshaped by #951 into "where did I stop": newest first, the verse's text in
+//! the list, a drag order, a bulk delete, no rename and no move): a list per
+//! reader, kept on the server so the phone and the PC show the same one. The reader is the Cloudflare Access e-mail (`None` = the shared list of
 //! the LAN). That e-mail picks WHICH list a request reads and writes — a
 //! convenience scope for one preacher's devices, not a protection of the
 //! rows (`access_identity.rs`). Every rule lives here; the repository only stores and orders.
 //! Lookups and `study.last` never touch a bookmark: only these writes do.
 
 use presenter_core::bible::canonical_book_by_code;
+
+use crate::bible_remote::structure_source;
 use presenter_core::bible::sermon::translation_short_code;
-use presenter_persistence::{BookmarkPlace, StudyBookmarkRecord};
+use presenter_persistence::{BookmarkPlace, DeletedStudyBookmark, StudyBookmarkRecord};
 
 use super::AppState;
 
@@ -16,6 +19,9 @@ use super::AppState;
 pub(crate) const MAX_NAME_CHARS: usize = 80;
 /// The most bookmarks one list keeps.
 pub(crate) const MAX_BOOKMARKS: usize = 100;
+/// The most characters of a verse a list row carries (#951): the row shows one
+/// ellipsized line, so the rest would only travel.
+pub(crate) const EXCERPT_CHARS: usize = 160;
 
 const LOG_TARGET: &str = "presenter::bible::bookmark";
 
@@ -47,6 +53,8 @@ pub(crate) struct StudyBookmark {
     pub(crate) chapter: u16,
     pub(crate) verse: u16,
     pub(crate) updated_at: String,
+    /// The start of the verse's text (#951), only in the list.
+    pub(crate) text: Option<String>,
 }
 
 impl TryFrom<StudyBookmarkRecord> for StudyBookmark {
@@ -67,7 +75,17 @@ impl TryFrom<StudyBookmarkRecord> for StudyBookmark {
             book_code: row.book_code,
             book: row.book_name,
             updated_at: row.updated_at,
+            text: row.text.as_deref().map(excerpt),
         })
+    }
+}
+
+/// The first [`EXCERPT_CHARS`] characters of a verse, with "…" when cut.
+pub(crate) fn excerpt(text: &str) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(EXCERPT_CHARS) {
+        Some((end, _)) => format!("{}…", text[..end].trim_end()),
+        None => text.to_string(),
     }
 }
 
@@ -90,12 +108,19 @@ impl AppState {
         &self,
         owner: Option<&str>,
     ) -> anyhow::Result<Vec<StudyBookmark>> {
-        let rows = self.repository.list_study_bookmarks(owner).await?;
+        // A row's text: its own translation, else the main one; the remote NLT
+        // has no text in the database, so it borrows its structure source's
+        // (the KJV), as a bookmark of its own does through the main one.
+        let main = self.get_bible_preferences().await?.main_translation;
+        let rows = self
+            .repository
+            .list_study_bookmarks(owner, main.as_deref().map(structure_source))
+            .await?;
         rows.into_iter().map(StudyBookmark::try_from).collect()
     }
 
-    /// A new bookmark at the end of the list, or at `index` (Späť after a
-    /// delete puts it back where it stood).
+    /// A new bookmark on TOP of the list, or at `index` (top-first; Späť after
+    /// a delete puts it back where it stood).
     pub(crate) async fn create_study_bookmark(
         &self,
         owner: Option<&str>,
@@ -105,7 +130,13 @@ impl AppState {
     ) -> anyhow::Result<StudyBookmark> {
         let name = check_name(name)?;
         let place = self.bookmark_place(place).await?;
-        if self.repository.list_study_bookmarks(owner).await?.len() >= MAX_BOOKMARKS {
+        if self
+            .repository
+            .list_study_bookmarks(owner, None)
+            .await?
+            .len()
+            >= MAX_BOOKMARKS
+        {
             return Err(BookmarkRefusal(format!(
                 "Záložiek môže byť najviac {MAX_BOOKMARKS} — niektorú zmaž"
             ))
@@ -119,42 +150,42 @@ impl AppState {
         row.try_into()
     }
 
-    /// A new name, a new place ("Presunúť sem"), or both.
-    pub(crate) async fn update_study_bookmark(
+    /// The list in a new order: `ids` top-first, the whole list (a stale set is
+    /// the repository's 409).
+    pub(crate) async fn reorder_study_bookmarks(
         &self,
         owner: Option<&str>,
-        id: i64,
-        name: Option<&str>,
-        place: Option<&PlaceRequest>,
-    ) -> anyhow::Result<StudyBookmark> {
-        if name.is_none() && place.is_none() {
-            return Err(BookmarkRefusal("Nie je čo zmeniť".to_string()).into());
-        }
-        let name = name.map(check_name).transpose()?;
-        let place = match place {
-            Some(place) => Some(self.bookmark_place(place).await?),
-            None => None,
-        };
-        let row = self
-            .repository
-            .update_study_bookmark(owner, id, name.as_deref(), place.as_ref())
-            .await?;
-        log_write(if place.is_some() { "move" } else { "rename" }, owner, &row);
-        row.try_into()
+        ids: &[i64],
+    ) -> anyhow::Result<()> {
+        self.repository.reorder_study_bookmarks(owner, ids).await?;
+        tracing::info!(
+            target: LOG_TARGET,
+            op = "reorder",
+            owner = ?owner.unwrap_or("-"),
+            ids = ?ids,
+            "study bookmark write"
+        );
+        Ok(())
     }
 
-    /// Deletes one; answers it with its index, for Späť.
-    pub(crate) async fn delete_study_bookmark(
+    /// Deletes the chosen ones at once (#951 "Vybrať" → "Zmazať (N)"); answers
+    /// each with its index in the list as it was, ascending, for Späť.
+    pub(crate) async fn delete_study_bookmarks(
         &self,
         owner: Option<&str>,
-        id: i64,
-    ) -> anyhow::Result<(StudyBookmark, usize)> {
-        let row = self.repository.delete_study_bookmark(owner, id).await?;
-        log_write("delete", owner, &row);
-        let index = usize::try_from(row.position).map_err(|_| {
-            anyhow::anyhow!("bookmark {}: stored position {}", row.id, row.position)
-        })?;
-        Ok((row.try_into()?, index))
+        ids: &[i64],
+    ) -> anyhow::Result<Vec<(StudyBookmark, usize)>> {
+        if ids.is_empty() {
+            return Err(BookmarkRefusal("Nie je čo zmazať".to_string()).into());
+        }
+        let deleted = self.repository.delete_study_bookmarks(owner, ids).await?;
+        deleted
+            .into_iter()
+            .map(|DeletedStudyBookmark { row, index }| {
+                log_write("delete", owner, &row);
+                Ok((row.try_into()?, index))
+            })
+            .collect()
     }
 
     /// A place this translation really has, with its own name of the book. The

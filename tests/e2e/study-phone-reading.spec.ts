@@ -181,14 +181,19 @@ test("Pridať záložku is the verse sheet's first action and adds in one tap", 
   expect(added).toHaveLength(1);
   expect(added[0]).toMatchObject({ name: "Hebrejom 12:6", bookCode: "HEB", chapter: 12, verse: 6 });
 
-  // It is in Záložky, renamable there.
+  // It is in Záložky, on top (#951: newest first, labelled by its place).
   await page.locator('[data-role="study-bookmarks"]').tap();
   const sheet = page.locator('[data-role="bookmarks"]');
   await expect(sheet).toHaveAttribute("data-state", "ready");
   const row = sheet.locator(`[data-bookmark-id="${added[0].id}"]`);
-  await expect(row.locator(".study-row__label")).toHaveText("Hebrejom 12:6");
-  await expect(row.locator('[data-role="bookmark-rename"]')).toBeVisible();
-  await row.locator('[data-role="bookmark-delete"]').tap();
+  await expect(sheet.locator('[data-role="bookmark-row"]').first()).toHaveAttribute(
+    "data-bookmark-id",
+    String(added[0].id),
+  );
+  await expect(row.locator(".study-bookmark__label")).toHaveText("Hebrejom 12:6");
+  await sheet.locator('[data-role="bookmarks-choose"]').tap();
+  await row.locator('[data-role="bookmark-pick"]').tap();
+  await sheet.locator('[data-role="bookmarks-delete"]').tap();
   await expect(row).toHaveCount(0);
   await finish(opened);
 });

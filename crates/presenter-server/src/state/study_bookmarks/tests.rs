@@ -58,7 +58,13 @@ async fn a_bookmark_keeps_its_trimmed_name_and_the_translations_book_name() {
     assert_eq!(made.book, "Hebrejom");
     assert_eq!((made.chapter, made.verse), (11, 3));
     let list = state.list_study_bookmarks(owner).await.expect("list");
-    assert_eq!(list, vec![made]);
+    // The list adds the verse's text (#951); a write answers none.
+    assert_eq!(made.text, None);
+    let listed = StudyBookmark {
+        text: Some("verš 3".to_string()),
+        ..made
+    };
+    assert_eq!(list, vec![listed]);
     assert!(state
         .list_study_bookmarks(None)
         .await
@@ -168,71 +174,114 @@ async fn a_full_list_refuses_one_more() {
 }
 
 #[tokio::test]
-async fn an_update_renames_moves_and_refuses_an_empty_change_or_a_bad_place() {
+async fn the_list_is_newest_first_with_each_verses_text() {
     let state = hebrews().await;
-    let made = state
-        .create_study_bookmark(None, "Kázeň", &place("slk-seb", "HEB", 11, 1), None)
+    for verse in [1, 2, 3] {
+        state
+            .create_study_bookmark(None, "x", &place("slk-seb", "HEB", 11, verse), None)
+            .await
+            .expect("create");
+    }
+    // The NLT is remote: no text of its own, and no main translation set → none.
+    state
+        .create_study_bookmark(None, "nlt", &place("eng-nlt", "HEB", 11, 2), Some(3))
         .await
-        .expect("create");
-    let renamed = state
-        .update_study_bookmark(None, made.id, Some(" Nedeľa "), None)
-        .await
-        .expect("rename");
-    assert_eq!((renamed.name.as_str(), renamed.verse), ("Nedeľa", 1));
-    let moved = state
-        .update_study_bookmark(None, made.id, None, Some(&place("eng-kjv", "HEB", 11, 3)))
-        .await
-        .expect("move");
+        .expect("nlt");
+    let list = state.list_study_bookmarks(None).await.expect("list");
+    let shown: Vec<(u16, Option<&str>)> = list
+        .iter()
+        .map(|row| (row.verse, row.text.as_deref()))
+        .collect();
     assert_eq!(
-        (
-            moved.name.as_str(),
-            moved.translation.as_str(),
-            moved.book.as_str(),
-            moved.verse
-        ),
-        ("Nedeľa", "eng-kjv", "Hebrews", 3)
+        shown,
+        vec![
+            (3, Some("verš 3")),
+            (2, Some("verš 2")),
+            (1, Some("verš 1")),
+            (2, None),
+        ]
     );
-    let nothing = state
-        .update_study_bookmark(None, made.id, None, None)
-        .await
-        .expect_err("nothing");
-    assert_eq!(refusal(&nothing), "Nie je čo zmeniť");
-    let bad = state
-        .update_study_bookmark(None, made.id, None, Some(&place("eng-kjv", "HEB", 11, 9)))
-        .await
-        .expect_err("bad place");
-    assert_eq!(refusal(&bad), "Hebrews 11:9 v preklade KJV nie je");
-    let still = state.list_study_bookmarks(None).await.expect("list");
-    assert_eq!(still, vec![moved]);
+    // With the KJV as the main translation, the NLT row reads its text.
+    let mut prefs = state.get_bible_preferences().await.expect("prefs");
+    prefs.main_translation = Some("eng-kjv".to_string());
+    state.set_bible_preferences(prefs).await.expect("set prefs");
+    let list = state.list_study_bookmarks(None).await.expect("list");
+    assert_eq!(list[3].text.as_deref(), Some("verš 2"));
+    assert_eq!(list[0].text.as_deref(), Some("verš 3"));
+    // The NLT as the main translation: its rows borrow the KJV's text.
+    let mut prefs = state.get_bible_preferences().await.expect("prefs");
+    prefs.main_translation = Some("eng-nlt".to_string());
+    state.set_bible_preferences(prefs).await.expect("set prefs");
+    let list = state.list_study_bookmarks(None).await.expect("list");
+    assert_eq!(list[3].text.as_deref(), Some("verš 2"));
+}
+
+#[test]
+fn a_long_verse_is_cut_at_the_excerpt_length_on_a_character() {
+    assert_eq!(excerpt("  Viera je istota.  "), "Viera je istota.");
+    let long = "ž".repeat(EXCERPT_CHARS + 5);
+    let cut = excerpt(&long);
+    assert_eq!(cut.chars().count(), EXCERPT_CHARS + 1);
+    assert!(cut.ends_with('…'));
+    let exact = "a".repeat(EXCERPT_CHARS);
+    assert_eq!(excerpt(&exact), exact);
+    // A cut right after a space leaves no space before the "…".
+    let spaced = format!("{} b", "a".repeat(EXCERPT_CHARS - 1));
+    assert_eq!(
+        excerpt(&spaced),
+        format!("{}…", "a".repeat(EXCERPT_CHARS - 1))
+    );
 }
 
 #[tokio::test]
-async fn a_delete_answers_the_index_and_spat_puts_it_back_there() {
+async fn a_reorder_and_a_bulk_delete_with_spat_keep_every_place() {
     let state = hebrews().await;
     let heb = place("slk-seb", "HEB", 11, 1);
     let mut ids = Vec::new();
-    for name in ["A", "B", "C"] {
+    for name in ["C", "B", "A"] {
         let made = state
             .create_study_bookmark(None, name, &heb, None)
             .await
             .expect("create");
         ids.push(made.id);
     }
-    let (deleted, index) = state
-        .delete_study_bookmark(None, ids[1])
+    let names = |list: Vec<StudyBookmark>| -> Vec<String> {
+        list.into_iter().map(|bookmark| bookmark.name).collect()
+    };
+    assert_eq!(
+        names(state.list_study_bookmarks(None).await.expect("list")),
+        ["A", "B", "C"]
+    );
+    state
+        .reorder_study_bookmarks(None, &[ids[0], ids[2], ids[1]])
+        .await
+        .expect("reorder");
+    assert_eq!(
+        names(state.list_study_bookmarks(None).await.expect("list")),
+        ["C", "A", "B"]
+    );
+    let deleted = state
+        .delete_study_bookmarks(None, &[ids[1], ids[0]])
         .await
         .expect("delete");
-    assert_eq!((deleted.name.as_str(), index), ("B", 1));
-    state
-        .create_study_bookmark(None, &deleted.name, &heb, Some(index))
-        .await
-        .expect("back");
-    let names: Vec<String> = state
-        .list_study_bookmarks(None)
-        .await
-        .expect("list")
-        .into_iter()
-        .map(|bookmark| bookmark.name)
+    let answered: Vec<(&str, usize)> = deleted
+        .iter()
+        .map(|(bookmark, index)| (bookmark.name.as_str(), *index))
         .collect();
-    assert_eq!(names, ["A", "B", "C"]);
+    assert_eq!(answered, [("C", 0), ("B", 2)]);
+    for (bookmark, index) in &deleted {
+        state
+            .create_study_bookmark(None, &bookmark.name, &heb, Some(*index))
+            .await
+            .expect("back");
+    }
+    assert_eq!(
+        names(state.list_study_bookmarks(None).await.expect("list")),
+        ["C", "A", "B"]
+    );
+    let nothing = state
+        .delete_study_bookmarks(None, &[])
+        .await
+        .expect_err("nothing");
+    assert_eq!(refusal(&nothing), "Nie je čo zmazať");
 }

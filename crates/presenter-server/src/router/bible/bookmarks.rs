@@ -1,10 +1,13 @@
-//! The study page's named bookmarks (#915): `GET|POST /bible/study/bookmarks`,
-//! `PATCH|DELETE /bible/study/bookmarks/{id}`. JSON camelCase. The list is the
+//! The study page's bookmarks (#915, #951): `GET|POST /bible/study/bookmarks`
+//! (the list newest first, each row with its verse's `text`),
+//! `PUT /bible/study/bookmarks/order` (the whole list, top-first) and
+//! `POST /bible/study/bookmarks/delete` (the chosen ones at once). JSON camelCase. The list is the
 //! caller's: the reader's e-mail (`AccessEmail`: a verified Access login or a
 //! remembered device), nobody = the shared list. An id of another list answers 404, never its row.
 
-use axum::extract::{Path, State};
-use axum::routing::{get, patch};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -20,10 +23,8 @@ pub(crate) fn routes() -> Router<AppState> {
             "/bible/study/bookmarks",
             get(list_bookmarks).post(create_bookmark),
         )
-        .route(
-            "/bible/study/bookmarks/{id}",
-            patch(update_bookmark).delete(delete_bookmark),
-        )
+        .route("/bible/study/bookmarks/order", put(reorder_bookmarks))
+        .route("/bible/study/bookmarks/delete", post(delete_bookmarks))
 }
 
 #[derive(Debug, Serialize)]
@@ -38,6 +39,9 @@ struct BookmarkDto {
     chapter: u16,
     verse: u16,
     updated_at: String,
+    /// The start of the verse's text: the bookmark's translation, else the
+    /// main one; `null` outside the list or when neither has the verse.
+    text: Option<String>,
 }
 
 impl From<StudyBookmark> for BookmarkDto {
@@ -51,6 +55,7 @@ impl From<StudyBookmark> for BookmarkDto {
             chapter: bookmark.chapter,
             verse: bookmark.verse,
             updated_at: bookmark.updated_at,
+            text: bookmark.text,
         }
     }
 }
@@ -59,8 +64,13 @@ impl From<StudyBookmark> for BookmarkDto {
 #[serde(rename_all = "camelCase")]
 struct DeletedDto {
     bookmark: BookmarkDto,
-    /// Where it stood in the list: Späť puts it back there.
+    /// Where it stood in the list (top-first): Späť puts it back there.
     index: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdsBody {
+    ids: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,15 +101,6 @@ struct CreateBody {
     place: PlaceBody,
     #[serde(default)]
     index: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdateBody {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    place: Option<PlaceBody>,
 }
 
 /// `BookmarkRefusal` → 422 with its Slovak message; everything else through the
@@ -143,34 +144,37 @@ async fn create_bookmark(
 }
 
 #[instrument(skip_all)]
-async fn update_bookmark(
+async fn reorder_bookmarks(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
     AccessEmail(owner): AccessEmail,
-    Json(body): Json<UpdateBody>,
-) -> Result<Json<BookmarkDto>, AppError> {
-    let place = body.place.map(PlaceRequest::from);
-    let changed = state
-        .update_study_bookmark(owner.as_deref(), id, body.name.as_deref(), place.as_ref())
+    Json(body): Json<IdsBody>,
+) -> Result<StatusCode, AppError> {
+    state
+        .reorder_study_bookmarks(owner.as_deref(), &body.ids)
         .await
         .map_err(bookmark_error)?;
-    Ok(Json(changed.into()))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[instrument(skip_all)]
-async fn delete_bookmark(
+async fn delete_bookmarks(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
     AccessEmail(owner): AccessEmail,
-) -> Result<Json<DeletedDto>, AppError> {
-    let (bookmark, index) = state
-        .delete_study_bookmark(owner.as_deref(), id)
+    Json(body): Json<IdsBody>,
+) -> Result<Json<Vec<DeletedDto>>, AppError> {
+    let deleted = state
+        .delete_study_bookmarks(owner.as_deref(), &body.ids)
         .await
         .map_err(bookmark_error)?;
-    Ok(Json(DeletedDto {
-        bookmark: bookmark.into(),
-        index,
-    }))
+    Ok(Json(
+        deleted
+            .into_iter()
+            .map(|(bookmark, index)| DeletedDto {
+                bookmark: bookmark.into(),
+                index,
+            })
+            .collect(),
+    ))
 }
 
 #[cfg(test)]

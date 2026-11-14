@@ -62,7 +62,7 @@ use crate::state::study_history::StudyHistory;
 use crate::state::study_word::{KEY_NUMBERS, SCOPE_ALL};
 
 use add_to_sermon::AddToSermonSheet;
-use bookmarks::{BookmarkList, BookmarksSheet};
+use bookmarks::{BookmarkList, BookmarkWrites, BookmarksSheet};
 use compare::{CompareCell, CompareView};
 use crossrefs::{CrossRefSheet, CrossRefs};
 use favourites::{FavouriteSheet, Favourites, TranslationsSheet};
@@ -143,10 +143,9 @@ enum Undo {
         position: usize,
         edits: ItemEdits,
     },
-    /// A deleted bookmark (#915), back at its index.
-    Bookmark {
-        bookmark: Box<crate::api::bookmarks::Bookmark>,
-        index: usize,
+    /// Deleted bookmarks (#951 "Zmazať (N)"), each back at its index.
+    Bookmarks {
+        items: Vec<(crate::api::bookmarks::Bookmark, usize)>,
     },
 }
 
@@ -212,6 +211,8 @@ struct Study {
     live: RwSignal<Option<u32>>,
     /// The named bookmarks, as the Záložky sheet last read them.
     bookmarks: RwSignal<BookmarkList>,
+    /// Their writes, one at a time, outliving the sheet (#951).
+    bookmark_writes: StoredValue<BookmarkWrites, LocalStorage>,
     /// Bumped by a retry button: asks again for the same chapter or search.
     retry: RwSignal<u32>,
     cache: StoredValue<ChapterCache>,
@@ -316,7 +317,7 @@ fn run_undo(s: Study) {
             position,
             edits,
         } => sermon_undo::undo_removed(s, sermon, *item, position, edits),
-        Undo::Bookmark { bookmark, index } => bookmarks::undo_delete(s, *bookmark, index),
+        Undo::Bookmarks { items } => bookmarks::undo_delete(s, items),
     }
 }
 
@@ -594,6 +595,7 @@ pub fn StudyPage() -> impl IntoView {
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
         live: RwSignal::new(None),
         bookmarks: RwSignal::new(BookmarkList::default()),
+        bookmark_writes: StoredValue::new_local(BookmarkWrites::default()),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
         scroll_plan: StoredValue::new(saved_verse.map_or(ScrollPlan::Keep, ScrollPlan::Verse)),
