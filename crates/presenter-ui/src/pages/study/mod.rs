@@ -143,10 +143,9 @@ enum Undo {
         position: usize,
         edits: ItemEdits,
     },
-    /// A deleted bookmark (#915), back at its index.
-    Bookmark {
-        bookmark: Box<crate::api::bookmarks::Bookmark>,
-        index: usize,
+    /// Deleted bookmarks (#951 "Zmazať (N)"), each back at its index.
+    Bookmarks {
+        items: Vec<(crate::api::bookmarks::Bookmark, usize)>,
     },
 }
 
@@ -316,7 +315,7 @@ fn run_undo(s: Study) {
             position,
             edits,
         } => sermon_undo::undo_removed(s, sermon, *item, position, edits),
-        Undo::Bookmark { bookmark, index } => bookmarks::undo_delete(s, *bookmark, index),
+        Undo::Bookmarks { items } => bookmarks::undo_delete(s, items),
     }
 }
 

@@ -1037,38 +1037,148 @@ body[data-shell="phone"] .study-verse__number {
   background: var(--study-panel);
 }
 
-/* Named bookmarks (#915): the name + place opens, the actions sit under it
-   (three 44 px buttons fit a 360 px sheet in one row). */
+/* Bookmarks (#951, owner 2026-11-14: "vidieť miesto v Biblii a časť verša"):
+   one compact row = the place (+ a small translation tag) and one ellipsized
+   line of the verse, the whole row opens; a small drag handle on the right.
+   "Vybrať" turns the rows into choices for ONE "Zmazať (N)" under the list. */
+.study-bookmarks {
+  gap: 4px;
+}
+
 .study-bookmark {
   display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--study-panel);
+}
+
+.study-bookmark[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+.study-bookmark[data-drop="before"] {
+  border-top-color: var(--study-blue);
+}
+
+.study-bookmark[data-drop="after"] {
+  border-bottom-color: var(--study-blue);
+}
+
+.study-bookmark[data-chosen="true"] {
+  outline: 1.5px solid var(--study-blue);
+}
+
+.study-bookmark__open {
+  display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 6px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--study-line);
-}
-
-.study-bookmark__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.study-bookmark__actions .study-button {
-  flex: 1 1 0;
+  gap: 2px;
   min-width: 0;
-  min-height: 44px;
-  padding: 0 8px;
+  min-height: 52px;
+  padding: 8px 4px 8px 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 
-.study-bookmark__rename {
+.study-bookmark__place {
   display: flex;
-  flex-wrap: wrap;
+  align-items: baseline;
   gap: 8px;
+  min-width: 0;
 }
 
-.study-bookmark__rename .study-input {
-  flex: 1 1 160px;
+.study-bookmark__label {
   min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.study-bookmark__tag {
+  flex: none;
+  color: var(--study-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.study-bookmark__text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--study-muted);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.study-bookmark__handle {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--study-muted);
+  font-size: 22px;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.study-bookmark__check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 10px;
+  border: 2px solid var(--study-muted);
+  border-radius: 7px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.study-bookmark[data-chosen="true"] .study-bookmark__check {
+  border-color: var(--study-blue);
+  background: var(--study-blue);
+}
+
+/* A control in a sheet's head beside the close button ("Vybrať"). */
+.study-sheet__action {
+  flex: none;
+  min-height: 40px;
+  margin-left: auto;
+  padding: 0 14px;
+}
+
+/* A row fixed under a sheet's scrolling body ("Zmazať (N)"). */
+.study-sheet__foot {
+  flex: none;
+  padding: 8px 12px 0;
+}
+
+.study-sheet__foot .study-button {
+  width: 100%;
+}
+
+.study-button--danger {
+  border-color: #b91c1c;
+  background: #991b1b;
+  color: #fff;
+}
+
+.study-button--danger:disabled {
+  border-color: var(--study-line);
+  background: var(--study-panel);
 }
 
 .study-icon__svg {
