@@ -1,4 +1,4 @@
-# APPROVED by the owner 2026-10-14 (#852) — AMENDED 2026-10-15 by the owner's decision on the evaluation (§13, §19, §20)
+# APPROVED by the owner 2026-10-14 (#852) — AMENDED 2026-10-15 by the owner's decision on the evaluation (§13, §19, §20) — AMENDED 2026-11-14 by the measured evaluation (§22: Soniox stt-rt-v6 for the guest EN transcript)
 
 # Sermon listening, verse suggestions and interpreter assist (#850 part C + #852) — Design
 
@@ -230,6 +230,9 @@ JSONL, behind the existing `mock-integrations` feature, used by E2E), `soniox.rs
 measures that a second engine is needed.
 
 ### 6.2 The first implementation is Gemini Live Translate (amended 2026-10-15, owner decision)
+
+> **SUPERSEDED 2026-11-14 by §22.3** — the measured evaluation replaced Gemini Live Translate with **Soniox
+> stt-rt-v6** for the guest's English transcript. §6.2 and §6.3 are kept below as history.
 
 songplayer already selected and runs it in production (dubbing, round H), so it is reused, not re-evaluated:
 
@@ -821,3 +824,212 @@ stays a debugging tool (off by default, per-day switch).
 `ai/client.rs` (`call_chat_completions_with_options`), `crates/presenter-server/Cargo.toml` (dependencies).
 
 **Earlier ticket research (cited, not redone):** #850 Findings 2–4, #852 Finding 1.
+
+---
+
+## 22. AMENDED by the evaluation — 2026-11-14 (#852)
+
+**Status:** amendment written 2026-11-14 from the measured replay evaluation and the owner's decisions of 2026-11-13/14
+on #852 (comments of those dates are the evidence). It **replaces §6.2 and §6.3**, adjusts §1 C-S2, §6.4, §6.5,
+§8.5, §8.6, §10, §11, §13, §16 and §20 as listed below, and **keeps everything else** (šepkár, VBAN/Dante ingest,
+interpreter layouts, verse suggestions §7, privacy §12). Implementation plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`.
+
+### 22.1 Owner decisions (2026-11-13 / 14, ROZHODNUTÉ on #852)
+
+1. **Text, not dubbing.** The interpreter needs TEXT; Gemini Live Translate is an audio→audio dubbing engine whose EN
+   input transcription arrives per phrase, 3–5 s late (already noted in §8.5). Owner priorities: high quality,
+   Christian context, and fast + correct capture of cited Bible references (C-S4 / C-S5 / C-S6).
+2. **EN → EN first, translation later.** The interpreter's most common problem is a missed word or a missed verse,
+   not the translation. The guest's live English transcript ships first; the Slovak suggestion (§8.6) is decided
+   after it.
+3. **Only the guest's microphone is transcribed** — never a mix of guest + interpreter, and the interpreter mic is not
+   sent to the cloud in this phase.
+4. **Tests run on English-only sermons** (no manual removal of the interpreter from mixed tracks): Marty Sloan
+   `UvP1l1RjmQY`, `LwFI3gwp7hU`; Jonathan Shuttlesworth `darlKC25jLs`; Ben Kroeske `8STuemX2aAU` (kept under
+   `~/.claude/work-products/presenter/eval-audio/en-only/` on dev2, never committed). The Gemini Live Translate run on
+   the mixed track (`vvlEx3pIa44`) is not valid for the real guest mic.
+5. ElevenLabs not tested (no new account). Keys received: Gemini, AssemblyAI, **Soniox** (dev1 + dev2 vault
+   `~/.secrets/listen-soniox-api-key`).
+
+### 22.2 What was measured (1.0× real-time streaming replay, dev2)
+
+Accuracy on the 10-min Sloan slice (`LwFI3gwp7hU` 180–780 s) against three independent batch references (AssemblyAI
+universal-3-5-pro, Soniox stt-async-v6, Gemini 3.6 Flash; the references disagree among themselves 1.9–2.8 % = the
+noise floor). "Visible" = a word's end in the audio → that word first visible in the engine's text (partial or
+final), one engine-neutral scorer (`timeline_score.py`).
+
+| Engine (streaming) | WER | Visible p50 / p90 | Citations (Shuttlesworth, 38 real) | $/h | Verdict |
+|---|---|---|---|---|---|
+| **Soniox stt-rt-v6 + context** (domain + Bible books + terms) | **1.9 %** | 0.76 / 1.55 s | **38 / 38** (incl. James 5:16) | **0.12** | **chosen** |
+| Soniox stt-rt-v6 (no context) | 2.1 % | 0.72 / 1.51 s | — | 0.12 | |
+| AssemblyAI Universal-3.6 Pro | 2.1 % | 0.65 / 1.61 s (partials only every ~1.3 s; finals at turn end, p90 15–41 s) | — | 0.45 | second |
+| AssemblyAI universal-streaming-english + format + keyterms | 3.5 % | 0.60 / 1.38 s | 37 / 38 (misses James 5:16) | 0.15 | |
+| Gemini 3.5 Transcribe Live | 23.5 % (drops whole phrases, e.g. "Matthew 5:13-16" → "514") | 0.50 / 1.31 s | — | ~0.54 | **out** |
+| Gemini Live Translate (EN input transcription) | — | phrase chunks, first text 3.2 s; mixes languages | — | ~2.2 | **out for EN** |
+
+Soniox also formatted the references ("Isaiah 53:5", "1 Peter 2:24", "Mark 10:29 to 30", "Matthew 5:13-16") and
+punctuated sentences. The context changed neither the latency nor the slice's WER beyond 0.2 pt; it is kept because
+it costs nothing and targets exactly the vocabulary the interpreter misses.
+
+### 22.3 §6.2 replaced — Soniox stt-rt-v6 is THE engine for the guest's English transcript
+
+- **One continuous Soniox real-time session for the guest mic only**, `stt-rt-v6` (released 2026-11-03; `stt-rt-v5` is
+  removed 2026-12-15 — the model id is an env setting so the next rename is a deploy, not a code change).
+- **Config = the measured one:** `audio_format: "pcm_s16le"`, `sample_rate: 16000`, `num_channels: 1`,
+  `language_hints: ["en"]`, and `context`:
+  - `general`: `[{key: "domain", value: "Christian church sermon"}, {key: "topic", value: "preacher reads and cites
+    Bible books, chapters and verses"}]` (the measured wording);
+  - `terms`: the **66 English Bible book names** (from the resolver's English name table, not a hand list — the
+    evaluation's list missed eight books), a curated list of Christian terms (Holy Spirit, Pentecost, righteousness,
+    sanctification, atonement, Gethsemane, Pharisees, …), **today's prepared references** (#851, "Romans 8:37" style,
+    English names) and **today's šepkár source terms** (§9.9);
+  - no `translation`, no `translation_terms` in this phase (§22.10).
+- **Endpoint detection** is NOT part of the measured config. It ships off; the acceptance run measures it on
+  (`enable_endpoint_detection: true`, `max_endpoint_delay_ms` 1000–1500) and keeps it only if finals arrive sooner
+  without hurting WER (it also gives the `<end>` token that closes a sentence, §6.5).
+- **Gemini Live Translate and Gemini Transcribe Live are dropped for the EN transcript** (measured: phrase-chunk EN
+  3+ s late and language mixing; Transcribe Live drops whole phrases incl. references, 23.5 % WER). Live Translate
+  is also out as the SK engine (§22.10).
+- The provider trait (§6.1) stays: `StreamingAsr` is implemented by `soniox.rs` + the test mock; a second engine
+  (AssemblyAI Universal-3.6 Pro, measured second) is added only if Soniox fails in production.
+
+### 22.4 §6.3 replaced — Soniox real-time protocol (docs.soniox.com, verified 2026-11-14)
+
+- `wss://stt-rt.soniox.com/transcribe-websocket`; auth = HTTP header `Authorization: Bearer <key>` on the upgrade
+  request (the start-message `api_key` field is deprecated and refused from 2027-01-15 — never sent); a non-default
+  `User-Agent: presenter-listen/<version>` [SP: Cloudflare 1010].
+- First message = TEXT frame with the config (§22.3; optional `enable_endpoint_detection`, `max_endpoint_delay_ms`
+  500–3000, `endpoint_sensitivity`, `endpoint_latency_adjustment_level`, `translation {type: one_way,
+  target_language}`, `context {general, text, terms, translation_terms}`).
+- Audio = BINARY frames (100 ms of s16le). End of audio = an EMPTY TEXT frame; the server answers the remaining
+  finals and `finished: true`, then closes.
+- Control TEXT frames: `{"type":"finalize"}` → every pending token becomes final, followed by a `<fin>` token;
+  `{"type":"keepalive"}` → keeps the stream open while no audio flows.
+- Responses: `{tokens: [{text, start_ms, end_ms, confidence, is_final, language, translation_status}],
+  final_audio_proc_ms, total_audio_proc_ms, finished?}`; errors `{error_code, error_type, error_message}` and the
+  server closes. Non-final tokens are REPLACED by every response; final tokens are sent ONCE. `<end>` = an endpoint
+  (only with endpoint detection), `<fin>` = a finalize completed — both markers, never text. Tokens are sub-word;
+  the text carries its own leading spaces [SP].
+- **≤ 300 min per stream** → the client rolls over to a new connection before that (§22.5).
+- **Production note (measured 2026-11-14):** Soniox does **not answer WebSocket pings** promptly — the Python
+  client's ping keepalive killed a run at 234 s (1011). The Rust client NEVER sends WS pings; liveness = the
+  response cadence while audio flows (measured: a response every 0.19 s p50, 0.41 s p90, max 1.19 s) and Soniox's own
+  `{"type":"keepalive"}` while no audio flows.
+- Price $0.12 per streamed hour [unverified: whether a kept-alive stream with no audio is billed — the client bounds
+  it anyway, §22.5].
+
+### 22.5 §6.4 adjusted — lifecycle of the guest session
+
+- **Which mic is the guest's:** the Dante mics are fixed (`dante-mic-1` / `-2`, role `moderator`, language `off`,
+  #933), so the language cannot pick. A setting names it: `listen.transcription.guestMic` (a mic id from the
+  published list, VBAN or Dante), chosen in Settings → Počúvanie before the service; none = nothing runs.
+- Start / stop, paid gate, daily cap, cost meter: unchanged (§6.4, §18 defaults 1, 8) — only for that one mic.
+- **Lazy connect:** no connection until the first voiced frame (> −50 dBFS); a 1 s pre-roll goes first.
+- **Silence gate (replaces the keepalive sentence of §6.4):** 10 s below −50 dBFS (or 10 s without frames) → send
+  `finalize` once (the open tail becomes final text at once), stop sending audio, send `keepalive` every 5 s;
+  the first voiced frame resumes with its 1 s pre-roll on the same connection. After **5 min gated** the connection
+  ends (empty text frame) — a later voiced frame reconnects with the same context. This bounds the billed time
+  whatever Soniox counts for a kept-alive stream.
+- **Reconnect** (close without `finished`, 408, 429, 5xx, a connect failure, a stall = no response for 15 s while
+  ≥ 10 s of audio went out): after 1, 5, 20, 60 s, then every 60 s; the audio since the end of the last FINAL token
+  (≤ 5 s) is resent first, so nothing finalized is transcribed twice and the unconfirmed tail is not lost.
+  401 / 402 / 403 / 400 → stop, status `auth` / `payment` / `refused`, no retry loop. More than 20 connections in
+  10 min → stop (a reconnect storm is a cost runaway).
+- **Rollover before 300 min:** from 280 min of connection age, at the first gated moment (else at 295 min
+  regardless): `finalize`, wait for `<fin>` (≤ 3 s), end the old stream, open the new one with the same config and
+  send the frames buffered meanwhile — no audio lost, no word split.
+
+### 22.6 §6.5 adjusted — transcript assembly from Soniox tokens
+
+- Final tokens append to the open sentence; non-final tokens are the live tail and are replaced by every response;
+  translation tokens (`translation_status: "translation"`) are ignored in this phase.
+- A sentence closes at `. ! ? …` (a following quote allowed) when the next final token starts a new word, at 20 words
+  (songplayer's cap), at `<end>` or `<fin>`; a pause alone never closes a sentence (`<fin>` is sent only by the
+  silence gate, `<end>` only with endpoint detection).
+- Token times are per connection; the session time = the connection's audio offset + `start_ms` / `end_ms`.
+
+### 22.7 §1 C-S2 adjusted (derived from the verdict; the owner may override)
+
+No accurate engine met "EN word p90 ≤ 1.0 s": the faster ones lose words (fast AssemblyAI 3.5 % WER) or whole phrases
+(Gemini). The owner chose accuracy. **C-S2 becomes: guest speech → English word visible on the interpreter display,
+p50 ≤ 0.9 s and p90 ≤ 1.8 s, measured on the Presenter path** (Dante/VBAN → chain → Soniox → `/listen/ws`; the
+engine alone measured 0.76 / 1.55 s). **C-S3** (SK suggestion) waits for §22.10. C-S4 / C-S5 unchanged (C4).
+
+### 22.8 Inputs for §7 (verse detection, the next plan after C3)
+
+Seen in Soniox's real output and binding for the detector's corpus:
+
+- references mostly formatted ("Isaiah 53:5", "1 Peter 2:24", "Matthew 5:13-16", "Mark 10:29 to 30", "Matthew chapter 5",
+  "verse 5"), but **sometimes bare digit pairs** ("John 10 10") → accept `<book> <n> <n>` as chapter + verse;
+- **translation names are not references:** "King James", "Amplified (classic)", NKJV / NIV / ESV / NLT / "the Message"
+  must never produce a book — Soniox wrote "2 King James. 1:2." around a translation name (must NOT become 2 Kings 1:2);
+- an allusion is not a citation ("build me a strong church" ≠ Matthew 16:18); "the book of Acts" = a book without a
+  chapter (low confidence, no card);
+- §7.2 fusion of two mics: the interpreter mic is not transcribed in this phase (§22.1), so C4 v1 detects on the guest
+  transcript only; the SK-mic half of §7.1 / §7.2 returns if the interpreter mic is ever transcribed.
+
+### 22.9 §8.5 adjusted
+
+Row "Cloud ASR partial": measured (Soniox at the client) 0.76 s p50 / 1.55 s p90 from a word's end; the budget row
+"Speech → EN word" follows C-S2 as amended (§22.7).
+
+### 22.10 §8.6 adjusted — the Slovak suggestion stays OPEN
+
+Decided after the EN transcript ships, by a replay of the English-only sermons scored by the owner's reading
+(Christian idiom first). Candidates:
+
+| Engine | Note from the evaluation |
+|---|---|
+| **A. Soniox built-in translation** (`translation {type: one_way, target_language: "sk"}` in the same session) | no second session; `context.translation_terms` now exists (a glossary: šepkár pairs + a curated Christian list) — the "no glossary" objection of §8.6 is outdated; quality on sermons unmeasured |
+| **B. LLM per finished sentence** with the Christian glossary + previous sentences (owner's model) | most controllable; +0.5–1.5 s; token cost |
+| ~~C. Gemini Live Translate~~ | **dropped**: errors on biblical idiom ("the story of Saul to Paul" → "príbeh Saula na Pavla"), audio output paid but unused (~$2.2/h), ~3 s behind |
+
+### 22.11 §10 adjusted — cost
+
+Guest mic only: **$0.12 per streamed hour**; with auto start/stop on `preach`, the silence gate and the 5-min park,
+≈ $0.15–0.20 per guest service. The interpreter mic costs nothing in this phase. A future SK engine A adds Soniox
+translation tokens; B adds the LLM's tokens.
+
+### 22.12 §11 adjusted — failure modes (additions)
+
+| Failure | Detected by | System does |
+|---|---|---|
+| Soniox `error_code` 401 / 403 / 402 / 400 | response `error_code` | stop, status `auth` / `payment` / `refused` + Slovak reason, no retry |
+| 408 / 429 / 5xx / close without `finished` / stall 15 s | response or close or response cadence | reconnect 1 / 5 / 20 / 60 s, resend since the last final (≤ 5 s); the interpreter banner "Služba prepisu nedostupná — skúšam znova" after 3 s |
+| 300-min stream limit | connection age | planned rollover at a gated moment (§22.5), no banner |
+| WS ping unanswered | — | never sent (§22.4) |
+
+### 22.13 §13 adjusted — the evaluation is DONE for EN
+
+Method as run: English-only sermons, 1.0× streaming replay, word-level arrival scorer, three batch references,
+citation lists drafted by Gemini 3.8 Flash and checked by hand. Results and the verdict: #852 comments of
+2026-11-13 / 14; scripts and logs: `~/.claude/work-products/presenter/eval-audio/en-only/runs/` on dev2. The C3
+acceptance repeats the Sloan slice and the Shuttlesworth windows through the real Presenter path (§22.7 numbers,
+citations ≥ 37 / 38).
+
+### 22.14 §16 adjusted — phasing
+
+| # | Unit | Plan |
+|---|---|---|
+| C3 | Guest EN transcript: Soniox session for the guest mic, assembly, `/listen/ws`, the interpreter's EN column, key plumbing, Settings, mock + E2E, real-API acceptance | `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md` |
+| C4 | Verse detection (§7, with §22.8) + console cards | next plan, after C3 |
+| C5a | Interpreter tablet: the rest (⏸, A−/A+, Bible area, numbers + names) | after C4 |
+| C6 | SK suggestion (§22.10) | after the EN transcript runs at a real service |
+| C3-persist | `listen_transcript` 7-day store (§12) | own small lane after C3 (the transcript lives in memory until then) |
+
+### 22.15 §20 adjusted — owner actions
+
+- **No new key needed:** the Soniox key is in the dev1 / dev2 vault; Claude stores it as the GitHub secret
+  `LISTEN_SONIOX_API_KEY` from the vault (stdin, never argv or chat) in the acceptance lane. The Gemini key is not
+  used by Presenter's C3 (it stays in the vault for evaluations).
+- **Before a guest service:** pick the guest's mic in Settings → Počúvanie → "Prepis hosťa" (Dante mic 1 or 2) and
+  switch the transcription on (off by default, §18 default 4 unchanged in spirit: the owner's money first).
+
+### 22.16 Sources (2026-11-14)
+
+- docs.soniox.com, read 2026-11-14: the WebSocket API reference (endpoint, Bearer header, config fields, binary audio,
+  empty text frame = end, responses, error fields), real-time endpoint detection, manual finalization (`finalize`,
+  `<fin>`), keepalive, context (`general`, `text`, `terms`, `translation_terms`), models (`stt-rt-v6`, `stt-rt-v5`
+  removal 2026-12-15, 300 min per stream) and pricing ($0.12/h).
+- Coval real-time benchmark (2026-11-13), Pipecat STT benchmark (Aug 2026) — shortlist only; the decision came from
+  our replay (#852).
