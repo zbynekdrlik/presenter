@@ -208,6 +208,12 @@ async fn the_list_is_newest_first_with_each_verses_text() {
     let list = state.list_study_bookmarks(None).await.expect("list");
     assert_eq!(list[3].text.as_deref(), Some("verš 2"));
     assert_eq!(list[0].text.as_deref(), Some("verš 3"));
+    // The NLT as the main translation: its rows borrow the KJV's text.
+    let mut prefs = state.get_bible_preferences().await.expect("prefs");
+    prefs.main_translation = Some("eng-nlt".to_string());
+    state.set_bible_preferences(prefs).await.expect("set prefs");
+    let list = state.list_study_bookmarks(None).await.expect("list");
+    assert_eq!(list[3].text.as_deref(), Some("verš 2"));
 }
 
 #[test]

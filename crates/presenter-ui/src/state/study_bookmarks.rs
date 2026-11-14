@@ -59,17 +59,6 @@ pub fn restore_order<T>(mut deleted: Vec<(T, usize)>) -> Vec<(T, usize)> {
     deleted
 }
 
-/// The local list in the order of `ids` (a drop shows at once, before the PUT
-/// answers). A row missing from `ids` keeps its place at the end.
-pub fn apply_order<T>(rows: &mut [T], ids: &[i64], id_of: impl Fn(&T) -> i64) {
-    rows.sort_by_key(|row| {
-        let id = id_of(row);
-        ids.iter()
-            .position(|held| *held == id)
-            .unwrap_or(usize::MAX)
-    });
-}
-
 /// The verse being read, as a bookmark keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadingPlace {
@@ -155,14 +144,9 @@ mod tests {
     }
 
     #[test]
-    fn spat_restores_lowest_index_first_and_a_drop_reorders_the_rows() {
+    fn spat_restores_lowest_index_first() {
         let back = restore_order(vec![("e", 4), ("a", 0), ("c", 2)]);
         assert_eq!(back, vec![("a", 0), ("c", 2), ("e", 4)]);
-        let mut rows = vec![1_i64, 2, 3, 4];
-        apply_order(&mut rows, &[3, 1, 2, 4], |row| *row);
-        assert_eq!(rows, vec![3, 1, 2, 4]);
-        apply_order(&mut rows, &[2], |row| *row);
-        assert_eq!(rows, vec![2, 3, 1, 4]);
     }
 
     #[test]

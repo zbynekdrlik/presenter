@@ -1155,7 +1155,7 @@ body[data-shell="phone"] .study-verse__number {
 /* A control in a sheet's head beside the close button ("Vybrať"). */
 .study-sheet__action {
   flex: none;
-  min-height: 40px;
+  min-height: 44px;
   margin-left: auto;
   padding: 0 14px;
 }

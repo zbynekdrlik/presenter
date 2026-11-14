@@ -113,6 +113,12 @@ impl Repository {
         .context("bookmark: list")
     }
 
+    /// How many bookmarks the owner's list holds (the limit check).
+    #[instrument(skip_all)]
+    pub async fn count_study_bookmarks(&self, owner: Option<&str>) -> anyhow::Result<usize> {
+        Ok(ids_in(&self.db, owner).await?.len())
+    }
+
     /// A new bookmark at `index` of the owner's list (top-first; the TOP when
     /// `None`, the end when past it); the list is numbered again in the same
     /// transaction.
@@ -326,6 +332,8 @@ mod tests {
         let owner = Some("preacher@example.org");
         add(&repo, owner, "Prvá").await;
         add(&repo, owner, "Druhá").await;
+        assert_eq!(repo.count_study_bookmarks(owner).await.unwrap(), 2);
+        assert_eq!(repo.count_study_bookmarks(None).await.unwrap(), 0);
         repo.insert_study_bookmark(owner, "Stred", &place("JHN", 3, 16), Some(1))
             .await
             .unwrap();

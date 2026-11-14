@@ -8,6 +8,8 @@
 //! Lookups and `study.last` never touch a bookmark: only these writes do.
 
 use presenter_core::bible::canonical_book_by_code;
+
+use crate::bible_remote::structure_source;
 use presenter_core::bible::sermon::translation_short_code;
 use presenter_persistence::{BookmarkPlace, DeletedStudyBookmark, StudyBookmarkRecord};
 
@@ -106,12 +108,13 @@ impl AppState {
         &self,
         owner: Option<&str>,
     ) -> anyhow::Result<Vec<StudyBookmark>> {
-        // A row's text: its own translation, else the main one (the NLT is
-        // remote, so it has none of its own).
+        // A row's text: its own translation, else the main one; the remote NLT
+        // has no text in the database, so it borrows its structure source's
+        // (the KJV), as a bookmark of its own does through the main one.
         let main = self.get_bible_preferences().await?.main_translation;
         let rows = self
             .repository
-            .list_study_bookmarks(owner, main.as_deref())
+            .list_study_bookmarks(owner, main.as_deref().map(structure_source))
             .await?;
         rows.into_iter().map(StudyBookmark::try_from).collect()
     }

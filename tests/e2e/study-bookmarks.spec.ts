@@ -284,6 +284,7 @@ for (const [label, profile, touch] of PROFILES) {
     await expect(row(page, two)).not.toHaveAttribute("data-chosen", "true");
     if (touch) {
       await assertMinTapTarget(remove, 44);
+      await assertMinTapTarget(choose, 44);
       await assertNoHorizontalOverflow(page);
     }
     // The delete button stays put under the list, inside the sheet.
@@ -313,6 +314,46 @@ for (const [label, profile, touch] of PROFILES) {
     await finish(opened);
   });
 }
+
+test("Späť that fails half-way keeps Späť for the rest, and a second Späť brings every row back to its place", async ({
+  browser,
+}) => {
+  const opened = await open(browser, PHONE_390);
+  const { page } = opened;
+  const [one, two, three] = await seed(page, [1, 2, 3]);
+  await openList(page, true);
+  await expectOrder(page, [three, two, one]);
+  await page.locator('[data-role="bookmarks-choose"]').tap();
+  for (const id of [three, one]) await row(page, id).locator('[data-role="bookmark-pick"]').tap();
+  await page.locator('[data-role="bookmarks-delete"]').tap();
+  await expect(notice(page)).toContainText("Zmazané 2 záložky");
+  await expectOrder(page, [two]);
+
+  // The second re-create fails once (the server is away for a moment).
+  let creates = 0;
+  await page.route("**/bible/study/bookmarks", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    creates += 1;
+    if (creates === 2) {
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Server je dočasne nedostupný" }) });
+    }
+    return route.continue();
+  });
+  await page.locator('[data-role="study-notice-undo"]').tap();
+  await expect(notice(page)).toContainText("Server je dočasne nedostupný");
+  // The first is back at the top; the one that failed still has its Späť.
+  await expect.poll(async () => (await stored(page)).map((item) => item.verse)).toEqual([3, 2]);
+  await page.locator('[data-role="study-notice-undo"]').tap();
+  await expect(notice(page)).toContainText("Záložka je späť");
+  await expect.poll(async () => (await stored(page)).map((item) => item.verse)).toEqual([3, 2, 1]);
+  await expect.poll(async () => (await shownIds(page)).length).toBe(3);
+  expect(creates).toBe(3);
+
+  const deliberate = /Failed to load resource: the server responded with a status of 503\b/;
+  expect(opened.errors.filter((text) => deliberate.test(text))).toHaveLength(1);
+  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((text) => !deliberate.test(text)));
+  await finish(opened);
+});
 
 test("the old rename and move routes are gone; an empty delete is refused in Slovak", async ({ browser }) => {
   const opened = await open(browser, PHONE_390);

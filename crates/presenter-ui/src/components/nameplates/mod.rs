@@ -370,7 +370,10 @@ impl NameplateStore {
     /// focus (the drag handle under ↑ / ↓, a half-typed field).
     fn reorder(self, ids: Vec<i64>) {
         self.next_gen();
-        focus::keep_focus(|| self.plates.update(|list| order::apply_order(list, &ids)));
+        focus::keep_focus(|| {
+            self.plates
+                .update(|list| order::apply_order(list, &ids, |plate| plate.id))
+        });
         self.send_order(self.output_slug.get_untracked(), ids);
     }
 

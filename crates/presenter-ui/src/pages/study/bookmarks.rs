@@ -11,17 +11,18 @@
 //! phone and the PC share it); lookups and `study.last` never touch it.
 
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
 use super::scroll::ScrollPlan;
 use super::sheet::Sheet;
 use super::{nav, sermon_error, Chapter, Study, Undo};
 use crate::api::bookmarks::{self as api, Bookmark, BookmarkPlace};
-use crate::components::nameplates::order::{drop_marker, drop_slot, reorder_to_slot};
+use crate::api::ApiError;
+use crate::components::drag_rows;
+use crate::components::nameplates::order::{apply_order, drop_marker, reorder_to_slot};
 use crate::state::study_bookmarks::{
-    apply_order, chosen_in_order, delete_label, deleted_notice, offered_name, open_route,
-    reading_place, restore_order, toggle_chosen, translation_tag, ReadingPlace,
+    chosen_in_order, delete_label, deleted_notice, offered_name, open_route, reading_place,
+    restore_order, toggle_chosen, translation_tag, ReadingPlace,
 };
 
 /// What the Záložky sheet shows.
@@ -140,20 +141,99 @@ fn ids_now(s: Study) -> Vec<i64> {
     })
 }
 
+/// The page's bookmark writes (#951): ONE at a time, an order before a delete,
+/// owned by the page, so a write still waiting when the sheet closes is sent,
+/// and a waiting order never lands after a delete as a stale 409 whose toast
+/// would replace the delete's Späť.
+#[derive(Default)]
+pub(super) struct BookmarkWrites {
+    /// A write on its way.
+    sending: bool,
+    /// The newest order chosen and not sent yet.
+    order: Option<Vec<i64>>,
+    /// The chosen ids of "Zmazať (N)", with the sheet that asked.
+    delete: Option<(Vec<i64>, ListUi)>,
+}
+
+/// Send the next waiting write, if none is on its way.
+fn pump(s: Study) {
+    let next = s.bookmark_writes.try_update_value(|writes| {
+        if writes.sending {
+            return None;
+        }
+        let next = match writes.order.take() {
+            Some(ids) => Some(Write::Order(ids)),
+            None => writes.delete.take().map(|(ids, ui)| Write::Delete(ids, ui)),
+        };
+        writes.sending = next.is_some();
+        next
+    });
+    let Some(next) = next.flatten() else {
+        return;
+    };
+    leptos::task::spawn_local(async move {
+        match next {
+            Write::Order(ids) => {
+                if let Err(err) = api::reorder(&ids).await {
+                    // Another device changed the list: show it as stored.
+                    s.tell(sermon_error(&err));
+                    load(s);
+                }
+            }
+            Write::Delete(ids, ui) => deleted(s, ui, &ids, api::delete_many(&ids).await),
+        }
+        s.bookmark_writes
+            .update_value(|writes| writes.sending = false);
+        pump(s);
+    });
+}
+
+enum Write {
+    Order(Vec<i64>),
+    Delete(Vec<i64>, ListUi),
+}
+
+/// A delete answered. The sheet may be gone by now: its signals are written
+/// with `try_*` only.
+fn deleted(s: Study, ui: ListUi, ids: &[i64], answer: Result<Vec<api::Deleted>, ApiError>) {
+    ui.busy.try_set(false);
+    match answer {
+        Ok(deleted) => {
+            s.bookmarks.update(|list| {
+                if let BookmarkList::Ready(rows) = list {
+                    rows.retain(|row| !ids.contains(&row.id));
+                }
+            });
+            ui.choosing.try_set(false);
+            ui.chosen.try_set(Vec::new());
+            s.tell_undo(
+                deleted_notice(deleted.len()),
+                Undo::Bookmarks {
+                    items: deleted
+                        .into_iter()
+                        .map(|item| (item.bookmark, item.index))
+                        .collect(),
+                },
+            );
+        }
+        Err(err) => {
+            s.tell(sermon_error(&err));
+            load(s);
+        }
+    }
+}
+
 /// The sheet's own state, `Copy` for the rows.
 #[derive(Clone, Copy)]
-struct ListUi {
+pub(super) struct ListUi {
     s: Study,
     /// "Vybrať" is on: a row tap chooses instead of opening.
     choosing: RwSignal<bool>,
     chosen: RwSignal<Vec<i64>>,
     /// The dragged id and the slot it would drop into now.
     drag: RwSignal<Option<(i64, usize)>>,
-    /// A delete on its way.
+    /// A delete waiting or on its way.
     busy: RwSignal<bool>,
-    /// An order PUT on its way, and the newest order waiting behind it.
-    sending: StoredValue<bool>,
-    waiting: StoredValue<Option<Vec<i64>>>,
 }
 
 impl ListUi {
@@ -164,8 +244,6 @@ impl ListUi {
             chosen: RwSignal::new(Vec::new()),
             drag: RwSignal::new(None),
             busy: RwSignal::new(false),
-            sending: StoredValue::new(false),
-            waiting: StoredValue::new(None),
         }
     }
 
@@ -180,7 +258,8 @@ impl ListUi {
         self.chosen.set(Vec::new());
     }
 
-    /// A drop: the rows move at once, the order goes to the server.
+    /// A drop: the rows move at once, the order goes to the server (only the
+    /// newest waiting order is sent next, so the server ends on the last one).
     fn drop_at(self, id: i64, slot: usize) {
         let Some(ids) = reorder_to_slot(&ids_now(self.s), &id, slot) else {
             return;
@@ -190,97 +269,37 @@ impl ListUi {
                 apply_order(rows, &ids, |row| row.id);
             }
         });
-        self.send_order(ids);
+        self.s
+            .bookmark_writes
+            .update_value(|writes| writes.order = Some(ids));
+        pump(self.s);
     }
 
-    /// One order PUT at a time; a newer drop while one is out waits and goes
-    /// next, so the server ends on the last order chosen. A refusal (another
-    /// device changed the list) or a failure reloads the list as stored.
-    fn send_order(self, ids: Vec<i64>) {
-        if self.sending.get_value() {
-            self.waiting.set_value(Some(ids));
-            return;
-        }
-        self.sending.set_value(true);
-        leptos::task::spawn_local(async move {
-            let answer = api::reorder(&ids).await;
-            self.sending.set_value(false);
-            if let Err(err) = answer {
-                self.waiting.set_value(None);
-                self.s.tell(sermon_error(&err));
-                load(self.s);
-                return;
-            }
-            if let Some(next) = self.waiting.try_update_value(Option::take).flatten() {
-                self.send_order(next);
-            }
-        });
-    }
-
-    /// "Zmazať (N)": the chosen ones at once, then a toast with Späť.
+    /// "Zmazať (N)": the chosen ones at once (after any order still on its
+    /// way), then a toast with Späť.
     fn delete_chosen(self) {
         let ids = self.chosen_now();
         if ids.is_empty() || self.busy.get_untracked() {
             return;
         }
         self.busy.set(true);
-        let s = self.s;
-        leptos::task::spawn_local(async move {
-            let answer = api::delete_many(&ids).await;
-            self.busy.set(false);
-            match answer {
-                Ok(deleted) => {
-                    s.bookmarks.update(|list| {
-                        if let BookmarkList::Ready(rows) = list {
-                            rows.retain(|row| !ids.contains(&row.id));
-                        }
-                    });
-                    self.set_choosing(false);
-                    s.tell_undo(
-                        deleted_notice(deleted.len()),
-                        Undo::Bookmarks {
-                            items: deleted
-                                .into_iter()
-                                .map(|item| (item.bookmark, item.index))
-                                .collect(),
-                        },
-                    );
-                }
-                Err(err) => {
-                    s.tell(sermon_error(&err));
-                    load(s);
-                }
-            }
-        });
+        self.s
+            .bookmark_writes
+            .update_value(|writes| writes.delete = Some((ids, self)));
+        pump(self.s);
     }
 }
 
-fn handle_of(ev: &PointerEvent) -> Option<web_sys::Element> {
-    ev.target()
-        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())?
-        .closest("[data-role=\"bookmark-drag\"]")
-        .ok()
-        .flatten()
-}
+const HANDLE: &str = "[data-role=\"bookmark-drag\"]";
 
 /// The drop slot under the pointer, measured on the rows on screen.
 fn slot_under(ev: &PointerEvent) -> Option<usize> {
-    let list = handle_of(ev)?
-        .closest("[data-role=\"bookmarks-list\"]")
-        .ok()
-        .flatten()?;
-    let rows = list
-        .query_selector_all(":scope > [data-role=\"bookmark-row\"]")
-        .ok()?;
-    let middles: Vec<f64> = (0..rows.length())
-        .filter_map(|i| rows.item(i))
-        .filter_map(|node| node.dyn_into::<web_sys::Element>().ok())
-        .map(|row| {
-            let rect = row.get_bounding_client_rect();
-            rect.top() + rect.height() / 2.0
-        })
-        .collect();
-    Some(drop_slot(&middles, f64::from(ev.client_y())))
+    drag_rows::slot_under(
+        ev,
+        HANDLE,
+        "[data-role=\"bookmarks-list\"]",
+        "[data-role=\"bookmark-row\"]",
+    )
 }
 
 /// The handle: press, move, release. A press captures the pointer, so the
@@ -292,7 +311,7 @@ fn DragHandle(ui: ListUi, id: i64, position: Memo<Option<usize>>) -> impl IntoVi
         if ev.button() != PRIMARY_BUTTON {
             return;
         }
-        let Some(handle) = handle_of(&ev) else {
+        let Some(handle) = drag_rows::handle_of(&ev, HANDLE) else {
             return;
         };
         ev.prevent_default();
