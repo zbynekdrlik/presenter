@@ -160,8 +160,11 @@ preparation (the sermon views are in `sermon-prep.md`).
   NEWEST FIRST; a row = the place ("Hebrejom 11:4", `offered_name`) + a small translation tag + ONE ellipsized line
   of the verse's text, the whole row opens it. No rename, no "Presunúť sem" (both had 0 presses on SNV; the PATCH
   route is gone, the `name` column stays = the place). Reorder = a drag on the row's handle (`bookmark-drag`,
-  `touch-action: none`, the `sermon_reorder.rs` pointer pattern + `nameplates::order`), one PUT at a time, the
-  newest waiting order next. Delete = "Vybrať" (`bookmarks-choose`, the `Sheet`'s `action` slot) → a row tap
+  `touch-action: none`, the `sermon_reorder.rs` pointer pattern; DOM half = the shared `components::drag_rows`,
+  decisions = `nameplates::order`). Order PUTs and the bulk delete share ONE page-level queue
+  (`Study::bookmark_writes`: one write at a time, the newest order before a delete), so a waiting order never lands
+  after a delete as a 409 whose toast would replace Späť, and a write waiting when the sheet closes is still sent
+  (the sheet's signals are written with `try_*` there). Delete = "Vybrať" (`bookmarks-choose`, the `Sheet`'s `action` slot) → a row tap
   chooses (`bookmark-pick`) → ONE "Zmazať (N)" (`bookmarks-delete`, the `Sheet`'s fixed `footer` slot) → Späť.
 - **Newest first WITHOUT a migration:** the stored `position` keeps "ascending = older" (SNV's rows were 0..n
   oldest→newest); the repository flips at its edge: `list` reads `position DESC, id DESC`, every API index (create's
@@ -169,7 +172,8 @@ preparation (the sermon views are in `sermon-prep.md`).
   with no index goes to the TOP.
 - **The row's text comes with the list, one query:** a correlated sub-select on `bible_passages`
   (`idx_bible_passages_place`, `verse_start <= v <= verse_end`) for the bookmark's translation, `COALESCE`d with the
-  main translation (`bible preferences`), so the remote NLT shows the main one's text; the state layer cuts it to
+  main translation (`bible preferences`; a remote NLT main reads its `structure_source`, the KJV), so an NLT row
+  always has text; the state layer cuts it to
   160 chars (`excerpt`). A write answers `text: null`.
 - **Bulk delete = `POST …/delete {ids}` in ONE transaction**, answered with each row's index in the list as it WAS
   (ascending). Späť re-creates them lowest index first (`restore_order`), so each lands on its old place; N single
