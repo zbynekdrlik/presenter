@@ -150,25 +150,40 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **`refresh-dev-data` refuses as stale:** `cargo build --release -p presenter-importer --bin
   import_propresenter --bin ingest_bibles`.
 
-## Named bookmarks (#915, `pages/study/bookmarks.rs`, `/bible/study/bookmarks*`)
+## Bookmarks (#915, reshaped by #951; `pages/study/bookmarks.rs`, `/bible/study/bookmarks*`)
 
 - **Server-side, one list per reader e-mail** (`AccessEmail`, `.claude/rules/access-identity.md`): a verified Access
   login, or the device cookie that login left (so the same phone keeps its list through the church's Access bypass,
   ROZHODNUTÉ 1, 2026-11-09). NULL = the shared list: the LAN address, a device that never logged in. An id of
   another list is 404. The e-mail is a convenience scope, never a protection: bookmarks are no secret.
+- **"Where did I stop" (#951, owner 2026-11-14: "ja len potrebujem vediet kde som skoncil citanie"):** the list is
+  NEWEST FIRST; a row = the place ("Hebrejom 11:4", `offered_name`) + a small translation tag + ONE ellipsized line
+  of the verse's text, the whole row opens it. No rename, no "Presunúť sem" (both had 0 presses on SNV; the PATCH
+  route is gone, the `name` column stays = the place). Reorder = a drag on the row's handle (`bookmark-drag`,
+  `touch-action: none`, the `sermon_reorder.rs` pointer pattern + `nameplates::order`), one PUT at a time, the
+  newest waiting order next. Delete = "Vybrať" (`bookmarks-choose`, the `Sheet`'s `action` slot) → a row tap
+  chooses (`bookmark-pick`) → ONE "Zmazať (N)" (`bookmarks-delete`, the `Sheet`'s fixed `footer` slot) → Späť.
+- **Newest first WITHOUT a migration:** the stored `position` keeps "ascending = older" (SNV's rows were 0..n
+  oldest→newest); the repository flips at its edge: `list` reads `position DESC, id DESC`, every API index (create's
+  `index`, delete's answered `index`, `PUT …/order`'s `ids`) is TOP-FIRST, `renumber` writes `len-1-i`, a create
+  with no index goes to the TOP.
+- **The row's text comes with the list, one query:** a correlated sub-select on `bible_passages`
+  (`idx_bible_passages_place`, `verse_start <= v <= verse_end`) for the bookmark's translation, `COALESCE`d with the
+  main translation (`bible preferences`), so the remote NLT shows the main one's text; the state layer cuts it to
+  160 chars (`excerpt`). A write answers `text: null`.
+- **Bulk delete = `POST …/delete {ids}` in ONE transaction**, answered with each row's index in the list as it WAS
+  (ascending). Späť re-creates them lowest index first (`restore_order`), so each lands on its old place; N single
+  DELETEs could not (each index would be relative to an already shortened list). An unknown id deletes nothing (404).
+  `PUT …/order` with any set but the whole list = 409 "Záložky sa medzitým zmenili — skús znova", the page reloads.
 - **Rules live in `state/study_bookmarks.rs`** (`BookmarkRefusal` → 422, Slovak): trimmed name 1–80 chars, ≤ 100 per
   list, a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
   structure with no request); the refusal names the book as the translation does. The row stores `book_name`.
-- **"Pridať záložku" adds in ONE tap** (#932, owner 2026-11-11: "Načo je to dobré?!" about the naming sheet;
-  `bookmark-save` was pressed unchanged 5 of 6 times): `bookmarks::add_here` posts the place name
-  (`offered_name`, "Hebrejom 11:4"), closes the verse sheet, notice "Záložka pridaná: …". It is the verse
-  sheet's FIRST action; the rest follow the SNV phone counters. No `s=zalozka` any more (an old link opens
-  the verse, no sheet); naming = Premenovať in `s=zalozky` (the header icon, hidden on the sermon views for
-  the 360 px header).
+- **"Pridať záložku" adds in ONE tap** (#932): `bookmarks::add_here` posts the place name, closes the verse sheet,
+  notice "Záložka pridaná: …". It is the verse sheet's FIRST action. No `s=zalozka` (an old link opens the verse).
 - **The list sheet starts every visit in `Loading`** and carries `data-state=loading|ready|error` (the spec's settle
-  marker); its keyed `<For>` sits OUTSIDE the state match, so a reload after Späť keeps an open rename field.
-- **Späť after Zmazať** re-creates at the deleted `index` (POST `index`), the repository renumbers 0..n in one
-  transaction. Lookups and `study.last` never touch bookmarks.
+  marker); its keyed `<For>` sits OUTSIDE the state match. A row's position is a `Memo` over the list, never captured.
+- **E2E (`study-bookmarks.spec.ts`):** phone 390 (touch, `touchDrag`) and desktop 1280 (mouse); each test empties the
+  list first (the server lives through the file); a drop on the row's own place sends no PUT.
 
 ## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
 
