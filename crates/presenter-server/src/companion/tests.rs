@@ -1052,6 +1052,69 @@ fn nameplate_variables_render_list_song_and_active() {
     assert!(vars.contains_key("nameplate_song_role"));
 }
 
+/// A camera-crew snapshot with the given Presenter title and AbleSet name.
+fn song_plate_snapshot(
+    presentation_name: Option<&str>,
+    song_name: Option<&str>,
+) -> StageDisplaySnapshot {
+    let now = Utc::now();
+    StageDisplaySnapshot::new(
+        StageDisplayLayout {
+            code: "camera-crew".to_string(),
+            name: "Camera crew".to_string(),
+            description: String::new(),
+        },
+        now,
+        presentation_name.map(|_| presenter_core::PresentationId::new()),
+        presentation_name.map(str::to_string),
+        Some("NEW LEVEL".to_string()),
+        song_name.map(str::to_string),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        presenter_core::timer::TimersOverview::demo(now),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+    )
+}
+
+fn nameplate_song_name(state: &CompanionVariableState) -> String {
+    state
+        .to_variables()
+        .into_iter()
+        .find(|v| v.name == "nameplate_song_name")
+        .map(|v| v.value)
+        .unwrap_or_default()
+}
+
+/// #956: the Stream Deck song-plate label shows the same text as the plate —
+/// Presenter's title with diacritics, no setlist number — even while AbleSet
+/// names the song in ASCII; AbleSet is only the fallback.
+#[test]
+fn nameplate_song_name_is_the_presenter_title_without_the_setlist_number() {
+    let mut state = CompanionVariableState::default();
+    state.apply_stage_snapshot(song_plate_snapshot(Some("040 Žalm 8"), Some("040 Zalm 8")));
+    assert_eq!(nameplate_song_name(&state), "Žalm 8");
+
+    state.apply_stage_snapshot(song_plate_snapshot(
+        Some("038 Dom zázrakov"),
+        Some("038 Dom zazrakov"),
+    ));
+    assert_eq!(nameplate_song_name(&state), "Dom zázrakov");
+
+    // No presentation on stage → AbleSet's name, number stripped too.
+    state.apply_stage_snapshot(song_plate_snapshot(None, Some("038 Dom zazrakov")));
+    assert_eq!(nameplate_song_name(&state), "Dom zazrakov");
+}
+
 #[test]
 fn interpreter_tips_event_leaves_companion_variables_unchanged() {
     let mut state = CompanionVariableState::default();

@@ -442,6 +442,47 @@ mod tests {
         );
     }
 
+    /// #956: every song plate shows the Presenter title of the presentation
+    /// on stage without the leading setlist number, whatever form the number
+    /// takes on prod ("040 ", "100. ", "137, "); a number that is part of the
+    /// title itself stays ("102 10 000 armád" → "10 000 armád").
+    #[tokio::test]
+    async fn show_song_uses_the_presenter_title_without_the_setlist_number() {
+        let state = AppState::in_memory().await.unwrap();
+        crate::state::seed_sample_library(&state).await.unwrap();
+        state
+            .repository()
+            .create_stream_output("np-song-title", "Out")
+            .await
+            .unwrap();
+        let libraries = state.libraries().await.unwrap();
+        let presentation = &libraries[0].presentations[0];
+        let cases = [
+            ("040 Žalm 8", "Žalm 8"),
+            ("100. Nad všetko si ty", "Nad všetko si ty"),
+            ("137, Tancuj generácia", "Tancuj generácia"),
+            ("102 10 000 armád", "10 000 armád"),
+            ("Dom zázrakov", "Dom zázrakov"),
+        ];
+        for (title, expected) in cases {
+            state
+                .rename_presentation(presentation.id, title)
+                .await
+                .unwrap();
+            state
+                .update_stage_state(presentation.id, presentation.slides[0].id, None, None, None)
+                .await
+                .unwrap();
+            let active = state
+                .stream_nameplate_show_song("np-song-title")
+                .await
+                .unwrap()
+                .expect("song plate on air");
+            assert_eq!(active.primary, expected, "plate text for {title:?}");
+            assert_eq!(active.secondary, libraries[0].name);
+        }
+    }
+
     #[tokio::test]
     async fn auto_hide_fires_after_delay_and_a_newer_show_cancels_the_old_one() {
         let state = AppState::in_memory().await.unwrap();
