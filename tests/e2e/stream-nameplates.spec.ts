@@ -311,8 +311,10 @@ test.describe("Stream lower-third nameplates (#779)", () => {
     // Server-side auto-hide fires after ~1 s and broadcasts a hide.
     await expect(plates(page)).toHaveCount(0, { timeout: 4_000 });
 
-    // ── SONG plate: shows the live song title + library.
-    const song = await seedSong(request, "Ako Ťa mám rád", "Kapela XY");
+    // ── SONG plate: shows the live song title + library, without the
+    // worship setlist number in front of the title (#956). "100. " is a prod
+    // form the stage's older 3-digit rule leaves in, so only #956 strips it.
+    const song = await seedSong(request, "100. Ako Ťa mám rád", "Kapela XY");
     await triggerSong(request, song.presentationId, song.slideId);
     expect(await showNameplate(request, { source: "song" })).toBe(200);
     await expect(plates(page)).toHaveCount(1, { timeout: 5_000 });

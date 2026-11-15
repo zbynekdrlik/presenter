@@ -234,20 +234,19 @@ impl AppState {
         )
     }
 
-    /// Resolve the song plate's texts (primary = song/presentation title,
-    /// secondary = library) from the layout-independent camera-crew stage
-    /// snapshot (the same worship content the stream lyrics element consumes).
+    /// Resolve the song plate's texts (primary = the on-stage presentation's
+    /// title without its setlist number, AbleSet's song name only as a
+    /// fallback — #956, `presenter_core::song_plate_title`; secondary =
+    /// library) from the layout-independent camera-crew stage snapshot (the
+    /// same worship content the stream lyrics element consumes).
     async fn resolve_song_texts(&self) -> anyhow::Result<(String, String)> {
         let snapshot = self.stage_display_snapshot("camera-crew").await?;
         let snapshot = snapshot.ok_or(NameplateError::EmptySong)?;
-        let primary = snapshot
-            .song_name
-            .filter(|s| !s.trim().is_empty())
-            .or(snapshot.presentation_name)
-            .unwrap_or_default();
-        if primary.trim().is_empty() {
-            return Err(NameplateError::EmptySong.into());
-        }
+        let primary = presenter_core::song_plate_title(
+            snapshot.presentation_name.as_deref(),
+            snapshot.song_name.as_deref(),
+        )
+        .ok_or(NameplateError::EmptySong)?;
         let secondary = snapshot.library_name.unwrap_or_default();
         Ok((primary, secondary))
     }
@@ -440,6 +439,47 @@ mod tests {
             err.downcast_ref::<NameplateError>().is_some(),
             "expected NameplateError::EmptySong, got {err:?}"
         );
+    }
+
+    /// #956: every song plate shows the Presenter title of the presentation
+    /// on stage without the leading setlist number, whatever form the number
+    /// takes on prod ("040 ", "100. ", "137, "); a number that is part of the
+    /// title itself stays ("102 10 000 armád" → "10 000 armád").
+    #[tokio::test]
+    async fn show_song_uses_the_presenter_title_without_the_setlist_number() {
+        let state = AppState::in_memory().await.unwrap();
+        crate::state::seed_sample_library(&state).await.unwrap();
+        state
+            .repository()
+            .create_stream_output("np-song-title", "Out")
+            .await
+            .unwrap();
+        let libraries = state.libraries().await.unwrap();
+        let presentation = &libraries[0].presentations[0];
+        let cases = [
+            ("040 Žalm 8", "Žalm 8"),
+            ("100. Nad všetko si ty", "Nad všetko si ty"),
+            ("137, Tancuj generácia", "Tancuj generácia"),
+            ("102 10 000 armád", "10 000 armád"),
+            ("Dom zázrakov", "Dom zázrakov"),
+        ];
+        for (title, expected) in cases {
+            state
+                .rename_presentation(presentation.id, title)
+                .await
+                .unwrap();
+            state
+                .update_stage_state(presentation.id, presentation.slides[0].id, None, None, None)
+                .await
+                .unwrap();
+            let active = state
+                .stream_nameplate_show_song("np-song-title")
+                .await
+                .unwrap()
+                .expect("song plate on air");
+            assert_eq!(active.primary, expected, "plate text for {title:?}");
+            assert_eq!(active.secondary, libraries[0].name);
+        }
     }
 
     #[tokio::test]

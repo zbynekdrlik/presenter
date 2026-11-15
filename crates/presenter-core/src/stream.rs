@@ -21,6 +21,7 @@ use thiserror::Error;
 
 mod playback;
 mod slug;
+mod song_plate;
 pub use playback::{
     is_valid_drive_file_id, is_valid_drive_folder_id, parse_drive_folder_url, DriveFolder,
     DriveLinkError, PlaybackItem, PlaybackItemKind, PlaybackPlaylist,
@@ -28,6 +29,7 @@ pub use playback::{
     STREAM_PLAYBACK_IMAGE_SECONDS_MIN,
 };
 pub use slug::slug_from_name;
+pub use song_plate::song_plate_title;
 
 /// Fixed v1 font whitelist (arch §4). Custom-font upload is deferred to v2.
 pub const STREAM_FONT_FAMILIES: &[&str] = &["system-ui", "Arial", "Inter", "Bebas Neue", "Oswald"];
