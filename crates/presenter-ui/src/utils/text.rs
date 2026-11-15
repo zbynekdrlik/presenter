@@ -39,29 +39,18 @@ pub fn break_if_long(text: String, threshold: usize) -> String {
     }
 }
 
-/// Strip a leading 3-digit-then-space prefix from a ProPresenter song name.
-/// Mirrors the server-side `sanitize_song_title`:
+/// A song name without its leading setlist number — the song plate's one
+/// rule (`presenter_core::song_plate_title`, #956), the same text the
+/// server's `sanitize_song_title` gives the stage (#959):
 ///
-///   "042 Amazing Grace"  -> "Amazing Grace"
-///   "  042 Padded"       -> "Padded"
-///   "12 Two Digit"       -> "12 Two Digit"   (not exactly 3 digits → unchanged)
-///   "Already Clean"      -> "Already Clean"
+///   "042 Amazing Grace"      -> "Amazing Grace"
+///   "100. Nad všetko si ty"  -> "Nad všetko si ty"
+///   "10000 dôvodov"          -> "10000 dôvodov"   (5 digits is a title)
 ///
 /// Used by the `worship-pp` playlist sidebar to keep operator-facing
 /// numeric prefixes off the stage display.
 pub fn clean_song_name(name: &str) -> String {
-    let trimmed = name.trim_start();
-    let bytes = trimmed.as_bytes();
-    if bytes.len() >= 4
-        && bytes[0].is_ascii_digit()
-        && bytes[1].is_ascii_digit()
-        && bytes[2].is_ascii_digit()
-        && bytes[3].is_ascii_whitespace()
-    {
-        trimmed[4..].trim_start().to_string()
-    } else {
-        trimmed.to_string()
-    }
+    presenter_core::song_plate_title(Some(name), None).unwrap_or_default()
 }
 
 #[cfg(test)]

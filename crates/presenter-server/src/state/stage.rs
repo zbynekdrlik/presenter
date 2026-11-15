@@ -379,13 +379,11 @@ pub(crate) fn extract_song_number(name: &str) -> Option<String> {
     }
 }
 
+/// The song name the stage display, the Resolume `#song-name` clip and the
+/// Companion `song_name` variable show: the song plate's one rule (#956,
+/// #959) — the title without its leading setlist number, diacritics kept.
 pub(crate) fn sanitize_song_title(name: &str) -> String {
-    let trimmed = name.trim_start();
-    if has_song_number_prefix(trimmed.as_bytes()) {
-        trimmed[4..].trim_start().to_string()
-    } else {
-        trimmed.to_string()
-    }
+    presenter_core::song_plate_title(Some(name), None).unwrap_or_default()
 }
 
 pub(crate) fn blank_slide_content() -> SlideContent {
