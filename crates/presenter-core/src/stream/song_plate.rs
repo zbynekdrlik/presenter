@@ -26,7 +26,9 @@ pub fn song_plate_title(
     let not_blank = |name: &&str| !name.trim().is_empty();
     match presentation_name.filter(not_blank) {
         Some(title) => Some(strip_setlist_number(title.trim()).to_string()),
-        None => song_name.filter(not_blank).map(|name| name.trim().to_string()),
+        None => song_name
+            .filter(not_blank)
+            .map(|name| name.trim().to_string()),
     }
 }
 
