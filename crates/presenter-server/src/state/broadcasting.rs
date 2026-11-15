@@ -186,8 +186,9 @@ impl AppState {
     }
 
     async fn resolve_current_song_name(&self) -> Option<String> {
+        // #959: strip AbleSet's setlist number once, where it enters the stage.
         let snapshot = self.ableset_bridge.song_snapshot().await?;
-        Some(snapshot.name.clone())
+        Some(sanitize_song_title(&snapshot.name))
     }
 
     pub(super) async fn resolve_next_song_name(
@@ -195,8 +196,9 @@ impl AppState {
         resolution: &StageResolution,
     ) -> Option<String> {
         // Try AbleSet first
+        // #959: AbleSet's name carries the setlist number; strip it here, once.
         if let Some(name) = self.ableset_bridge.next_song_name().await {
-            return Some(name);
+            return Some(sanitize_song_title(&name));
         }
 
         // Fall back to playlist: find next presentation after current
