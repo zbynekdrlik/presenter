@@ -267,6 +267,13 @@ paths:
   no-layer hint, a stale def dropped) and reloads everything after a socket reconnect.
 - **The song line** (`song_line`): "title · library", "—" with no song; since #871 a song with
   no library shows its title alone (the pre-#871 editor printed "title · ").
+- **The song row shows what the song plate shows (#956):** `song_texts` =
+  `presenter_core::song_plate_title` (the on-stage presentation's title, no setlist number,
+  AbleSet's name only as a fallback) + library, read ONLY from the camera-crew snapshot
+  (`SONG_PLATE_LAYOUT`): cold-load `GET /stage/snapshot?layout=camera-crew`, and
+  `is_song_plate_snapshot` drops `Stage` events of other layouts. The selected layout's
+  snapshot is wrong here: on SNV (`api-ambient`) it carries AbleSet's song, a different
+  song than the plate's.
 - **The toast is a `Callback<(String, &'static str)>`** built before the page context exists
   (`show_editor_toast` / `state::show_toast_on` take only the signals, because a
   `Send + Sync` callback cannot capture the whole `AppContext`).
