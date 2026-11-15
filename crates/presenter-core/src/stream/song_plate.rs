@@ -28,9 +28,11 @@ pub fn song_plate_title(
 }
 
 /// `title` without ONE leading setlist number: 1–4 digits followed by
-/// whitespace, or by one separator (`.` `,` `-` `–` `:`) and whitespace.
-/// Digits anywhere else stay ("102 10 000 armád" → "10 000 armád"), and a
-/// title that would become empty is returned unchanged ("040", "040 ").
+/// whitespace, or by one separator (`.` `,` `-` `–` `:`) and whitespace or a
+/// letter. Digits anywhere else stay ("102 10 000 armád" → "10 000 armád"),
+/// and a title that would become empty is returned unchanged ("040", "040 ").
+/// Accepted limit: a title whose OWN first word is a short number and that
+/// has no setlist number would lose it — none of the prod titles does.
 fn strip_setlist_number(title: &str) -> &str {
     let digits = title.bytes().take_while(u8::is_ascii_digit).count();
     if digits == 0 || digits > SETLIST_NUMBER_MAX_DIGITS {
@@ -40,8 +42,9 @@ fn strip_setlist_number(title: &str) -> &str {
     let after_number = &title[digits..];
     let after_space = after_number.trim_start();
     let after_separator = match after_space.strip_prefix(SETLIST_NUMBER_SEPARATORS) {
-        // The separator must be followed by whitespace: "1.5 GHz" is a title.
-        Some(rest) if rest.starts_with(char::is_whitespace) => rest,
+        // The separator must be followed by whitespace or a letter ("233.Boh
+        // je tu" is on prod): "1.5 GHz" and "15.2. Kázeň" are titles.
+        Some(rest) if rest.starts_with(|c: char| c.is_whitespace() || c.is_alphabetic()) => rest,
         Some(_) => return title,
         // No separator: the number must be followed by whitespace ("040 Žalm").
         None if after_space.len() < after_number.len() => after_space,
@@ -73,6 +76,11 @@ mod tests {
         assert_eq!(strip_setlist_number("12 - Haleluja"), "Haleluja");
         assert_eq!(strip_setlist_number("7 Sláva"), "Sláva");
         assert_eq!(strip_setlist_number("1001   Pieseň"), "Pieseň");
+        assert_eq!(
+            strip_setlist_number("233.Tancujme, tancujme"),
+            "Tancujme, tancujme"
+        );
+        assert_eq!(strip_setlist_number("248.Boh je tu"), "Boh je tu");
     }
 
     #[test]
@@ -92,6 +100,7 @@ mod tests {
         // Number glued to a word, or a separator without a space.
         assert_eq!(strip_setlist_number("3dni"), "3dni");
         assert_eq!(strip_setlist_number("1.5 GHz"), "1.5 GHz");
+        assert_eq!(strip_setlist_number("15.2. Kázeň"), "15.2. Kázeň");
         // Nothing would be left.
         assert_eq!(strip_setlist_number("040"), "040");
         assert_eq!(strip_setlist_number("040 "), "040 ");
