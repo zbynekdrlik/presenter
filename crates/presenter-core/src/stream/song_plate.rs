@@ -117,14 +117,17 @@ mod tests {
     }
 
     #[test]
-    fn ableset_name_is_the_fallback() {
+    fn ableset_name_is_the_fallback_as_it_arrives() {
+        // #959: the stage strips AbleSet's setlist number where the name
+        // enters it, so the fallback must not strip a second time: a title
+        // that starts with its own number stays whole.
         assert_eq!(
-            song_plate_title(None, Some("038 Dom zazrakov")).as_deref(),
+            song_plate_title(None, Some("Dom zazrakov")).as_deref(),
             Some("Dom zazrakov")
         );
         assert_eq!(
-            song_plate_title(Some("  "), Some("038 Dom zazrakov")).as_deref(),
-            Some("Dom zazrakov")
+            song_plate_title(Some("  "), Some("10 000 armad")).as_deref(),
+            Some("10 000 armad")
         );
     }
 

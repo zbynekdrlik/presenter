@@ -431,3 +431,59 @@ async fn refresh_survives_concurrent_invalidate_races() {
         "cache must converge to a correct, populated state after concurrent invalidate races (#655 F7)"
     );
 }
+
+/// #959: AbleSet's song names carry the setlist number ("040 Zalm 8"). The
+/// stage song name, the next song name and the Companion `song_name` read them
+/// when no presentation is on stage, so they are stripped ONCE where they
+/// enter the stage context — with the one `song_plate_title` rule, keeping a
+/// number that belongs to the title ("102 10 000 armad" → "10 000 armad").
+#[tokio::test]
+async fn ableset_song_names_enter_the_stage_without_the_setlist_number() {
+    let state = AppState::in_memory().await.unwrap();
+    let mock_server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/setlist"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "activeSongId": "s1",
+                "songs": [
+                    { "id": "s1", "meta": { "name": "040 Zalm 8" } },
+                    { "id": "s2", "meta": { "name": "102 10 000 armad" } }
+                ]
+            })),
+        )
+        .mount(&mock_server)
+        .await;
+    let addr = mock_server.address();
+    let draft = AbleSetSettingsDraft {
+        enabled: true,
+        host: addr.ip().to_string(),
+        osc_port: 39051,
+        http_port: addr.port(),
+        library_name: "Hymnal".to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(draft, SettingsAuditSource::HttpSetter, "test")
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while state.ableset_bridge.song_snapshot().await.is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "AbleSet active song never populated from the mock server"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let empty = state.empty_stage_context().await.unwrap();
+    let context = state.enrich_stage_context(&empty).await;
+    assert_eq!(
+        context.resolution.override_song_name.as_deref(),
+        Some("Zalm 8")
+    );
+    assert_eq!(
+        context.resolution.next_song_name.as_deref(),
+        Some("10 000 armad")
+    );
+}
