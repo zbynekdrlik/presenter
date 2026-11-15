@@ -143,14 +143,22 @@ mod tests {
         assert_eq!(clean_song_name("Amazing Grace"), "Amazing Grace");
     }
 
+    /// #959: the worship-pp playlist uses the song plate's one rule (#956):
+    /// any 1–4 digit setlist number + space or `. , - – :`.
     #[test]
-    fn clean_song_name_rejects_two_digit_prefix() {
-        assert_eq!(clean_song_name("12 Two Digit"), "12 Two Digit");
+    fn clean_song_name_strips_every_setlist_number_form() {
+        assert_eq!(clean_song_name("12 Two Digit"), "Two Digit");
+        assert_eq!(clean_song_name("1234 Four Digit"), "Four Digit");
+        assert_eq!(clean_song_name("100. Nad všetko si ty"), "Nad všetko si ty");
+        assert_eq!(clean_song_name("137, Tancuj generácia"), "Tancuj generácia");
+        assert_eq!(clean_song_name("248.Boh je tu"), "Boh je tu");
     }
 
     #[test]
-    fn clean_song_name_rejects_four_digit_prefix() {
-        assert_eq!(clean_song_name("1234 Four Digit"), "1234 Four Digit");
+    fn clean_song_name_keeps_titles_that_are_not_a_setlist_number() {
+        assert_eq!(clean_song_name("10000 dôvodov"), "10000 dôvodov");
+        assert_eq!(clean_song_name("15.2. Kázeň"), "15.2. Kázeň");
+        assert_eq!(clean_song_name("040"), "040");
     }
 
     #[test]
