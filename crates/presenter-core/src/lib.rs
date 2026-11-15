@@ -73,10 +73,10 @@ pub use stage_display::{
 pub use stage_text_mode::{StageTextMode, UnknownStageTextMode};
 pub use stream::{
     is_valid_drive_file_id, is_valid_drive_folder_id, parse_drive_folder_url, slug_from_name,
-    validate_props, validate_scene_name, validate_slug, ActiveNameplate, AnimationPreset,
-    ContentTransition, DriveFolder, DriveLinkError, Frame, ImageFit, Nameplate, NameplateKind,
-    NameplateSource, PlaybackItem, PlaybackItemKind, PlaybackPlaylist, SceneKind, Shadow,
-    StreamAsset, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
+    song_plate_title, validate_props, validate_scene_name, validate_slug, ActiveNameplate,
+    AnimationPreset, ContentTransition, DriveFolder, DriveLinkError, Frame, ImageFit, Nameplate,
+    NameplateKind, NameplateSource, PlaybackItem, PlaybackItemKind, PlaybackPlaylist, SceneKind,
+    Shadow, StreamAsset, StreamElementDef, StreamElementProps, StreamFont, StreamOutputDef,
     StreamOutputSummary, StreamSceneDef, StreamShowState, StreamValidationError, TextAlign,
     TextBox, TextStyle, RESERVED_STREAM_SLUGS, STREAM_DEFAULT_FADE_MS, STREAM_FONT_FAMILIES,
     STREAM_FRAME_POS_MAX_PCT, STREAM_FRAME_POS_MIN_PCT, STREAM_FRAME_SIZE_MAX_PCT,

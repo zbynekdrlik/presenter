@@ -234,20 +234,19 @@ impl AppState {
         )
     }
 
-    /// Resolve the song plate's texts (primary = song/presentation title,
-    /// secondary = library) from the layout-independent camera-crew stage
-    /// snapshot (the same worship content the stream lyrics element consumes).
+    /// Resolve the song plate's texts (primary = the on-stage presentation's
+    /// title without its setlist number, AbleSet's song name only as a
+    /// fallback — #956, `presenter_core::song_plate_title`; secondary =
+    /// library) from the layout-independent camera-crew stage snapshot (the
+    /// same worship content the stream lyrics element consumes).
     async fn resolve_song_texts(&self) -> anyhow::Result<(String, String)> {
         let snapshot = self.stage_display_snapshot("camera-crew").await?;
         let snapshot = snapshot.ok_or(NameplateError::EmptySong)?;
-        let primary = snapshot
-            .song_name
-            .filter(|s| !s.trim().is_empty())
-            .or(snapshot.presentation_name)
-            .unwrap_or_default();
-        if primary.trim().is_empty() {
-            return Err(NameplateError::EmptySong.into());
-        }
+        let primary = presenter_core::song_plate_title(
+            snapshot.presentation_name.as_deref(),
+            snapshot.song_name.as_deref(),
+        )
+        .ok_or(NameplateError::EmptySong)?;
         let secondary = snapshot.library_name.unwrap_or_default();
         Ok((primary, secondary))
     }
