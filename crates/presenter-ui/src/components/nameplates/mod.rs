@@ -481,6 +481,53 @@ mod tests {
         assert!(!song_line("Ako Ťa mám rád", "").contains('·'));
     }
 
+    /// A camera-crew snapshot with Presenter's title and AbleSet's name.
+    fn song_snapshot(presentation: Option<&str>, song: Option<&str>) -> StageDisplaySnapshot {
+        let now = chrono::Utc::now();
+        StageDisplaySnapshot::new(
+            presenter_core::StageDisplayLayout {
+                code: "camera-crew".to_string(),
+                name: "Camera crew".to_string(),
+                description: String::new(),
+            },
+            now,
+            None,
+            presentation.map(str::to_string),
+            Some("NEW LEVEL".to_string()),
+            song.map(str::to_string),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// #956: the "Pieseň" row and its Prehrať preview show what the song plate
+    /// shows — Presenter's title with diacritics, no setlist number; AbleSet's
+    /// name only when no presentation is on stage.
+    #[test]
+    fn the_song_row_shows_the_presenter_title_without_the_setlist_number() {
+        assert_eq!(
+            song_texts(&song_snapshot(Some("040 Žalm 8"), Some("040 Zalm 8"))),
+            ("Žalm 8".to_string(), "NEW LEVEL".to_string())
+        );
+        assert_eq!(
+            song_texts(&song_snapshot(None, Some("038 Dom zazrakov"))).0,
+            "Dom zazrakov"
+        );
+        assert_eq!(song_texts(&song_snapshot(None, None)).0, "");
+    }
+
     #[test]
     fn the_nameplate_paths_are_output_scoped_and_id_scoped() {
         assert_eq!(
