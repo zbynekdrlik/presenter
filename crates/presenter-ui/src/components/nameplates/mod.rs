@@ -91,11 +91,29 @@ pub fn song_line(name: &str, library: &str) -> String {
     }
 }
 
-/// The song plate's texts from a stage snapshot: the live song title + library
-/// (the same pair the server resolves the song plate from, #779).
+/// The stage layout the server resolves the song plate from (#779): its
+/// snapshot is layout-independent worship content, whatever the operator
+/// selected. The "Pieseň" row reads only this one (#956).
+pub const SONG_PLATE_LAYOUT: &str = crate::pages::stage_events::CAMERA_CREW_LAYOUT;
+
+/// True when `snapshot` is the one the song plate is resolved from — a Stage
+/// event of the operator-selected layout (e.g. `api-ambient`, which carries
+/// AbleSet's song) must not replace the row's song.
+pub fn is_song_plate_snapshot(snapshot: &StageDisplaySnapshot) -> bool {
+    snapshot.layout.code == SONG_PLATE_LAYOUT
+}
+
+/// The song plate's texts from the camera-crew snapshot: the title the server
+/// puts on the plate (`presenter_core::song_plate_title` — the on-stage
+/// presentation's title without its setlist number, AbleSet's name only as a
+/// fallback, #956) + the library.
 pub fn song_texts(snapshot: &StageDisplaySnapshot) -> (String, String) {
     (
-        snapshot.song_name.clone().unwrap_or_default(),
+        presenter_core::song_plate_title(
+            snapshot.presentation_name.as_deref(),
+            snapshot.song_name.as_deref(),
+        )
+        .unwrap_or_default(),
         snapshot.library_name.clone().unwrap_or_default(),
     )
 }
@@ -266,11 +284,11 @@ impl NameplateStore {
         });
     }
 
-    /// Cold-load the live song for the "Pieseň" row (the stage snapshot's
-    /// `song_name` / `library_name` are layout-independent).
+    /// Cold-load the live song for the "Pieseň" row from the camera-crew
+    /// snapshot — the one the server resolves the song plate from (#956).
     pub fn reload_song(self) {
         leptos::task::spawn_local(async move {
-            if let Ok(snapshot) = crate::api::stage::get_snapshot().await {
+            if let Ok(snapshot) = crate::api::stage::get_snapshot_for(SONG_PLATE_LAYOUT).await {
                 self.song.set(song_texts(&snapshot));
             }
         });
@@ -290,7 +308,9 @@ impl NameplateStore {
             {
                 self.reload_list();
             }
-            LiveEvent::Stage { snapshot } => self.song.set(song_texts(snapshot)),
+            LiveEvent::Stage { snapshot } if is_song_plate_snapshot(snapshot) => {
+                self.song.set(song_texts(snapshot))
+            }
             _ => {}
         }
     }
@@ -479,6 +499,65 @@ mod tests {
     fn a_song_without_a_library_shows_its_title_alone_with_no_dangling_separator() {
         assert_eq!(song_line("Ako Ťa mám rád", ""), "Ako Ťa mám rád");
         assert!(!song_line("Ako Ťa mám rád", "").contains('·'));
+    }
+
+    /// A camera-crew snapshot with Presenter's title and AbleSet's name.
+    fn song_snapshot(presentation: Option<&str>, song: Option<&str>) -> StageDisplaySnapshot {
+        let now = chrono::Utc::now();
+        StageDisplaySnapshot::new(
+            presenter_core::StageDisplayLayout {
+                code: "camera-crew".to_string(),
+                name: "Camera crew".to_string(),
+                description: String::new(),
+            },
+            now,
+            None,
+            presentation.map(str::to_string),
+            Some("NEW LEVEL".to_string()),
+            song.map(str::to_string),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// #956: the "Pieseň" row and its Prehrať preview show what the song plate
+    /// shows — Presenter's title with diacritics, no setlist number; AbleSet's
+    /// name only when no presentation is on stage.
+    #[test]
+    fn the_song_row_shows_the_presenter_title_without_the_setlist_number() {
+        assert_eq!(
+            song_texts(&song_snapshot(Some("040 Žalm 8"), Some("040 Zalm 8"))),
+            ("Žalm 8".to_string(), "NEW LEVEL".to_string())
+        );
+        assert_eq!(
+            song_texts(&song_snapshot(None, Some("038 Dom zazrakov"))).0,
+            "Dom zazrakov"
+        );
+        assert_eq!(song_texts(&song_snapshot(None, None)).0, "");
+    }
+
+    /// #956: only the camera-crew snapshot feeds the row; the operator's
+    /// selected layout (on SNV `api-ambient`, AbleSet's song) does not.
+    #[test]
+    fn only_the_camera_crew_snapshot_feeds_the_song_row() {
+        let mut snapshot = song_snapshot(Some("038 Dom zázrakov"), None);
+        assert!(is_song_plate_snapshot(&snapshot));
+        snapshot.layout.code = "api-ambient".to_string();
+        assert!(!is_song_plate_snapshot(&snapshot));
+        snapshot.layout.code = "worship".to_string();
+        assert!(!is_song_plate_snapshot(&snapshot));
     }
 
     #[test]

@@ -447,8 +447,9 @@ test("#871 the Menovky tab lists the plates in Stream Deck order: add, rename, r
   await expect(row(page, anna)).toHaveAttribute("data-active", "false");
   await expect.poll(() => activePlate(request)).toBeNull();
 
-  // ── The song row: the live song, and it puts the song plate on air.
-  await triggerSong(request, "Ako Ťa mám rád", "Kapela XY");
+  // ── The song row: the live song, and it puts the song plate on air. The
+  // row shows what the plate shows: no setlist number (#956).
+  await triggerSong(request, "100. Ako Ťa mám rád", "Kapela XY");
   await expect(songRow(page).locator('[data-role="stream-nameplate-song-live"]')).toHaveText(
     "Ako Ťa mám rád · Kapela XY",
   );
