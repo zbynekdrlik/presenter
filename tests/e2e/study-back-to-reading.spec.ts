@@ -7,7 +7,6 @@
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import {
-  assertNoHorizontalOverflow,
   deriveTestConfig,
   PHONE_360,
   refreshDevData,
@@ -36,6 +35,24 @@ test.afterAll(async () => {
 
 const role = (page: Page, name: string): Locator => page.locator(`[data-role="${name}"]`);
 
+/**
+ * The 360 px header holds Biblia and Kázne inside the screen. The whole page is
+ * not checked: Strong's book row scrolls sideways on purpose (36 books).
+ */
+async function assertHeaderFits(page: Page): Promise<void> {
+  const overflow = await page.evaluate(() => {
+    const width = window.innerWidth;
+    return Array.from(document.querySelectorAll<HTMLElement>(".study-head *"))
+      .filter((el) => el.getBoundingClientRect().right > width + 1)
+      .map((el) => `${el.dataset.role ?? el.className} right=${Math.round(el.getBoundingClientRect().right)}`);
+  });
+  expect(overflow, "header elements past the right edge").toEqual([]);
+  const pageOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(pageOverflow, "page wider than the viewport").toBeLessThanOrEqual(0);
+}
+
 /** Every study view that is not the reader, as a pasted link opens it. */
 const AWAY_FROM_READING: Array<[string, string]> = [
   ["search", "/ui/study?view=search&t=slk-seb&q=viera"],
@@ -55,8 +72,8 @@ for (const [name, path] of AWAY_FROM_READING) {
     await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached", timeout: 30_000 });
     await expect(role(page, "study-bible")).toBeVisible();
     await expect(role(page, "study-sermons")).toBeVisible();
-    await assertNoHorizontalOverflow(page);
-    await role(page, "study-bible").tap();
+    await assertHeaderFits(page);
+    await role(page, "study-bible").tap({ timeout: 10_000 });
     await expectChapter(page, "slk-seb:HEB.11");
     await expect(page).not.toHaveURL(/[?&]s=/);
     await expect(page).not.toHaveURL(/view=/);
@@ -69,6 +86,6 @@ test("the reader itself needs no Biblia and keeps its place title", async ({ bro
   const { page } = opened;
   await expect(role(page, "study-bible")).toHaveCount(0);
   await expect(role(page, "study-place")).toContainText("11");
-  await assertNoHorizontalOverflow(page);
+  await assertHeaderFits(page);
   await finish(opened);
 });
