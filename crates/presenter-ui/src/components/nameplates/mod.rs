@@ -105,15 +105,11 @@ pub fn is_song_plate_snapshot(snapshot: &StageDisplaySnapshot) -> bool {
 
 /// The song plate's texts from the camera-crew snapshot: the title the server
 /// puts on the plate (`presenter_core::song_plate_title` — the on-stage
-/// presentation's title without its setlist number, AbleSet's name only as a
-/// fallback, #956) + the library.
+/// presentation's title without its setlist number, never AbleSet's name,
+/// #956, #962) + the library.
 pub fn song_texts(snapshot: &StageDisplaySnapshot) -> (String, String) {
     (
-        presenter_core::song_plate_title(
-            snapshot.presentation_name.as_deref(),
-            snapshot.song_name.as_deref(),
-        )
-        .unwrap_or_default(),
+        presenter_core::song_plate_title(snapshot.presentation_name.as_deref()).unwrap_or_default(),
         snapshot.library_name.clone().unwrap_or_default(),
     )
 }
@@ -533,8 +529,8 @@ mod tests {
     }
 
     /// #956: the "Pieseň" row and its Prehrať preview show what the song plate
-    /// shows — Presenter's title with diacritics, no setlist number; AbleSet's
-    /// name only when no presentation is on stage.
+    /// shows — Presenter's title with diacritics, no setlist number; never
+    /// AbleSet's name (#962).
     #[test]
     fn the_song_row_shows_the_presenter_title_without_the_setlist_number() {
         assert_eq!(

@@ -1097,7 +1097,7 @@ fn nameplate_song_name(state: &CompanionVariableState) -> String {
 
 /// #956: the Stream Deck song-plate label shows the same text as the plate —
 /// Presenter's title with diacritics, no setlist number — even while AbleSet
-/// names the song in ASCII; AbleSet is only the fallback.
+/// names the song in ASCII; AbleSet's name is never used (#962).
 #[test]
 fn nameplate_song_name_is_the_presenter_title_without_the_setlist_number() {
     let mut state = CompanionVariableState::default();

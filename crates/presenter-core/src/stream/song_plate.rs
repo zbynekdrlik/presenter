@@ -1,11 +1,11 @@
 //! #956: the text of the song lower third ("menovka piesne").
 //!
-//! The plate names the song by the title of the presentation actually on
-//! stage — Presenter's own title, with diacritics — and only falls back to
-//! AbleSet's song name (ASCII) when no presentation is on stage. Both sources
-//! carry the worship setlist number in front ("040 Žalm 8", "100. Nad všetko si
-//! ty", "137, Tancuj generácia"); the plate leaves it out. One function, so the
-//! on-air plate and the Companion button label can never disagree.
+//! The plate names the song selected in Presenter — the title of the
+//! presentation on stage, with diacritics. AbleSet plays no role (#962, owner
+//! 2026-11-16), not even as a fallback. The title carries the worship setlist
+//! number in front ("040 Žalm 8", "100. Nad všetko si ty", "137, Tancuj
+//! generácia"); the plate leaves it out. One function, so the on-air plate and
+//! the Companion button label can never disagree.
 
 /// Most digits a leading setlist number has ("040", "1001").
 const SETLIST_NUMBER_MAX_DIGITS: usize = 4;
@@ -14,15 +14,10 @@ const SETLIST_NUMBER_MAX_DIGITS: usize = 4;
 /// "137, ", "12 - ").
 const SETLIST_NUMBER_SEPARATORS: &[char] = &['.', ',', '-', '–', ':'];
 
-/// The song plate's primary text: the presentation title when there is one,
-/// else AbleSet's song name, without the leading setlist number. `None` when
-/// both are missing or blank.
-pub fn song_plate_title(
-    presentation_name: Option<&str>,
-    song_name: Option<&str>,
-) -> Option<String> {
-    // #962: AbleSet's song name plays no role on the plate.
-    let _ = song_name;
+/// The song plate's primary text: the selected presentation's title without
+/// the leading setlist number. `None` when no presentation is selected or its
+/// title is blank.
+pub fn song_plate_title(presentation_name: Option<&str>) -> Option<String> {
     let source = presentation_name.filter(|name| !name.trim().is_empty())?;
     Some(strip_setlist_number(source.trim()).to_string())
 }
@@ -109,31 +104,24 @@ mod tests {
     }
 
     #[test]
-    fn presentation_title_wins_over_the_ableset_name() {
+    fn the_plate_names_the_selected_presentation() {
         assert_eq!(
-            song_plate_title(Some("040 Žalm 8"), Some("040 Zalm 8")).as_deref(),
+            song_plate_title(Some("040 Žalm 8")).as_deref(),
             Some("Žalm 8")
         );
     }
 
-    /// #962 (owner 2026-11-16): the plate names the song selected in
-    /// Presenter; AbleSet plays no role, not even as a fallback.
-    #[test]
-    fn ableset_name_is_never_the_plate_text() {
-        assert_eq!(song_plate_title(None, Some("038 Dom zazrakov")), None);
-        assert_eq!(song_plate_title(Some("  "), Some("038 Dom zazrakov")), None);
-    }
-
     #[test]
     fn nothing_on_stage_is_none() {
-        assert_eq!(song_plate_title(None, None), None);
-        assert_eq!(song_plate_title(Some(""), Some(" ")), None);
+        assert_eq!(song_plate_title(None), None);
+        assert_eq!(song_plate_title(Some("")), None);
+        assert_eq!(song_plate_title(Some("  ")), None);
     }
 
     #[test]
     fn surrounding_whitespace_is_trimmed() {
         assert_eq!(
-            song_plate_title(Some("  040 Žalm 8 "), None).as_deref(),
+            song_plate_title(Some("  040 Žalm 8 ")).as_deref(),
             Some("Žalm 8")
         );
     }
