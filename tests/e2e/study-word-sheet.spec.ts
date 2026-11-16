@@ -131,7 +131,7 @@ test("closing the sheet leaves the reading position where it was", async ({ brow
 
   await verse(page, 20).locator('[data-role="study-word"]').first().click();
   await expect(sheet(page)).toBeVisible();
-  await role(page, "study-backdrop").click({ position: { x: 20, y: 20 } });
+  await role(page, "study-backdrop").click({ position: { x: 20, y: 120 } });
   await expect(sheet(page)).toHaveCount(0);
   await settled(page);
   expect(await scrollTop(page)).toBe(before);
