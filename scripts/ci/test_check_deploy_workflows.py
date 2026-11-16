@@ -471,5 +471,27 @@ class CheckDeployWorkflowsTest(unittest.TestCase):
         self.assertEqual([v.render() for v in found], [])
 
 
+class RunnerImagePinTest(unittest.TestCase):
+    """#964: `ubuntu-latest` rolled to Ubuntu 26.04 (glibc 2.43); the release
+    binary built there could not start on SNV / PP (Ubuntu 24.04, glibc 2.39).
+    A GitHub-hosted job names a fixed image, never the moving `-latest` one."""
+
+    def _wf(self, runs_on: str) -> list[cdw.Violation]:
+        doc = "jobs:\n  build:\n    runs-on: " + runs_on + "\n    steps:\n      - run: cargo build\n"
+        return cdw.check_workflow("wf.yml", yaml.safe_load(doc))
+
+    def test_ubuntu_latest_is_flagged(self) -> None:
+        found = self._wf("ubuntu-latest")
+        self.assertEqual(len(found), 1)
+        self.assertIn("ubuntu-24.04", found[0].render())
+
+    def test_ubuntu_latest_in_a_list_is_flagged(self) -> None:
+        self.assertEqual(len(self._wf("[ubuntu-latest]")), 1)
+
+    def test_pinned_image_and_self_hosted_pass(self) -> None:
+        self.assertEqual(self._wf("ubuntu-24.04"), [])
+        self.assertEqual(self._wf("self-hosted"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
