@@ -33,10 +33,13 @@ preparation (the sermon views are in `sermon-prep.md`).
   Obrazovky surface list (those open a new tab). The page is also entered from `/`.
 - **A chapter comes from `GET /bible/study/chapter`, in ONE function** (`api/study.rs::load_chapter`).
   An empty `verses` = this translation lacks it; specs gate it with a URL regex, it has no body.
-- **Every view leads back to the verses without the history:** a tab reopened on a sermon or the
-  sermon list has no ◀ and no field, so the header adds `study-bible` "Biblia" on those views
-  (`sermon_pane::reading_route` = the last reading place, its saved verse) beside Kázne (owner,
-  2026-11-06). A new view without the field needs the same way out.
+- **Every view leads back to the verses in ONE tap, without the history (#966):** the header adds
+  `study-bible` "Biblia" on EVERY view that is not the reader (search, Strong's, compare, sermons,
+  sermon — any sheet open over them too), beside Kázne; it opens `sermon_pane::reading_route` (the
+  last reading place, its saved verse) and drops the sheet. A tab reopened there has no ◀ (owner,
+  2026-11-06; 2026-11-16: "je stale vela miest z ktorych sa neviem vratit do biblie"). Where Biblia
+  shows, the bookmark icon gives way (360 px). A new view gets this for free; `study-back-to-reading.spec.ts`
+  walks every non-reader view from a cold link — add a new view to its list.
 - **The URL is the state.** `state::study::StudyRoute::{parse,to_url}`; every view AND sheet has a
   URL (`s=akcie|historia|pismo|prekladN`), so the system Back closes a sheet. `v=3-12` = the
   selected verses. Moves go through `pages/study/nav.rs`, never a direct `route.set`.
