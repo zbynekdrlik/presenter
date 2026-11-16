@@ -20,7 +20,7 @@ jobs:
   # ============================================
   branch-sync:
     name: Branch Sync Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,7 +42,7 @@ jobs:
   # ============================================
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
   # ============================================
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
   # ============================================
   companion-tests:
     name: Companion Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -134,7 +134,7 @@ jobs:
   # ServerHandle field, a wrong Locator.evaluate signature) fails CI loudly.
   typecheck:
     name: TypeScript Type Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -156,7 +156,7 @@ jobs:
   # ============================================
   version-check:
     name: Validate Version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -223,7 +223,7 @@ jobs:
   # ============================================
   security-audit:
     name: Cargo Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -255,7 +255,7 @@ jobs:
   # ============================================
   security-deny:
     name: Cargo Deny (${{ matrix.checks }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     strategy:
       matrix:
@@ -286,7 +286,7 @@ jobs:
   # ============================================
   npm-audit:
     name: npm Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -308,7 +308,7 @@ jobs:
   # ============================================
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v4
@@ -413,7 +413,7 @@ jobs:
   # ============================================
   quality:
     name: Quality Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v4
@@ -585,7 +585,7 @@ jobs:
   # ============================================
   coverage:
     name: Code Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - uses: actions/checkout@v4
@@ -628,7 +628,7 @@ jobs:
   # ============================================
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - test
       - quality
@@ -725,7 +725,7 @@ jobs:
   # ============================================
   build-android:
     name: Build Android Stage APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: branch-sync
     steps:
       - uses: actions/checkout@v4
@@ -770,7 +770,7 @@ jobs:
   # ============================================
   e2e:
     name: Playwright E2E (${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - build
       - companion-tests
@@ -1012,7 +1012,7 @@ jobs:
   # ============================================
   e2e-report:
     name: Merge E2E Reports
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: e2e
     if: ${{ !cancelled() }}
     steps:
