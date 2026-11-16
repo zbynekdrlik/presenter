@@ -1110,9 +1110,10 @@ fn nameplate_song_name_is_the_presenter_title_without_the_setlist_number() {
     ));
     assert_eq!(nameplate_song_name(&state), "Dom zázrakov");
 
-    // No presentation on stage → AbleSet's name, number stripped too.
+    // #962: no presentation selected in Presenter → no song text; AbleSet's
+    // name is never used.
     state.apply_stage_snapshot(song_plate_snapshot(None, Some("038 Dom zazrakov")));
-    assert_eq!(nameplate_song_name(&state), "Dom zazrakov");
+    assert_eq!(nameplate_song_name(&state), "");
 }
 
 #[test]

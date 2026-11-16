@@ -116,16 +116,12 @@ mod tests {
         );
     }
 
+    /// #962 (owner 2026-11-16): the plate names the song selected in
+    /// Presenter; AbleSet plays no role, not even as a fallback.
     #[test]
-    fn ableset_name_is_the_fallback() {
-        assert_eq!(
-            song_plate_title(None, Some("038 Dom zazrakov")).as_deref(),
-            Some("Dom zazrakov")
-        );
-        assert_eq!(
-            song_plate_title(Some("  "), Some("038 Dom zazrakov")).as_deref(),
-            Some("Dom zazrakov")
-        );
+    fn ableset_name_is_never_the_plate_text() {
+        assert_eq!(song_plate_title(None, Some("038 Dom zazrakov")), None);
+        assert_eq!(song_plate_title(Some("  "), Some("038 Dom zazrakov")), None);
     }
 
     #[test]

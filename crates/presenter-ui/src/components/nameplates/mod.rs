@@ -541,9 +541,10 @@ mod tests {
             song_texts(&song_snapshot(Some("040 Žalm 8"), Some("040 Zalm 8"))),
             ("Žalm 8".to_string(), "NEW LEVEL".to_string())
         );
+        // #962: AbleSet's name is never the plate text.
         assert_eq!(
             song_texts(&song_snapshot(None, Some("038 Dom zazrakov"))).0,
-            "Dom zazrakov"
+            ""
         );
         assert_eq!(song_texts(&song_snapshot(None, None)).0, "");
     }
