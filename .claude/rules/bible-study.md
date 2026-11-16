@@ -40,6 +40,11 @@ preparation (the sermon views are in `sermon-prep.md`).
   2026-11-06; 2026-11-16: "je stale vela miest z ktorych sa neviem vratit do biblie"). Where Biblia
   shows, the bookmark icon gives way (360 px). A new view gets this for free; `study-back-to-reading.spec.ts`
   walks every non-reader view from a cold link — add a new view to its list.
+  The header sits ABOVE a sheet's backdrop (`.study-head` z-index 9 > `.study-backdrop` 8): a modal
+  sheet dims the page but never the header, so Biblia stays tappable (CI found the covered button, a
+  `tap()` waiting out 180 s). Sheets never reach the header (phone ≤ 70/86 % from the bottom, ≥ 1024 px
+  beside the text); a spec that taps the backdrop to close a sheet taps below y = 48. Strong's book row
+  scrolls sideways on purpose — check the header's width, not the whole page.
 - **The URL is the state.** `state::study::StudyRoute::{parse,to_url}`; every view AND sheet has a
   URL (`s=akcie|historia|pismo|prekladN`), so the system Back closes a sheet. `v=3-12` = the
   selected verses. Moves go through `pages/study/nav.rs`, never a direct `route.set`.
