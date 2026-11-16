@@ -148,8 +148,8 @@ impl CompanionVariableState {
     }
 
     /// The song plate's texts, mirrored from the live stage snapshot: primary =
-    /// the on-stage presentation's title without its setlist number (AbleSet's
-    /// song name only as a fallback), secondary = band/library. Uses the SAME
+    /// the on-stage presentation's title without its setlist number (never
+    /// AbleSet's song name, #962), secondary = band/library. Uses the SAME
     /// `presenter_core::song_plate_title` the on-air plate resolves with
     /// (`state/stream_nameplates.rs::resolve_song_texts`, #956) so the Companion
     /// button label never diverges from the rendered plate. Empty when no
@@ -157,11 +157,8 @@ impl CompanionVariableState {
     pub(super) fn stage_song_texts(&self) -> (String, String) {
         match &self.stage {
             Some(stage) => {
-                let primary = presenter_core::song_plate_title(
-                    Some(&stage.presentation_name),
-                    Some(&stage.song_name),
-                )
-                .unwrap_or_default();
+                let primary = presenter_core::song_plate_title(Some(&stage.presentation_name))
+                    .unwrap_or_default();
                 (primary, stage.band_name.clone())
             }
             None => (String::new(), String::new()),

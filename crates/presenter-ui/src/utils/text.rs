@@ -39,18 +39,29 @@ pub fn break_if_long(text: String, threshold: usize) -> String {
     }
 }
 
-/// A song name without its leading setlist number — the song plate's one
-/// rule (`presenter_core::song_plate_title`, #956), the same text the
-/// server's `sanitize_song_title` gives the stage (#959):
+/// Strip a leading 3-digit-then-space prefix from a ProPresenter song name.
+/// Mirrors the server-side `sanitize_song_title`:
 ///
-///   "042 Amazing Grace"      -> "Amazing Grace"
-///   "100. Nad všetko si ty"  -> "Nad všetko si ty"
-///   "10000 dôvodov"          -> "10000 dôvodov"   (5 digits is a title)
+///   "042 Amazing Grace"  -> "Amazing Grace"
+///   "  042 Padded"       -> "Padded"
+///   "12 Two Digit"       -> "12 Two Digit"   (not exactly 3 digits → unchanged)
+///   "Already Clean"      -> "Already Clean"
 ///
 /// Used by the `worship-pp` playlist sidebar to keep operator-facing
 /// numeric prefixes off the stage display.
 pub fn clean_song_name(name: &str) -> String {
-    presenter_core::song_plate_title(Some(name), None).unwrap_or_default()
+    let trimmed = name.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_whitespace()
+    {
+        trimmed[4..].trim_start().to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -132,22 +143,14 @@ mod tests {
         assert_eq!(clean_song_name("Amazing Grace"), "Amazing Grace");
     }
 
-    /// #959: the worship-pp playlist uses the song plate's one rule (#956):
-    /// any 1–4 digit setlist number + space or `. , - – :`.
     #[test]
-    fn clean_song_name_strips_every_setlist_number_form() {
-        assert_eq!(clean_song_name("12 Two Digit"), "Two Digit");
-        assert_eq!(clean_song_name("1234 Four Digit"), "Four Digit");
-        assert_eq!(clean_song_name("100. Nad všetko si ty"), "Nad všetko si ty");
-        assert_eq!(clean_song_name("137, Tancuj generácia"), "Tancuj generácia");
-        assert_eq!(clean_song_name("248.Boh je tu"), "Boh je tu");
+    fn clean_song_name_rejects_two_digit_prefix() {
+        assert_eq!(clean_song_name("12 Two Digit"), "12 Two Digit");
     }
 
     #[test]
-    fn clean_song_name_keeps_titles_that_are_not_a_setlist_number() {
-        assert_eq!(clean_song_name("10000 dôvodov"), "10000 dôvodov");
-        assert_eq!(clean_song_name("15.2. Kázeň"), "15.2. Kázeň");
-        assert_eq!(clean_song_name("040"), "040");
+    fn clean_song_name_rejects_four_digit_prefix() {
+        assert_eq!(clean_song_name("1234 Four Digit"), "1234 Four Digit");
     }
 
     #[test]

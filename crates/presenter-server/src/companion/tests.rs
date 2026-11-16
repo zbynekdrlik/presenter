@@ -1097,7 +1097,7 @@ fn nameplate_song_name(state: &CompanionVariableState) -> String {
 
 /// #956: the Stream Deck song-plate label shows the same text as the plate —
 /// Presenter's title with diacritics, no setlist number — even while AbleSet
-/// names the song in ASCII; AbleSet is only the fallback.
+/// names the song in ASCII; AbleSet's name is never used (#962).
 #[test]
 fn nameplate_song_name_is_the_presenter_title_without_the_setlist_number() {
     let mut state = CompanionVariableState::default();
@@ -1110,11 +1110,10 @@ fn nameplate_song_name_is_the_presenter_title_without_the_setlist_number() {
     ));
     assert_eq!(nameplate_song_name(&state), "Dom zázrakov");
 
-    // No presentation on stage → the snapshot's song name as it arrives: the
-    // stage already stripped AbleSet's number (#959), so a title's own number
-    // stays.
-    state.apply_stage_snapshot(song_plate_snapshot(None, Some("10 000 armad")));
-    assert_eq!(nameplate_song_name(&state), "10 000 armad");
+    // #962: no presentation selected in Presenter → no song text; AbleSet's
+    // name is never used.
+    state.apply_stage_snapshot(song_plate_snapshot(None, Some("038 Dom zazrakov")));
+    assert_eq!(nameplate_song_name(&state), "");
 }
 
 #[test]
