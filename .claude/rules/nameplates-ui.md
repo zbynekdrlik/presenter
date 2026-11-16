@@ -269,7 +269,7 @@ paths:
   no library shows its title alone (the pre-#871 editor printed "title · ").
 - **The song row shows what the song plate shows (#956):** `song_texts` =
   `presenter_core::song_plate_title` (the on-stage presentation's title, no setlist number,
-  AbleSet's name only as a fallback) + library, read ONLY from the camera-crew snapshot
+  AbleSet's name only as a fallback, taken as it arrives: the server strips it where it enters the stage, #959) + library, read ONLY from the camera-crew snapshot
   (`SONG_PLATE_LAYOUT`): cold-load `GET /stage/snapshot?layout=camera-crew`, and
   `is_song_plate_snapshot` drops `Stage` events of other layouts. The selected layout's
   snapshot is wrong here: on SNV (`api-ambient`) it carries AbleSet's song, a different

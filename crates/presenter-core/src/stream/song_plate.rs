@@ -14,17 +14,22 @@ const SETLIST_NUMBER_MAX_DIGITS: usize = 4;
 /// "137, ", "12 - ").
 const SETLIST_NUMBER_SEPARATORS: &[char] = &['.', ',', '-', '–', ':'];
 
-/// The song plate's primary text: the presentation title when there is one,
-/// else AbleSet's song name, without the leading setlist number. `None` when
+/// The song plate's primary text: the presentation title without its leading
+/// setlist number when there is one, else the stage's song name as it is —
+/// the stage strips AbleSet's number where the name enters it (#959), so a
+/// second strip would eat a title's own number ("10 000 armád"). `None` when
 /// both are missing or blank.
 pub fn song_plate_title(
     presentation_name: Option<&str>,
     song_name: Option<&str>,
 ) -> Option<String> {
-    let source = presentation_name
-        .filter(|name| !name.trim().is_empty())
-        .or(song_name.filter(|name| !name.trim().is_empty()))?;
-    Some(strip_setlist_number(source.trim()).to_string())
+    let not_blank = |name: &&str| !name.trim().is_empty();
+    match presentation_name.filter(not_blank) {
+        Some(title) => Some(strip_setlist_number(title.trim()).to_string()),
+        None => song_name
+            .filter(not_blank)
+            .map(|name| name.trim().to_string()),
+    }
 }
 
 /// `title` without ONE leading setlist number: 1–4 digits followed by
@@ -117,14 +122,17 @@ mod tests {
     }
 
     #[test]
-    fn ableset_name_is_the_fallback() {
+    fn ableset_name_is_the_fallback_as_it_arrives() {
+        // #959: the stage strips AbleSet's setlist number where the name
+        // enters it, so the fallback must not strip a second time: a title
+        // that starts with its own number stays whole.
         assert_eq!(
-            song_plate_title(None, Some("038 Dom zazrakov")).as_deref(),
+            song_plate_title(None, Some("Dom zazrakov")).as_deref(),
             Some("Dom zazrakov")
         );
         assert_eq!(
-            song_plate_title(Some("  "), Some("038 Dom zazrakov")).as_deref(),
-            Some("Dom zazrakov")
+            song_plate_title(Some("  "), Some("10 000 armad")).as_deref(),
+            Some("10 000 armad")
         );
     }
 
