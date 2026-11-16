@@ -60,6 +60,11 @@
 /* Header ------------------------------------------------------------------ */
 
 .study-head {
+  /* Above a sheet's backdrop: Biblia leads back to reading in one tap even
+     with a sheet open (#966). Sheets never reach the header: a phone sheet
+     stops below it, a wide one stands beside the text. */
+  position: relative;
+  z-index: 9;
   flex: none;
   display: flex;
   align-items: center;

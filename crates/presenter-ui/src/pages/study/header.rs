@@ -1,11 +1,12 @@
 //! The 48 px header: the chapter on screen, always in sight (owner, 2026-11-07,
 //! #913), ◀ ▶ step through the history, a long press on ◀ opens the list, Aa the
 //! text size, Kázne the sermon list, the bookmark icon the named bookmarks
-//! (#915; not on the sermon views, where Biblia leads back to the text first and
-//! a 360 px header has no room for both). The sermon views add Biblia,
-//! back to the last reading place: a tab reopened on a sermon has no history,
-//! and the field is not shown there (owner, 2026-11-06: "už sa neviem vrátiť k
-//! veršom").
+//! (#915). Every view that is not the reader adds Biblia, back to the last
+//! reading place in one tap, whatever sheet is open: a tab reopened there has
+//! no history (owner, 2026-11-06: "už sa neviem vrátiť k veršom"; #966,
+//! 2026-11-16: "je stale vela miest z ktorych sa neviem vratit do biblie").
+//! Where Biblia shows, the bookmark icon gives way: a 360 px header has no
+//! room for both.
 
 use leptos::prelude::*;
 
@@ -37,9 +38,9 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
         let translation = s.route.with_untracked(|route| route.translation.clone());
         nav::go(s, StudyRoute::sermons(translation), ScrollPlan::Top);
     };
-    let on_sermon_view = Memo::new(move |_| {
+    let away_from_reading = Memo::new(move |_| {
         s.route
-            .with(|route| matches!(route.view, StudyView::Sermons | StudyView::Sermon { .. }))
+            .with(|route| !matches!(route.view, StudyView::Reader { .. }))
     });
     let on_bible = move |_| {
         let mut route = reading_route();
@@ -92,7 +93,7 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
                 }}
             </h1>
             <div class="study-head__actions">
-                <Show when=move || on_sermon_view.get()>
+                <Show when=move || away_from_reading.get()>
                     <button
                         type="button"
                         class="study-icon study-icon--text study-icon--wide"
@@ -110,7 +111,7 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
                 >
                     "Kázne"
                 </button>
-                <Show when=move || !on_sermon_view.get()>
+                <Show when=move || !away_from_reading.get()>
                     <button
                         type="button"
                         class="study-icon"
