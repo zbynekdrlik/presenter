@@ -379,11 +379,13 @@ pub(crate) fn extract_song_number(name: &str) -> Option<String> {
     }
 }
 
-/// The song name the stage display, the Resolume `#song-name` clip and the
-/// Companion `song_name` variable show: the song plate's one rule (#956,
-/// #959) — the title without its leading setlist number, diacritics kept.
 pub(crate) fn sanitize_song_title(name: &str) -> String {
-    presenter_core::song_plate_title(Some(name), None).unwrap_or_default()
+    let trimmed = name.trim_start();
+    if has_song_number_prefix(trimmed.as_bytes()) {
+        trimmed[4..].trim_start().to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub(crate) fn blank_slide_content() -> SlideContent {
@@ -492,39 +494,6 @@ mod tests {
             sanitize_song_title("Song Without Number"),
             "Song Without Number"
         );
-    }
-
-    /// #959: the stage / Resolume `#song-name` / Companion `song_name` text
-    /// uses the song plate's one rule (#956): 1–4 digits + space or
-    /// `. , - – :`, Presenter title with diacritics kept.
-    #[test]
-    fn sanitize_song_title_matches_the_song_plate_rule() {
-        for name in [
-            "100. Nad všetko si ty",
-            "137, Tancuj generácia",
-            "12 - Haleluja",
-            "7 Sláva",
-            "1001   Pieseň",
-            "248.Boh je tu",
-            "040 Žalm 8",
-            "102 10 000 armád",
-            "10000 dôvodov",
-            "15.2. Kázeň",
-            "040",
-            "  040 Žalm 8 ",
-        ] {
-            assert_eq!(
-                sanitize_song_title(name),
-                presenter_core::song_plate_title(Some(name), None).unwrap_or_default(),
-                "{name:?}"
-            );
-        }
-        assert_eq!(
-            sanitize_song_title("100. Nad všetko si ty"),
-            "Nad všetko si ty"
-        );
-        assert_eq!(sanitize_song_title("12 - Haleluja"), "Haleluja");
-        assert_eq!(sanitize_song_title(""), "");
     }
 
     fn presentation_entry(presentation_id: PresentationId) -> presenter_core::PlaylistEntry {

@@ -541,11 +541,9 @@ mod tests {
             song_texts(&song_snapshot(Some("040 Žalm 8"), Some("040 Zalm 8"))),
             ("Žalm 8".to_string(), "NEW LEVEL".to_string())
         );
-        // #959: the snapshot's song name arrives already stripped, so a title's
-        // own number stays.
         assert_eq!(
-            song_texts(&song_snapshot(None, Some("10 000 armad"))).0,
-            "10 000 armad"
+            song_texts(&song_snapshot(None, Some("038 Dom zazrakov"))).0,
+            "Dom zazrakov"
         );
         assert_eq!(song_texts(&song_snapshot(None, None)).0, "");
     }
