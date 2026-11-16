@@ -21,9 +21,9 @@ pub fn song_plate_title(
     presentation_name: Option<&str>,
     song_name: Option<&str>,
 ) -> Option<String> {
-    let source = presentation_name
-        .filter(|name| !name.trim().is_empty())
-        .or(song_name.filter(|name| !name.trim().is_empty()))?;
+    // #962: AbleSet's song name plays no role on the plate.
+    let _ = song_name;
+    let source = presentation_name.filter(|name| !name.trim().is_empty())?;
     Some(strip_setlist_number(source.trim()).to_string())
 }
 
