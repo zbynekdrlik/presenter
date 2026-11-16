@@ -13,7 +13,7 @@ permissions:
 jobs:
   audit:
     name: Cargo Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +41,7 @@ jobs:
 
   deny:
     name: Cargo Deny (${{ matrix.checks }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         checks:
@@ -68,7 +68,7 @@ jobs:
 
   npm-audit:
     name: npm Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

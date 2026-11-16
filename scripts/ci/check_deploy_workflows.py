@@ -37,6 +37,10 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    the old service refuses to boot on; right after the restart it would race
    the new service's own migration run.
 
+6. A GitHub-hosted job never runs on ``ubuntu-latest`` (#964): the image
+   rolled to Ubuntu 26.04 and the release binary needed glibc 2.43, which
+   SNV / PP (Ubuntu 24.04) do not have. Pin ``ubuntu-24.04``.
+
 5. A workflow a push to ``dev`` starts (``push`` / ``workflow_run`` whose
    branch filter reaches dev) never deploys the Companion module or reaches a
    production Companion host (no ``deploy_companion_module.sh``,
@@ -367,6 +371,19 @@ def check_companion_deploys(workflow: str, job: str, spec: dict[str, Any]) -> li
     return violations
 
 
+def check_runner_image(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
+    """#964: a GitHub-hosted job names a fixed image, never ``ubuntu-latest``.
+
+    ``ubuntu-latest`` rolled to Ubuntu 26.04 (glibc 2.43) and the release
+    binary built there could not start on SNV / PP (Ubuntu 24.04, glibc 2.39).
+    """
+    runs_on = spec.get("runs-on")
+    labels = runs_on if isinstance(runs_on, list) else [runs_on]
+    if any(str(label).strip() == "ubuntu-latest" for label in labels):
+        return [Violation(workflow, job, "runs-on", "runs on `ubuntu-latest`, a moving image (it became Ubuntu 26.04 / glibc 2.43, and the binary built there cannot start on SNV / PP's Ubuntu 24.04) — pin `ubuntu-24.04`, the deploy targets' OS (#964)")]
+    return []
+
+
 def check_workflow(path: str, document: Any) -> list[Violation]:
     if not isinstance(document, dict):
         return []
@@ -377,6 +394,7 @@ def check_workflow(path: str, document: Any) -> list[Violation]:
         if isinstance(spec, dict):
             violations.extend(check_job(path, str(job), spec))
             violations.extend(check_staged_tools(path, str(job), spec))
+            violations.extend(check_runner_image(path, str(job), spec))
             if on_dev_push:
                 violations.extend(check_companion_deploys(path, str(job), spec))
     return violations
