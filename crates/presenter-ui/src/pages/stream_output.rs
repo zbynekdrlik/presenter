@@ -209,6 +209,10 @@ pub fn StreamOutputPage(slug: String) -> impl IntoView {
                 // above) — skipped in preview mode, where the editor drives it.
                 if !preview {
                     spawn_refetch_nameplate(slug_c.clone(), ctx.nameplate);
+                } else {
+                    // #970: the editor preview holds a real plate (the last
+                    // shown) so a design change is visible without Prehrať.
+                    spawn_load_sample_nameplate(slug_c.clone(), ctx.nameplate);
                 }
             }
         });
@@ -585,6 +589,19 @@ fn spawn_refetch_bible(bible: RwSignal<Option<BibleSlideOutput>>) {
     leptos::task::spawn_local(async move {
         if let Ok(output) = api::bible::get_active_slide_output().await {
             bible.set(output);
+        }
+    });
+}
+
+/// Editor preview only (#970): show the server's sample plate (the last one
+/// shown, else the song, else the first person plate) while the preview holds
+/// none — a plate the editor's Prehrať already put there is never replaced.
+fn spawn_load_sample_nameplate(slug: String, nameplate: RwSignal<Option<ActiveNameplate>>) {
+    leptos::task::spawn_local(async move {
+        if let Ok(Some(sample)) = api::stream::get_sample_nameplate(&slug).await {
+            if nameplate.get_untracked().is_none() {
+                nameplate.set(Some(sample));
+            }
         }
     });
 }

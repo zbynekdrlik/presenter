@@ -281,10 +281,11 @@ test("#829 Prehrať in the Menovky tab plays the plate in a preview the operator
   });
   await row.locator('[data-role="stream-nameplate-preview"]').click();
 
-  await expect(preview.locator('[data-role="stream-lower-third-primary"]').first()).toHaveText(
-    "Prehrať Test",
-    { timeout: 10_000 },
-  );
+  // #970: the preview may already hold a sample plate that is leaving now, so
+  // look for the played one by its text.
+  await expect(
+    preview.locator('[data-role="stream-lower-third-primary"]', { hasText: "Prehrať Test" }),
+  ).toBeVisible({ timeout: 10_000 });
   await expect(preview.locator('[data-role="stream-lower-third-plate"]').first()).toBeVisible();
   await expect(frame).toBeVisible();
 
@@ -302,6 +303,53 @@ test("#829 Prehrať in the Menovky tab plays the plate in a preview the operator
     await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
     "no horizontal page scroll with the Menovky preview at 320 px",
   ).toBeLessThanOrEqual(0);
+
+  expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
+});
+
+test("#970 the Menovky preview shows the last played plate on open, without Prehrať", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  attachEditorConsoleCollector(page, errors);
+
+  // A plate shown on the real output and hidden again (REST, like Companion).
+  const created = await page.request.post(`${baseURL}/stream/api/outputs/stream/nameplates`, {
+    data: { primaryText: "Posledná Menovka", secondaryText: "kazateľ" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const plateId = ((await created.json()) as { id: number }).id;
+  const active = `${baseURL}/stream/api/outputs/stream/nameplates/active`;
+  expect((await page.request.put(active, { data: { source: "person", id: plateId } })).ok()).toBeTruthy();
+  expect((await page.request.put(active, { data: { source: null } })).ok()).toBeTruthy();
+  expect(await (await page.request.get(active)).json()).toBeNull();
+
+  // The sample is that plate, and reading it puts nothing on air.
+  const sample = await page.request.get(`${baseURL}/stream/api/outputs/stream/nameplates/sample`);
+  expect(sample.ok()).toBeTruthy();
+  expect(((await sample.json()) as { primary: string }).primary).toBe("Posledná Menovka");
+  expect(await (await page.request.get(active)).json()).toBeNull();
+
+  await openEditor(page, "?tab=nameplates");
+  await expectActiveTab(page, "nameplates");
+  const hasLowerThird = (await getDef(page)).scenes.some((s) =>
+    s.elements.some((e) => e.props?.kind === "lower_third"),
+  );
+  if (!hasLowerThird) {
+    await page.locator('[data-role="stream-nameplate-create-layer"]').click();
+  }
+  const preview = page.frameLocator('[data-role="stream-nameplate-preview-frame"]');
+  await expect(preview.locator('body[data-wasm-ready="true"]')).toHaveCount(1, { timeout: 30_000 });
+
+  // No Prehrať clicked: the preview already holds the last played plate.
+  await expect(
+    preview.locator('[data-role="stream-lower-third-primary"]', { hasText: "Posledná Menovka" }),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    preview.locator('[data-role="stream-lower-third-secondary"]', { hasText: "kazateľ" }),
+  ).toBeVisible();
+  // The real output still has nothing on air.
+  expect(await (await page.request.get(active)).json()).toBeNull();
 
   expect(errors, `editor console: ${errors.join(" | ")}`).toEqual([]);
 });

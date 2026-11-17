@@ -42,6 +42,9 @@ pub(crate) enum NameplateError {
 #[derive(Clone, Default)]
 struct NameplateSlot {
     active: Option<ActiveNameplate>,
+    /// The last plate shown (#970) — kept after a hide or auto-hide, so the
+    /// editor preview can show a real plate while nothing is on air.
+    last: Option<ActiveNameplate>,
     /// Monotonic generation for the next show — guards the auto-hide task.
     next_seq: u64,
 }
@@ -71,7 +74,20 @@ impl NameplateManager {
     /// Store the active plate (or clear it) for `slug`.
     async fn set_active(&self, slug: &str, active: Option<ActiveNameplate>) {
         let mut slots = self.slots.write().await;
-        slots.entry(slug.to_string()).or_default().active = active;
+        let slot = slots.entry(slug.to_string()).or_default();
+        if active.is_some() {
+            slot.last.clone_from(&active);
+        }
+        slot.active = active;
+    }
+
+    /// The last plate shown on `slug` since the start (None = none yet).
+    async fn last(&self, slug: &str) -> Option<ActiveNameplate> {
+        self.slots
+            .read()
+            .await
+            .get(slug)
+            .and_then(|s| s.last.clone())
     }
 
     /// The current on-air plate for `slug` (None = nothing on air).
@@ -168,6 +184,35 @@ impl AppState {
     /// The current on-air plate for cold OBS load / editor + Companion sync.
     pub(crate) async fn stream_nameplate_active(&self, slug: &str) -> Option<ActiveNameplate> {
         self.nameplates.active(slug).await
+    }
+
+    /// A plate for the editor preview (#970): the last one shown on `slug`,
+    /// else the song plate of the current stage song, else the first person
+    /// plate, else None. Never shows anything on air.
+    pub(crate) async fn stream_nameplate_sample(
+        &self,
+        slug: &str,
+    ) -> anyhow::Result<Option<ActiveNameplate>> {
+        if let Some(last) = self.nameplates.last(slug).await {
+            return Ok(Some(last));
+        }
+        if let Ok((primary, secondary)) = self.resolve_song_texts().await {
+            return Ok(Some(sample_plate(
+                NameplateSource::Song,
+                None,
+                primary,
+                secondary,
+            )));
+        }
+        let plates = self.repository.list_stream_nameplates(slug).await?;
+        Ok(plates.into_iter().next().map(|p| {
+            sample_plate(
+                NameplateSource::Person,
+                Some(p.id),
+                p.primary_text,
+                p.secondary_text,
+            )
+        }))
     }
 
     /// Broadcast [`LiveEvent::StreamNameplatesChanged`] after a plate-list CRUD
@@ -298,6 +343,22 @@ impl AppState {
     }
 }
 
+/// A preview-only plate (never on air, so `seq` 0).
+fn sample_plate(
+    source: NameplateSource,
+    nameplate_id: Option<i64>,
+    primary: String,
+    secondary: String,
+) -> ActiveNameplate {
+    ActiveNameplate {
+        source,
+        nameplate_id,
+        primary,
+        secondary,
+        seq: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,6 +462,73 @@ mod tests {
         let hidden = state.stream_nameplate_hide("np-hide").await.unwrap();
         assert!(hidden.is_none());
         assert!(state.stream_nameplate_active("np-hide").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn sample_is_the_last_shown_plate_after_a_hide() {
+        let state = AppState::in_memory().await.unwrap();
+        let id = seed_output_with_plate(&state, "np-sample-last").await;
+        let second = state
+            .repository()
+            .create_stream_nameplate("np-sample-last", "Eva Malá", "speváčka")
+            .await
+            .unwrap()
+            .id;
+        state
+            .stream_nameplate_show_person("np-sample-last", second)
+            .await
+            .unwrap();
+        state.stream_nameplate_hide("np-sample-last").await.unwrap();
+        let sample = state
+            .stream_nameplate_sample("np-sample-last")
+            .await
+            .unwrap()
+            .expect("sample");
+        assert_eq!(sample.nameplate_id, Some(second));
+        assert_eq!(sample.primary, "Eva Malá");
+        assert_eq!(sample.secondary, "speváčka");
+        // Nothing went on air.
+        assert!(state
+            .stream_nameplate_active("np-sample-last")
+            .await
+            .is_none());
+        let _ = id;
+    }
+
+    #[tokio::test]
+    async fn sample_falls_back_to_the_first_person_plate() {
+        let state = AppState::in_memory().await.unwrap();
+        let id = seed_output_with_plate(&state, "np-sample-first").await;
+        let mut rx = state.live_hub().subscribe();
+        let sample = state
+            .stream_nameplate_sample("np-sample-first")
+            .await
+            .unwrap()
+            .expect("sample");
+        assert_eq!(sample.source, NameplateSource::Person);
+        assert_eq!(sample.nameplate_id, Some(id));
+        assert_eq!(sample.primary, "Ján Novák");
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, LiveEvent::StreamNameplate { .. }),
+                "a sample is never broadcast: {event:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sample_is_none_without_any_plate() {
+        let state = AppState::in_memory().await.unwrap();
+        state
+            .repository()
+            .create_stream_output("np-sample-none", "Out")
+            .await
+            .unwrap();
+        assert!(state
+            .stream_nameplate_sample("np-sample-none")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
