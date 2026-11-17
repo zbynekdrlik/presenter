@@ -46,6 +46,10 @@ pub fn router() -> Router<AppState> {
             get(get_active).put(set_active),
         )
         .route(
+            "/stream/api/outputs/{slug}/nameplates/sample",
+            get(get_sample),
+        )
+        .route(
             "/stream/api/nameplates/{id}",
             patch(patch_nameplate).delete(delete_nameplate),
         )
@@ -170,6 +174,17 @@ pub(super) async fn get_active(
     Path(slug): Path<String>,
 ) -> Result<Json<Option<ActiveNameplate>>, AppError> {
     Ok(Json(state.stream_nameplate_active(&slug).await))
+}
+
+/// `GET .../nameplates/sample` (#970): the plate the editor preview shows while
+/// nothing is previewed — the last shown, else the song, else the first person
+/// plate, else `null`. Read-only: nothing goes on air.
+#[instrument(skip_all)]
+pub(super) async fn get_sample(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<Option<ActiveNameplate>>, AppError> {
+    Ok(Json(state.stream_nameplate_sample(&slug).await?))
 }
 
 #[instrument(skip_all)]

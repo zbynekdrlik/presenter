@@ -28,6 +28,11 @@ pub async fn get_active_nameplate(slug: &str) -> Result<Option<ActiveNameplate>,
     get_json(&format!("/stream/api/outputs/{slug}/nameplates/active")).await
 }
 
+/// The editor preview's sample plate (#970) — `None` when the output has none.
+pub async fn get_sample_nameplate(slug: &str) -> Result<Option<ActiveNameplate>, ApiError> {
+    get_json(&format!("/stream/api/outputs/{slug}/nameplates/sample")).await
+}
+
 /// The path of a Drive folder's cached playlist (#843) — the link travels as
 /// one url-encoded query parameter.
 pub fn playback_playlist_path(source_url: &str) -> String {
