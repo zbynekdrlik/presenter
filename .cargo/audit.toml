@@ -57,4 +57,7 @@ ignore = [
   # opens only its own DB and the owner's Bible modules. Remove BOTH entries
   # (here and deny.toml) once sqlx allows >= 0.39. Published 2026-11-09.
   "RUSTSEC-2026-0459", # libsqlite3-sys bundled SQLite WAL page-size read (pinned by sqlx)
+  # chrono unmaintained (informational, no vulnerability), transitive through
+  # sea-orm / sqlx / gst-plugins; #972. Remove BOTH entries (here and deny.toml).
+  "RUSTSEC-2026-0543", # chrono unmaintained (transitive)
 ]
