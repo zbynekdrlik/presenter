@@ -72,6 +72,12 @@ ignore = [
     # Keep in sync with .cargo/audit.toml.
     # https://rustsec.org/advisories/RUSTSEC-2026-0459
     "RUSTSEC-2026-0459",
+    # chrono is unmaintained (informational, no vulnerability; all versions).
+    # Transitive through sea-orm / sea-query / sqlx / gst-plugin-rtp+webrtc, so
+    # it cannot leave the lock until those move. Tracked in #972 — remove BOTH
+    # entries (here and .cargo/audit.toml) once chrono is gone from the tree.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0543
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
