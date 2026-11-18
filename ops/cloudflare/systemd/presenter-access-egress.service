@@ -1,0 +1,12 @@
+# #977: keep each site's Cloudflare Access bypass equal to its real public address.
+# Installed on dev2 as a user unit (linger on):
+#   ln -sf <repo>/ops/cloudflare/systemd/presenter-access-egress.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now presenter-access-egress.timer
+# Logs: journalctl --user -u presenter-access-egress
+[Unit]
+Description=Presenter Access bypass follows each site's public address (#977)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/devel/presenter/presenter-dev2
+ExecStart=/usr/bin/python3 %h/devel/airuleset/airuleset.py secret exec --file %h/.secrets/cloudflare-presenter-access --env CF_TOKEN -- /usr/bin/python3 -B ops/cloudflare/egress_sync.py --config %h/.config/presenter/presenter-access.json

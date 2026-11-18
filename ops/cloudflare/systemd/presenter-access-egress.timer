@@ -1,0 +1,12 @@
+# #977: hourly; a changed PP/SNV address costs at most one hour of login prompts on site.
+[Unit]
+Description=Hourly Presenter Access egress check (#977)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
