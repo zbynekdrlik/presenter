@@ -34,21 +34,21 @@ CONFIG = {
 
 class Pure(unittest.TestCase):
     def test_parse_ipv4_accepts_a_public_address_with_whitespace(self):
-        self.assertEqual(es.parse_ipv4(" 95.102.87.189\n"), "95.102.87.189")
+        self.assertEqual(es.parse_ipv4(" 151.101.1.69\n"), "151.101.1.69")
 
     def test_parse_ipv4_refuses_private_loopback_html_and_ipv6(self):
         for text in ("10.77.9.205", "127.0.0.1", "<html>", "", "2001:db8::1"):
             self.assertIsNone(es.parse_ipv4(text), text)
 
     def test_agreed_address_needs_every_source_to_agree(self):
-        self.assertEqual(es.agreed_address(["95.102.87.189", "95.102.87.189"]), "95.102.87.189")
-        self.assertIsNone(es.agreed_address(["95.102.87.189", "95.102.87.190"]))
-        self.assertIsNone(es.agreed_address(["95.102.87.189", ""]))
-        self.assertIsNone(es.agreed_address(["95.102.87.189"]))
+        self.assertEqual(es.agreed_address(["151.101.1.69", "151.101.1.69"]), "151.101.1.69")
+        self.assertIsNone(es.agreed_address(["151.101.1.69", "151.101.1.70"]))
+        self.assertIsNone(es.agreed_address(["151.101.1.69", ""]))
+        self.assertIsNone(es.agreed_address(["151.101.1.69"]))
 
     def test_with_new_bypass_replaces_only_that_site_and_keeps_the_input(self):
-        updated = es.with_new_bypass(CONFIG, "b.example.com", "95.102.87.189")
-        self.assertEqual(updated["sites"][1]["bypass_ips"], ["95.102.87.189/32"])
+        updated = es.with_new_bypass(CONFIG, "b.example.com", "151.101.1.69")
+        self.assertEqual(updated["sites"][1]["bypass_ips"], ["151.101.1.69/32"])
         self.assertEqual(updated["sites"][0]["bypass_ips"], ["81.2.69.160/32"])
         self.assertEqual(CONFIG["sites"][1]["bypass_ips"], ["93.184.216.34/32"])
 
@@ -87,9 +87,9 @@ class Sync(unittest.TestCase):
         self.assertEqual(out.count("egress unchanged"), 2)
 
     def test_a_changed_address_rewrites_the_config_then_applies_and_dry_runs(self):
-        code, out = self.run_sync({"u@a": ["81.2.69.160"] * 2, "u@b": ["95.102.87.189"] * 2})
+        code, out = self.run_sync({"u@a": ["81.2.69.160"] * 2, "u@b": ["151.101.1.69"] * 2})
         self.assertEqual(code, 0)
-        self.assertEqual(self.saved()["sites"][1]["bypass_ips"], ["95.102.87.189/32"])
+        self.assertEqual(self.saved()["sites"][1]["bypass_ips"], ["151.101.1.69/32"])
         self.assertEqual(self.saved()["sites"][0]["bypass_ips"], ["81.2.69.160/32"])
         self.assertEqual(self.calls, [["--config", self.path, "--apply"], ["--config", self.path]])
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
@@ -102,7 +102,7 @@ class Sync(unittest.TestCase):
         self.assertIn("unreachable  a.example.com", out)
 
     def test_disagreeing_sources_fail_and_change_nothing(self):
-        code, _ = self.run_sync({"u@a": ["95.102.87.189", "95.102.87.1"], "u@b": ["93.184.216.34"] * 2})
+        code, _ = self.run_sync({"u@a": ["151.101.1.69", "151.101.1.1"], "u@b": ["93.184.216.34"] * 2})
         self.assertEqual(code, 1)
         self.assertEqual(self.calls, [])
         self.assertEqual(self.saved(), CONFIG)
@@ -114,7 +114,7 @@ class Sync(unittest.TestCase):
 
         out = io.StringIO()
         with redirect_stdout(out):
-            code = es.sync(self.path, lambda t: {"u@a": ["81.2.69.160"] * 2, "u@b": ["95.102.87.189"] * 2}[t], failing)
+            code = es.sync(self.path, lambda t: {"u@a": ["81.2.69.160"] * 2, "u@b": ["151.101.1.69"] * 2}[t], failing)
         self.assertEqual(code, 1)
         self.assertEqual(len(self.calls), 1)
 

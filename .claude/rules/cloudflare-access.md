@@ -27,8 +27,8 @@ paths:
   **[unverified]** against the live API (the 2026-10-13 apps were created, never updated). The first
   real `update_app` must be followed by a dry run that prints `ok`.
 - `desired_apps()` / `plan()` are pure and unit-tested in `test_presenter_access.py` (CI `quality` job).
-- **A site's bypass IP drifts when its ISP changes the address (#977):** PP went
-  95.103.102.92 → 95.102.87.189 and every PP device got the e-mail + PIN page. `egress_sync.py`
+- **A site's bypass IP drifts when its ISP changes the address (#977):** PP's address changed
+  (18.11.2026) and every PP device got the e-mail + PIN page. `egress_sync.py`
   (dev2 user timer `presenter-access-egress.timer`, hourly, units in `ops/cloudflare/systemd/`)
   asks two IP services over `ssh <site egress_ssh>`; both must agree on a public IPv4, then it
   rewrites the site's `bypass_ips` (atomic, 0600), applies and dry-runs. A site without
