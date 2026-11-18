@@ -518,6 +518,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s ops/cloudflare -p 'test_presenter_access.py' -v
+          python3 -m unittest discover -s ops/cloudflare -p 'test_egress_sync.py' -v
 
       # #850 A1a: the Bible resolver's book-name table is generated from
       # data/bible-book-names/ — a stale committed table fails here.
