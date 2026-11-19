@@ -92,6 +92,7 @@ impl NdiManager {
             snapshot_contention_streak: std::sync::atomic::AtomicU32::new(0),
             drift_guards: std::sync::Mutex::new(HashMap::new()),
             silent_streaks: SilentStreaks::default(),
+            park_book: super::park::ParkBook::default(),
         })
     }
 
@@ -152,6 +153,9 @@ impl NdiManager {
         // operator re-activate of an already-streaming source on such a host waits
         // for that choice (<= 6 s) before the idempotent no-op; the 30 s ticker
         // never gets here for a streaming source (`ReconnectAction::Heartbeat`).
+        // #979: any start ends a park — the source gets a pipeline again (or,
+        // when silent, the normal repair path owns it).
+        self.park_book.forget(source_id);
         let route = self.route_for(ndi_name).await;
         // Phase 1 — RESERVE under the lock (fast: check + build + start + insert a
         // `Starting` entry). The lock is RELEASED before the ~8 s streaming-ready
@@ -367,6 +371,7 @@ impl NdiManager {
         // A stopped source's silence is over (#858) — also when it never got a
         // pipeline (a silent start leaves no active entry, only the streak).
         self.silent_streaks.reset(source_id);
+        self.park_book.forget(source_id);
         let mut active = self.active.lock().await;
         if let Some(mut src) = active.remove(source_id) {
             if let Some(handle) = src.supervisor.take() {
@@ -389,6 +394,7 @@ impl NdiManager {
         // The siblings' silent streaks end with them (#858); `keep_id`'s own
         // streak stays — this reap runs after every silent activation.
         self.silent_streaks.retain_only(keep_id);
+        self.park_book.retain_only(keep_id);
         let mut active = self.active.lock().await;
         super::retain_only_active(&mut active, keep_id).await;
     }
@@ -396,6 +402,7 @@ impl NdiManager {
     /// Stop ALL pipelines.
     pub async fn stop_all(&self) {
         self.silent_streaks.clear();
+        self.park_book.clear();
         let mut active = self.active.lock().await;
         for (_, src) in active.drain() {
             if let Some(handle) = src.supervisor {

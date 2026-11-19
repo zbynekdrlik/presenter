@@ -18,7 +18,7 @@ pub struct VideoSourceStatusDto {
     pub id: String,
     pub ndi_name: String,
     pub is_active: bool,
-    /// `unknown | not-found | ready | connecting | not-broadcasting | unreachable | live`.
+    /// `unknown | not-found | ready | connecting | parked | not-broadcasting | unreachable | live`.
     pub state: String,
     /// The pipeline's error text, when it has one.
     pub detail: Option<String>,

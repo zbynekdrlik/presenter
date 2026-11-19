@@ -507,6 +507,16 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         None => Some(Vec::new()),
     };
     let ndi_pipelines_busy = health.is_none();
+    // #979: sources whose receiver is parked because no stage watches them.
+    let ndi_parked: Vec<serde_json::Value> = state
+        .ndi_manager()
+        .map(|manager| manager.parked_sources())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(source_id, parked_for)| {
+            serde_json::json!({ "sourceId": source_id, "parkedSecs": parked_for.as_secs() })
+        })
+        .collect();
     let ndi_pipelines: Vec<serde_json::Value> = health
         .unwrap_or_default()
         .iter()
@@ -537,6 +547,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "channel": BUILD_CHANNEL,
             "ndi_pipelines": ndi_pipelines,
             "ndi_pipelines_busy": ndi_pipelines_busy,
+            "ndi_parked": ndi_parked,
             "ai": ai,
         })),
     )

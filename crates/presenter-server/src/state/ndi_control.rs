@@ -89,6 +89,47 @@ impl NdiManagerHandle {
         }
     }
 
+    /// Forward to [`NdiManager::is_parked`] (#979).
+    pub(crate) fn is_parked(&self, source_id: &str) -> bool {
+        match self {
+            Self::Real(m) => m.is_parked(source_id),
+            #[cfg(test)]
+            Self::Fake(f) => f.parked.lock().expect("parked lock").contains(source_id),
+        }
+    }
+
+    /// Forward to [`NdiManager::parked_sources`] — every parked source and how long
+    /// it has been parked (#979).
+    pub(crate) fn parked_sources(&self) -> Vec<(String, std::time::Duration)> {
+        match self {
+            Self::Real(m) => m.parked_sources(),
+            #[cfg(test)]
+            Self::Fake(f) => {
+                let mut ids: Vec<String> = f
+                    .parked
+                    .lock()
+                    .expect("parked lock")
+                    .iter()
+                    .cloned()
+                    .collect();
+                ids.sort();
+                ids.into_iter()
+                    .map(|id| (id, std::time::Duration::ZERO))
+                    .collect()
+            }
+        }
+    }
+
+    /// Forward to [`NdiManager::park_if_idle`] (#979): `true` when this call parked
+    /// the source.
+    pub(crate) async fn park_if_idle(&self, source_id: &str, after: std::time::Duration) -> bool {
+        match self {
+            Self::Real(m) => m.park_if_idle(source_id, after).await,
+            #[cfg(test)]
+            Self::Fake(f) => f.park_if_idle(source_id),
+        }
+    }
+
     /// Forward to [`NdiManager::discover_sources`] — best-effort, empty when blind.
     pub(crate) fn discover_sources(
         &self,
@@ -289,6 +330,12 @@ pub(crate) struct FakeNdiControl {
     /// silent start (`SourceSilent { advertised_address }`) and by the health
     /// snapshot, like the real manager's pipeline route. `None` = not advertised.
     advertised_address: Mutex<Option<String>>,
+    /// #979: sources whose pipeline "has no viewer" — `park_if_idle` parks them.
+    idle: Mutex<std::collections::HashSet<String>>,
+    /// #979: parked sources, mirroring the real manager's park book: set by
+    /// `park_if_idle`, ended by any start, `stop_pipeline`, `stop_all` and
+    /// `stop_other_pipelines(keep)` (keeps only `keep`'s).
+    parked: Mutex<std::collections::HashSet<String>>,
 }
 
 /// A one-source start-gate for the #745(a) concurrency test. `start_pipeline` for
@@ -343,6 +390,8 @@ pub(crate) enum NdiCall {
     StopPipeline { source_id: String },
     /// `stop_all()` — the deactivate-all teardown (#745a wiring test).
     StopAll,
+    /// `park_if_idle(source_id)` parked the source (#979).
+    Park { source_id: String },
 }
 
 /// What [`FakeNdiControl::start_pipeline`] should return.
@@ -424,6 +473,41 @@ impl FakeNdiControl {
             parked: Arc::clone(&parked),
         });
         (release, parked)
+    }
+
+    /// #979: this source's pipeline has no viewer — the next `park_if_idle` parks it.
+    pub(crate) fn set_idle(&self, source_id: &str) {
+        self.idle
+            .lock()
+            .expect("idle lock")
+            .insert(source_id.to_string());
+    }
+
+    /// #979: put this source in the park (as if an earlier tick had parked it).
+    pub(crate) fn set_parked(&self, source_id: &str) {
+        self.parked
+            .lock()
+            .expect("parked lock")
+            .insert(source_id.to_string());
+    }
+
+    /// #979: like the real manager, parking drops the source's pipeline.
+    fn park_if_idle(&self, source_id: &str) -> bool {
+        if !self.idle.lock().expect("idle lock").remove(source_id) {
+            return false;
+        }
+        self.snapshots
+            .lock()
+            .expect("snapshots lock")
+            .retain(|(id, _)| id != source_id);
+        self.parked
+            .lock()
+            .expect("parked lock")
+            .insert(source_id.to_string());
+        self.record(NdiCall::Park {
+            source_id: source_id.to_string(),
+        });
+        true
     }
 
     /// Put these NDI names "on the network" (#546).
@@ -527,6 +611,7 @@ impl FakeNdiControl {
             source_id: source_id.to_string(),
             ndi_name: ndi_name.to_string(),
         });
+        self.parked.lock().expect("parked lock").remove(source_id);
         // #745(a) test gate: if this source is gated, signal we've parked (its DB
         // row is already written by activate_video_source) and wait for release.
         // Clone the Notify handles out from under the std Mutex — never await while
@@ -586,6 +671,7 @@ impl FakeNdiControl {
             .lock()
             .expect("silent_streaks lock")
             .remove(source_id);
+        self.parked.lock().expect("parked lock").remove(source_id);
         self.record(NdiCall::StopPipeline {
             source_id: source_id.to_string(),
         });
@@ -596,6 +682,7 @@ impl FakeNdiControl {
             .lock()
             .expect("silent_streaks lock")
             .clear();
+        self.parked.lock().expect("parked lock").clear();
         self.record(NdiCall::StopAll);
     }
 
@@ -604,6 +691,10 @@ impl FakeNdiControl {
             .lock()
             .expect("silent_streaks lock")
             .retain(|id, _| id == keep_id);
+        self.parked
+            .lock()
+            .expect("parked lock")
+            .retain(|id| id == keep_id);
         self.record(NdiCall::StopOtherPipelines {
             keep_id: keep_id.to_string(),
         });

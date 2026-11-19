@@ -134,6 +134,7 @@
 }
 
 .settings__status--ready,
+.settings__status--parked,
 .settings__status--unknown,
 .settings__status--checking {
   background: #e2e8f0;

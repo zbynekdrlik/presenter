@@ -131,6 +131,8 @@ pub(crate) async fn post_whep_endpoint(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
+    // #979: a source parked for lack of a viewer starts again for this one.
+    state.wake_parked_ndi_source(&source_id).await;
     let reply = match manager
         .whep_signaller_call(
             &source_id,

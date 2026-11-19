@@ -156,6 +156,22 @@ impl NdiPipeline {
         profile: StreamProfile,
         turn_server: Option<String>,
     ) -> Result<WhepAnswer, AddConsumerError> {
+        // Counted as a consumer from here until this call returns (#979) —
+        // the session itself is inserted only after the consumer pipeline is
+        // built, seconds later.
+        let _joining = super::joining::JoiningGuard::enter(&self.joining);
+        self.add_consumer_counted(sdp_offer_bytes, profile, turn_server)
+            .await
+    }
+
+    /// The body of [`Self::add_consumer`], run while the call is counted in
+    /// `joining`.
+    async fn add_consumer_counted(
+        &self,
+        sdp_offer_bytes: Vec<u8>,
+        profile: StreamProfile,
+        turn_server: Option<String>,
+    ) -> Result<WhepAnswer, AddConsumerError> {
         self.reap_and_check_cap().await?;
 
         let session_id = WhepSession::new_session_id();
@@ -305,6 +321,13 @@ impl NdiPipeline {
             "WHEP ICE candidate forwarded to webrtcbin"
         );
         Ok(())
+    }
+
+    /// Consumers of this pipeline: live sessions plus WHEP POSTs still inside
+    /// `add_consumer` (#979). The manager parks a source only at `0`.
+    pub async fn consumer_count(&self) -> usize {
+        let joining = self.joining.load(std::sync::atomic::Ordering::SeqCst);
+        self.sessions.lock().await.len() + joining
     }
 
     /// Remove a WHEP consumer: disconnect it from the StreamProducer and tear

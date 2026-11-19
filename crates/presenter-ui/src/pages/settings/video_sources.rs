@@ -25,6 +25,7 @@ pub(crate) fn status_label(state: &str) -> &'static str {
         "unreachable" => "Nedá sa pripojiť",
         "ready" => "Pripravené",
         "connecting" => "Pripája sa…",
+        "parked" => "Čaká na obrazovku",
         "unknown" => "NDI nedostupné",
         _ => "Zisťujem…",
     }
@@ -42,6 +43,7 @@ pub(crate) fn status_class(state: &str) -> String {
             | "unreachable"
             | "ready"
             | "connecting"
+            | "parked"
             | "unknown"
     );
     let modifier = if known { state } else { "checking" };
@@ -105,6 +107,11 @@ pub(crate) fn status_hint(state: &str, address: Option<&str>) -> Option<String> 
         ),
         "not-broadcasting" => Some(
             "V sieti je, ale neposiela obraz. Zapni výstup NDI na vysielacom počítači.".to_string(),
+        ),
+        "parked" => Some(
+            "Žiadna obrazovka ho práve nezobrazuje, preto server obraz neprijíma. Spustí sa \
+             sám, keď ho niektorá obrazovka otvorí."
+                .to_string(),
         ),
         "unreachable" => {
             let address = address
@@ -529,6 +536,20 @@ mod tests {
         assert_eq!(status_label("connecting"), "Pripája sa…");
         assert_eq!(status_label("unknown"), "NDI nedostupné");
         assert_eq!(status_label("unreachable"), "Nedá sa pripojiť");
+        assert_eq!(status_label("parked"), "Čaká na obrazovku");
+    }
+
+    /// #979: a parked source is fine — it says why no video is pulled and that it
+    /// starts on its own, in the neutral colour (never the amber "sending nothing").
+    #[test]
+    fn a_parked_source_explains_itself_in_the_neutral_colour() {
+        assert_eq!(
+            status_class("parked"),
+            "settings__status settings__status--parked"
+        );
+        let hint = status_hint("parked", None).expect("parked must explain itself");
+        assert!(hint.contains("Žiadna obrazovka"), "{hint}");
+        assert!(hint.contains("Spustí sa"), "{hint}");
     }
 
     /// A state we do not know must not render a raw wire token at the operator, and must

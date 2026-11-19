@@ -36,6 +36,9 @@ pub(crate) enum VideoSourceState {
     /// whole reconnect cycle (#925): this server most likely cannot connect to that
     /// address (SNV: the sender's Dante address). The Settings row names the address.
     Unreachable,
+    /// Activated, but no stage screen watches it, so its receiver is parked and
+    /// no video is pulled (#979). The first screen that opens it starts it again.
+    Parked,
     /// Activated and streaming. Video is flowing.
     Live,
 }
@@ -51,6 +54,7 @@ impl VideoSourceState {
             Self::Connecting => "connecting",
             Self::NotBroadcasting => "not-broadcasting",
             Self::Unreachable => "unreachable",
+            Self::Parked => "parked",
             Self::Live => "live",
         }
     }
@@ -97,9 +101,10 @@ pub(crate) enum PipelineFact<'a> {
 ///    exists — stronger than discovery, whose finder list can still be catching up.
 /// 3. Not in discovery → `NotFound`. The PP case.
 /// 4. Not activated → `Ready` (even if a just-reaped pipeline is still winding down).
-/// 5. Starting, or the map was unreadable (⇒ the manager is busy starting it) →
+/// 5. Parked (#979: no stage viewer, receiver stopped on purpose) → `Parked`.
+/// 6. Starting, or the map was unreadable (⇒ the manager is busy starting it) →
 ///    `Connecting`.
-/// 6. Otherwise → `NotBroadcasting`: it IS on the network, it IS switched on, and no
+/// 7. Otherwise → `NotBroadcasting`: it IS on the network, it IS switched on, and no
 ///    video is arriving.
 pub(crate) fn classify(
     is_active: bool,
@@ -120,6 +125,7 @@ pub(crate) fn classify(
         return VideoSourceState::Ready;
     }
     match pipeline {
+        PipelineFact::Known(Some("parked")) => VideoSourceState::Parked,
         PipelineFact::Unreadable | PipelineFact::Known(Some("starting")) => {
             VideoSourceState::Connecting
         }
@@ -249,6 +255,33 @@ mod tests {
                 PipelineFact::Known(Some("errored"))
             ),
             VideoSourceState::NotBroadcasting
+        );
+    }
+
+    /// #979: an active source parked for lack of a stage viewer is `Parked`, never the
+    /// amber "on the network but sending nothing" — nothing is wrong with the sender.
+    #[test]
+    fn parked_when_no_stage_viewer_and_the_receiver_is_parked() {
+        let net = network(&[MAPPED]);
+        assert_eq!(
+            classify(
+                true,
+                MAPPED,
+                Discovery::Names(&net),
+                PipelineFact::Known(Some("parked"))
+            ),
+            VideoSourceState::Parked
+        );
+        assert_eq!(VideoSourceState::Parked.as_str(), "parked");
+        // A sender that left the network while parked is reported as gone.
+        assert_eq!(
+            classify(
+                true,
+                MAPPED,
+                Discovery::Names(&network(&[ON_AIR])),
+                PipelineFact::Known(Some("parked"))
+            ),
+            VideoSourceState::NotFound
         );
     }
 
