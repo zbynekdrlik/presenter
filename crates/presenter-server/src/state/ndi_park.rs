@@ -10,15 +10,17 @@
 //!   ([`AppState::park_if_no_viewer`]) and treats a parked one as healthy
 //!   (`ReconnectAction::Heartbeat { parked: true }`, never a repair);
 //! - a stage's WHEP POST for a parked source starts it again
-//!   ([`AppState::wake_parked_ndi_source`]) through the normal activation path
-//!   (`activate_video_source_locked`: start, "connected", sibling reap) before
-//!   the POST adds its consumer.
+//!   ([`AppState::wake_parked_ndi_source`]) through the manager half of the
+//!   activation (`start_active_video_source_locked`: start, status, sibling
+//!   reap — no DB write, no audit row) before the POST adds its consumer; a
+//!   POST that raced a park wakes it and tries once more
+//!   ([`AppState::post_whep_waking`]).
 //!
 //! Both run under `activation_lock` (the ticker already holds it; the wake
 //! takes it), so neither can interleave with an operator activate, switch,
 //! deactivate or delete (`ndi-manager-locking.md`, #745a/#747).
 
-use presenter_persistence::SettingsAuditSource;
+use presenter_ndi::manager::{NdiSessionError, WhepReply};
 
 use super::integrations::NdiActivation;
 use super::AppState;
@@ -27,12 +29,52 @@ impl AppState {
     /// Park the active source when no stage has watched it for
     /// [`presenter_ndi::manager::PARK_AFTER_IDLE`]. The caller holds `activation_lock`
     /// (the reconnect ticker); the manager logs the park.
-    pub(super) async fn park_if_no_viewer(&self, source_id: &str) {
-        if let Some(manager) = &self.ndi_manager {
-            manager
-                .park_if_idle(source_id, presenter_ndi::manager::PARK_AFTER_IDLE)
-                .await;
+    pub(super) async fn park_if_no_viewer(&self, source_id: &str) -> bool {
+        match &self.ndi_manager {
+            Some(manager) => {
+                manager
+                    .park_if_idle(source_id, presenter_ndi::manager::PARK_AFTER_IDLE)
+                    .await
+            }
+            None => false,
         }
+    }
+
+    /// A stage's WHEP POST (new consumer) with the #979 wake around it: a parked
+    /// source is woken first, and a POST that finds no pipeline because the
+    /// source was parked in the meantime (between the wake check and the POST)
+    /// wakes it and tries once more instead of answering "not producing".
+    pub(crate) async fn post_whep_waking<F, Fut>(
+        &self,
+        source_id: &str,
+        mut post: F,
+    ) -> anyhow::Result<WhepReply>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<WhepReply>>,
+    {
+        self.wake_parked_ndi_source(source_id).await;
+        let first = post().await;
+        let not_active = matches!(
+            first
+                .as_ref()
+                .map_err(|err| err.downcast_ref::<NdiSessionError>()),
+            Err(Some(NdiSessionError::SourceNotActive))
+        );
+        let parked_meanwhile = not_active
+            && self
+                .ndi_manager
+                .as_ref()
+                .is_some_and(|manager| manager.is_parked(source_id));
+        if !parked_meanwhile {
+            return first;
+        }
+        tracing::info!(
+            source_id,
+            "WHEP POST: the source was parked meanwhile — waking it and trying once more (#979)"
+        );
+        self.wake_parked_ndi_source(source_id).await;
+        post().await
     }
 
     /// A stage opened `source_id`: when it is parked, start its pipeline again
@@ -83,10 +125,7 @@ impl AppState {
             parked_secs = parked_for.as_secs(),
             "NDI source woken: a stage opened it, starting the receiver (#979)"
         );
-        match self
-            .activate_video_source_locked(source.id, SettingsAuditSource::StartupDefault, "system")
-            .await
-        {
+        match self.start_active_video_source_locked(source).await {
             Ok((_, NdiActivation::Streaming)) => {}
             Ok((_, NdiActivation::NotStreaming)) => {
                 tracing::info!(

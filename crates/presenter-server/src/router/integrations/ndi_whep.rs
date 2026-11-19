@@ -132,17 +132,19 @@ pub(crate) async fn post_whep_endpoint(
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
     // #979: a source parked for lack of a viewer starts again for this one.
-    state.wake_parked_ndi_source(&source_id).await;
-    let reply = match manager
-        .whep_signaller_call(
-            &source_id,
-            WhepOp::Post {
-                id: None,
-                body: body.to_vec(),
-                profile: StreamProfile::from_query(query.profile.as_deref()),
-                turn_server,
-            },
-        )
+    let profile = StreamProfile::from_query(query.profile.as_deref());
+    let reply = match state
+        .post_whep_waking(&source_id, || {
+            manager.whep_signaller_call(
+                &source_id,
+                WhepOp::Post {
+                    id: None,
+                    body: body.to_vec(),
+                    profile,
+                    turn_server: turn_server.clone(),
+                },
+            )
+        })
         .await
     {
         Ok(reply) => reply,

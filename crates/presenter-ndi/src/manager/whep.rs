@@ -233,6 +233,17 @@ impl NdiManager {
         Ok(std::sync::Arc::clone(&src.pipeline))
     }
 
+    /// [`Self::streaming_pipeline`] for a joining viewer: the pipeline comes
+    /// with a [`crate::pipeline::JoinTicket`] taken while the lock is held.
+    async fn joining_pipeline(&self, source_id: &str) -> Result<crate::pipeline::JoinTicket> {
+        let active = self.active.lock().await;
+        let src = active
+            .get(source_id)
+            .ok_or(NdiSessionError::SourceNotActive)?;
+        Self::ensure_streaming(src)?;
+        Ok(src.pipeline.join_ticket())
+    }
+
     /// WHEP POST (new consumer): SDP offer in, 201 + SDP answer + Location
     /// out. `profile` is parsed from the `?profile=` query but always resolves
     /// to the single shared 720p H264 stream that feeds the new consumer.
@@ -243,7 +254,10 @@ impl NdiManager {
         profile: StreamProfile,
         turn_server: Option<String>,
     ) -> Result<WhepReply> {
-        let pipeline = self.streaming_pipeline(source_id).await?;
+        // The ticket is taken under the active-map lock and held through
+        // `add_consumer`: a park never stops the pipeline this POST joins (#979).
+        let ticket = self.joining_pipeline(source_id).await?;
+        let pipeline = ticket.pipeline();
         // `add_consumer` returns the pipeline's OWN typed `AddConsumerError`
         // (its `CapReached` variant + a catch-all `Other(anyhow::Error)`) —
         // translate `CapReached` into the shared `NdiSessionError` HERE, at

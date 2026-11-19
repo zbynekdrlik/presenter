@@ -62,6 +62,7 @@ pub mod health;
 pub mod health_window;
 mod ingest_timing;
 mod joining;
+pub use joining::JoinTicket;
 mod keyframe_throttle;
 mod lifecycle;
 pub mod link_probe;

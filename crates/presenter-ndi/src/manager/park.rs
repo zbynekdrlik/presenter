@@ -180,9 +180,11 @@ impl NdiManager {
     /// belongs to the activation / repair paths). The consumers are counted with
     /// the `active` lock released; the slot is then removed only if it still
     /// holds the same pipeline (`Arc::ptr_eq`), and the pipeline is stopped
-    /// outside the lock. A viewer whose POST lands in the gap between the count
-    /// and the removal loses its new session; its stage retries and the retry
-    /// wakes the parked source.
+    /// outside the lock. Under that second lock the pipeline is re-checked
+    /// without waiting ([`crate::pipeline::NdiPipeline::has_consumers_now`]): a POST that took it
+    /// meanwhile holds a [`crate::pipeline::JoinTicket`], so it is never parked
+    /// under a joining viewer. The source is marked parked before its slot is
+    /// removed, so a POST that finds no slot finds it parked.
     pub async fn park_if_idle(&self, source_id: &str, after: Duration) -> bool {
         let pipeline = {
             let active = self.active.lock().await;
@@ -205,7 +207,18 @@ impl NdiManager {
         let removed = {
             let mut active = self.active.lock().await;
             match active.get(source_id) {
-                Some(src) if Arc::ptr_eq(&src.pipeline, &pipeline) => active.remove(source_id),
+                // A viewer that took the pipeline since the count holds a
+                // `JoinTicket` (taken under this lock) or the sessions map:
+                // it keeps the pipeline (#979 review).
+                Some(src)
+                    if Arc::ptr_eq(&src.pipeline, &pipeline) && !pipeline.has_consumers_now() =>
+                {
+                    // Parked BEFORE the slot goes, both under the lock: a POST
+                    // that finds no slot always finds the source parked, so it
+                    // wakes it instead of answering "not producing".
+                    self.park_book.mark_parked(source_id, now);
+                    active.remove(source_id)
+                }
                 _ => None,
             }
         };
@@ -215,7 +228,6 @@ impl NdiManager {
         if let Some(handle) = src.supervisor.take() {
             handle.abort();
         }
-        self.park_book.mark_parked(source_id, now);
         tracing::info!(
             source_id,
             idle_secs = idle_for.as_secs(),

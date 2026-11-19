@@ -153,9 +153,11 @@ impl NdiManager {
         // operator re-activate of an already-streaming source on such a host waits
         // for that choice (<= 6 s) before the idempotent no-op; the 30 s ticker
         // never gets here for a streaming source (`ReconnectAction::Heartbeat`).
-        // #979: any start ends a park — the source gets a pipeline again (or,
-        // when silent, the normal repair path owns it).
-        self.park_book.forget(source_id);
+        // #979: a start makes this the one active source, so every park ends —
+        // this source gets a pipeline again (or, when silent, the normal repair
+        // path owns it), and a failed switch never leaves the old source listed
+        // as parked.
+        self.park_book.clear();
         let route = self.route_for(ndi_name).await;
         // Phase 1 — RESERVE under the lock (fast: check + build + start + insert a
         // `Starting` entry). The lock is RELEASED before the ~8 s streaming-ready
