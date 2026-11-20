@@ -60,6 +60,13 @@ EnvironmentFile=-/etc/presenter/turn.env
 # DB `ai-settings` row / bundled defaults, service still starts. These env vars
 # WIN over the stored DB row for the effective AI call/status path.
 EnvironmentFile=-/etc/presenter/ai.env
+# #852 C3-8: the listening transcription key (PRESENTER_LISTEN_SONIOX_API_KEY
+# + _MODEL). Kept OUT of this committed unit (the key is a secret) — the deploy
+# writes a 0600 root-only EnvironmentFile from the LISTEN_SONIOX_API_KEY secret
+# + LISTEN_SONIOX_MODEL variable. Leading `-` makes it optional: absent → no
+# key, the guest transcription stays off (status "Chýba kľúč"), service still
+# starts.
+EnvironmentFile=-/etc/presenter/listen.env
 
 # Security hardening - no CAP_NET_BIND_SERVICE needed for port 8080
 ProtectSystem=strict

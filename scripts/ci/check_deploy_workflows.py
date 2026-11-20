@@ -51,6 +51,15 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    18:00), and put unreleased plugin code next to the released server. The
    module ships with the release: deploy.yml (SNV) and release.yml (PP).
 
+7. A job that deploys the presenter service (``systemctl enable
+   ${{ env.SERVICE_NAME }}``) writes the listening transcription key file
+   ``listen.env`` (#852 C3-8) BEFORE that start, from the
+   ``LISTEN_SONIOX_API_KEY`` secret: written under ``umask 077`` (0600 from
+   creation), REMOVED with ``rm -f`` when the secret is empty (no key = the
+   transcription stays off, the deploy goes on), and the key variable only
+   tested (``[ -n ... ]``) or piped by ``printf`` into ``ssh`` stdin — never
+   echoed, never a remote argv.
+
 Usage: check_deploy_workflows.py [WORKFLOW.yml ...]
        (default: every .github/workflows/*.yml)
 Exit 0 when clean, 1 on any violation (each printed as a GitHub ::error::).
@@ -86,6 +95,12 @@ COMPANION_DEPLOY_RE = re.compile(
     r"|systemctl\s+(?:-\S+\s+)*(?:stop|start|restart|reload|kill)\s+(?:-\S+\s+)*companion\b"
 )
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# #852 C3-8: the service deploy start and the listening transcription key file.
+SERVICE_DEPLOY_RE = re.compile(r"systemctl\s+enable\s+\$\{\{\s*env\.SERVICE_NAME\s*\}\}")
+LISTEN_SECRET = "secrets.LISTEN_SONIOX_API_KEY"
+LISTEN_FILE_RE = re.compile(r"/listen\.env\b")
+UMASK_WRITE_RE = re.compile(r"umask\s+077\s*&&\s*cat\s+>")
+
 # Words that run a LATER word as the command:
 # wrapper -> (options that take an argument, positional words before the command).
 WRAPPERS = {
@@ -384,6 +399,53 @@ def check_runner_image(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
     return []
 
 
+def _key_variable(step: dict[str, Any]) -> str | None:
+    """The step env variable that carries the Soniox key secret, if any."""
+    env = step.get("env")
+    if not isinstance(env, dict):
+        return None
+    return next((str(name) for name, value in env.items() if LISTEN_SECRET in str(value)), None)
+
+
+def _listen_step_problems(script: str, key: str) -> list[str]:
+    """What a `listen.env` step does wrong (#852 C3-8), empty when it is right."""
+    problems: list[str] = []
+    if not LISTEN_FILE_RE.search(script):
+        problems.append("does not name the `listen.env` file")
+    if not UMASK_WRITE_RE.search(script):
+        problems.append("does not write the key file under `umask 077 && cat >` (0600 from creation)")
+    if not re.search(r"\brm\s+-f\b", script):
+        problems.append("never removes the file with `rm -f` — an empty secret must delete a stale key file")
+    key_use = re.compile(r"\$\{?" + re.escape(key) + r"\b")
+    for line in script.splitlines():
+        if not key_use.search(line):
+            continue
+        tested = re.search(r"\[\s+-n\s+\"?\$\{?" + re.escape(key) + r"\}?\"?\s+\]", line)
+        piped = re.search(r"\bprintf\b", line) and re.search(r"\|\s*ssh\b", line)
+        if not (tested or piped):
+            problems.append(f"uses `${key}` outside a `[ -n ... ]` test or a `printf ... | ssh` pipe (the key would reach a log or an argv)")
+    return problems
+
+
+def check_listen_env(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
+    """Invariant 7: a presenter service deploy writes `listen.env` safely (#852 C3-8)."""
+    steps = [step for step in spec.get("steps") or [] if isinstance(step, dict)]
+    scripts = [_script(step) for step in steps]
+    start = next((i for i, script in enumerate(scripts) if SERVICE_DEPLOY_RE.search(script)), None)
+    listen = [i for i, step in enumerate(steps) if _key_variable(step) is not None]
+    violations: list[Violation] = []
+    for index in listen:
+        name = _step_name(steps[index], index)
+        key = _key_variable(steps[index]) or ""
+        for problem in _listen_step_problems(scripts[index], key):
+            violations.append(Violation(workflow, job, name, f"{problem} (#852 C3-8)"))
+        if start is not None and index > start:
+            violations.append(Violation(workflow, job, name, "writes `listen.env` AFTER the service start — the started service never reads it (#852 C3-8)"))
+    if start is not None and not listen:
+        violations.append(Violation(workflow, job, _step_name(steps[start], start), f"deploys the presenter service but no step writes `listen.env` from `{LISTEN_SECRET}` — the transcription key never reaches this site (#852 C3-8)"))
+    return violations
+
+
 def check_workflow(path: str, document: Any) -> list[Violation]:
     if not isinstance(document, dict):
         return []
@@ -395,6 +457,7 @@ def check_workflow(path: str, document: Any) -> list[Violation]:
             violations.extend(check_job(path, str(job), spec))
             violations.extend(check_staged_tools(path, str(job), spec))
             violations.extend(check_runner_image(path, str(job), spec))
+            violations.extend(check_listen_env(path, str(job), spec))
             if on_dev_push:
                 violations.extend(check_companion_deploys(path, str(job), spec))
     return violations
@@ -412,7 +475,7 @@ def main(argv: list[str]) -> int:
     for violation in violations:
         print(violation.render())
     if violations:
-        print(f"{len(violations)} deploy-workflow safety violation(s) (#795, #851 D1)", file=sys.stderr)
+        print(f"{len(violations)} deploy-workflow safety violation(s) (#795, #851 D1, #852 C3-8)", file=sys.stderr)
         return 1
     print(f"deploy-workflow SSH safety OK ({len(paths)} workflow file(s) checked)")
     return 0
