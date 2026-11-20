@@ -121,36 +121,38 @@ mod tests {
                "latencyP90Ms": null})
     }
 
-    fn round_trip(message: ListenWsMessage, expected: Value) {
-        assert_eq!(serde_json::to_value(&message).unwrap(), expected);
-        let back: ListenWsMessage = serde_json::from_value(expected).unwrap();
-        assert_eq!(back, message);
+    fn encode(message: &ListenWsMessage) -> Value {
+        serde_json::to_value(message).unwrap()
+    }
+
+    fn decode(value: Value) -> ListenWsMessage {
+        serde_json::from_value(value).unwrap()
     }
 
     #[test]
     fn a_sentence_message_has_the_shared_shape() {
-        round_trip(
-            ListenWsMessage::Sentence {
-                sentence: sentence(),
-            },
-            json!({"type": "sentence", "sentence": sentence_json()}),
-        );
+        let message = ListenWsMessage::Sentence {
+            sentence: sentence(),
+        };
+        let expected = json!({"type": "sentence", "sentence": sentence_json()});
+        assert_eq!(encode(&message), expected);
+        assert_eq!(decode(expected), message);
     }
 
     #[test]
     fn a_tail_message_has_the_shared_shape() {
-        round_trip(
-            ListenWsMessage::Tail { tail: tail() },
-            json!({"type": "tail", "tail": tail_json()}),
-        );
+        let message = ListenWsMessage::Tail { tail: tail() };
+        let expected = json!({"type": "tail", "tail": tail_json()});
+        assert_eq!(encode(&message), expected);
+        assert_eq!(decode(expected), message);
     }
 
     #[test]
     fn a_session_message_has_the_shared_shape() {
-        round_trip(
-            ListenWsMessage::Session { session: session() },
-            json!({"type": "session", "session": session_json()}),
-        );
+        let message = ListenWsMessage::Session { session: session() };
+        let expected = json!({"type": "session", "session": session_json()});
+        assert_eq!(encode(&message), expected);
+        assert_eq!(decode(expected), message);
     }
 
     #[test]
@@ -160,21 +162,21 @@ mod tests {
             tails: vec![tail()],
             sessions: vec![session()],
         };
-        round_trip(
-            ListenWsMessage::Snapshot { snapshot },
-            json!({"type": "snapshot", "snapshot": {"sentences": [sentence_json()],
-                   "tails": [tail_json()], "sessions": [session_json()]}}),
-        );
+        let message = ListenWsMessage::Snapshot { snapshot };
+        let expected = json!({"type": "snapshot", "snapshot": {"sentences": [sentence_json()], "tails": [tail_json()], "sessions": [session_json()]}});
+        assert_eq!(encode(&message), expected);
+        assert_eq!(decode(expected), message);
     }
 
     #[test]
     fn an_empty_snapshot_and_an_off_session_serialise_plainly() {
-        round_trip(
-            ListenWsMessage::Snapshot {
-                snapshot: TranscriptSnapshot::default(),
-            },
-            json!({"type": "snapshot", "snapshot": {"sentences": [], "tails": [], "sessions": []}}),
-        );
+        let message = ListenWsMessage::Snapshot {
+            snapshot: TranscriptSnapshot::default(),
+        };
+        let expected =
+            json!({"type": "snapshot", "snapshot": {"sentences": [], "tails": [], "sessions": []}});
+        assert_eq!(encode(&message), expected);
+        assert_eq!(decode(expected), message);
         let off = MicTranscription {
             mic_id: "guest".into(),
             reason: Some(OffReason::NoKey),
