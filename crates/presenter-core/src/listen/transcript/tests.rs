@@ -274,6 +274,23 @@ fn a_new_connection_starts_a_word_and_decides_a_pending_close() {
 }
 
 #[test]
+fn a_whitespace_only_final_is_not_a_word_for_the_cap() {
+    let mut a = TranscriptAssembler::new();
+    let mut words: Vec<String> = (1..=19).map(|i| format!(" w{i}")).collect();
+    words[0] = "w1".into();
+    words.extend([" ".to_owned(), "w20".to_owned(), " next".to_owned()]);
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    let out = a.apply(finals(&refs));
+    assert_eq!(out.closed.len(), 1);
+    assert!(
+        out.closed[0].text.ends_with(" w19 w20"),
+        "{}",
+        out.closed[0].text
+    );
+    assert_eq!(out.tail.unwrap().final_text, "next");
+}
+
+#[test]
 fn a_new_connection_counts_its_first_word_for_the_cap() {
     let mut a = TranscriptAssembler::new();
     let mut words: Vec<String> = (1..=19).map(|i| format!(" w{i}")).collect();
