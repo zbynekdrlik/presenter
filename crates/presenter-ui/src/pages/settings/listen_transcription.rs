@@ -65,6 +65,7 @@ fn guest_session(t: &TranscriptionStatus) -> MicTranscription {
     MicTranscription {
         mic_id: t.setting.guest_mic.clone().unwrap_or_default(),
         reason: Some(reason),
+        cap_ms: u64::from(t.setting.daily_cap_minutes) * MS_PER_MINUTE,
         ..MicTranscription::default()
     }
 }
@@ -494,6 +495,11 @@ mod tests {
     fn without_a_guest_session_the_setting_says_why_nothing_runs() {
         let mut t = TranscriptionStatus::default();
         assert_eq!(guest_session(&t).reason, Some(OffReason::Disabled));
+        assert_eq!(
+            status_line(&guest_session(&t)),
+            "Prepis je vypnutý · pripojené 0 / 240 min dnes · ≈ $0,00 dnes",
+            "the cap is the setting's before any session"
+        );
         t.setting.enabled = true;
         assert_eq!(guest_session(&t).reason, Some(OffReason::NoGuestMic));
         assert_eq!(guest_session(&t).state, TranscriptionState::Off);
