@@ -286,11 +286,9 @@ fn planned_duration(
     plan[0].duration
 }
 
-fn assert_duration(actual: Duration, expected: Duration) {
-    assert!(
-        (actual.as_secs_f64() - expected.as_secs_f64()).abs() < 1e-6,
-        "fades over {actual:?}, expected {expected:?}"
-    );
+/// How far `actual` is from `expected`, in seconds.
+fn seconds_off(actual: Duration, expected: Duration) -> f64 {
+    (actual.as_secs_f64() - expected.as_secs_f64()).abs()
 }
 
 /// #848 second review, finding 1: a fade that replaced one cut short ran over
@@ -316,13 +314,17 @@ fn a_cover_fades_over_the_share_of_the_cover_fade_left_to_go() {
             level: 0.2,
         },
     );
-    assert_duration(
-        planned_duration(&covers, &tracked, CoverDirection::Hide),
-        RULED_COVER_FADE.mul_f64(0.25),
+    let planned = planned_duration(&covers, &tracked, CoverDirection::Hide);
+    assert!(
+        seconds_off(planned, RULED_COVER_FADE.mul_f64(0.25)) < 1e-6,
+        "hide over {planned:?}, expected {:?}",
+        RULED_COVER_FADE.mul_f64(0.25)
     );
-    assert_duration(
-        planned_duration(&covers, &tracked, CoverDirection::Show),
-        RULED_COVER_FADE.mul_f64(0.75),
+    let planned = planned_duration(&covers, &tracked, CoverDirection::Show);
+    assert!(
+        seconds_off(planned, RULED_COVER_FADE.mul_f64(0.75)) < 1e-6,
+        "show over {planned:?}, expected {:?}",
+        RULED_COVER_FADE.mul_f64(0.75)
     );
 
     // Shown at its base: the hide is the whole way down.
@@ -333,9 +335,11 @@ fn a_cover_fades_over_the_share_of_the_cover_fade_left_to_go() {
             level: 0.8,
         },
     );
-    assert_duration(
-        planned_duration(&covers, &tracked, CoverDirection::Hide),
-        RULED_COVER_FADE,
+    let planned = planned_duration(&covers, &tracked, CoverDirection::Hide);
+    assert!(
+        seconds_off(planned, RULED_COVER_FADE) < 1e-6,
+        "hide over {planned:?}, expected {:?}",
+        RULED_COVER_FADE
     );
 }
 
@@ -358,9 +362,11 @@ fn a_cover_fades_over_half_a_second_whatever_its_layer_transition() {
                 level: 0.8,
             },
         );
-        assert_duration(
+        // Exact: 0.5 s × a share of 1 or 1/2 is a whole number of ms.
+        assert_eq!(
             planned_duration(&covers, &tracked, CoverDirection::Hide),
             RULED_COVER_FADE,
+            "the whole way down, layer transition {transition:?}"
         );
 
         tracked.set(
@@ -370,13 +376,15 @@ fn a_cover_fades_over_half_a_second_whatever_its_layer_transition() {
                 level: 0.4,
             },
         );
-        assert_duration(
+        assert_eq!(
             planned_duration(&covers, &tracked, CoverDirection::Hide),
             RULED_COVER_FADE / 2,
+            "half way down, layer transition {transition:?}"
         );
-        assert_duration(
+        assert_eq!(
             planned_duration(&covers, &tracked, CoverDirection::Show),
             RULED_COVER_FADE / 2,
+            "half way up, layer transition {transition:?}"
         );
     }
 }
