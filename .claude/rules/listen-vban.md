@@ -352,7 +352,7 @@ paths:
   closed words never show twice) and the next `set_tail` goes out at once. An empty tail (`None` / no text)
   is sent with empty texts and left out of the snapshot. `session` only on a state / reason / error change.
   The socket: snapshot, stream, a WS Ping every `KEEPALIVE` (30 s; 1 s under `cfg(test)`) because the hub
-  is quiet outside a sermon and Cloudflare cuts an idle socket at ~100 s; no frame from the client for two
+  is quiet outside a sermon and Cloudflare cuts an idle socket at ~100 s — a const assert keeps 2 × 30 s under it; no frame from the client for two
   intervals ends it (`WsEndReason::ClientSilent`). End reasons are `/live/ws`'s `WsEndReason` +
   `close_frame_reason`; client IP via `extract_client_ip`. Logs on `presenter::listen::ws` (connect,
   disconnect with `reason` / `resyncs` / `connected_ms`, resync). The upgrade is NOT a poll: it stays out of

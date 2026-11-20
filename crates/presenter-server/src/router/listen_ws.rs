@@ -29,9 +29,13 @@ use crate::state::AppState;
 
 /// The target of the reader lines (plan Decision 16).
 pub(crate) const LISTEN_WS_TARGET: &str = "presenter::listen::ws";
+/// The production ping interval: a ping and the two-interval silence cut
+/// both stay under Cloudflare's ~100 s idle cut (checked at compile time).
+const KEEPALIVE_PRODUCTION: Duration = Duration::from_secs(30);
+const _: () = assert!(KEEPALIVE_PRODUCTION.as_secs() * 2 < 100);
 /// A Ping this often; no frame from the client for two intervals ends the socket.
 #[cfg(not(test))]
-pub(crate) const KEEPALIVE: Duration = Duration::from_secs(30);
+pub(crate) const KEEPALIVE: Duration = KEEPALIVE_PRODUCTION;
 #[cfg(test)]
 pub(crate) const KEEPALIVE: Duration = Duration::from_secs(1);
 
@@ -86,9 +90,10 @@ async fn forward(
     if let Err(reason) = send_snapshot(socket, snapshot).await {
         return reason;
     }
-    let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
-    keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // Set before the interval's start, so the 2nd tick is ≥ 2 intervals after it.
     let mut last_heard = Instant::now();
+    let mut keepalive = tokio::time::interval_at(last_heard + KEEPALIVE, KEEPALIVE);
+    keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             message = messages.recv() => match message {
@@ -121,7 +126,7 @@ async fn forward(
                 Some(Ok(_)) => last_heard = Instant::now(),
             },
             _ = keepalive.tick() => {
-                if last_heard.elapsed() > 2 * KEEPALIVE {
+                if last_heard.elapsed() >= 2 * KEEPALIVE {
                     return WsEndReason::ClientSilent;
                 }
                 if let Err(err) = socket.send(Message::Ping(Default::default())).await {
