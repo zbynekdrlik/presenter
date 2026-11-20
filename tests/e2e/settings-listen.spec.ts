@@ -388,6 +388,10 @@ test("a received microphone shows its health and the recorder writes today's WAV
   await expect(card.locator('[data-role="listen-socket"]')).toContainText("nečinný");
   await expect(recorderState).toContainText("Najprv pridaj mikrofón");
   await expect(toggle).toBeDisabled();
+  // #852 C3-9: this server has no Soniox key — the guest transcription says so
+  await expect(card.locator('[data-role="listen-transcription-key"]')).toContainText(
+    "Chýba kľúč služby prepisu (Soniox)",
+  );
 
   await seed(page, [{ ...GUEST, name: "Hosť E2E", streamName: GUEST_STREAM }]);
   const row = card.locator('li[data-id="guest"]');

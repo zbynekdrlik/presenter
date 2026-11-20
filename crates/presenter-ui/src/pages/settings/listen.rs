@@ -29,6 +29,7 @@ use super::list_card::{failure_text, CardItem, CardText, ListCard, RowParts};
 use super::list_sync::ResponseOrder;
 use super::listen_dante::DanteMics;
 use super::listen_form::{mic_aside, MicDraft, MicForm, TakenIds};
+use super::listen_transcription::GuestTranscription;
 use super::video_sources::is_stale;
 use super::ToastHandle;
 use crate::api::{listen, ApiError};
@@ -584,6 +585,7 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
                 {move || recorder.with(|r| recorder_state_line(r.as_ref()))}
             </p>
             {card.render_list(row)}
+            <GuestTranscription status=status toast=toast />
         </section>
     }
 }
