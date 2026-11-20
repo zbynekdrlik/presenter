@@ -21,6 +21,10 @@ paths:
   - "crates/presenter-server/src/router/bible/bookmarks.rs"
   - "crates/presenter-server/src/state/study_bookmarks.rs"
   - "crates/presenter-persistence/src/repository/bible/study_bookmarks.rs"
+  - "crates/presenter-persistence/src/repository/bible/study_bookmark_folders.rs"
+  - "crates/presenter-server/src/state/study_bookmark_folders.rs"
+  - "crates/presenter-server/src/router/bible/bookmark_folders.rs"
+  - "crates/presenter-ui/src/pages/study/bookmark_folders.rs"
 ---
 
 # The study page `/ui/study` (#851 S1–S5)
@@ -214,6 +218,20 @@ preparation (the sermon views are in `sermon-prep.md`).
   marker); its keyed `<For>` sits OUTSIDE the state match. A row's position is a `Memo` over the list, never captured.
 - **E2E (`study-bookmarks.spec.ts`):** phone 390 (touch, `touchDrag`) and desktop 1280 (mouse); each test empties the
   list first (the server lives through the file); a drop on the row's own place sends no PUT.
+- **Folders (#952, owner 2026-11-20: folders, not tags):** the default folder "Kde som skončil" is NO row — it is
+  `study_bookmarks.folder_id IS NULL` (every bookmark from before #952); own folders are `study_bookmark_folders`
+  (m20261120, incremental; never edit m20261108). Every bookmark call names its folder (`?folder=` on the list, a
+  `folder` body field on writes; absent = default) and the repository checks the folder is the owner's FIRST
+  (`ensure_folder`, inside the write's transaction) — another reader's folder is 404 for any use. Folder rules in
+  `state/study_bookmark_folders.rs` (1–40 chars, ≤ 30, the default name reserved → 422); a name in use (case-blind)
+  is the repository's 409; a folder delete takes its bookmarks in one transaction. The folder is in the sheet's URL:
+  `StudySheet::Bookmarks(Option<i64>)` = `s=zalozky` / `s=zalozky<id>`; a chip is a `nav::replace` (Back closes the
+  sheet in one step) and remounts `BookmarksSheet`, whose `load` drops an answer for a folder no longer shown. A URL
+  folder missing from the fresh folder list falls back to the default (`folder_gone`). Writes (order, delete, Späť)
+  carry their folder (`ListUi::folder`, `Undo::Bookmarks { folder }`). New / rename = `window.prompt`, delete =
+  `window.confirm` naming the count. "Pridať záložku" stays one tap into the default; ▾ (`verse-save-bookmark-folder`)
+  opens `FolderPicker` (`bookmark_folders.rs`) under it. E2E: `study-bookmark-folders.spec.ts` (empties folders AND
+  the default list first).
 
 ## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
 

@@ -9,10 +9,17 @@
 //! into choices for ONE "Zmazať (N)" under the list, with Späť. No rename, no
 //! "Presunúť sem" (0 presses in 30 days on SNV). The server keeps the list (the
 //! phone and the PC share it); lookups and `study.last` never touch it.
+//!
+//! #952 (owner 2026-11-20): the list is one FOLDER's. The default one, "Kde som
+//! skončil", is what "Pridať záložku" fills in one tap; ▾ beside it picks one
+//! of the reader's own folders. The sheet's folder row and its menu are
+//! `bookmark_folders.rs`; the folder is in the URL (`s=zalozky<id>`), so a
+//! switch remounts this sheet and every list call names its folder.
 
 use leptos::prelude::*;
 use web_sys::PointerEvent;
 
+use super::bookmark_folders::{FolderMenu, FolderRow};
 use super::scroll::ScrollPlan;
 use super::sheet::Sheet;
 use super::{nav, sermon_error, Chapter, Study, Undo};
@@ -20,9 +27,10 @@ use crate::api::bookmarks::{self as api, Bookmark, BookmarkPlace};
 use crate::api::ApiError;
 use crate::components::drag_rows;
 use crate::components::nameplates::order::{apply_order, drop_marker, reorder_to_slot};
+use crate::state::study::StudySheet;
 use crate::state::study_bookmarks::{
-    chosen_in_order, delete_label, deleted_notice, offered_name, open_route, reading_place,
-    restore_order, toggle_chosen, translation_tag, ReadingPlace,
+    added_notice, chosen_in_order, delete_label, deleted_notice, offered_name, open_route,
+    reading_place, restore_order, toggle_chosen, translation_tag, ReadingPlace,
 };
 
 /// What the Záložky sheet shows.
@@ -55,9 +63,16 @@ fn of(bookmark: &Bookmark) -> BookmarkPlace {
     }
 }
 
-fn load(s: Study) {
+/// Read the folder's list. An answer for a folder no longer on screen (a
+/// quick switch, a closed sheet) is dropped: only the folder shown may land.
+pub(super) fn load(s: Study, folder: Option<i64>) {
     leptos::task::spawn_local(async move {
-        s.bookmarks.set(match api::list().await {
+        let answer = api::list(folder).await;
+        let shown = s.route.try_with_untracked(|route| route.sheet);
+        if shown != Some(Some(StudySheet::Bookmarks(folder))) {
+            return;
+        }
+        s.bookmarks.set(match answer {
             Ok(list) => BookmarkList::Ready(list),
             Err(err) => BookmarkList::Failed(sermon_error(&err)),
         });
@@ -70,6 +85,12 @@ fn load(s: Study) {
 /// list (#951). The verse sheet closes now, the answer is a notice. `true` = the
 /// sheet was closed.
 pub(super) fn add_here(s: Study) -> bool {
+    add_to(s, None)
+}
+
+/// "Pridať záložku" into a folder (#952: ▾ beside the button): `None` = the
+/// default one, else the reader's folder (id, name for the notice).
+pub(super) fn add_to(s: Study, folder: Option<(i64, String)>) -> bool {
     let route = s.route.get_untracked();
     let (Some(place), Some(name)) = (
         reading_place(&route, s.translation().as_deref(), None),
@@ -81,8 +102,9 @@ pub(super) fn add_here(s: Study) -> bool {
     };
     nav::close_sheet(s);
     leptos::task::spawn_local(async move {
-        match api::create(&name, &to_api(place), None).await {
-            Ok(made) => s.tell(format!("Záložka pridaná: {}", made.name)),
+        let (id, folder_name) = folder.unzip();
+        match api::create(id, &name, &to_api(place), None).await {
+            Ok(made) => s.tell(added_notice(&made.name, folder_name.as_deref())),
             Err(err) => s.tell(sermon_error(&err)),
         }
     });
@@ -91,19 +113,21 @@ pub(super) fn add_here(s: Study) -> bool {
 
 /// Späť on "Zmazané …": each comes back where it stood, the lowest index first
 /// (`restore_order`), so every row lands on its old place.
-pub(super) fn undo_delete(s: Study, items: Vec<(Bookmark, usize)>) {
+pub(super) fn undo_delete(s: Study, folder: Option<i64>, items: Vec<(Bookmark, usize)>) {
     leptos::task::spawn_local(async move {
         let items = restore_order(items);
         for (at, (bookmark, index)) in items.iter().enumerate() {
-            if let Err(err) = api::create(&bookmark.name, &of(bookmark), Some(*index)).await {
+            let back = api::create(folder, &bookmark.name, &of(bookmark), Some(*index)).await;
+            if let Err(err) = back {
                 // The ones not back yet keep their Späť.
                 s.tell_undo(
                     sermon_error(&err),
                     Undo::Bookmarks {
+                        folder,
                         items: items[at..].to_vec(),
                     },
                 );
-                load(s);
+                load(s, folder);
                 return;
             }
         }
@@ -112,7 +136,7 @@ pub(super) fn undo_delete(s: Study, items: Vec<(Bookmark, usize)>) {
         } else {
             "Záložky sú späť".to_string()
         });
-        load(s);
+        load(s, folder);
     });
 }
 
@@ -149,9 +173,10 @@ fn ids_now(s: Study) -> Vec<i64> {
 pub(super) struct BookmarkWrites {
     /// A write on its way.
     sending: bool,
-    /// The newest order chosen and not sent yet.
-    order: Option<Vec<i64>>,
-    /// The chosen ids of "Zmazať (N)", with the sheet that asked.
+    /// The newest order chosen and not sent yet, with its folder.
+    order: Option<(Option<i64>, Vec<i64>)>,
+    /// The chosen ids of "Zmazať (N)", with the sheet that asked (and so its
+    /// folder).
     delete: Option<(Vec<i64>, ListUi)>,
 }
 
@@ -162,7 +187,7 @@ fn pump(s: Study) {
             return None;
         }
         let next = match writes.order.take() {
-            Some(ids) => Some(Write::Order(ids)),
+            Some((folder, ids)) => Some(Write::Order(folder, ids)),
             None => writes.delete.take().map(|(ids, ui)| Write::Delete(ids, ui)),
         };
         writes.sending = next.is_some();
@@ -173,14 +198,17 @@ fn pump(s: Study) {
     };
     leptos::task::spawn_local(async move {
         match next {
-            Write::Order(ids) => {
-                if let Err(err) = api::reorder(&ids).await {
+            Write::Order(folder, ids) => {
+                if let Err(err) = api::reorder(folder, &ids).await {
                     // Another device changed the list: show it as stored.
                     s.tell(sermon_error(&err));
-                    load(s);
+                    load(s, folder);
                 }
             }
-            Write::Delete(ids, ui) => deleted(s, ui, &ids, api::delete_many(&ids).await),
+            Write::Delete(ids, ui) => {
+                let answer = api::delete_many(ui.folder, &ids).await;
+                deleted(s, ui, &ids, answer);
+            }
         }
         s.bookmark_writes
             .update_value(|writes| writes.sending = false);
@@ -189,7 +217,7 @@ fn pump(s: Study) {
 }
 
 enum Write {
-    Order(Vec<i64>),
+    Order(Option<i64>, Vec<i64>),
     Delete(Vec<i64>, ListUi),
 }
 
@@ -209,6 +237,7 @@ fn deleted(s: Study, ui: ListUi, ids: &[i64], answer: Result<Vec<api::Deleted>, 
             s.tell_undo(
                 deleted_notice(deleted.len()),
                 Undo::Bookmarks {
+                    folder: ui.folder,
                     items: deleted
                         .into_iter()
                         .map(|item| (item.bookmark, item.index))
@@ -218,7 +247,7 @@ fn deleted(s: Study, ui: ListUi, ids: &[i64], answer: Result<Vec<api::Deleted>, 
         }
         Err(err) => {
             s.tell(sermon_error(&err));
-            load(s);
+            load(s, ui.folder);
         }
     }
 }
@@ -227,6 +256,8 @@ fn deleted(s: Study, ui: ListUi, ids: &[i64], answer: Result<Vec<api::Deleted>, 
 #[derive(Clone, Copy)]
 pub(super) struct ListUi {
     s: Study,
+    /// The folder on screen (`None` = the default one).
+    folder: Option<i64>,
     /// "Vybrať" is on: a row tap chooses instead of opening.
     choosing: RwSignal<bool>,
     chosen: RwSignal<Vec<i64>>,
@@ -237,9 +268,10 @@ pub(super) struct ListUi {
 }
 
 impl ListUi {
-    fn new(s: Study) -> Self {
+    fn new(s: Study, folder: Option<i64>) -> Self {
         Self {
             s,
+            folder,
             choosing: RwSignal::new(false),
             chosen: RwSignal::new(Vec::new()),
             drag: RwSignal::new(None),
@@ -271,7 +303,7 @@ impl ListUi {
         });
         self.s
             .bookmark_writes
-            .update_value(|writes| writes.order = Some(ids));
+            .update_value(|writes| writes.order = Some((self.folder, ids)));
         pump(self.s);
     }
 
@@ -436,8 +468,9 @@ fn BookmarkRow(ui: ListUi, bookmark: Bookmark) -> impl IntoView {
 }
 
 #[component]
-fn ListState(s: Study) -> impl IntoView {
-    move || match s.bookmarks.get() {
+fn ListState(s: Study, folder: Option<i64>) -> impl IntoView {
+    move || {
+        match s.bookmarks.get() {
         BookmarkList::Loading => view! {
             <p class="study-empty" data-role="bookmarks-loading">"Načítavam…"</p>
         }
@@ -449,7 +482,7 @@ fn ListState(s: Study) -> impl IntoView {
                     type="button"
                     class="study-button"
                     data-role="bookmarks-retry"
-                    on:click=move |_| load(s)
+                    on:click=move |_| load(s, folder)
                 >
                     "Skúsiť znova"
                 </button>
@@ -458,11 +491,16 @@ fn ListState(s: Study) -> impl IntoView {
         .into_any(),
         BookmarkList::Ready(rows) if rows.is_empty() => view! {
             <p class="study-empty" data-role="bookmarks-empty">
-                "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Pridať záložku“."
+                {if folder.is_some() {
+                    "Priečinok je prázdny. Ťukni na verš, pri „Pridať záložku“ zvoľ ▾ a tento priečinok."
+                } else {
+                    "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Pridať záložku“."
+                }}
             </p>
         }
         .into_any(),
         BookmarkList::Ready(_) => ().into_any(),
+    }
     }
 }
 
@@ -510,11 +548,11 @@ fn delete_bar(ui: ListUi) -> impl IntoView {
 }
 
 #[component]
-pub(super) fn BookmarksSheet(s: Study) -> impl IntoView {
-    // A list from an earlier visit is never shown as this one's answer.
+pub(super) fn BookmarksSheet(s: Study, folder: Option<i64>) -> impl IntoView {
+    // A list from an earlier visit (or folder) is never shown as this one's answer.
     s.bookmarks.set(BookmarkList::Loading);
-    load(s);
-    let ui = ListUi::new(s);
+    load(s, folder);
+    let ui = ListUi::new(s, folder);
     // The settle marker of the specs: `ready` once this visit's list answered.
     let state = Signal::derive(move || match s.bookmarks.with(|list| list.clone()) {
         BookmarkList::Loading => "loading",
@@ -542,7 +580,9 @@ pub(super) fn BookmarksSheet(s: Study) -> impl IntoView {
             action=ViewFn::from(move || choose_toggle(ui))
             footer=ViewFn::from(move || delete_bar(ui))
         >
-            <ListState s=s />
+            <FolderRow s=s folder=folder />
+            <FolderMenu s=s folder=folder />
+            <ListState s=s folder=folder />
             <div
                 class="study-list study-bookmarks"
                 data-role="bookmarks-list"
