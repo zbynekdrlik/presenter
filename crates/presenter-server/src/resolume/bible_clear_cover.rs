@@ -66,10 +66,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
-/// How long a cover takes from 0 to its base or back: fixed, whatever its
-/// layer's transition. Owner, 2026-11-20 (#987): "pevná dĺžka fadu
-/// `#bible-clear` v Presenteri, 0,5 s; prechod vrstvy 12 v Resolume sa
-/// nemení".
+/// A whole cover fade, whatever its layer's transition (#987, owner ruling).
 pub(super) const COVER_FADE: Duration = Duration::from_millis(500);
 
 /// Which way a cover fade goes.
