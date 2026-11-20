@@ -330,7 +330,9 @@ impl SonioxCore {
         }
     }
 
-    /// The state last reported (`Armed` before the first change).
+    /// The state last reported (`Armed` before the first change); the
+    /// driver reads the reported states, the tests read this.
+    #[cfg(test)]
     pub fn state(&self) -> TranscriptionState {
         self.state
     }

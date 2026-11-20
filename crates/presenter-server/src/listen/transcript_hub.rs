@@ -80,8 +80,6 @@ impl TranscriptHub {
         }
     }
 
-    // #852 C3-6: the publishers are C3-7's session task — C3-7 removes this.
-    #[allow(dead_code)]
     /// Keep and send a closed sentence; its id.
     pub(crate) fn push_sentence(&self, mic_id: &str, sentence: ClosedSentence) -> u64 {
         let mut state = self.shared.lock();
@@ -114,8 +112,6 @@ impl TranscriptHub {
         id
     }
 
-    // #852 C3-6: the publishers are C3-7's session task — C3-7 removes this.
-    #[allow(dead_code)]
     /// Set a mic's open tail (`None` or no text = nothing open: readers get an
     /// empty tail and the snapshot leaves it out). Coalesced per mic.
     pub(crate) fn set_tail(&self, mic_id: &str, tail: Option<TailText>, at: DateTime<Utc>) {
@@ -149,8 +145,6 @@ impl TranscriptHub {
         self.schedule_flush(mic_id, deadline);
     }
 
-    // #852 C3-6: the publishers are C3-7's session task — C3-7 removes this.
-    #[allow(dead_code)]
     /// Store a mic's session state; send it only when state / reason / error
     /// changed (the counters change every second and ride in the snapshot).
     pub(crate) fn set_session(&self, session: MicTranscription) {
@@ -173,9 +167,9 @@ impl TranscriptHub {
         (snapshot_of(&state), self.shared.tx.subscribe())
     }
 
-    // #852 C3-6: the publishers are C3-7's session task — C3-7 removes this.
-    #[allow(dead_code)]
-    /// What a reader connecting now would get first.
+    /// What a reader connecting now would get first (tests; readers
+    /// `subscribe`).
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> TranscriptSnapshot {
         snapshot_of(&self.shared.lock())
     }

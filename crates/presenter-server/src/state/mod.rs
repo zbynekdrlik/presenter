@@ -48,6 +48,7 @@ mod companion_manager;
 mod integrations;
 pub(crate) mod interpreter_tips;
 mod listen;
+mod listen_transcription;
 mod ndi_control;
 mod ndi_park;
 #[cfg(test)]

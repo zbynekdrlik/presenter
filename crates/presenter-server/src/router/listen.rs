@@ -2,6 +2,9 @@
 //! and `GET /listen/status` (polled → a quiet GET in `request_log.rs`). C1b:
 //! `PUT /listen/recorder`, the recorder's per-day toggle (a person's write, logged).
 //! C3-6: `GET /listen/ws`, the guest's live transcript (`listen_ws.rs`).
+//! C3-7: `PUT /listen/transcription` (the paid switch, guest mic, daily cap;
+//! 422 with the Slovak rule) and `PUT /listen/session` (today's choice
+//! `on` / `off` / `auto`); both answer with `ListenStatus.transcription`.
 
 use super::integrations::extract_actor;
 use super::AppError;
@@ -13,6 +16,10 @@ use axum::{Json, Router};
 use presenter_core::listen::mics::{MicConfig, MicsValidationError};
 use presenter_core::listen::recorder::{RecorderSetting, RecorderToggle};
 use presenter_core::listen::status::ListenStatus;
+use presenter_core::listen::transcription::{
+    SessionMode, TranscriptionSetting, TranscriptionStatus, TranscriptionValidationError,
+};
+use serde::Deserialize;
 use tracing::instrument;
 
 /// The listen sub-router.
@@ -22,6 +29,44 @@ pub fn router() -> Router<AppState> {
         .route("/listen/status", get(get_status))
         .route("/listen/recorder", put(put_recorder))
         .route("/listen/ws", get(super::listen_ws::listen_websocket))
+        .route("/listen/transcription", put(put_transcription))
+        .route("/listen/session", put(put_session))
+}
+
+/// `PUT /listen/session` body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionChoice {
+    mode: SessionMode,
+}
+
+#[instrument(skip_all)]
+async fn put_transcription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(setting): Json<TranscriptionSetting>,
+) -> Result<Json<TranscriptionStatus>, AppError> {
+    let actor = extract_actor(&headers);
+    state
+        .set_listen_transcription(setting, &actor)
+        .await
+        .map(Json)
+        .map_err(
+            |err| match err.downcast_ref::<TranscriptionValidationError>() {
+                Some(refusal) => AppError::unprocessable(refusal.to_string()),
+                None => AppError::from(err),
+            },
+        )
+}
+
+#[instrument(skip_all)]
+async fn put_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(choice): Json<SessionChoice>,
+) -> Result<Json<TranscriptionStatus>, AppError> {
+    let actor = extract_actor(&headers);
+    Ok(Json(state.set_listen_session(choice.mode, &actor).await?))
 }
 
 #[instrument(skip_all)]
