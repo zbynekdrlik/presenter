@@ -206,21 +206,7 @@ impl NdiManager {
         };
         let removed = {
             let mut active = self.active.lock().await;
-            match active.get(source_id) {
-                // A viewer that took the pipeline since the count holds a
-                // `JoinTicket` (taken under this lock) or the sessions map:
-                // it keeps the pipeline (#979 review).
-                Some(src)
-                    if Arc::ptr_eq(&src.pipeline, &pipeline) && !pipeline.has_consumers_now() =>
-                {
-                    // Parked BEFORE the slot goes, both under the lock: a POST
-                    // that finds no slot always finds the source parked, so it
-                    // wakes it instead of answering "not producing".
-                    self.park_book.mark_parked(source_id, now);
-                    active.remove(source_id)
-                }
-                _ => None,
-            }
+            take_for_park(&mut active, source_id, &pipeline, &self.park_book, now)
         };
         let Some(mut src) = removed else {
             return false;
@@ -235,6 +221,29 @@ impl NdiManager {
         );
         src.pipeline.stop().await;
         true
+    }
+}
+
+/// The locked half of [`NdiManager::park_if_idle`]: remove `source_id`'s slot
+/// for parking, or keep it. A slot that no longer holds the counted pipeline
+/// stays, and so does one a viewer took since the count — it holds a
+/// `JoinTicket` (taken under this lock) or the sessions map (#979 review). The
+/// source is marked parked BEFORE the slot goes, both under the lock, so a POST
+/// that finds no slot always finds the source parked and wakes it instead of
+/// answering "not producing".
+fn take_for_park(
+    active: &mut HashMap<String, super::ActiveSource>,
+    source_id: &str,
+    pipeline: &Arc<crate::pipeline::NdiPipeline>,
+    book: &ParkBook,
+    now: Instant,
+) -> Option<super::ActiveSource> {
+    match active.get(source_id) {
+        Some(src) if Arc::ptr_eq(&src.pipeline, pipeline) && !pipeline.has_consumers_now() => {
+            book.mark_parked(source_id, now);
+            active.remove(source_id)
+        }
+        _ => None,
     }
 }
 
@@ -330,5 +339,61 @@ mod tests {
             book.observe("a", 0, t1, AFTER),
             IdleStep::Idle { since: t1 }
         );
+    }
+
+    fn slot_for(
+        pipeline: &Arc<crate::pipeline::NdiPipeline>,
+    ) -> HashMap<String, super::super::ActiveSource> {
+        let mut active = HashMap::new();
+        active.insert(
+            "src".to_string(),
+            super::super::ActiveSource {
+                pipeline: Arc::clone(pipeline),
+                supervisor: None,
+            },
+        );
+        active
+    }
+
+    #[test]
+    fn a_viewer_joining_since_the_count_keeps_the_pipeline() {
+        let pipeline = Arc::new(crate::pipeline::NdiPipeline::stopped_for_test());
+        let mut active = slot_for(&pipeline);
+        let book = ParkBook::default();
+        let ticket = pipeline.join_ticket();
+        assert!(take_for_park(&mut active, "src", &pipeline, &book, Instant::now()).is_none());
+        assert!(
+            active.contains_key("src"),
+            "the joining viewer keeps its pipeline"
+        );
+        assert!(
+            book.parked_since("src").is_none(),
+            "not parked under a viewer"
+        );
+        drop(ticket);
+    }
+
+    #[test]
+    fn an_unwatched_slot_is_removed_and_already_parked() {
+        let pipeline = Arc::new(crate::pipeline::NdiPipeline::stopped_for_test());
+        let mut active = slot_for(&pipeline);
+        let book = ParkBook::default();
+        assert!(take_for_park(&mut active, "src", &pipeline, &book, Instant::now()).is_some());
+        assert!(!active.contains_key("src"));
+        assert!(
+            book.parked_since("src").is_some(),
+            "parked by the time the slot is gone"
+        );
+    }
+
+    #[test]
+    fn a_slot_holding_another_pipeline_is_kept() {
+        let counted = Arc::new(crate::pipeline::NdiPipeline::stopped_for_test());
+        let newer = Arc::new(crate::pipeline::NdiPipeline::stopped_for_test());
+        let mut active = slot_for(&newer);
+        let book = ParkBook::default();
+        assert!(take_for_park(&mut active, "src", &counted, &book, Instant::now()).is_none());
+        assert!(active.contains_key("src"));
+        assert!(book.parked_since("src").is_none());
     }
 }
