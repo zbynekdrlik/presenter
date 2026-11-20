@@ -309,11 +309,56 @@ fn a_late_fin_of_an_older_connection_never_splits_a_newer_sentence() {
 }
 
 #[test]
+fn a_late_finalize_answer_of_an_older_connection_never_splits_a_newer_sentence() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(1, 0, vec![fin("Grace", 0)]));
+    a.apply(batch(2, 1_000, vec![fin(" and", 0), fin(" mercy", 100)]));
+    // The rollover's finalize answer comes late: its last finals + <fin>.
+    let out = a.apply(batch(1, 0, vec![fin(" be", 300), fin(FIN_MARKER, 0)]));
+    assert!(out.closed.is_empty(), "{:?}", texts(&out));
+    let out = a.apply(batch(2, 1_000, vec![fin(FIN_MARKER, 0)]));
+    let s = &out.closed[0];
+    assert_eq!(s.text, "Grace and mercy be");
+    // The draining token's end never moves the sentence's end backwards.
+    assert_eq!((s.start_ms, s.end_ms), (0, 1_160));
+}
+
+#[test]
+fn punctuation_opening_a_new_connection_attaches_to_the_word_before() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(
+        1,
+        0,
+        vec![fin("so", 0), fin(" loved", 100), part(".", 160)],
+    ));
+    a.connection_ended(1);
+    let out = a.apply(batch(2, 220, vec![part(".", 0)]));
+    assert_eq!(out.tail.unwrap().partial_text, ".");
+    let out = a.apply(batch(2, 220, vec![fin(".", 0), fin(" Then", 100)]));
+    assert_eq!(texts(&out), ["so loved."]);
+    assert_eq!(out.tail.unwrap().final_text, "Then");
+}
+
+#[test]
+fn flush_forgets_the_newest_time_too() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(1, 0, vec![fin("x", 5_000)]));
+    a.flush(at(2));
+    let mut untimed = fin("y", 0);
+    untimed.start_ms = None;
+    untimed.end_ms = None;
+    a.apply(batch(1, 0, vec![untimed]));
+    let out = a.flush(at(3));
+    assert_eq!((out.closed[0].start_ms, out.closed[0].end_ms), (0, 0));
+}
+
+#[test]
 fn an_older_connections_partials_change_nothing() {
     let mut a = TranscriptAssembler::new();
     a.apply(batch(2, 0, vec![part("Lord", 0)]));
     assert_eq!(a.apply(batch(1, 0, vec![part("junk", 0)])).tail, None);
-    // The end of a connection that never sent a batch clears the live tail.
+    // A newer connection's end supersedes the current tail: it goes even
+    // though connection 3 never sent a batch.
     assert_eq!(a.connection_ended(3).tail, Some(TailText::default()));
 }
 
