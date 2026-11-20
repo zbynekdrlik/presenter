@@ -399,6 +399,15 @@ impl SonioxCore {
         out
     }
 
+    /// When the running back-off ends (`None` = none runs; the driver's
+    /// reconnect log line).
+    pub fn retry_at(&self) -> Option<Instant> {
+        match self.phase {
+            Phase::Backoff { until } => Some(until),
+            _ => None,
+        }
+    }
+
     /// The earliest moment [`on_tick`](Self::on_tick) has something to do.
     pub fn next_deadline(&self) -> Option<Instant> {
         let phase = match &self.phase {

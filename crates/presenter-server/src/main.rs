@@ -138,8 +138,14 @@ fn setup_tracing() {
         std::env::set_var("RUST_LOG", "info,tower_http=debug,sqlx=warn");
     }
 
+    // #852 C3-5: tungstenite TRACE-logs the raw upgrade request, the Soniox
+    // `Authorization: Bearer` key included — capped whatever RUST_LOG says.
+    let mut filter = tracing_subscriber::EnvFilter::from_default_env();
+    if let Ok(cap) = "tungstenite::handshake=debug".parse() {
+        filter = filter.add_directive(cap);
+    }
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
 }
