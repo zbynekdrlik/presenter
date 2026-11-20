@@ -370,9 +370,11 @@ paths:
   wait ≤ 5 s for the task's `Finished` reason, else abort. Any `Finished(Some(reason))` blocks the rows the
   session STARTED under (`Running.key`) until `BlockKey` changes (day, switch, guest mic, or a NEW
   `PUT /listen/session` — `Rows.choice` counts them, so repeating "on" retries; a cap change does not); the
-  start is decided AFTER a stop (that stop may have been refused). A session that ends by itself without a
-  reason, or whose task panicked, is retried after `bind_retry_delay` (1, 2, 4 … 60 s, reset by a session
-  that ran ≥ 60 s), WARN on power-of-two ends — never reopened on the next tick. A PUT answers only after the
+  block check runs again AFTER a stop (a refusal returned by that stop names the OLD rows and is lifted at
+  once, so the new guest mic starts in the same decision). A session that ends by itself without a reason,
+  or whose task panicked, is retried after `bind_retry_delay` (1, 2, 4 … 60 s; reset by a session that ran
+  ≥ 60 s and by ANY rows change — an operator's "on" starts at once), shown as `reconnecting` meanwhile,
+  WARN and the restart INFO on power-of-two ends only — never reopened on the next tick. A PUT answers only after the
   supervisor decided on its rows generation (`Transcription::decided_on`, ≤ 7 s; no wait when no
   supervisor runs). Meter counters: `connections` = connection numbers that delivered words or ended,
   `reconnects` = entries into `reconnecting` (an outage, not each retry), lost frames summed. `listen.usage` = the meter's row, written every 60 s while

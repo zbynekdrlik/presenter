@@ -44,6 +44,8 @@ struct FakeAsr {
     opened: Mutex<Vec<Opened>>,
     /// Never reads its input (a session that fell behind).
     stuck: bool,
+    /// How a stopped session ends (`None` = a normal stop).
+    refuse_on_stop: Option<OffReason>,
 }
 
 impl StreamingAsr for FakeAsr {
@@ -53,6 +55,7 @@ impl StreamingAsr for FakeAsr {
         let frames = Arc::new(Mutex::new(Vec::new()));
         let closed = Arc::new(AtomicBool::new(false));
         let mut unread = None;
+        let refusal = self.refuse_on_stop;
         if self.stuck {
             unread = Some(inputs);
         } else {
@@ -63,7 +66,7 @@ impl StreamingAsr for FakeAsr {
                     frames.lock().unwrap().push(pcm[0]);
                 }
                 closed.store(true, Ordering::SeqCst);
-                let _ = events_tx.send(AsrEvent::Finished(None)).await;
+                let _ = events_tx.send(AsrEvent::Finished(refusal)).await;
             });
         }
         self.opened.lock().unwrap().push(Opened {
@@ -652,10 +655,10 @@ async fn a_session_that_does_not_end_within_five_seconds_is_ended() {
     let transcription = rig.listen.transcription();
     transcription.set_override(choice(SessionMode::On));
     wait(1).await;
-    transcription.set_override(choice(SessionMode::Off));
-    wait(3).await;
+    transcription.set_override(choice(SessionMode::Off)); // t = 1.1 s
+    tokio::time::sleep(Duration::from_millis(4_800)).await;
     assert_eq!(rig.guest().0, TranscriptionState::Armed, "still waiting");
-    wait(4).await;
+    tokio::time::sleep(Duration::from_millis(400)).await; // 5.2 s after the stop
     assert_eq!(
         rig.guest(),
         (TranscriptionState::Off, Some(OffReason::OverrideOff))
@@ -738,17 +741,35 @@ async fn an_unexpected_end_is_retried_after_a_growing_pause() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(rig.asr.opens(), 1, "never reopened on the next tick");
-    wait(2).await;
+    assert_eq!(
+        rig.guest(),
+        (TranscriptionState::Reconnecting, None),
+        "the pause is shown as a retry"
+    );
+    wait(2).await; // t = 3.3 s; the 1 s pause ended at the 3 s tick
     assert_eq!(rig.asr.opens(), 2, "retried after 1 s");
     rig.asr
         .events(1)
         .send(AsrEvent::Finished(None))
         .await
         .unwrap();
-    wait(1).await;
+    // t = 5.1 s: a 1 s pause would have restarted at the 5 s tick.
+    tokio::time::sleep(Duration::from_millis(1_800)).await;
     assert_eq!(rig.asr.opens(), 2, "the second pause is 2 s");
-    wait(2).await;
+    wait(1).await;
     assert_eq!(rig.asr.opens(), 3);
+    rig.asr
+        .events(2)
+        .send(AsrEvent::Finished(None))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rig.asr.opens(), 3, "the third pause is 4 s");
+    rig.listen
+        .transcription()
+        .set_override(choice(SessionMode::On));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rig.asr.opens(), 4, "a new choice starts at once");
     let warned = capture.events_with_message("ended unexpectedly");
     let ends: Vec<_> = warned.iter().map(|e| e.field("ends")).collect();
     assert_eq!(ends, [Some("1"), Some("2")]);
@@ -791,4 +812,56 @@ async fn onsets_reconnects_and_lost_frames_reach_the_status_and_the_log() {
     let lost = capture.events_with_message("frames lost");
     assert_eq!(lost.len(), 1, "{lost:?}");
     assert_eq!(lost[0].field("lost"), Some("72"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_returned_by_a_stop_never_blocks_the_new_guest_mic() {
+    let refusing = FakeAsr {
+        refuse_on_stop: Some(OffReason::Payment),
+        ..FakeAsr::default()
+    };
+    let rig = rig_with(on(240), None, true, refusing, ContextInputs::default());
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    let generation = transcription.set_setting(TranscriptionSetting {
+        guest_mic: Some("interp".to_string()),
+        ..on(240)
+    });
+    rig.listen.transcription_decided_on(generation).await;
+    assert!(rig.asr.closed(0));
+    assert_eq!(
+        rig.asr.opens(),
+        2,
+        "the new guest mic starts in the same decision"
+    );
+    assert_eq!(
+        transcription.status(day()).mics[0].mic_id,
+        "interp",
+        "the answer names the new mic"
+    );
+    assert_eq!(rig.guest(), (TranscriptionState::Armed, None));
+}
+
+#[tokio::test(start_paused = true)]
+async fn usage_after_midnight_counts_for_the_new_day() {
+    let rig = rig(on(240));
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    usage(&rig.asr.events(0), 1_000, 100_000).await;
+    wait(1).await;
+    // Past midnight; the session's next totals arrive before any tick.
+    *rig.now.lock().unwrap() = "2026-11-23T00:00:00".parse().unwrap();
+    usage(&rig.asr.events(0), 1_500, 130_000).await;
+    // Well before the next 1 s tick: only the mic task can roll the day.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let next_day: NaiveDate = "2026-11-23".parse().unwrap();
+    let status = transcription.status(next_day);
+    let guest = &status.mics[0];
+    assert_eq!(
+        (guest.audio_ms_today, guest.connected_ms_today),
+        (500, 30_000),
+        "only the delta after midnight is the new day's"
+    );
 }

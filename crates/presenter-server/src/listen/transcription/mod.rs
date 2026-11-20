@@ -305,6 +305,8 @@ struct Supervisor {
     /// Sessions that ended unexpectedly in a row, and when to try again.
     unexpected: u32,
     retry_at: Option<Instant>,
+    /// The rows the last decision saw (a change resets the back-off).
+    last_key: Option<BlockKey>,
     was_preach: bool,
     left_preach_at: Option<Instant>,
     last_saved: Instant,
@@ -331,6 +333,7 @@ pub(crate) async fn supervise(listen: ListenService, deps: TranscriptionDeps) {
         blocked: None,
         unexpected: 0,
         retry_at: None,
+        last_key: None,
         was_preach: false,
         left_preach_at: None,
         last_saved: Instant::now(),
@@ -376,7 +379,8 @@ impl Supervisor {
                 Ended::Unexpected
             }
         };
-        tracing::info!(target: ASR_TARGET, mic, ended = ?ended, "guest transcription session ended by itself");
+        // No line of its own: a refusal and an unexpected end WARN in
+        // `after_session` (the latter on power-of-two ends only).
         self.after_session(&running, ended).await;
     }
 
@@ -401,33 +405,48 @@ impl Supervisor {
         });
         let off = decision.as_ref().err().copied();
         let key = BlockKey::of(&rows, today);
-        if self.blocked.as_ref().is_some_and(|block| block.key != key) {
-            tracing::info!(target: ASR_TARGET, "the setting changed, the stopped guest transcription may run again");
-            self.blocked = None;
-        }
+        self.follow_rows(&key);
         let want = decision.as_ref().ok().cloned();
-        let blocked = self.blocked.is_some();
+        // A block or a back-off only exists while no session runs.
         if self
             .running
             .as_ref()
-            .is_some_and(|r| blocked || Some(&r.task.mic_id) != want.as_ref())
+            .is_some_and(|r| Some(&r.task.mic_id) != want.as_ref())
         {
             let why = off.map_or("blocked", |reason| reason.slovak());
             self.stop(why).await;
+            // That stop may have come back refused: its block names the rows
+            // the session ran under, so rows changed since lift it at once.
+            self.follow_rows(&key);
         }
-        // Decided AFTER the stop: the stopped session may have been refused.
         let backing_off = self.retry_at.is_some_and(|at| Instant::now() < at);
         let start = want.filter(|_| self.blocked.is_none() && !backing_off);
         if let (Some(mic), None) = (start, self.running.as_ref()) {
             self.start(mic, today, &published, key).await;
         }
-        self.show_guest(&rows, off, today);
+        let waiting = (off.is_none() && self.blocked.is_none() && backing_off)
+            .then_some(TranscriptionState::Reconnecting);
+        self.show_guest(&rows, off, waiting, today);
         self.save_usage(false).await;
         let _previous = self
             .listen
             .transcription()
             .decided
             .send_replace(rows.generation);
+    }
+
+    /// The rows changed (the day, the switch, the guest mic or a new choice):
+    /// a provider block is lifted and the back-off starts over.
+    fn follow_rows(&mut self, key: &BlockKey) {
+        if self.blocked.as_ref().is_some_and(|block| block.key != *key) {
+            tracing::info!(target: ASR_TARGET, "the setting changed, the stopped guest transcription may run again");
+            self.blocked = None;
+        }
+        if self.last_key.as_ref() != Some(key) {
+            self.unexpected = 0;
+            self.retry_at = None;
+            self.last_key = Some(key.clone());
+        }
     }
 
     /// Follow the stage layout: the moment it left Kázeň starts the delay.
@@ -467,7 +486,10 @@ impl Supervisor {
             .iter()
             .find(|m| m.id == mic)
             .map_or("", |m| m.name.as_str());
-        tracing::info!(target: ASR_TARGET, mic = mic.as_str(), name, terms = context.terms.len(), refs = inputs.prepared_refs.len(), tips = inputs.tip_terms.len(), "guest transcription started");
+        // A retry after unexpected ends logs with the same power-of-two gate.
+        if self.unexpected == 0 || should_log_event(u64::from(self.unexpected)) {
+            tracing::info!(target: ASR_TARGET, mic = mic.as_str(), name, terms = context.terms.len(), refs = inputs.prepared_refs.len(), tips = inputs.tip_terms.len(), retry = self.unexpected, "guest transcription started");
+        }
         let frames = self.listen.subscribe_frames(&mic);
         let session = self.deps.asr.open(AsrSessionConfig {
             mic_id: mic.clone(),
@@ -550,7 +572,14 @@ impl Supervisor {
     }
 
     /// Set the guest's state for the status and send it to `/listen/ws`.
-    fn show_guest(&mut self, rows: &Rows, off: Option<OffReason>, today: NaiveDate) {
+    /// `waiting` = the state shown while a retry waits for its pause.
+    fn show_guest(
+        &mut self,
+        rows: &Rows,
+        off: Option<OffReason>,
+        waiting: Option<TranscriptionState>,
+        today: NaiveDate,
+    ) {
         let transcription = self.listen.transcription();
         let guest = rows.setting.guest_mic.clone();
         let hub = self.listen.transcripts();
@@ -584,7 +613,7 @@ impl Supervisor {
                     },
                     (None, None) => GuestView {
                         mic_id,
-                        state: TranscriptionState::Off,
+                        state: waiting.unwrap_or(TranscriptionState::Off),
                         reason: off,
                         error: None,
                         cap_ms: cap,
