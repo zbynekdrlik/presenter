@@ -297,3 +297,15 @@ paths:
   8 000-char cap counts compact serde_json chars (`context_json_chars`, pinned against serde_json — core
   has serde_json only as a dev-dependency); a new wire field of `ListenStatus` is `#[serde(default)]`
   and every `ListenStatus {` literal (server `health.rs`, two presenter-ui tests) gets it.
+- **Soniox wire + env (#852 C3-3, server `listen/soniox/{wire,config}.rs`, pure):** the key goes ONLY in
+  the upgrade's `Authorization: Bearer` header — never an `api_key` config field (deprecated, refused
+  from 2027-01-15), never in `Debug` (`SonioxEnv` prints `<set>`/`<unset>`) or a log (`wire::redact`).
+  An empty TEXT frame ENDS a Soniox stream, so no message builder may ever fall back to `""`.
+  `classify` reads `error_code` first, then `error_type` (docs: branch on the type, not the message);
+  `classify_close` reads an `error_type` in the reason, then the close code (1001 = idle Timeout,
+  1002/1003/1007/1009 = ours → BadRequest stop, 1011–1014 = Server). Any `_ENDPOINT_DELAY_MS` number,
+  0 included, turns endpoint detection on (clamped 500–3000). A `Serialize` struct of an EXTERNAL
+  snake_case wire needs an explicit `#[serde(rename_all = "snake_case")]`: `quality-check.sh`'s serde
+  convention otherwise fails it for missing camelCase. `tokio-tungstenite` 0.29 with
+  `rustls-tls-webpki-roots` is a normal dependency (adds only `webpki-roots 0.26.11`; rustls's
+  provider stays `ring`). Tests use `test-key-not-real` and loopback URLs only.
