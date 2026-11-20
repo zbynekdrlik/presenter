@@ -66,10 +66,13 @@ pub enum ConnectError {
 
 impl ConnectError {
     /// The HTTP status of a refused upgrade (401 / 402 / 403 / 400 stop).
+    /// A URL or key that cannot make a request is our config error, never
+    /// a transient one: 400, so the session stops instead of retrying.
     pub fn status(&self) -> Option<u16> {
         match self {
             Self::Refused(status) => Some(*status),
-            _ => None,
+            Self::Url(_) | Self::Header => Some(400),
+            Self::NoKey | Self::Timeout | Self::Transport(_) => None,
         }
     }
 }
@@ -226,6 +229,8 @@ async fn pump(
                     let (code, reason) = frame.map_or((None, String::new()), |f| {
                         (Some(u16::from(f.code)), f.reason.to_string())
                     });
+                    // Best effort: send tungstenite's queued close reply.
+                    let _ = ws.flush().await;
                     return Some(closed(conn, code, reason));
                 }
                 // Ping / pong: tungstenite answers a server ping itself.

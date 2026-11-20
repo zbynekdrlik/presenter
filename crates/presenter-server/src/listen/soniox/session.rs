@@ -12,6 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::Duration;
 
 use presenter_core::audio::level::VOICED_DBFS;
 use presenter_core::listen::transcription::{cost_usd, OffReason, TranscriptionState};
@@ -113,6 +114,7 @@ impl Driver {
         let mic = self.cfg.mic_id.clone();
         if self.env.key.is_none() {
             // Nothing to connect with: the status names the missing key.
+            // (The machine's own no-key branch is the fallback.)
             tracing::info!(target: TARGET, mic = mic.as_str(), "no Soniox key, transcription session not started");
             let _ = self
                 .events
@@ -148,9 +150,6 @@ impl Driver {
             if !self.execute(actions).await {
                 break;
             }
-        }
-        for (_, conn) in self.conns.drain() {
-            conn.abort.abort();
         }
     }
 
@@ -189,6 +188,8 @@ impl Driver {
                 Action::Emit(batch) => AsrEvent::Tokens(batch),
                 Action::ConnectionEnded { conn } => AsrEvent::ConnectionEnded(conn),
                 Action::State { state, error } => {
+                    // Redacted at the source: the status shows this text.
+                    let error = error.map(|e| self.redacted(&e));
                     self.log_state(state, error.as_deref());
                     AsrEvent::State { state, error }
                 }
@@ -280,21 +281,24 @@ impl Driver {
 
     fn log_state(&mut self, state: TranscriptionState, error: Option<&str>) {
         let mic = self.cfg.mic_id.as_str();
-        let error = error.map(|e| self.redacted(e));
-        let error = error.as_deref().unwrap_or("");
+        let error = error.unwrap_or("");
+        if state != TranscriptionState::Reconnecting && self.streak > 0 {
+            // Any other state ends the streak (#484: reset on success), so
+            // the next outage's first attempt WARNs again.
+            tracing::info!(target: TARGET, mic, attempts = self.streak, state = ?state, "Soniox reconnect attempts ended");
+            self.streak = 0;
+        }
         match state {
             TranscriptionState::Reconnecting => {
                 self.streak += 1;
                 if should_log_event(self.streak) {
-                    let wait_ms = self.core.next_deadline().map_or(0, |at| {
-                        at.saturating_duration_since(conn::now()).as_millis()
+                    // 0 = the retry runs at once (no back-off).
+                    let wait = self.core.retry_at().map_or(Duration::ZERO, |at| {
+                        at.saturating_duration_since(conn::now())
                     });
-                    tracing::warn!(target: TARGET, mic, attempt = self.streak, wait_ms = wait_ms as u64, error, "Soniox connection lost, reconnecting");
+                    let wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+                    tracing::warn!(target: TARGET, mic, attempt = self.streak, wait_ms, error, "Soniox connection lost, reconnecting");
                 }
-            }
-            TranscriptionState::Streaming if self.streak > 0 => {
-                tracing::info!(target: TARGET, mic, attempts = self.streak, "Soniox connection restored");
-                self.streak = 0;
             }
             TranscriptionState::Stopped => {
                 tracing::warn!(target: TARGET, mic, error, "transcription stopped, a person must fix it")
@@ -325,6 +329,16 @@ impl Driver {
             .key
             .as_deref()
             .map_or_else(|| text.to_string(), |key| redact(text, key))
+    }
+}
+
+impl Drop for Driver {
+    /// However the session task ends (finished, its reader gone, aborted),
+    /// no connection task outlives it.
+    fn drop(&mut self) {
+        for (_, conn) in self.conns.drain() {
+            conn.abort.abort();
+        }
     }
 }
 

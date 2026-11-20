@@ -3,6 +3,7 @@
 //! runs on tokio's paused clock, so the 10 s gate, the 5 s keepalives and
 //! the 15 s stall are exact without waiting.
 
+mod conn;
 mod mock;
 mod session;
 

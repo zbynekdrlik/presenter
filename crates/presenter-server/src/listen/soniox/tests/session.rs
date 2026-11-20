@@ -177,7 +177,12 @@ async fn a_dropped_connection_resends_unconfirmed_audio_once() {
             Step::Reply(final_word("one", 2_500, 3_000)),
             Step::Drop,
         ],
-        vec![Step::ExpectConfig, Step::GoSilent],
+        vec![
+            Step::ExpectConfig,
+            Step::ExpectAudio { ms: 1_000 },
+            Step::Reply(final_word("two", 0, 500)),
+            Step::GoSilent,
+        ],
     ]);
     h.speak(60, VOICED).await;
     h.stop().await;
@@ -203,10 +208,18 @@ async fn a_dropped_connection_resends_unconfirmed_audio_once() {
     assert!(events
         .iter()
         .any(|e| state(e, TranscriptionState::Reconnecting)));
-    let resumed = events
+    let batches: Vec<(u32, u64)> = events
         .iter()
-        .any(|e| matches!(e, AsrEvent::Tokens(b) if b.connection == 1 && b.offset_ms == 0));
-    assert!(resumed);
+        .filter_map(|e| match e {
+            AsrEvent::Tokens(b) => Some((b.connection, b.offset_ms)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        batches,
+        vec![(1, 0), (2, 3_000)],
+        "the second connection's tokens carry the session ms of its first byte"
+    );
     assert_eq!(h.mock.connects(), 2);
     assert_eq!(h.mock.pings(), 0);
 }
@@ -315,7 +328,7 @@ async fn stop_ends_audio_with_an_empty_text_frame_and_waits_for_finished() {
         Step::ExpectEnd,
         Step::Wait(Duration::from_secs(2)),
         Step::Reply(FINISHED.to_string()),
-        Step::Close(1000),
+        Step::Close(1000, ""),
     ]]);
     h.speak(10, VOICED).await;
     let stop_at = h.stop().await;
@@ -346,4 +359,133 @@ async fn without_a_key_a_session_finishes_at_once_and_never_connects() {
     assert_eq!(h.events(), vec![AsrEvent::Finished(Some(OffReason::NoKey))]);
     assert_eq!(h.mock.connects(), 0);
     assert!(h.mock.headers().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connect_that_never_completes_fails_after_ten_seconds() {
+    let mut h = Harness::start(vec![
+        vec![Step::HangUpgrade],
+        vec![Step::ExpectConfig, Step::GoSilent],
+    ]);
+    let opened = Instant::now();
+    h.speak(150, VOICED).await;
+    let reconnecting = h
+        .wait_for(|e| state(e, TranscriptionState::Reconnecting))
+        .await;
+    h.stop().await;
+    h.finished().await;
+
+    assert_eq!(reconnecting - opened, Duration::from_secs(10));
+    let error = h.events().into_iter().find_map(|e| match e {
+        AsrEvent::State {
+            state: TranscriptionState::Reconnecting,
+            error,
+        } => error,
+        _ => None,
+    });
+    assert!(error.unwrap().contains("no connection within 10 s"));
+    assert_eq!(h.mock.connects(), 2);
+    assert_eq!(h.mock.texts(1)[0].0 - reconnecting, Duration::from_secs(1));
+    assert!(!h.mock.audio(1).is_empty(), "the queued speech goes out");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_url_that_makes_no_request_stops_without_retrying() {
+    let mut bad = env(Some(KEY));
+    bad.url = "not a url".to_string();
+    let mut h = Harness::start_with(bad, vec![]);
+    h.speak(100, VOICED).await;
+    h.finished().await;
+
+    assert!(h
+        .events()
+        .contains(&AsrEvent::Finished(Some(OffReason::Refused))));
+    assert_eq!(h.mock.connects(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn five_gated_minutes_end_the_connection_with_an_empty_text_frame() {
+    let mut h = Harness::start(vec![vec![Step::ExpectConfig, Step::GoSilent]]);
+    h.speak(10, VOICED).await;
+    h.speak(3_200, QUIET).await;
+    let parked = h.wait_for(|e| state(e, TranscriptionState::Parked)).await;
+    h.stop().await;
+    h.finished().await;
+
+    let texts = h.mock.texts(0);
+    let (end_at, end) = texts.last().unwrap();
+    assert_eq!(end, "", "the park ends the stream: {texts:?}");
+    assert_eq!(*end_at, parked);
+    let gated_at = texts
+        .iter()
+        .find(|(_, t)| t.contains("finalize"))
+        .unwrap()
+        .0;
+    assert_eq!(parked - gated_at, Duration::from_secs(300));
+    assert!(h.events().contains(&AsrEvent::ConnectionEnded(1)));
+    assert_eq!(
+        h.mock.connects(),
+        1,
+        "nobody spoke again: no new connection"
+    );
+    assert_eq!(h.mock.pings(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconnect_warnings_restart_per_outage_and_never_show_the_key() {
+    let capture = crate::tracing_capture::Capture::install();
+    // Outage 1 hits a gated connection: the back-off ends in silence, so the
+    // session parks — never streaming between the outages. The park must
+    // end the streak, or outage 2 (a connect that times out) would count on
+    // from it (attempt 2, and a third outage would not WARN at all).
+    let mut h = Harness::start(vec![
+        vec![
+            Step::ExpectConfig,
+            Step::ReplyOnFinalize(FIN.to_string()),
+            Step::Close(1011, "internal_error test-key-not-real"),
+        ],
+        vec![Step::HangUpgrade],
+        vec![Step::ExpectConfig, Step::GoSilent],
+    ]);
+    h.speak(10, VOICED).await;
+    h.speak(150, QUIET).await;
+    h.wait_for(|e| state(e, TranscriptionState::Parked)).await;
+    // 10 s connect timeout + 5 s back-off, then 5 s on the new connection.
+    h.speak(200, VOICED).await;
+    h.stop().await;
+    h.finished().await;
+
+    let warns = capture.events_with_message("Soniox connection lost, reconnecting");
+    let attempts: Vec<&str> = warns.iter().filter_map(|l| l.field("attempt")).collect();
+    assert_eq!(
+        attempts,
+        vec!["1", "1"],
+        "each outage WARNs its first attempt"
+    );
+    let waits: Vec<&str> = warns.iter().filter_map(|l| l.field("wait_ms")).collect();
+    assert_eq!(waits, vec!["1000", "5000"], "the back-off of each attempt");
+    let ended = capture.events_with_message("Soniox reconnect attempts ended");
+    assert_eq!(ended.len(), 2);
+    let closes = capture.events_with_message("Soniox connection closed");
+    let reason = closes[0].field("reason").unwrap();
+    assert!(
+        reason.contains("<redacted>") && !reason.contains(KEY),
+        "{reason}"
+    );
+    let errors: Vec<String> = h
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            AsrEvent::State { error, .. } => error,
+            _ => None,
+        })
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains("<redacted>")),
+        "{errors:?}"
+    );
+    assert!(errors.iter().all(|e| !e.contains(KEY)), "{errors:?}");
+    let summaries = capture.events_with_message("transcription session finished");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].field("connections"), Some("3"));
 }

@@ -28,6 +28,8 @@ use super::super::conn::{handshake, ConnectError, Connector, WsStream};
 pub enum Step {
     /// Refuse the upgrade with this HTTP status (must be the first step).
     RefuseUpgrade(u16),
+    /// Never answer the upgrade (must be the first step).
+    HangUpgrade,
     /// Read the first frame (the config).
     ExpectConfig,
     /// Read until this much audio arrived on the connection.
@@ -40,7 +42,8 @@ pub enum Step {
     /// Read until the empty TEXT frame arrives.
     ExpectEnd,
     Wait(Duration),
-    Close(u16),
+    /// A close frame with this code and reason.
+    Close(u16, &'static str),
     /// End the stream without a close frame (an abnormal close, 1006).
     Drop,
     /// An error response (`error_code`, `error_type`), then a close.
@@ -139,6 +142,9 @@ impl Connector for DuplexConnector {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| vec![Step::ExpectConfig, Step::GoSilent]);
+        if matches!(steps.first(), Some(Step::HangUpgrade)) {
+            return std::future::pending().await;
+        }
         let (client, server) = tokio::io::duplex(1 << 20);
         tokio::spawn(serve(Arc::clone(&self.0), conn, server, steps));
         handshake(req, Box::new(client)).await
@@ -192,7 +198,7 @@ impl Server {
     /// `false` = the connection is over.
     async fn step(&mut self, step: Step) -> bool {
         match step {
-            Step::RefuseUpgrade(_) => true,
+            Step::RefuseUpgrade(_) | Step::HangUpgrade => true,
             Step::ExpectConfig => self.read().await.is_some(),
             Step::ExpectAudio { ms } => {
                 while self.audio_bytes < ms * 32 {
@@ -216,22 +222,22 @@ impl Server {
                 tokio::time::sleep(d).await;
                 true
             }
-            Step::Close(code) => self.close(code).await,
+            Step::Close(code, reason) => self.close(code, reason).await,
             Step::Drop => false,
             Step::Error(code, kind) => {
                 let json = format!(
                     r#"{{"error_code":{code},"error_type":"{kind}","error_message":"test"}}"#
                 );
-                self.ws.send(Message::text(json)).await.is_ok() && self.close(1000).await
+                self.ws.send(Message::text(json)).await.is_ok() && self.close(1000, "").await
             }
             Step::GoSilent => true,
         }
     }
 
-    async fn close(&mut self, code: u16) -> bool {
+    async fn close(&mut self, code: u16, reason: &str) -> bool {
         let frame = CloseFrame {
             code: CloseCode::from(code),
-            reason: "".into(),
+            reason: reason.into(),
         };
         self.ws.close(Some(frame)).await.is_ok()
     }
