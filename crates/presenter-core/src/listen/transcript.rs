@@ -90,12 +90,16 @@ fn session_ms(offset_ms: u64, ms: Option<u64>) -> Option<u64> {
 struct OpenSentence {
     text: String,
     start_ms: Option<u64>,
-    end_ms: Option<u64>,
+    end_ms: u64,
     words: usize,
     language: Option<String>,
+    /// The connection of the last final appended.
+    connection: Option<u32>,
 }
 
-/// Turns token batches into closed sentences and a live tail.
+/// Turns token batches into closed sentences and a live tail. One per
+/// transcription session: after [`flush`](Self::flush) the next session may
+/// number its connections from the start again.
 #[derive(Debug, Default)]
 pub struct TranscriptAssembler {
     connection: u32,
@@ -103,8 +107,11 @@ pub struct TranscriptAssembler {
     /// The open sentence ends with sentence punctuation: the next final
     /// token decides (a new word closes it, a continuation like `5.13` not).
     pending_close: bool,
+    /// The non-final tokens of the current connection's last batch.
     partial: String,
     partial_start_ms: Option<u64>,
+    /// The newest session ms seen; a token without times takes it.
+    last_ms: u64,
     reported: TailText,
 }
 
@@ -115,9 +122,7 @@ impl TranscriptAssembler {
 
     pub fn apply(&mut self, batch: TokenBatch) -> AssemblyOutput {
         let current = batch.connection >= self.connection;
-        if batch.connection > self.connection {
-            self.connection = batch.connection;
-        }
+        self.connection = self.connection.max(batch.connection);
         let mut closed = Vec::new();
         let mut partial = String::new();
         let mut partial_start_ms = None;
@@ -126,13 +131,16 @@ impl TranscriptAssembler {
                 continue;
             }
             if token.text == END_MARKER || token.text == FIN_MARKER {
-                if token.is_final {
+                // A late marker of a draining older connection never closes
+                // a sentence that already holds a newer connection's words.
+                let ours = self.open.connection.is_none_or(|c| c <= batch.connection);
+                if token.is_final && ours {
                     self.close_into(&mut closed, batch.received_at);
                 }
                 continue;
             }
             if token.is_final {
-                self.push_final(token, batch.offset_ms, batch.received_at, &mut closed);
+                self.push_final(token, &batch, &mut closed);
             } else if current {
                 if partial_start_ms.is_none() {
                     partial_start_ms = session_ms(batch.offset_ms, token.start_ms);
@@ -162,11 +170,14 @@ impl TranscriptAssembler {
         }
     }
 
-    /// The session ended: the open sentence closes, the tail empties.
+    /// The session ended: the open sentence closes, the tail empties and the
+    /// connection numbering starts again.
     pub fn flush(&mut self, at: DateTime<Utc>) -> AssemblyOutput {
         let mut closed = Vec::new();
         self.close_into(&mut closed, at);
         self.clear_partial();
+        self.connection = 0;
+        self.last_ms = 0;
         AssemblyOutput {
             closed,
             tail: self.tail_change(),
@@ -176,17 +187,20 @@ impl TranscriptAssembler {
     fn push_final(
         &mut self,
         token: &AsrToken,
-        offset_ms: u64,
-        at: DateTime<Utc>,
+        batch: &TokenBatch,
         closed: &mut Vec<ClosedSentence>,
     ) {
-        let starts_word = token.text.starts_with(char::is_whitespace)
+        let spaced = token.text.starts_with(char::is_whitespace)
             || self.open.text.ends_with(char::is_whitespace);
+        // A connection's first token carries no leading space: a final of
+        // another connection than the open sentence's last one starts a word.
+        let other_connection = self.open.connection.is_some_and(|c| c != batch.connection);
+        let starts_word = spaced || other_connection;
         if !self.open.text.is_empty()
             && starts_word
             && (self.pending_close || self.open.words >= MAX_SENTENCE_WORDS)
         {
-            self.close_into(closed, at);
+            self.close_into(closed, batch.received_at);
         }
         let text = if self.open.text.is_empty() {
             token.text.trim_start()
@@ -199,17 +213,20 @@ impl TranscriptAssembler {
         if (self.open.text.is_empty() || starts_word) && !text.trim().is_empty() {
             self.open.words += 1;
         }
-        let start = session_ms(offset_ms, token.start_ms);
-        let end = session_ms(offset_ms, token.end_ms).or(start);
-        if self.open.start_ms.is_none() {
-            self.open.start_ms = start.or(end);
+        if !self.open.text.is_empty() && other_connection && !spaced {
+            self.open.text.push(' ');
         }
-        if end.is_some() {
-            self.open.end_ms = end;
-        }
+        let start = session_ms(batch.offset_ms, token.start_ms)
+            .or(session_ms(batch.offset_ms, token.end_ms))
+            .unwrap_or(self.last_ms);
+        let end = session_ms(batch.offset_ms, token.end_ms).unwrap_or(start);
+        self.last_ms = end;
+        self.open.start_ms.get_or_insert(start);
+        self.open.end_ms = end;
         if self.open.language.is_none() {
             self.open.language.clone_from(&token.language);
         }
+        self.open.connection = Some(batch.connection);
         self.open.text.push_str(text);
         self.pending_close = ends_sentence(&self.open.text);
     }
@@ -221,11 +238,10 @@ impl TranscriptAssembler {
         if text.is_empty() {
             return;
         }
-        let end_ms = open.end_ms.or(open.start_ms).unwrap_or(0);
         closed.push(ClosedSentence {
             text: text.to_owned(),
-            start_ms: open.start_ms.unwrap_or(end_ms),
-            end_ms,
+            start_ms: open.start_ms.unwrap_or(open.end_ms),
+            end_ms: open.end_ms,
             closed_at: at,
             language: open.language,
         });
@@ -237,14 +253,23 @@ impl TranscriptAssembler {
     }
 
     fn tail_change(&mut self) -> Option<TailText> {
-        let partial_text = if self.open.text.is_empty() {
-            self.partial.trim_start()
+        let mut partial_text = if self.open.text.is_empty() {
+            self.partial.trim_start().to_owned()
         } else {
-            self.partial.as_str()
+            self.partial.clone()
         };
+        // The current connection's tail after another connection's finals.
+        let other_connection = self.open.connection.is_some_and(|c| c != self.connection);
+        if other_connection
+            && !partial_text.is_empty()
+            && !partial_text.starts_with(char::is_whitespace)
+            && !self.open.text.ends_with(char::is_whitespace)
+        {
+            partial_text.insert(0, ' ');
+        }
         let tail = TailText {
             final_text: self.open.text.clone(),
-            partial_text: partial_text.to_owned(),
+            partial_text,
             start_ms: self.open.start_ms.or(self.partial_start_ms),
         };
         if tail == self.reported {
