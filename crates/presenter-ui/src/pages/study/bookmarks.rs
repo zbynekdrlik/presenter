@@ -19,7 +19,7 @@
 use leptos::prelude::*;
 use web_sys::PointerEvent;
 
-use super::bookmark_folders::{FolderMenu, FolderRow};
+use super::bookmark_folders::{folder_ids, fresh, load_folders, show, FolderMenu, FolderRow};
 use super::scroll::ScrollPlan;
 use super::sheet::Sheet;
 use super::{nav, sermon_error, Chapter, Study, Undo};
@@ -29,8 +29,8 @@ use crate::components::drag_rows;
 use crate::components::nameplates::order::{apply_order, drop_marker, reorder_to_slot};
 use crate::state::study::StudySheet;
 use crate::state::study_bookmarks::{
-    added_notice, chosen_in_order, delete_label, deleted_notice, offered_name, open_route,
-    reading_place, restore_order, toggle_chosen, translation_tag, ReadingPlace,
+    added_notice, chosen_in_order, delete_label, deleted_notice, folder_gone, offered_name,
+    open_route, reading_place, restore_order, toggle_chosen, translation_tag, ReadingPlace,
 };
 
 /// What the Záložky sheet shows.
@@ -119,6 +119,12 @@ pub(super) fn undo_delete(s: Study, folder: Option<i64>, items: Vec<(Bookmark, u
         for (at, (bookmark, index)) in items.iter().enumerate() {
             let back = api::create(folder, &bookmark.name, &of(bookmark), Some(*index)).await;
             if let Err(err) = back {
+                if matches!(err, ApiError::Refused(404, _) | ApiError::Status(404, _)) {
+                    // The folder itself is gone (deleted meanwhile): another
+                    // Späť would fail the same way.
+                    s.tell(sermon_error(&err));
+                    return;
+                }
                 // The ones not back yet keep their Späť.
                 s.tell_undo(
                     sermon_error(&err),
@@ -467,10 +473,13 @@ fn BookmarkRow(ui: ListUi, bookmark: Bookmark) -> impl IntoView {
     }
 }
 
+const EMPTY_DEFAULT: &str = "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Pridať záložku“.";
+const EMPTY_FOLDER: &str =
+    "Priečinok je prázdny. Ťukni na verš, pri „Pridať záložku“ zvoľ ▾ a tento priečinok.";
+
 #[component]
 fn ListState(s: Study, folder: Option<i64>) -> impl IntoView {
-    move || {
-        match s.bookmarks.get() {
+    move || match s.bookmarks.get() {
         BookmarkList::Loading => view! {
             <p class="study-empty" data-role="bookmarks-loading">"Načítavam…"</p>
         }
@@ -491,16 +500,11 @@ fn ListState(s: Study, folder: Option<i64>) -> impl IntoView {
         .into_any(),
         BookmarkList::Ready(rows) if rows.is_empty() => view! {
             <p class="study-empty" data-role="bookmarks-empty">
-                {if folder.is_some() {
-                    "Priečinok je prázdny. Ťukni na verš, pri „Pridať záložku“ zvoľ ▾ a tento priečinok."
-                } else {
-                    "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Pridať záložku“."
-                }}
+                {if folder.is_some() { EMPTY_FOLDER } else { EMPTY_DEFAULT }}
             </p>
         }
         .into_any(),
         BookmarkList::Ready(_) => ().into_any(),
-    }
     }
 }
 
@@ -551,7 +555,26 @@ fn delete_bar(ui: ListUi) -> impl IntoView {
 pub(super) fn BookmarksSheet(s: Study, folder: Option<i64>) -> impl IntoView {
     // A list from an earlier visit (or folder) is never shown as this one's answer.
     s.bookmarks.set(BookmarkList::Loading);
-    load(s, folder);
+    let read = load_folders(s);
+    match folder {
+        None => load(s, None),
+        // An own folder is read once the reader's folders confirm it is still
+        // theirs; a folder gone (deleted elsewhere, a stale link) shows the
+        // default one instead, asking nothing for it.
+        Some(_) => {
+            Effect::new(move |done: Option<bool>| {
+                if done == Some(true) || !fresh(s, read) {
+                    return done.unwrap_or(false);
+                }
+                if folder_gone(folder, &folder_ids(s)) {
+                    show(s, None);
+                } else {
+                    load(s, folder);
+                }
+                true
+            });
+        }
+    }
     let ui = ListUi::new(s, folder);
     // The settle marker of the specs: `ready` once this visit's list answered.
     let state = Signal::derive(move || match s.bookmarks.with(|list| list.clone()) {
@@ -580,7 +603,7 @@ pub(super) fn BookmarksSheet(s: Study, folder: Option<i64>) -> impl IntoView {
             action=ViewFn::from(move || choose_toggle(ui))
             footer=ViewFn::from(move || delete_bar(ui))
         >
-            <FolderRow s=s folder=folder />
+            <FolderRow s=s folder=folder read=read />
             <FolderMenu s=s folder=folder />
             <ListState s=s folder=folder />
             <div

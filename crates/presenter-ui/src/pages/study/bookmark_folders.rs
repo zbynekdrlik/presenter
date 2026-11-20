@@ -9,7 +9,10 @@
 //! záložku" opens [`FolderPicker`]: one tap saves into the chosen folder.
 //!
 //! The folders are `Study::bookmark_folders`, read again whenever the sheet or
-//! the picker opens; the server keeps them per reader, like the bookmarks.
+//! the picker opens; the server keeps them per reader, like the bookmarks. The
+//! list on screen stays while a new read is on its way (no jumping chips on a
+//! switch); only the NEWEST read may land (`Study::folder_reads`), and a sheet
+//! judges its URL folder only on an answer asked after it opened ([`fresh`]).
 
 use leptos::prelude::*;
 
@@ -17,22 +20,55 @@ use super::bookmarks::{self, BookmarkList};
 use super::{nav, sermon_error, Study};
 use crate::api::bookmarks::{self as api, Folder};
 use crate::state::study::StudySheet;
-use crate::state::study_bookmarks::{folder_delete_question, folder_gone, DEFAULT_FOLDER_NAME};
+use crate::state::study_bookmarks::{folder_delete_question, DEFAULT_FOLDER_NAME};
 
-/// Read the reader's folders again.
-fn load_folders(s: Study) {
+/// The folder reads: how many were asked, and the newest one that answered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct FolderReads {
+    asked: u64,
+    answered: u64,
+}
+
+/// Read the reader's folders again; answers this read's number. An answer
+/// older than the newest one asked is dropped.
+pub(super) fn load_folders(s: Study) -> u64 {
+    let read = s
+        .folder_reads
+        .try_update(|reads| {
+            reads.asked += 1;
+            reads.asked
+        })
+        .unwrap_or(0);
     leptos::task::spawn_local(async move {
-        match api::folders().await {
+        let answer = api::folders().await;
+        let newest = s.folder_reads.try_with_untracked(|reads| reads.asked) == Some(read);
+        if !newest {
+            return;
+        }
+        match answer {
             Ok(list) => {
                 s.bookmark_folders.try_set(Some(list));
             }
             Err(err) => s.tell(sermon_error(&err)),
         }
+        s.folder_reads.try_update(|reads| reads.answered = read);
     });
+    read
+}
+
+/// The folder list on screen answers read `read` or a later one.
+pub(super) fn fresh(s: Study, read: u64) -> bool {
+    s.folder_reads.with(|reads| reads.answered >= read) && s.bookmark_folders.with(Option::is_some)
+}
+
+/// The ids of the reader's folders on screen.
+pub(super) fn folder_ids(s: Study) -> Vec<i64> {
+    s.bookmark_folders
+        .with_untracked(|folders| folders.iter().flatten().map(|folder| folder.id).collect())
 }
 
 /// Show one folder in the sheet, in place (no history step).
-fn show(s: Study, folder: Option<i64>) {
+pub(super) fn show(s: Study, folder: Option<i64>) {
     let route = s.route.get_untracked();
     let wanted = Some(StudySheet::Bookmarks(folder));
     if route.sheet != wanted {
@@ -125,23 +161,10 @@ fn delete(s: Study, folder: Folder) {
     });
 }
 
-/// The folder chips over the list.
+/// The folder chips over the list. `read` = the folder read this sheet asked
+/// for: `data-loaded` (the specs' settle marker) waits for it.
 #[component]
-pub(super) fn FolderRow(s: Study, folder: Option<i64>) -> impl IntoView {
-    // Read now: the chips of an earlier visit are not this one's answer.
-    s.bookmark_folders.set(None);
-    load_folders(s);
-    // A folder the URL names that is gone: the default folder instead.
-    Effect::new(move |_| {
-        let held: Option<Vec<i64>> = s.bookmark_folders.with(|folders| {
-            folders
-                .as_ref()
-                .map(|list| list.iter().map(|folder| folder.id).collect())
-        });
-        if held.is_some_and(|held| folder_gone(folder, &held)) {
-            show(s, None);
-        }
-    });
+pub(super) fn FolderRow(s: Study, folder: Option<i64>, read: u64) -> impl IntoView {
     let chip = move |id: Option<i64>, name: String| {
         view! {
             <button
@@ -160,7 +183,7 @@ pub(super) fn FolderRow(s: Study, folder: Option<i64>) -> impl IntoView {
         <div
             class="study-chips study-folders"
             data-role="bookmark-folders"
-            data-loaded=move || s.bookmark_folders.with(Option::is_some).then_some("true")
+            data-loaded=move || fresh(s, read).then_some("true")
         >
             {chip(None, DEFAULT_FOLDER_NAME.to_string())}
             <For
@@ -223,7 +246,7 @@ pub(super) fn FolderMenu(s: Study, folder: Option<i64>) -> impl IntoView {
 /// second bookmark.
 #[component]
 pub(super) fn FolderPicker(s: Study, closing: StoredValue<bool>) -> impl IntoView {
-    load_folders(s);
+    let read = load_folders(s);
     let pick = move |folder: Option<(i64, String)>| {
         if !closing.get_value() && bookmarks::add_to(s, folder) {
             closing.set_value(true);
@@ -237,7 +260,7 @@ pub(super) fn FolderPicker(s: Study, closing: StoredValue<bool>) -> impl IntoVie
         <div
             class="study-folder-picker"
             data-role="verse-bookmark-folders"
-            data-loaded=move || s.bookmark_folders.with(Option::is_some).then_some("true")
+            data-loaded=move || fresh(s, read).then_some("true")
         >
             <p class="study-sheet__hint">"Uložiť do priečinka:"</p>
             <div class="study-chips">

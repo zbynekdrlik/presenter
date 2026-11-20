@@ -210,7 +210,7 @@ preparation (the sermon views are in `sermon-prep.md`).
   DELETEs could not (each index would be relative to an already shortened list). An unknown id deletes nothing (404).
   `PUT …/order` with any set but the whole list = 409 "Záložky sa medzitým zmenili — skús znova", the page reloads.
 - **Rules live in `state/study_bookmarks.rs`** (`BookmarkRefusal` → 422, Slovak): trimmed name 1–80 chars, ≤ 100 per
-  list, a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
+  list (per FOLDER since #952), a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
   structure with no request); the refusal names the book as the translation does. The row stores `book_name`.
 - **"Pridať záložku" adds in ONE tap** (#932): `bookmarks::add_here` posts the place name, closes the verse sheet,
   notice "Záložka pridaná: …". It is the verse sheet's FIRST action. No `s=zalozka` (an old link opens the verse).
@@ -224,10 +224,13 @@ preparation (the sermon views are in `sermon-prep.md`).
   `folder` body field on writes; absent = default) and the repository checks the folder is the owner's FIRST
   (`ensure_folder`, inside the write's transaction) — another reader's folder is 404 for any use. Folder rules in
   `state/study_bookmark_folders.rs` (1–40 chars, ≤ 30, the default name reserved → 422); a name in use (case-blind)
-  is the repository's 409; a folder delete takes its bookmarks in one transaction. The folder is in the sheet's URL:
+  is the repository's 409; a folder delete takes its bookmarks in one transaction. `PUT …/bookmark-folders/order` exists (the design's folder
+  reorder) with no UI caller yet: server-only on purpose, tested over HTTP. The folder is in the sheet's URL:
   `StudySheet::Bookmarks(Option<i64>)` = `s=zalozky` / `s=zalozky<id>`; a chip is a `nav::replace` (Back closes the
-  sheet in one step) and remounts `BookmarksSheet`, whose `load` drops an answer for a folder no longer shown. A URL
-  folder missing from the fresh folder list falls back to the default (`folder_gone`). Writes (order, delete, Späť)
+  sheet in one step) and remounts `BookmarksSheet`, whose `load` drops an answer for a folder no longer shown. An own
+  folder's list is asked only after a folder read asked by THIS sheet answered (`fresh`, `Study::folder_reads`: only
+  the newest read lands, the chips stay on screen meanwhile) and still holds it, else the default shows
+  (`folder_gone`) — no 404 for a gone folder. Writes (order, delete, Späť)
   carry their folder (`ListUi::folder`, `Undo::Bookmarks { folder }`). New / rename = `window.prompt`, delete =
   `window.confirm` naming the count. "Pridať záložku" stays one tap into the default; ▾ (`verse-save-bookmark-folder`)
   opens `FolderPicker` (`bookmark_folders.rs`) under it. E2E: `study-bookmark-folders.spec.ts` (empties folders AND

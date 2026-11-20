@@ -206,6 +206,20 @@ for (const [label, profile, touch] of PROFILES) {
     await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached", timeout: 30_000 });
     await settled(page, id);
 
+    // "Vybrať" → "Zmazať (1)" inside the folder deletes only there; Späť puts it back there.
+    await press(sheet(page).locator('[data-role="bookmarks-choose"]'), touch);
+    await press(rows(page).first().locator('[data-role="bookmark-pick"]'), touch);
+    await press(sheet(page).locator('[data-role="bookmarks-delete"]'), touch);
+    await expect(notice(page)).toContainText("Zmazaná 1 záložka");
+    await expect.poll(() => verses(page, id)).toEqual([1]);
+    expect(await verses(page, null)).toEqual([5]);
+    await press(page.locator('[data-role="study-notice-undo"]'), touch);
+    await expect(notice(page)).toContainText("Záložka je späť");
+    await expect.poll(() => verses(page, id)).toEqual([2, 1]);
+    expect(await verses(page, null)).toEqual([5]);
+    await expect.poll(() => shownVerses(page)).toEqual(["Hebrejom 11:2", "Hebrejom 11:1"]);
+    await press(sheet(page).locator('[data-role="bookmarks-choose"]'), touch);
+
     // Rename: the prompt offers the current name.
     page.once("dialog", (dialog) => {
       expect(dialog.defaultValue()).toBe("Modlitba");
@@ -244,13 +258,16 @@ test("a link to a folder that is gone falls back to the default folder", async (
   const made = await api<Folder>(page, "/bible/study/bookmark-folders", "POST", { name: "Dočasný" });
   const id = made.json.id;
   expect((await api(page, "/bible/study/bookmark-folders/delete", "POST", { id })).status).toBe(200);
+  // Its list is never asked (no 404 in the console): the folders answer first.
+  const lists: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/bible/study/bookmarks?folder=")) lists.push(request.url());
+  });
   await page.goto(`/ui/study?t=slk-seb&p=HEB.11&s=zalozky${id}`);
   await page.waitForSelector('body[data-wasm-ready="true"]', { state: "attached", timeout: 30_000 });
   await settled(page, null);
   await expect(chips(page)).toHaveText(["Kde som skončil"]);
-  // The gone folder's list answered 404 before the folders did: that line only.
-  const deliberate = /Failed to load resource: the server responded with a status of 404\b/;
-  expect(opened.errors.filter((text) => deliberate.test(text)).length).toBeLessThanOrEqual(1);
-  opened.errors.splice(0, opened.errors.length, ...opened.errors.filter((text) => !deliberate.test(text)));
+  await expect(sheet(page).locator('[data-role="bookmarks-error"]')).toHaveCount(0);
+  expect(lists).toEqual([]);
   await finish(opened);
 });

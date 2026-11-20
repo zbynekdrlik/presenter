@@ -216,6 +216,8 @@ struct Study {
     /// The reader's own bookmark folders (#952), as last read; `None` until
     /// they answered.
     bookmark_folders: RwSignal<Option<Vec<crate::api::bookmarks::Folder>>>,
+    /// Their reads: only the newest lands (#952).
+    folder_reads: RwSignal<bookmark_folders::FolderReads>,
     /// Their writes, one at a time, outliving the sheet (#951).
     bookmark_writes: StoredValue<BookmarkWrites, LocalStorage>,
     /// Bumped by a retry button: asks again for the same chapter or search.
@@ -582,6 +584,7 @@ pub fn StudyPage() -> impl IntoView {
         live: RwSignal::new(None),
         bookmarks: RwSignal::new(BookmarkList::default()),
         bookmark_folders: RwSignal::new(None),
+        folder_reads: RwSignal::new(bookmark_folders::FolderReads::default()),
         bookmark_writes: StoredValue::new_local(BookmarkWrites::default()),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),

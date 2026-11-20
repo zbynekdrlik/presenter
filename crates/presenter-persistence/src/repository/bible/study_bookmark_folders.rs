@@ -193,8 +193,14 @@ impl Repository {
         ensure_free_name(&held, name, Some(id))?;
         txn.execute(Statement::from_sql_and_values(
             txn.get_database_backend(),
-            "UPDATE study_bookmark_folders SET name = ?, updated_at = ? WHERE id = ?",
-            [name.into(), Utc::now().to_rfc3339().into(), id.into()],
+            "UPDATE study_bookmark_folders SET name = ?, updated_at = ? \
+             WHERE id = ? AND owner_email IS ?",
+            [
+                name.into(),
+                Utc::now().to_rfc3339().into(),
+                id.into(),
+                owner_value(owner),
+            ],
         ))
         .await
         .context("bookmark folder: rename")?;
@@ -223,8 +229,8 @@ impl Repository {
         .context("bookmark folder: delete its bookmarks")?;
         txn.execute(Statement::from_sql_and_values(
             backend,
-            "DELETE FROM study_bookmark_folders WHERE id = ?",
-            [id.into()],
+            "DELETE FROM study_bookmark_folders WHERE id = ? AND owner_email IS ?",
+            [id.into(), owner_value(owner)],
         ))
         .await
         .context("bookmark folder: delete")?;
@@ -486,6 +492,99 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(refusal(&err), Some(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn a_reorder_and_a_delete_inside_a_folder_touch_only_that_folder() {
+        let repo = repo().await;
+        let viera = repo
+            .insert_study_bookmark_folder(ME, "Viera")
+            .await
+            .unwrap()
+            .id;
+        let other = repo
+            .insert_study_bookmark_folder(ME, "Iné")
+            .await
+            .unwrap()
+            .id;
+        let mut ids = Vec::new();
+        for name in ["A", "B", "C"] {
+            let made = repo
+                .insert_study_bookmark(ME, Some(viera), name, &place(), None)
+                .await
+                .unwrap();
+            ids.push(made.id);
+        }
+        repo.insert_study_bookmark(ME, Some(other), "X", &place(), None)
+            .await
+            .unwrap();
+        repo.insert_study_bookmark(ME, None, "D", &place(), None)
+            .await
+            .unwrap();
+        let shown = |rows: Vec<crate::repository::StudyBookmarkRecord>| -> Vec<String> {
+            rows.into_iter().map(|row| row.name).collect()
+        };
+        // Shown newest first: C B A. Reorder to A C B.
+        repo.reorder_study_bookmarks(ME, Some(viera), &[ids[0], ids[2], ids[1]])
+            .await
+            .unwrap();
+        assert_eq!(
+            shown(
+                repo.list_study_bookmarks(ME, Some(viera), None)
+                    .await
+                    .unwrap()
+            ),
+            vec!["A", "C", "B"]
+        );
+        // The default folder's or another folder's ids are a stale set here.
+        let err = repo
+            .reorder_study_bookmarks(ME, Some(other), &[ids[0], ids[2], ids[1]])
+            .await
+            .unwrap_err();
+        assert!(matches!(refusal(&err), Some(RepositoryError::Conflict(_))));
+        let deleted = repo
+            .delete_study_bookmarks(ME, Some(viera), &[ids[2]])
+            .await
+            .unwrap();
+        assert_eq!(
+            deleted
+                .iter()
+                .map(|item| (item.row.name.as_str(), item.index, item.row.folder_id))
+                .collect::<Vec<_>>(),
+            vec![("C", 1, Some(viera))]
+        );
+        assert_eq!(
+            shown(
+                repo.list_study_bookmarks(ME, Some(viera), None)
+                    .await
+                    .unwrap()
+            ),
+            vec!["A", "B"]
+        );
+        // Späť: back into its folder at its old place.
+        repo.insert_study_bookmark(ME, Some(viera), "C", &place(), Some(deleted[0].index))
+            .await
+            .unwrap();
+        assert_eq!(
+            shown(
+                repo.list_study_bookmarks(ME, Some(viera), None)
+                    .await
+                    .unwrap()
+            ),
+            vec!["A", "C", "B"]
+        );
+        assert_eq!(
+            shown(
+                repo.list_study_bookmarks(ME, Some(other), None)
+                    .await
+                    .unwrap()
+            ),
+            vec!["X"]
+        );
+        assert_eq!(
+            shown(repo.list_study_bookmarks(ME, None, None).await.unwrap()),
+            vec!["D"]
+        );
     }
 
     #[tokio::test]

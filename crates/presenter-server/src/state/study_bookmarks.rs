@@ -17,7 +17,8 @@ use super::AppState;
 
 /// The longest name, in characters.
 pub(crate) const MAX_NAME_CHARS: usize = 80;
-/// The most bookmarks one list keeps.
+/// The most bookmarks one list keeps — one FOLDER since #952 (each folder,
+/// the default one too, holds up to this many).
 pub(crate) const MAX_BOOKMARKS: usize = 100;
 /// The most characters of a verse a list row carries (#951): the row shows one
 /// ellipsized line, so the rest would only travel.
