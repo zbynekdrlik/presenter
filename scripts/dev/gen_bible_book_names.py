@@ -180,6 +180,19 @@ def bprp_preferred(path: Path) -> list[tuple[str, str]]:
     return out
 
 
+def english_long_names(path: Path) -> list[str]:
+    """The English long name per book, in book order (#852 C3: the Soniox
+    context terms and "Romans 8:37" references)."""
+    group = yaml.safe_load(path.read_text(encoding="utf-8"))["default"]
+    names = []
+    for osis_id in OSIS_IDS:
+        long = group.get(osis_id, {}).get("long")
+        if not isinstance(long, str) or not long.strip():
+            raise GeneratorError(f"{path.name}: no long English name for {osis_id}")
+        names.append(normal_form(long))
+    return names
+
+
 def english_short(text: str) -> bool:
     """BPRP English forms of at most 5 letters without a doubled letter."""
     letters = re.sub(r"^[1-3I]+\s*\.?\s*", "", text)
@@ -318,7 +331,7 @@ def packed_lines(values: list[str], per_line: int) -> list[str]:
     return ["    " + ", ".join(values[i:i + per_line]) + "," for i in range(0, len(values), per_line)]
 
 
-def render(rows, fold_rows, shorts, ranks, codes) -> str:
+def render(rows, fold_rows, shorts, ranks, codes, long_en) -> str:
     lines = [
         HEADER,
         "//! Book-name keys of the Bible reference resolver (#850 spec §5.2),",
@@ -354,6 +367,12 @@ def render(rows, fold_rows, shorts, ranks, codes) -> str:
         *packed_lines([str(r) for r in ranks], 11),
         "];",
         "",
+        "/// The English long name per book index (BPRP preferred `long`): Soniox context",
+        "/// terms and references of the guest's transcript (#852 C3).",
+        "pub static BOOK_LONG_EN: [&str; 66] = [",
+        *packed_lines([rust_str(name) for name in long_en], 6),
+        "];",
+        "",
     ]
     return "\n".join(lines)
 
@@ -362,7 +381,8 @@ def generate(data: Path = DATA, canonical: Path = CANONICAL) -> str:
     curated = yaml.safe_load((data / "curated.yaml").read_text(encoding="utf-8"))
     forms, codes = collect_forms(data, canonical.read_text(encoding="utf-8"))
     rows, fold_rows = build_table(forms, codes, curated)
-    return render(rows, fold_rows, short_defaults(curated, rows, codes), frequency(curated, codes), codes)
+    long_en = english_long_names(data / "bprp-eng-preferred.yaml")
+    return render(rows, fold_rows, short_defaults(curated, rows, codes), frequency(curated, codes), codes, long_en)
 
 
 def main(argv: list[str] | None = None) -> int:

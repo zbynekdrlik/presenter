@@ -188,6 +188,7 @@ mod tests {
             rejected: Vec::new(),
             recorder: RecorderStatus::default(),
             dante: DanteStatus::default(),
+            transcription: Default::default(),
         };
         assert_eq!(dante_mic_ids(&status), ["dante-mic-1", "dante-mic-2"]);
         assert_eq!(channel_text(&status.mics[2]), "kanál Dante „mic 2“");
