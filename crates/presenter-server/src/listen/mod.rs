@@ -15,6 +15,10 @@
 //! the mic list every consumer reads ([`ListenService::mics`]) is the saved
 //! VBAN list followed by those two, whenever the box names a Dante interface.
 
+// #852 C3-5: the provider seam; the supervisor (C3-7) is its first user —
+// C3-7 removes this allowance.
+#[allow(dead_code)]
+mod asr;
 mod dante;
 pub(crate) mod health;
 mod mic_chain;
