@@ -9,6 +9,7 @@ mod integrations;
 mod interpreter_tips;
 mod libraries;
 mod listen;
+mod listen_ws;
 pub mod network_mode;
 mod playlists;
 mod presentations;

@@ -1,6 +1,7 @@
 //! #852 C1a: `GET|PUT /listen/mics` (the whole list; 422 with the Slovak rule)
 //! and `GET /listen/status` (polled → a quiet GET in `request_log.rs`). C1b:
 //! `PUT /listen/recorder`, the recorder's per-day toggle (a person's write, logged).
+//! C3-6: `GET /listen/ws`, the guest's live transcript (`listen_ws.rs`).
 
 use super::integrations::extract_actor;
 use super::AppError;
@@ -20,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/listen/mics", get(get_mics).put(put_mics))
         .route("/listen/status", get(get_status))
         .route("/listen/recorder", put(put_recorder))
+        .route("/listen/ws", get(super::listen_ws::listen_websocket))
 }
 
 #[instrument(skip_all)]
