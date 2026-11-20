@@ -309,3 +309,18 @@ paths:
   convention otherwise fails it for missing camelCase. `tokio-tungstenite` 0.29 with
   `rustls-tls-webpki-roots` is a normal dependency (adds only `webpki-roots 0.26.11`; rustls's
   provider stays `ring`). Tests use `test-key-not-real` and loopback URLs only.
+- **Soniox session machine (#852 C3-4, server `listen/soniox/machine.rs` + `machine/{reports,timers,audio}.rs`,
+  pure):** `SonioxCore` = `on_input` / `on_report` / `on_tick(now)` → `Vec<Action>` + `next_deadline()`; no
+  tokio, no clock read (a `Response` report brings its own `received_at`). Session ms = the position in the
+  audio SENT: a frame gets its ms at its FIRST send (a gated or dropped frame never gets one, a resend keeps
+  them), so every connection is contiguous from its `offset_ms`. Confirmed ms = a final's end, or the audio a
+  `<fin>` answered — one cover per `finalize`, popped in order (never one `Option`: a second gate before the
+  first answer would confirm too much). A resend starts exactly at the confirmed ms (the first frame cut, ≤ 5 s
+  back); tokens of an ended ("draining") connection are ignored — the resend recreates them. The pre-roll is
+  the last SECOND of unsent frames (time, not count), drained on EVERY onset, also while no connection takes
+  audio. Onset latency counts only tokens at/after the onset's session ms. A retry or an unexpected `finished`
+  while nobody spoke for 10 s parks instead of connecting. The machine has no connect deadline: the driver
+  reports `ConnectFailed` (with the HTTP `status` of a refused upgrade, so 401/402/403/400 stop) after its own
+  timeout. Child modules hold `impl SonioxCore` blocks: their methods are `pub(super)`, the parent's helpers
+  stay private (`pub(super)` there leaks the private `Live` type → `private_interfaces` under `-D warnings`).
+  Tests: hand-made `Instant`s, a frame's first two samples carry its index.
