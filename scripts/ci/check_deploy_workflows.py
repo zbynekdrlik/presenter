@@ -52,16 +52,19 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    module ships with the release: deploy.yml (SNV) and release.yml (PP).
 
 7. A job that deploys the presenter service (``systemctl enable
-   ${{ env.SERVICE_NAME }}``) writes the listening transcription key file
-   ``listen.env`` (#852 C3-8) BEFORE that start, from the
-   ``LISTEN_SONIOX_API_KEY`` secret: written under ``umask 077`` (0600 from
-   creation), REMOVED with ``rm -f`` when the secret is empty (no key = the
-   transcription stays off, the deploy goes on), and the key variable only
-   tested (``[ -n ... ]``) or piped by ``printf`` into ``ssh`` stdin — never
-   echoed, never a remote argv. A service deploy job is recognised by
-   ``systemctl enable ${{ env.SERVICE_NAME }}``: a job that starts the service
-   another way (``restart`` only, ``enable --now``, a literal unit name) is not
-   checked, so deploy jobs keep the shared ``enable … && start`` shape.
+   ${{ env.SERVICE_NAME }}``) has the step "Configure listening transcription"
+   (#852 C3-8) BEFORE that start, and the step is EXACTLY the canonical one
+   (``LISTEN_STEP_ENV`` + ``LISTEN_STEP_RUN`` below; only the etc dir differs
+   per workflow): the ``LISTEN_SONIOX_API_KEY`` secret → a 0600 ``listen.env``
+   written under ``umask 077`` through ``printf`` piped into ssh stdin, the
+   file REMOVED when the secret is empty (the deploy goes on), the key never
+   echoed or in an argv. A shape comparison, not a shell parser: any edit of
+   the step (a ``tee``, a ``set -x``, a redirect, another write) fails until
+   the canonical text here is changed with it, in review. The secret appears
+   in no other step and in no job-level ``env``. A service deploy job is
+   recognised by ``systemctl enable ${{ env.SERVICE_NAME }}``: a job that
+   starts the service another way is not checked, so deploy jobs keep the
+   shared ``enable … && start`` shape.
 
 Usage: check_deploy_workflows.py [WORKFLOW.yml ...]
        (default: every .github/workflows/*.yml)
@@ -101,7 +104,30 @@ ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # #852 C3-8: the service deploy start and the listening transcription key file.
 SERVICE_DEPLOY_RE = re.compile(r"systemctl\s+enable\s+\$\{\{\s*env\.SERVICE_NAME\s*\}\}")
 LISTEN_SECRET = "secrets.LISTEN_SONIOX_API_KEY"
-LISTEN_FILE_RE = re.compile(r"/listen\.env\b")
+LISTEN_STEP_NAME = "Configure listening transcription"
+LISTEN_STEP_ENV = {
+    "LISTEN_SONIOX_API_KEY": "${{ secrets.LISTEN_SONIOX_API_KEY }}",
+    "LISTEN_SONIOX_MODEL": "${{ vars.LISTEN_SONIOX_MODEL }}",
+}
+# The step's `run`, with `<ETC>` for the etc dir. Compared line by line after
+# stripping indentation and blank lines (`_normalized_run`).
+LISTEN_STEP_RUN = """
+set -euo pipefail
+SECRET_FILE=<ETC>/listen.env
+if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
+ssh deploy-target "sudo install -d -m 755 <ETC>"
+printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\\nPRESENTER_LISTEN_SONIOX_MODEL=%s\\n' \\
+"$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\
+| ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+else
+ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
+fi
+ssh deploy-target "sudo systemctl daemon-reload"
+"""
+# The etc dir: a literal /etc/presenter[-site] or deploy-site.yml's input.
+ETC_DIR_RE = re.compile(r"\$\{\{\s*env\.ETC_DIR\s*\}\}|/etc/presenter(?:-[a-z0-9]+)?(?=[/\"\s]|$)")
 
 # Words that run a LATER word as the command:
 # wrapper -> (options that take an argument, positional words before the command).
@@ -401,81 +427,46 @@ def check_runner_image(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
     return []
 
 
-def _key_variable(step: dict[str, Any]) -> str | None:
-    """The step env variable that carries the Soniox key secret, if any."""
-    env = step.get("env")
-    if not isinstance(env, dict):
-        return None
-    return next((str(name) for name, value in env.items() if LISTEN_SECRET in str(value)), None)
+def _normalized_run(run: str) -> list[str]:
+    """A `run` script as its non-blank lines, indentation stripped, the etc
+    dir replaced by `<ETC>` (the only part that differs per workflow)."""
+    lines = (ETC_DIR_RE.sub("<ETC>", line.strip()) for line in str(run).splitlines())
+    return [line for line in lines if line]
 
 
-def _file_targets(script: str) -> str:
-    """A regex for how the step names `listen.env`: the literal path or a
-    variable assigned to it (`SECRET_FILE=/etc/presenter/listen.env`)."""
-    targets = [r"\S*/listen\.env\b"]
-    for match in re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=.*/listen\.env\s*$", script):
-        targets.append(r"\$\{?" + re.escape(match.group(1)) + r"\b\}?")
-    return "(?:" + "|".join(targets) + ")"
-
-
-def _key_line_problem(line: str, key: str) -> str | None:
-    """Why one line's use of the key is unsafe, None when it is safe. Safe:
-    the `[ -n "$KEY" ]` test (the rest of the line must not use the key), or
-    a `printf … "$KEY" …` segment piped STRAIGHT into `ssh` (stdin), with the
-    key in no other segment (never a remote argv, never a `tee` to the log)."""
-    key_use = re.compile(r"\$\{?" + re.escape(key) + r"\b")
-    rest = re.sub(r"\[\s+-n\s+\"?\$\{?" + re.escape(key) + r"\}?\"?\s+\]", "", line)
-    if not key_use.search(rest):
-        return None
-    segments = re.split(r"(?<!\|)\|(?!\|)", rest)
-    for index, segment in enumerate(segments):
-        if not key_use.search(segment):
-            continue
-        into_ssh = index + 1 < len(segments) and re.match(r"\s*ssh\b", segments[index + 1])
-        plain_printf = re.match(r"\s*printf\b", segment) and not re.search(r"&&|;", segment)
-        if not (plain_printf and into_ssh):
-            return f"uses `${key}` outside a `[ -n ... ]` test or a `printf ... | ssh` pipe (the key would reach a log or an argv)"
+def _listen_step_problem(step: dict[str, Any]) -> str | None:
+    """Why a step that carries the Soniox secret is not the canonical one."""
+    if step.get("name") != LISTEN_STEP_NAME:
+        return f"carries `{LISTEN_SECRET}` but is not the `{LISTEN_STEP_NAME}` step — the key belongs only there"
+    env = {str(name): str(value) for name, value in (step.get("env") or {}).items()}
+    if env != LISTEN_STEP_ENV:
+        return f"`env` must be exactly {LISTEN_STEP_ENV} (the secret under one name, nothing else)"
+    if step.get("if") is not None or step.get("shell") is not None:
+        return "must have no `if:` / `shell:` (it runs on every deploy, with the default bash -e)"
+    if _normalized_run(step.get("run", "")) != _normalized_run(LISTEN_STEP_RUN):
+        return "differs from the canonical step (LISTEN_STEP_RUN in check_deploy_workflows.py): 0600 via `umask 077` over ssh stdin, `rm -f` on an empty secret, the key never echoed — change both together, in review"
     return None
 
 
-def _listen_step_problems(script: str, key: str) -> list[str]:
-    """What a `listen.env` step does wrong (#852 C3-8), empty when it is right.
-    The write and the remove must target `listen.env` itself (its literal path
-    or the variable assigned to it), never just any file."""
-    problems: list[str] = []
-    if not LISTEN_FILE_RE.search(script):
-        problems.append("does not name the `listen.env` file")
-    target = _file_targets(script)
-    writes = list(re.finditer(r"(umask\s+077\s*&&\s*)?\bcat\s+>\s*" + target, script))
-    if not writes:
-        problems.append("does not write `listen.env` under `umask 077 && cat >` (0600 from creation)")
-    elif any(write.group(1) is None for write in writes):
-        problems.append("writes `listen.env` with a `cat >` not under `umask 077` (readable before a chmod)")
-    if not re.search(r"\brm\s+-f\s+" + target, script):
-        problems.append("never removes `listen.env` with `rm -f` — an empty secret must delete a stale key file")
-    for line in script.splitlines():
-        problem = _key_line_problem(line, key)
-        if problem:
-            problems.append(problem)
-    return problems
-
-
 def check_listen_env(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
-    """Invariant 7: a presenter service deploy writes `listen.env` safely (#852 C3-8)."""
+    """Invariant 7: a presenter service deploy writes `listen.env` the one
+    canonical way, before the start (#852 C3-8)."""
     steps = [step for step in spec.get("steps") or [] if isinstance(step, dict)]
     scripts = [_script(step) for step in steps]
     start = next((i for i, script in enumerate(scripts) if SERVICE_DEPLOY_RE.search(script)), None)
-    listen = [i for i, step in enumerate(steps) if _key_variable(step) is not None]
     violations: list[Violation] = []
-    for index in listen:
+    if LISTEN_SECRET in str(spec.get("env") or ""):
+        violations.append(Violation(workflow, job, "env", f"job-level `env` carries `{LISTEN_SECRET}` — every step would see the key (#852 C3-8)"))
+    carriers = [i for i, step in enumerate(steps) if LISTEN_SECRET in str(step)]
+    for index in carriers:
         name = _step_name(steps[index], index)
-        key = _key_variable(steps[index]) or ""
-        for problem in _listen_step_problems(scripts[index], key):
+        problem = _listen_step_problem(steps[index])
+        if problem:
             violations.append(Violation(workflow, job, name, f"{problem} (#852 C3-8)"))
         if start is not None and index > start:
             violations.append(Violation(workflow, job, name, "writes `listen.env` AFTER the service start — the started service never reads it (#852 C3-8)"))
-    if start is not None and not listen:
-        violations.append(Violation(workflow, job, _step_name(steps[start], start), f"deploys the presenter service but no step writes `listen.env` from `{LISTEN_SECRET}` — the transcription key never reaches this site (#852 C3-8)"))
+    if start is not None and not any(steps[i].get("name") == LISTEN_STEP_NAME for i in carriers):
+        violations.append(Violation(workflow, job, _step_name(steps[start], start), f"deploys the presenter service but has no `{LISTEN_STEP_NAME}` step writing `listen.env` from `{LISTEN_SECRET}` — the transcription key never reaches this site (#852 C3-8)"))
     return violations
 
 

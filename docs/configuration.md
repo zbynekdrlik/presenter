@@ -211,9 +211,11 @@ read it as `EnvironmentFile=-<etc dir>/listen.env`. An empty or missing secret
 REMOVES the file and the deploy goes on: no key, transcription off. The key is
 piped over ssh stdin (never an argv) and never printed.
 `scripts/ci/check_deploy_workflows.py` (invariant 7) fails CI when a service
-deploy job lacks this step, writes the file without `umask 077`, never removes
-it, or uses the key anywhere but the `[ -n … ]` test and a `printf … | ssh` pipe
-(stdin only — never a remote argv, never a `tee` to the log).
+deploy job lacks this step, runs it after the start, or the step differs in any
+way from the canonical text kept in the checker (`LISTEN_STEP_ENV` /
+`LISTEN_STEP_RUN`; only the etc dir varies), and when the secret appears in any
+other step or in a job-level `env`. An edit of the step is made in the checker
+and the three workflows together.
 
 The dev deploy copies prod's database and then deletes the rows
 `listen.transcription`, `listen.session` and `listen.usage` (with

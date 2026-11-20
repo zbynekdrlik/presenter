@@ -58,8 +58,9 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   "Configure listening transcription" before the start: the `LISTEN_SONIOX_API_KEY` secret →
   0600 `<etc dir>/listen.env` (`printf` piped into ssh stdin, written under `umask 077`), an empty
   secret REMOVES the file and the deploy goes on; the units read it with `EnvironmentFile=-`.
-  Invariant 7 of `scripts/ci/check_deploy_workflows.py` enforces this; a new deploy job inherits the
-  check.
+  Invariant 7 of `scripts/ci/check_deploy_workflows.py` pins the step to ONE canonical text
+  (`LISTEN_STEP_RUN`; only the etc dir varies) and keeps the secret out of every other step: edit the
+  checker and the three workflows together.
 - **Dev never inherits prod's transcription:** the dev deploy deletes `listen.transcription`,
   `listen.session` and `listen.usage` (with `listen.recorder`) after copying prod's DB — no switch,
   no override, a fresh meter. A new transcription settings row joins that `DELETE`.

@@ -494,20 +494,25 @@ class RunnerImagePinTest(unittest.TestCase):
 
 
 
-LISTEN_STEP = """
+LISTEN_STEP = r"""
       - name: Configure listening transcription
         env:
           LISTEN_SONIOX_API_KEY: ${{ secrets.LISTEN_SONIOX_API_KEY }}
+          LISTEN_SONIOX_MODEL: ${{ vars.LISTEN_SONIOX_MODEL }}
         run: |
           set -euo pipefail
           SECRET_FILE=/etc/presenter/listen.env
           if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
-            printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\\n' \\
-              "$LISTEN_SONIOX_API_KEY" \\
+            ssh deploy-target "sudo install -d -m 755 /etc/presenter"
+            printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
+              "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \
               | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
           else
             ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
           fi
+          ssh deploy-target "sudo systemctl daemon-reload"
 """
 
 START_STEP = """
@@ -515,106 +520,90 @@ START_STEP = """
         run: ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
 """
 
+DIFFERS = "differs from the canonical step"
+
 
 class ListenEnvTest(unittest.TestCase):
-    """#852 C3-8: a presenter service deploy writes the Soniox key file
-    `listen.env` before the start: 0600 (`umask 077`), removed on an empty
-    secret, the key never echoed or put in an argv."""
+    """#852 C3-8: a presenter service deploy has the ONE canonical
+    "Configure listening transcription" step before the start (0600 via
+    `umask 077` over ssh stdin, removed on an empty secret, the key never
+    echoed); the secret appears nowhere else in the job."""
 
     def _messages(self, steps: str) -> list[str]:
         return [v.message for v in _violations(steps)]
 
-    def test_key_file_written_before_the_start_passes(self) -> None:
+    def _mutated(self, old: str, new: str) -> list[str]:
+        steps = LISTEN_STEP.replace(old, new)
+        self.assertNotEqual(steps, LISTEN_STEP, "the mutation must change the step")
+        return self._messages(SAFE_SETUP + steps + START_STEP)
+
+    def test_the_canonical_step_before_the_start_passes(self) -> None:
         self.assertEqual(_violations(SAFE_SETUP + LISTEN_STEP + START_STEP), [])
 
-    def test_a_service_deploy_without_the_key_file_is_flagged(self) -> None:
+    def test_every_etc_dir_form_passes(self) -> None:
+        for etc in ("/etc/presenter-prba", "${{ env.ETC_DIR }}"):
+            with self.subTest(etc=etc):
+                steps = LISTEN_STEP.replace("/etc/presenter", etc)
+                self.assertEqual(_violations(SAFE_SETUP + steps + START_STEP), [])
+
+    def test_a_service_deploy_without_the_step_is_flagged(self) -> None:
         found = self._messages(SAFE_SETUP + START_STEP)
         self.assertEqual(len(found), 1)
-        self.assertIn("no step writes `listen.env`", found[0])
+        self.assertIn("no `Configure listening transcription` step", found[0])
 
-    def test_the_key_file_after_the_start_is_flagged(self) -> None:
+    def test_the_step_after_the_start_is_flagged(self) -> None:
         found = self._messages(SAFE_SETUP + START_STEP + LISTEN_STEP)
         self.assertEqual(len(found), 1)
         self.assertIn("AFTER the service start", found[0])
 
-    def test_a_write_without_umask_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace("umask 077 && cat >", "cat >")
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("umask 077", found[0])
+    def test_every_unsafe_edit_of_the_run_is_flagged(self) -> None:
+        edits = {
+            "no umask": ("umask 077 && cat >", "cat >"),
+            "no rm on an empty secret": ("sudo rm -f $SECRET_FILE", "true"),
+            "another file removed": ("sudo rm -f $SECRET_FILE", "sudo rm -f /tmp/other"),
+            "key echoed": ("          else\n", '            echo "$LISTEN_SONIOX_API_KEY"\n          else\n'),
+            "key teed to the log": ("              | ssh deploy-target \"sudo sh", "              | tee /dev/stderr | ssh deploy-target \"sudo sh"),
+            "key in the remote argv": ("cat > $SECRET_FILE'\"", "cat > $SECRET_FILE' && echo $LISTEN_SONIOX_API_KEY\""),
+            "key redirected to stderr": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" >&2 \\'),
+            "xtrace": ("set -euo pipefail", "set -euxo pipefail"),
+            "tee write without umask": ("umask 077 && cat > $SECRET_FILE", "tee $SECRET_FILE"),
+            "a backup name": ("SECRET_FILE=/etc/presenter/listen.env", "SECRET_FILE=/etc/presenter/listen.env.bak"),
+            "env dump": ("          fi\n", "          fi\n          printenv\n"),
+        }
+        for label, (old, new) in edits.items():
+            with self.subTest(edit=label):
+                found = self._mutated(old, new)
+                self.assertEqual(len(found), 1, found)
+                self.assertIn(DIFFERS, found[0])
 
-    def test_an_empty_secret_that_keeps_a_stale_file_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace('ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"', 'echo "no key"')
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("rm -f", found[0])
+    def test_extra_or_renamed_env_is_flagged(self) -> None:
+        for label, (old, new) in {
+            "second alias": ("          LISTEN_SONIOX_MODEL:", "          KEY2: ${{ secrets.LISTEN_SONIOX_API_KEY }}\n          LISTEN_SONIOX_MODEL:"),
+            "renamed": ("LISTEN_SONIOX_API_KEY: ${{", "SONIOX_KEY: ${{"),
+        }.items():
+            with self.subTest(edit=label):
+                found = self._mutated(old, new)
+                self.assertTrue(any("`env` must be exactly" in message for message in found), found)
 
-    def test_a_key_echoed_to_the_log_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace("          else\n", '            echo "key=$LISTEN_SONIOX_API_KEY"\n          else\n')
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
+    def test_the_secret_in_another_step_is_flagged(self) -> None:
+        other = """
+      - name: Leak
+        run: ssh deploy-target "echo ${{ secrets.LISTEN_SONIOX_API_KEY }} > /etc/presenter/listen.env"
+"""
+        found = self._messages(SAFE_SETUP + LISTEN_STEP + other + START_STEP)
         self.assertEqual(len(found), 1)
-        self.assertIn("outside a `[ -n ... ]` test", found[0])
+        self.assertIn("is not the `Configure listening transcription` step", found[0])
 
-    def test_a_key_in_a_remote_argv_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace(
-            "          else\n",
-            '            ssh deploy-target "echo $LISTEN_SONIOX_API_KEY | sudo tee /etc/presenter/listen.env"\n          else\n',
-        )
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
+    def test_the_secret_in_the_job_env_is_flagged(self) -> None:
+        document = yaml.safe_load(_normalize(SAFE_SETUP + LISTEN_STEP + START_STEP))
+        document["jobs"]["deploy"]["env"] = {"K": "${{ secrets.LISTEN_SONIOX_API_KEY }}"}
+        found = [v.message for v in cdw.check_workflow("wf.yml", document)]
         self.assertEqual(len(found), 1)
-        self.assertIn("argv", found[0])
+        self.assertIn("job-level `env`", found[0])
 
-    def test_a_key_in_the_argv_after_the_ssh_pipe_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace(
-            """| ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'\"""",
-            """| ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE' && echo $LISTEN_SONIOX_API_KEY\"""",
-        )
-        self.assertNotEqual(steps, LISTEN_STEP)
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("argv", found[0])
-
-    def test_a_key_teed_to_the_log_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace("              | ssh deploy-target", "              | tee /dev/stderr | ssh deploy-target")
-        self.assertNotEqual(steps, LISTEN_STEP)
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("outside a `[ -n ... ]` test", found[0])
-
-    def test_a_key_echoed_on_the_test_line_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace(
-            'if [ -n "$LISTEN_SONIOX_API_KEY" ]; then',
-            'if [ -n "$LISTEN_SONIOX_API_KEY" ]; then echo "$LISTEN_SONIOX_API_KEY"',
-        )
-        self.assertNotEqual(steps, LISTEN_STEP)
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-
-    def test_removing_another_file_does_not_count(self) -> None:
-        steps = LISTEN_STEP.replace("sudo rm -f $SECRET_FILE", "sudo rm -f /tmp/other")
-        self.assertNotEqual(steps, LISTEN_STEP)
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("rm -f", found[0])
-
-    def test_a_plain_write_next_to_a_umask_write_elsewhere_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace(
-            "umask 077 && cat > $SECRET_FILE",
-            "cat > $SECRET_FILE",
-        ).replace("          else\n", "            ssh deploy-target \"sh -c 'umask 077 && cat > /tmp/other'\" < /dev/null\n          else\n")
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("umask 077", found[0])
-
-    def test_a_umask_write_and_a_plain_write_of_the_file_is_flagged(self) -> None:
-        steps = LISTEN_STEP.replace(
-            "          else\n",
-            "            ssh deploy-target \"cat > $SECRET_FILE\" < /dev/null\n          else\n",
-        )
-        found = self._messages(SAFE_SETUP + steps + START_STEP)
-        self.assertEqual(len(found), 1)
-        self.assertIn("not under `umask 077`", found[0])
-
+    def test_a_condition_on_the_step_is_flagged(self) -> None:
+        found = self._mutated("      - name: Configure listening transcription\n", "      - name: Configure listening transcription\n        if: vars.X != ''\n")
+        self.assertTrue(any("no `if:`" in message for message in found), found)
 
 if __name__ == "__main__":
     unittest.main()

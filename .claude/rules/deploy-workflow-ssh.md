@@ -64,11 +64,14 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   `persist-credentials: false`) and reads `data/bibles-private/<file>`; release.yml
   `build-release` (the public tarball) never checks it out. Enforced by
   `scripts/ci/check_public_bibles.py`; details in `.claude/rules/bible-import.md`.
-- **Every service deploy job writes `listen.env` before the start** (invariant 7, #852 C3-8): the
-  `LISTEN_SONIOX_API_KEY` secret → 0600 `<etc>/listen.env` under `umask 077 && cat >`, `rm -f` of that
-  file on an empty secret (the deploy goes on), the key only in the `[ -n … ]` test and a
-  `printf … | ssh` pipe. A job is a "service deploy" by `systemctl enable ${{ env.SERVICE_NAME }}`:
-  keep that `enable … && start` shape in a new deploy job, or it is not checked.
+- **Every service deploy job has the canonical "Configure listening transcription" step before the
+  start** (invariant 7, #852 C3-8): the step must equal `LISTEN_STEP_ENV` / `LISTEN_STEP_RUN` in the
+  checker line for line (only the etc dir varies: `/etc/presenter`, `/etc/presenter-prba`,
+  `${{ env.ETC_DIR }}`), and `secrets.LISTEN_SONIOX_API_KEY` appears in no other step and no job
+  `env`. It is a shape comparison on purpose — a heuristic shell check passed `tee`, `set -x`, `>&2`
+  and argv leaks (round-2 review); change the canonical text and the three workflows together. A job
+  is a "service deploy" by `systemctl enable ${{ env.SERVICE_NAME }}`: keep that `enable … && start`
+  shape in a new deploy job, or it is not checked.
 
 ## One reusable site deploy (#918)
 
