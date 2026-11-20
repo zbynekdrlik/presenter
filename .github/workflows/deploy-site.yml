@@ -511,6 +511,33 @@ jobs:
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
+      # #852 C3-8: the listening transcription key (Soniox) → 0600 root-only
+      # EnvironmentFile `listen.env`, the same shape as the AI step above (the
+      # committed unit reads it as `EnvironmentFile=-`). The key is a SECRET:
+      # printf builtin over ssh stdin (never argv), `umask 077` so 0600 from
+      # creation, never echoed. Empty / missing secret → the file is REMOVED and
+      # the deploy goes on: the server then has no key, its status says "Chýba
+      # kľúč" and no Soniox connection is ever made (the owner's money first).
+      # Runs BEFORE the service (re)start so the new service reads it.
+      - name: Configure listening transcription
+        env:
+          LISTEN_SONIOX_API_KEY: ${{ secrets.LISTEN_SONIOX_API_KEY }}
+          LISTEN_SONIOX_MODEL: ${{ vars.LISTEN_SONIOX_MODEL }}
+        run: |
+          set -euo pipefail
+          SECRET_FILE=${{ env.ETC_DIR }}/listen.env
+          if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
+            ssh deploy-target "sudo install -d -m 755 ${{ env.ETC_DIR }}"
+            printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
+              "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \
+              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+          else
+            ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
+          fi
+          ssh deploy-target "sudo systemctl daemon-reload"
+
       # The transfers above ran with the OLD service still serving. Downtime
       # window = this single step: stop → swap the staged binaries into place
       # → start. Seconds, not the length of a slow-bridge transfer.

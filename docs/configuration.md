@@ -177,6 +177,51 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 | `PRESENTER_LISTEN_DANTE_NAME` | `presenter-listen` | #852: the Dante device's name in Dante Controller (1–31 of A–Z a–z 0–9 `-`). |
 | `PRESENTER_LISTEN_DANTE_RATE` | `96000` | #852: the Dante network's sample rate (dstack #90: the site runs 96 kHz); dlink converts to the mics' 16 kHz on the device clock. Not a number → WARN, default. |
 
+### Sermon listening — guest transcription, Soniox (#852 C3)
+
+The guest microphone's English transcript runs on Soniox real-time (`stt-rt-v6`,
+provider notes in [listen-providers.md](listen-providers.md)). Each variable is
+read once at startup; an empty or whitespace-only value counts as unset. The
+switch, the guest mic and the daily cap are settings (Settings → Počúvanie), not
+env vars; the transcription ships OFF.
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `PRESENTER_LISTEN_SONIOX_API_KEY` | unset | The Soniox API key, sent only as the `Authorization: Bearer` header of the WebSocket upgrade (never in a log, status or `Debug`). Unset → status "Chýba kľúč služby prepisu (Soniox)", nothing connects. Deployed instances get it from `listen.env` (below). |
+| `PRESENTER_LISTEN_SONIOX_MODEL` | `stt-rt-v6` | The real-time model id (`stt-rt-v5` is removed 2026-12-15, so a rename is a variable edit + redeploy). |
+| `PRESENTER_LISTEN_SONIOX_URL` | `wss://stt-rt.soniox.com/transcribe-websocket` | The WebSocket endpoint; `ws://` allowed. Tests point it at a mock; the E2E harness defaults it to the dead loopback `ws://127.0.0.1:9` with no key. |
+| `PRESENTER_LISTEN_SONIOX_ENDPOINT_DELAY_MS` | unset | Unset → endpoint detection OFF (the measured config). Any whole number, `0` included, turns it ON (`enable_endpoint_detection: true`) with `max_endpoint_delay_ms` clamped to 500–3000. Not a whole number → WARN, stays off. |
+
+#### The key file `listen.env` (#852 C3-8)
+
+Every deploy path — `pipeline.yml` (dev), `deploy-site.yml` (SNV through
+`deploy.yml`, and PRBA), `release.yml` (PP) — runs "Configure listening
+transcription" before the service starts, the same shape as `ai.env`: a 0600
+root-only `<etc dir>/listen.env` (`/etc/presenter`, PRBA `/etc/presenter-prba`)
+written from the `LISTEN_SONIOX_API_KEY` GitHub secret and the
+`LISTEN_SONIOX_MODEL` GitHub Actions variable (default `stt-rt-v6`):
+
+```
+PRESENTER_LISTEN_SONIOX_API_KEY=<LISTEN_SONIOX_API_KEY secret>
+PRESENTER_LISTEN_SONIOX_MODEL=<LISTEN_SONIOX_MODEL variable, default stt-rt-v6>
+```
+
+The units (`presenter.service`, `presenter-dev.service`, `presenter-prba.service`)
+read it as `EnvironmentFile=-<etc dir>/listen.env`. An empty or missing secret
+REMOVES the file and the deploy goes on: no key, transcription off. The key is
+piped over ssh stdin (never an argv) and never printed.
+`scripts/ci/check_deploy_workflows.py` (invariant 7) fails CI when a service
+deploy job lacks this step, runs it after the start, or the step differs in any
+way from the canonical text kept in the checker (`LISTEN_STEP_ENV` /
+`LISTEN_STEP_RUN`; only the etc dir varies), and when the secret appears in any
+other step or in a job-level `env`. An edit of the step is made in the checker
+and the three workflows together.
+
+The dev deploy copies prod's database and then deletes the rows
+`listen.transcription`, `listen.session` and `listen.usage` (with
+`listen.recorder`): a dev server never inherits prod's switch, start override or
+daily meter.
+
 ### NDI on a site with a Dante network (#925)
 
 | Variable       | Default | Purpose |
@@ -348,6 +393,11 @@ GitHub Actions repository variables:
 | Variable        | Purpose                                   |
 | --------------- | ----------------------------------------- |
 | `RUNNER_LABEL`  | Custom runner label (e.g., `self-hosted`) |
+
+The deploy workflows also read the variables `AI_MODEL` (`ai.env`, #761) and
+`LISTEN_SONIOX_MODEL` (`listen.env`, #852 C3-8), and the secrets
+`OPENROUTER_API_KEY` and `LISTEN_SONIOX_API_KEY` (each optional: unset = that
+service off, never a failed deploy).
 
 ## Related
 

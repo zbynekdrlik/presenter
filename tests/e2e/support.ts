@@ -407,6 +407,14 @@ export async function startTestServer(
     // listen.mics. A spec that sends VBAN reads the port from /listen/status.
     PRESENTER_LISTEN_VBAN_ADDR:
       process.env.PRESENTER_LISTEN_VBAN_ADDR ?? "127.0.0.1:0",
+    // #852 C3-8: the guest transcription (Soniox) gets a dead loopback and NO
+    // key by default (an empty value counts as unset), so no spec ever dials
+    // stt-rt.soniox.com or spends a paid minute. A spec that needs it sets
+    // both in process.env (its own fake Soniox + a `e2e-test-key-not-real`).
+    PRESENTER_LISTEN_SONIOX_URL:
+      process.env.PRESENTER_LISTEN_SONIOX_URL ?? "ws://127.0.0.1:9",
+    PRESENTER_LISTEN_SONIOX_API_KEY:
+      process.env.PRESENTER_LISTEN_SONIOX_API_KEY ?? "",
     RUST_LOG:
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };
