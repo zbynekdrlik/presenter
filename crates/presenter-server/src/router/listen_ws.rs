@@ -3,11 +3,15 @@
 //! `session` message of the [`TranscriptHub`]. A reader that fell
 //! [`HUB_CAPACITY`](crate::listen::transcript_hub::HUB_CAPACITY) messages
 //! behind gets a fresh `snapshot` (a resync, INFO). What the client sends is
-//! read only to notice the close. Connect / disconnect / resync log on
-//! `presenter::listen::ws` with the client IP of the #793 rule.
+//! read only to notice the close and that it is alive. Outside a sermon the hub
+//! sends nothing, so a WS Ping goes out every [`KEEPALIVE`] (under Cloudflare's
+//! 100 s idle cut); a client that sent no frame — not even the automatic
+//! pong — for two keepalive intervals is a half-open socket and is dropped. Connect /
+//! disconnect / resync log on `presenter::listen::ws` with the client IP of
+//! the #793 rule and the end reason of `/live/ws` ([`WsEndReason`]).
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
@@ -16,33 +20,20 @@ use axum::response::IntoResponse;
 use axum::Extension;
 use presenter_core::listen::ws::{ListenWsMessage, TranscriptSnapshot};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::time::{Instant, MissedTickBehavior};
 
 use super::integrations::extract_client_ip;
 use crate::listen::transcript_hub::TranscriptHub;
+use crate::live::{close_frame_reason, WsEndReason};
 use crate::state::AppState;
 
 /// The target of the reader lines (plan Decision 16).
 pub(crate) const LISTEN_WS_TARGET: &str = "presenter::listen::ws";
-
-/// Why a reader's socket ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EndReason {
-    ClientClosed,
-    ReadFailed,
-    WriteFailed,
-    HubClosed,
-}
-
-impl EndReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ClientClosed => "client closed",
-            Self::ReadFailed => "read failed",
-            Self::WriteFailed => "write failed",
-            Self::HubClosed => "hub closed",
-        }
-    }
-}
+/// A Ping this often; no frame from the client for two intervals ends the socket.
+#[cfg(not(test))]
+pub(crate) const KEEPALIVE: Duration = Duration::from_secs(30);
+#[cfg(test)]
+pub(crate) const KEEPALIVE: Duration = Duration::from_secs(1);
 
 pub(super) async fn listen_websocket(
     ws: WebSocketUpgrade,
@@ -76,30 +67,34 @@ async fn serve_reader(
         target: LISTEN_WS_TARGET,
         client_ip = client_ip.as_str(),
         peer = peer.as_str(),
-        reason = reason.as_str(),
+        reason = reason.to_string().as_str(),
         resyncs,
         connected_ms = u64::try_from(connected_at.elapsed().as_millis()).unwrap_or(u64::MAX),
         "listen ws reader disconnected"
     );
 }
 
-/// Send the snapshot, then every hub message, until either side ends.
+/// Send the snapshot, then every hub message and a ping every [`KEEPALIVE`],
+/// until either side ends.
 async fn forward(
     hub: &TranscriptHub,
     socket: &mut WebSocket,
     client_ip: &str,
     resyncs: &mut u64,
-) -> EndReason {
+) -> WsEndReason {
     let (snapshot, mut messages) = hub.subscribe();
-    if send_snapshot(socket, snapshot).await.is_err() {
-        return EndReason::WriteFailed;
+    if let Err(reason) = send_snapshot(socket, snapshot).await {
+        return reason;
     }
+    let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
+    keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut last_heard = Instant::now();
     loop {
         tokio::select! {
             message = messages.recv() => match message {
                 Ok(message) => {
-                    if send(socket, &message).await.is_err() {
-                        return EndReason::WriteFailed;
+                    if let Err(reason) = send(socket, &message).await {
+                        return reason;
                     }
                 }
                 Err(RecvError::Lagged(missed)) => {
@@ -113,31 +108,46 @@ async fn forward(
                         resyncs = *resyncs,
                         "listen ws reader fell behind — sending a fresh snapshot"
                     );
-                    if send_snapshot(socket, snapshot).await.is_err() {
-                        return EndReason::WriteFailed;
+                    if let Err(reason) = send_snapshot(socket, snapshot).await {
+                        return reason;
                     }
                 }
-                Err(RecvError::Closed) => return EndReason::HubClosed,
+                Err(RecvError::Closed) => return WsEndReason::HubClosed,
             },
             incoming = socket.recv() => match incoming {
-                None | Some(Ok(Message::Close(_))) => return EndReason::ClientClosed,
-                Some(Err(_)) => return EndReason::ReadFailed,
-                Some(Ok(_)) => {}
+                None => return WsEndReason::StreamEnded,
+                Some(Err(err)) => return WsEndReason::ReadError(err.to_string()),
+                Some(Ok(Message::Close(frame))) => return close_frame_reason(frame),
+                Some(Ok(_)) => last_heard = Instant::now(),
             },
+            _ = keepalive.tick() => {
+                if last_heard.elapsed() > 2 * KEEPALIVE {
+                    return WsEndReason::ClientSilent;
+                }
+                if let Err(err) = socket.send(Message::Ping(Default::default())).await {
+                    return WsEndReason::SendFailed(err.to_string());
+                }
+            }
         }
     }
 }
 
-async fn send_snapshot(socket: &mut WebSocket, snapshot: TranscriptSnapshot) -> Result<(), ()> {
+async fn send_snapshot(
+    socket: &mut WebSocket,
+    snapshot: TranscriptSnapshot,
+) -> Result<(), WsEndReason> {
     send(socket, &ListenWsMessage::Snapshot { snapshot }).await
 }
 
-async fn send(socket: &mut WebSocket, message: &ListenWsMessage) -> Result<(), ()> {
-    let json = serde_json::to_string(message).map_err(|_| ())?;
+async fn send(socket: &mut WebSocket, message: &ListenWsMessage) -> Result<(), WsEndReason> {
+    let json = serde_json::to_string(message).map_err(|err| {
+        tracing::warn!(target: LISTEN_WS_TARGET, %err, "failed to serialise a listen ws message");
+        WsEndReason::SendFailed(format!("encode: {err}"))
+    })?;
     socket
         .send(Message::Text(json.into()))
         .await
-        .map_err(|_| ())
+        .map_err(|err| WsEndReason::SendFailed(err.to_string()))
 }
 
 #[cfg(test)]

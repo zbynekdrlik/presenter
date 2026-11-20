@@ -6,6 +6,8 @@ paths:
   - "crates/presenter-server/src/listen/dante/**"
   - "crates/presenter-server/src/state/listen.rs"
   - "crates/presenter-server/src/router/listen.rs"
+  - "crates/presenter-server/src/router/listen_ws.rs"
+  - "crates/presenter-server/src/router/listen_ws/**"
   - "scripts/dev/listen/**"
 ---
 
@@ -338,3 +340,21 @@ paths:
   Tests (`listen/soniox/tests/`): the scripted server (`mock.rs`: `Step`s, upgrade headers, a log of every
   client frame) on `start_paused`; a tungstenite upgrade callback needs `#[allow(clippy::result_large_err)]`
   (the http error response is its fixed type).
+- **Transcript hub + `GET /listen/ws` (#852 C3-6, server `listen/transcript_hub.rs`, `router/listen_ws.rs`):**
+  ONE `TranscriptHub` (a cheap clone of one `Arc`) owned by `ListenService` (`transcripts()`), never a
+  `LiveEvent`. Every message is sent WHILE the hub's std mutex is held, and `subscribe` takes the snapshot
+  AND `tx.subscribe()` under that same lock — the only way a reader's snapshot + stream join with no gap and
+  no double (never take the receiver outside the lock; the threaded race test, which catches that, checks ≥ 100
+  rounds). Newest 500 sentences, ids from 1, never reused; a 512-message lag → the reader subscribes again
+  (fresh snapshot, `resyncs`, INFO). Tails: ≤ 1 per 100 ms per mic (tokio `Instant`, the paused clock drives
+  the tests); a coalesced tail is sent by the hub's own flush task at the window's end, which re-arms when a
+  forced send restarted the window; `push_sentence` clears the mic's stored tail and its pending flush (the
+  closed words never show twice) and the next `set_tail` goes out at once. An empty tail (`None` / no text)
+  is sent with empty texts and left out of the snapshot. `session` only on a state / reason / error change.
+  The socket: snapshot, stream, a WS Ping every `KEEPALIVE` (30 s; 1 s under `cfg(test)`) because the hub
+  is quiet outside a sermon and Cloudflare cuts an idle socket at ~100 s; no frame from the client for two
+  intervals ends it (`WsEndReason::ClientSilent`). End reasons are `/live/ws`'s `WsEndReason` +
+  `close_frame_reason`; client IP via `extract_client_ip`. Logs on `presenter::listen::ws` (connect,
+  disconnect with `reason` / `resyncs` / `connected_ms`, resync). The upgrade is NOT a poll: it stays out of
+  `request_log.rs`'s quiet lists. Tests: a real axum server on loopback + `tokio_tungstenite`; the lag test
+  runs on the CURRENT-thread runtime (600 synchronous pushes → exactly 88 missed) with `Capture`.

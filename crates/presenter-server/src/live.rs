@@ -54,6 +54,9 @@ pub(crate) enum WsEndReason {
     SendFailed(String),
     /// The live hub closed (server shutdown).
     HubClosed,
+    /// No frame from the client (not even a pong) for two keepalive intervals
+    /// (`/listen/ws`, #852 C3-6): a half-open socket of a sleeping tablet.
+    ClientSilent,
 }
 
 impl fmt::Display for WsEndReason {
@@ -68,12 +71,13 @@ impl fmt::Display for WsEndReason {
             Self::StreamEnded => write!(f, "stream ended without close frame"),
             Self::SendFailed(err) => write!(f, "send failed: {err}"),
             Self::HubClosed => write!(f, "live hub closed"),
+            Self::ClientSilent => write!(f, "client silent (no frame for two keepalive intervals)"),
         }
     }
 }
 
-/// Classify a client Close frame (#793).
-fn close_frame_reason(frame: Option<CloseFrame>) -> WsEndReason {
+/// Classify a client Close frame (#793; `/listen/ws` too, #852 C3-6).
+pub(crate) fn close_frame_reason(frame: Option<CloseFrame>) -> WsEndReason {
     match frame {
         Some(frame) => WsEndReason::ClientClose {
             code: Some(frame.code),

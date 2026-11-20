@@ -100,11 +100,16 @@ impl TranscriptHub {
             let _oldest = state.sentences.pop_front();
         }
         state.sentences.push_back(sentence.clone());
-        state
-            .gates
-            .entry(mic_id.to_string())
-            .or_default()
-            .after_sentence = true;
+        // The stored tail held the words just closed: clear it, so neither a
+        // snapshot nor a pending flush shows them twice. The publisher's next
+        // `set_tail` goes out at once.
+        if let Some(tail) = state.tails.get_mut(mic_id) {
+            tail.final_text.clear();
+            tail.partial_text.clear();
+        }
+        let gate = state.gates.entry(mic_id.to_string()).or_default();
+        gate.pending = false;
+        gate.after_sentence = true;
         self.shared.send(ListenWsMessage::Sentence { sentence });
         id
     }
@@ -191,12 +196,13 @@ impl TranscriptHub {
         let shared = Arc::clone(&self.shared);
         let mic_id = mic_id.to_string();
         drop(runtime.spawn(async move {
-            tokio::time::sleep_until(deadline).await;
-            let mut state = shared.lock();
-            let gate = state.gates.entry(mic_id.clone()).or_default();
-            gate.flush_scheduled = false;
-            if gate.pending {
-                send_tail(&shared, &mut state, &mic_id, Instant::now());
+            let mut deadline = deadline;
+            loop {
+                tokio::time::sleep_until(deadline).await;
+                match flush_due(&shared, &mic_id) {
+                    Some(later) => deadline = later,
+                    None => break,
+                }
             }
         }));
     }
@@ -211,6 +217,23 @@ impl Shared {
     fn send(&self, message: ListenWsMessage) {
         let _readers = self.tx.send(message);
     }
+}
+
+/// The flush task woke: send the pending tail, unless a forced send after a
+/// sentence restarted the window meanwhile — then the time to wait for.
+fn flush_due(shared: &Shared, mic_id: &str) -> Option<Instant> {
+    let now = Instant::now();
+    let mut state = shared.lock();
+    let gate = state.gates.entry(mic_id.to_string()).or_default();
+    let window_end = gate.last_sent.map(|last| last + TAIL_MIN_INTERVAL);
+    if let Some(later) = window_end.filter(|end| gate.pending && now < *end) {
+        return Some(later);
+    }
+    gate.flush_scheduled = false;
+    if gate.pending {
+        send_tail(shared, &mut state, mic_id, now);
+    }
+    None
 }
 
 /// Send the mic's stored tail now and restart its window.

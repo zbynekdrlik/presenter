@@ -192,11 +192,75 @@ async fn a_lagging_reader_gets_a_fresh_snapshot() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert_eq!(disconnected.field("resyncs"), Some("1"));
-    assert_eq!(disconnected.field("reason"), Some("\"client closed\""));
+    assert_eq!(
+        disconnected.field("reason"),
+        Some("\"client close (no close code)\"")
+    );
     let lines = capture.events(LISTEN_WS_TARGET);
     assert!(lines.iter().any(|line| line
         .field("message")
         .is_some_and(|m| m.contains("listen ws reader connected"))
         && line.field("client_ip").is_some()));
     assert!(lines.iter().any(|line| line.field("missed") == Some("88")));
+}
+
+/// The first disconnect line on the reader target, waited for up to 8 s.
+async fn disconnect_line(capture: &Capture) -> crate::tracing_capture::Captured {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let lines = capture.events(LISTEN_WS_TARGET);
+        if let Some(line) = lines.iter().find(|line| {
+            line.field("message")
+                .is_some_and(|m| m.contains("listen ws reader disconnected"))
+        }) {
+            return line.clone();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{lines:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idle_reader_gets_pings_and_stays_while_it_answers() {
+    let (addr, _hub) = serve().await;
+    let mut client = connect(addr).await;
+    assert!(matches!(
+        next(&mut client).await,
+        ListenWsMessage::Snapshot { .. }
+    ));
+    // Reading answers each ping with the automatic pong.
+    let mut pings = 0;
+    let until = tokio::time::Instant::now() + KEEPALIVE * 4 + KEEPALIVE / 2;
+    while let Ok(frame) = tokio::time::timeout_at(until, client.next()).await {
+        match frame {
+            Some(Ok(WsMessage::Ping(_))) => pings += 1,
+            other => panic!("only pings while the hub is quiet, got {other:?}"),
+        }
+    }
+    assert!(pings >= 3, "a ping every keepalive interval: {pings}");
+}
+
+#[tokio::test]
+async fn a_silent_reader_is_dropped_and_logged_with_the_tunnel_client_ip() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let capture = Capture::install();
+    let (addr, _hub) = serve().await;
+    let mut request = format!("ws://{addr}/listen/ws")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("x-forwarded-for", "203.0.113.7".parse().unwrap());
+    // Never read again after the upgrade: no pong ever goes back.
+    let (_client, _response) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let line = disconnect_line(&capture).await;
+    assert_eq!(
+        line.field("reason"),
+        Some("\"client silent (no frame for two keepalive intervals)\"")
+    );
+    assert_eq!(
+        line.field("client_ip"),
+        Some("\"203.0.113.7\""),
+        "from a loopback peer (the tunnel) X-Forwarded-For names the client (#793)"
+    );
 }

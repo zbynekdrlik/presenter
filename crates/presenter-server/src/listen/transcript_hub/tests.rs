@@ -4,7 +4,9 @@
 use super::*;
 use chrono::TimeZone;
 use presenter_core::listen::transcription::TranscriptionState;
-use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Barrier;
+use tokio::sync::broadcast::error::TryRecvError;
 
 fn at() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 22, 9, 30, 5)
@@ -198,72 +200,144 @@ fn outside_a_runtime_a_coalesced_tail_is_sent_at_once() {
     );
 }
 
-/// One reader: subscribe `rounds` times, each time check that the snapshot's
-/// sentences and the stream after it are one gapless, double-free run of ids.
-/// Returns every break of that rule (empty = none).
-async fn read_in_rounds(hub: TranscriptHub, total: u64, rounds: usize) -> Vec<String> {
-    let mut faults = Vec::new();
-    for round in 0..rounds {
+/// Advance the paused clock `steps` × 10 ms, draining after each step;
+/// every tail received with the paused-clock ms it went out at.
+async fn tails_over(
+    rx: &mut broadcast::Receiver<ListenWsMessage>,
+    start: Instant,
+    steps: u32,
+) -> Vec<(u128, String)> {
+    let mut received = Vec::new();
+    for _ in 0..steps {
+        tokio::time::advance(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
+        for text in tail_texts(&drain(rx)) {
+            received.push(((Instant::now() - start).as_millis(), text));
+        }
+    }
+    received
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sentence_clears_a_pending_tail() {
+    let hub = TranscriptHub::new();
+    let (_, mut rx) = hub.subscribe();
+    let start = Instant::now();
+    hub.set_tail("guest", Some(tail("Turn with me", "")), at());
+    tokio::time::advance(Duration::from_millis(20)).await;
+    hub.set_tail("guest", Some(tail("Turn with me to John 3:16.", "")), at());
+    hub.push_sentence("guest", closed("Turn with me to John 3:16."));
+    let sent = drain(&mut rx);
+    assert_eq!(sent.len(), 2, "the first tail and the sentence: {sent:?}");
+    let later = tails_over(&mut rx, start, 20).await;
+    assert!(
+        later.is_empty(),
+        "the pending tail held the closed words and must never go out: {later:?}"
+    );
+    assert!(hub.snapshot().tails.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tail_after_a_forced_send_waits_for_the_new_window() {
+    let hub = TranscriptHub::new();
+    let (_, mut rx) = hub.subscribe();
+    let start = Instant::now();
+    hub.set_tail("guest", Some(tail("a", "")), at());
+    tokio::time::advance(Duration::from_millis(20)).await;
+    hub.set_tail("guest", Some(tail("a b", "")), at());
+    tokio::time::advance(Duration::from_millis(30)).await;
+    hub.push_sentence("guest", closed("A b."));
+    hub.set_tail("guest", Some(tail("c", "")), at());
+    tokio::time::advance(Duration::from_millis(10)).await;
+    hub.set_tail("guest", Some(tail("c d", "")), at());
+    let early = tail_texts(&drain(&mut rx));
+    assert_eq!(early, vec!["a|".to_string(), "c|".to_string()]);
+    let later = tails_over(&mut rx, start, 15).await;
+    assert_eq!(
+        later,
+        vec![(150, "c d|".to_string())],
+        "the tail waits 100 ms after the forced send at 50 ms, not the old 100 ms deadline"
+    );
+}
+
+/// What one reader thread saw: rounds in which it checked at least one
+/// message, and every break of the gapless / double-free rule.
+#[derive(Default)]
+struct ReaderReport {
+    checked_rounds: u32,
+    faults: Vec<String>,
+}
+
+/// Subscribe again and again while the publisher runs; each time the
+/// snapshot's ids and the next ≤ 5 streamed ids must be one gapless run.
+fn read_while_publishing(hub: &TranscriptHub, done: &AtomicBool) -> ReaderReport {
+    let mut report = ReaderReport::default();
+    while !done.load(Ordering::SeqCst) {
         let (snapshot, mut rx) = hub.subscribe();
         let ids: Vec<u64> = snapshot.sentences.iter().map(|s| s.id).collect();
         if ids.windows(2).any(|pair| pair[1] != pair[0] + 1) {
-            faults.push(format!("round {round}: snapshot ids not contiguous"));
+            report.faults.push("snapshot ids not contiguous".into());
         }
         let mut expected = ids.last().map_or(1, |last| last + 1);
         let mut seen = 0;
-        while expected <= total && seen < 300 {
-            match rx.recv().await {
+        while seen < 5 {
+            match rx.try_recv() {
                 Ok(ListenWsMessage::Sentence { sentence }) => {
                     if sentence.id != expected {
-                        faults.push(format!(
-                            "round {round}: got {} after {}",
-                            sentence.id,
-                            expected - 1
-                        ));
+                        report
+                            .faults
+                            .push(format!("got {} after {}", sentence.id, expected - 1));
                     }
                     expected = sentence.id + 1;
                     seen += 1;
                 }
                 Ok(_) => {}
-                Err(RecvError::Lagged(_)) => break,
-                Err(RecvError::Closed) => {
-                    faults.push("closed".into());
+                Err(TryRecvError::Empty) if done.load(Ordering::SeqCst) => break,
+                Err(TryRecvError::Empty) => std::thread::yield_now(),
+                Err(TryRecvError::Lagged(_)) => break,
+                Err(TryRecvError::Closed) => {
+                    report.faults.push("closed".into());
                     break;
                 }
             }
         }
+        if seen > 0 {
+            report.checked_rounds += 1;
+        }
     }
-    faults
+    report
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn subscribe_and_snapshot_never_miss_or_double_a_sentence() {
-    const TOTAL: u64 = 3_000;
+#[test]
+fn subscribe_and_snapshot_never_miss_or_double_a_sentence() {
+    const TOTAL: u64 = 50_000;
     let hub = TranscriptHub::new();
-    let publisher = {
-        let hub = hub.clone();
-        tokio::spawn(async move {
-            for n in 1..=TOTAL {
-                let _id = hub.push_sentence("guest", closed(&format!("S{n}.")));
-                if n % 50 == 0 {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                }
-            }
-        })
-    };
-    let readers: Vec<_> = (0..4u64)
-        .map(|k| {
-            let hub = hub.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(k * 7)).await;
-                read_in_rounds(hub, TOTAL, 6).await
+    let done = Arc::new(AtomicBool::new(false));
+    let start = Arc::new(Barrier::new(5));
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let (hub, done, start) = (hub.clone(), Arc::clone(&done), Arc::clone(&start));
+            std::thread::spawn(move || {
+                start.wait();
+                read_while_publishing(&hub, &done)
             })
         })
         .collect();
-    publisher.await.unwrap();
-    for reader in readers {
-        let faults = reader.await.unwrap();
-        assert!(faults.is_empty(), "{faults:?}");
+    start.wait();
+    for n in 1..=TOTAL {
+        let _id = hub.push_sentence("guest", closed(&format!("S{n}.")));
+        if n % 10 == 0 {
+            std::thread::yield_now();
+        }
     }
+    done.store(true, Ordering::SeqCst);
+    let reports: Vec<ReaderReport> = readers.into_iter().map(|r| r.join().unwrap()).collect();
+    let faults: Vec<&String> = reports.iter().flat_map(|r| &r.faults).collect();
+    assert!(faults.is_empty(), "{faults:?}");
+    let checked: u32 = reports.iter().map(|r| r.checked_rounds).sum();
+    assert!(
+        checked >= 100,
+        "the readers must subscribe while sentences flow, not after: {checked} rounds"
+    );
     assert_eq!(hub.snapshot().sentences.last().map(|s| s.id), Some(TOTAL));
 }
