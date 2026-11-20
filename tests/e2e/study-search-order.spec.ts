@@ -204,7 +204,11 @@ for (const [name, profile, touch] of [
     const { page } = opened;
     await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou");
     // The server's answer for a chapter a translation lacks: 200, no verses.
-    const kjvChapter = /\/bible\/study\/chapter\?translation=eng-kjv&book_code=HEB&chapter=11$/;
+    const kjvChapter = (url: URL) =>
+      url.pathname === "/bible/study/chapter" &&
+      url.searchParams.get("translation") === "eng-kjv" &&
+      url.searchParams.get("book_code") === "HEB" &&
+      url.searchParams.get("chapter") === "11";
     await page.route(kjvChapter, (route) =>
       route.fulfill({
         status: 200,
