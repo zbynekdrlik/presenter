@@ -15,6 +15,7 @@ mod field;
 mod field_recent;
 mod header;
 mod history;
+mod hit;
 mod long_press;
 mod markup_view;
 mod nav;
@@ -59,7 +60,7 @@ use crate::state::study::{
     START_CHAPTER,
 };
 use crate::state::study_history::StudyHistory;
-use crate::state::study_word::{KEY_NUMBERS, SCOPE_ALL};
+use crate::state::study_word::KEY_NUMBERS;
 
 use add_to_sermon::AddToSermonSheet;
 use bookmarks::{BookmarkList, BookmarkWrites, BookmarksSheet};
@@ -70,7 +71,7 @@ use field::StudyField;
 use header::StudyHeader;
 use history::HistorySheet;
 use reader::{ChapterBar, Reader};
-use results::SearchResults;
+use results::{fetch_search, SearchResults};
 use scroll::ScrollPlan;
 use sermon_editor::{open_editor, Editor, SermonEditor};
 use sermon_pane::SermonPane;
@@ -82,8 +83,6 @@ use text_size::TextSizeSheet;
 use verse_actions::VerseActionsSheet;
 use word_sheet::{LexiconEntries, WordSheet};
 
-/// `/bible/search` answers at most this many verses.
-const SEARCH_LIMIT: u32 = 100;
 /// How long "Skopírované" stays.
 const NOTICE_MS: u32 = 2_500;
 /// How long a toast with Späť stays.
@@ -374,25 +373,6 @@ fn show_chapter(s: Study, chapter: Chapter) {
     scroll::settle(s);
 }
 
-fn fetch_search(s: Study, translation: String, query: String, scope: String) {
-    let key = search_marker(&translation, &query, &scope);
-    leptos::task::spawn_local(async move {
-        let scoped = (scope != SCOPE_ALL).then_some(scope.as_str());
-        let answer = bible_api::search(&query, &translation, Some(SEARCH_LIMIT), scoped).await;
-        if s.search_key() != Some((translation, query, scope)) {
-            return;
-        }
-        s.search.set(match answer {
-            Ok(hits) => Search::Ready { key, hits },
-            Err(err) => Search::Failed {
-                key,
-                message: study_error(&err),
-            },
-        });
-        scroll::settle(s);
-    });
-}
-
 fn ensure_structure(s: Study, code: String) {
     if s.structures.with_untracked(|map| map.contains_key(&code)) {
         return;
@@ -675,8 +655,15 @@ pub fn StudyPage() -> impl IntoView {
             StudyView::Sermon { id } => ViewKind::Sermon(id.clone()),
         })
     });
-    let bible_view = move || matches!(view_kind.get(), ViewKind::Reader | ViewKind::Search);
-    let field_view = move || bible_view() || view_kind.get() == ViewKind::Strongs;
+    // #983: the search view carries its own translation row above the hits
+    // (`results::translation_row`), so the header's chips are the reader's.
+    let reader_view = move || view_kind.get() == ViewKind::Reader;
+    let field_view = move || {
+        matches!(
+            view_kind.get(),
+            ViewKind::Reader | ViewKind::Search | ViewKind::Strongs
+        )
+    };
     let body = move || match view_kind.get() {
         ViewKind::Reader => view! {
             <Reader s=s />
@@ -719,7 +706,7 @@ pub fn StudyPage() -> impl IntoView {
             <Show when=field_view>
                 <div class="study-tools">
                     <StudyField s=s />
-                    <Show when=bible_view>
+                    <Show when=reader_view>
                         <Favourites s=s />
                     </Show>
                 </div>

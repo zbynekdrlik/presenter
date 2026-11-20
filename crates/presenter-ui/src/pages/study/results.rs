@@ -1,18 +1,51 @@
 //! The text search view (spec §6.4): `/bible/search` in the reader's
-//! translation, within the scope on the route. A fully quoted query is an
-//! exact phrase. A hit opens the reader at its verse.
+//! translation, within the scope on the route, every hit in the Bible's order
+//! (#983). A fully quoted query is an exact phrase. A hit opens the reader at
+//! its verse. The translation row runs the search again in another one.
 
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
+use presenter_core::bible::SearchOrder;
 
-use super::scroll::ScrollPlan;
-use super::{
-    add_to_sermon, compare, nav, Chapter, Search, Study, REMOTE_TRANSLATION, SEARCH_LIMIT,
-};
-use crate::api::bible::BibleSearchHit;
-use crate::api::sermons::SermonPassage;
-use crate::state::study::{mark_matches, StudyRoute, StudyView};
+use super::favourites::switch;
+use super::hit::Hit;
+use super::scroll::{self, ScrollPlan};
+use super::{nav, study_error, Chapter, Search, Study, REMOTE_TRANSLATION};
+use crate::api::bible as bible_api;
+use crate::state::bible_translations::study_chip_cap;
+use crate::state::study::{search_marker, visible_favourites, StudySheet, StudyView};
+use crate::state::study_search::search_translation_row;
 use crate::state::study_word::{search_scopes, SCOPE_ALL};
+
+/// `/bible/search` in the Bible's order answers at most this many verses
+/// (#983: every hit, not the first 100 by relevance).
+const SEARCH_LIMIT: u32 = 1_000;
+
+/// The search on the route, in the Bible's order. Only the newest lands.
+pub(super) fn fetch_search(s: Study, translation: String, query: String, scope: String) {
+    let key = search_marker(&translation, &query, &scope);
+    leptos::task::spawn_local(async move {
+        let scoped = (scope != SCOPE_ALL).then_some(scope.as_str());
+        let answer = bible_api::search(
+            &query,
+            &translation,
+            (Some(SEARCH_LIMIT), scoped),
+            SearchOrder::Bible,
+        )
+        .await;
+        if s.search_key() != Some((translation, query, scope)) {
+            return;
+        }
+        s.search.set(match answer {
+            Ok(hits) => Search::Ready { key, hits },
+            Err(err) => Search::Failed {
+                key,
+                message: study_error(&err),
+            },
+        });
+        scroll::settle(s);
+    });
+}
 
 fn count_text(count: usize) -> String {
     if count >= SEARCH_LIMIT as usize {
@@ -39,6 +72,71 @@ fn set_scope(s: Study, wanted: &str) {
     }
     s.scroll_plan.set_value(ScrollPlan::Top);
     nav::replace(s, route);
+}
+
+/// The reader's favourites that can be searched, in one row above the hits,
+/// and ▾ for every installed translation (#983: the header's chips are the
+/// reader's, and a phone's focused field hid them). A tap is the reader chip's
+/// `switch`: the search runs again in that translation, from the top.
+fn translation_row(s: Study) -> impl IntoView {
+    let open_list = move |_| nav::open_sheet(s, nav::sheet_route(s, StudySheet::Translations));
+    let chips = move || {
+        let installed = {
+            s.translations.track();
+            s.installed_codes()
+        };
+        let favourites = visible_favourites(&s.favourites.get(), &installed);
+        let open = s.route.with(|route| route.translation.clone());
+        search_translation_row(
+            favourites,
+            open.as_deref(),
+            study_chip_cap(s.narrow.get()),
+            |code| code != REMOTE_TRANSLATION,
+        )
+    };
+    view! {
+        <nav
+            class="study-scopes study-search-translations"
+            data-role="search-translations"
+            aria-label="Hľadať v preklade"
+        >
+            <For
+                each=chips
+                key=|chip| chip.clone()
+                children=move |(_, code)| {
+                    let mine = code.clone();
+                    let target = code.clone();
+                    let pressed = Memo::new(move |_| {
+                        s.route
+                            .with(|route| route.translation.as_deref() == Some(mine.as_str()))
+                    });
+                    view! {
+                        <button
+                            type="button"
+                            class="study-chip"
+                            data-role="search-translation"
+                            data-translation=code.clone()
+                            aria-pressed=move || if pressed.get() { "true" } else { "false" }
+                            on:click=move |_| switch(s, &target)
+                        >
+                            {translation_short_code(&code)}
+                        </button>
+                    }
+                }
+            />
+            <button
+                type="button"
+                class="study-chip"
+                data-role="study-translations-open"
+                title="Všetky preklady"
+                aria-label="Všetky preklady"
+                aria-haspopup="dialog"
+                on:click=open_list
+            >
+                "\u{25BE}"
+            </button>
+        </nav>
+    }
 }
 
 fn scope_label(s: Study, scope: &str) -> String {
@@ -141,6 +239,7 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
                 data-loaded-for=loaded_for
                 data-state=state
             >
+                {translation_row(s)}
                 {move || (!remote()).then(|| scope_row(s))}
                 {move || {
                     match count() {
@@ -196,110 +295,5 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
                 }}
             </section>
         </main>
-    }
-}
-
-#[component]
-fn Hit(s: Study, hit: BibleSearchHit, query: String) -> impl IntoView {
-    let reference = hit.reference.clone();
-    let translation = hit.translation.code.clone();
-    let label = format!(
-        "{} · {}",
-        reference.to_human_readable(),
-        translation_short_code(&translation)
-    );
-    let on_add = {
-        let reference = reference.clone();
-        let translation = translation.clone();
-        move |_| {
-            let Some(book) = reference.book_code.clone() else {
-                return;
-            };
-            let verse_start = reference.verse_start;
-            add_to_sermon::add(
-                s,
-                SermonPassage {
-                    translation: translation.clone(),
-                    book_code: book,
-                    chapter: reference.chapter,
-                    verse_start,
-                    verse_end: reference.verse_end.max(verse_start),
-                },
-            );
-        }
-    };
-    let has_book = reference.book_code.is_some();
-    let on_compare = {
-        let reference = reference.clone();
-        let translation = translation.clone();
-        move |_| {
-            let Some(book) = reference.book_code.as_deref() else {
-                return;
-            };
-            compare::open_at(
-                s,
-                &translation,
-                (book, reference.chapter, reference.verse_start),
-            );
-        }
-    };
-    let on_open = {
-        let reference = reference.clone();
-        move |_| {
-            let Some(book) = reference.book_code.as_deref() else {
-                return;
-            };
-            let verse = reference.verse_start;
-            let route = StudyRoute::reader(&translation, book, reference.chapter)
-                .with_verses(Some((verse, reference.verse_end.max(verse))));
-            nav::go(s, route, ScrollPlan::Verse(verse));
-        }
-    };
-    let snippet = mark_matches(&hit.text, &query)
-        .into_iter()
-        .map(|(piece, marked)| {
-            if marked {
-                view! { <mark>{piece}</mark> }.into_any()
-            } else {
-                view! { <span>{piece}</span> }.into_any()
-            }
-        })
-        .collect_view();
-
-    view! {
-        <div class="study-hit-row">
-            <button
-                type="button"
-                class="study-hit"
-                data-role="search-hit"
-                data-book-code=reference.book_code.clone().unwrap_or_default()
-                data-chapter=reference.chapter
-                data-verse=reference.verse_start
-                on:click=on_open
-            >
-                <span class="study-hit__label">{label}</span>
-                <span class="study-hit__text">{snippet}</span>
-            </button>
-            {has_book.then(|| view! {
-                <button
-                    type="button"
-                    class="study-icon"
-                    data-role="search-hit-compare"
-                    aria-label="Porovnať"
-                    on:click=on_compare
-                >
-                    "\u{2261}"
-                </button>
-            })}
-            <button
-                type="button"
-                class="study-icon"
-                data-role="search-hit-add"
-                aria-label="Pridať do kázne"
-                on:click=on_add
-            >
-                "+"
-            </button>
-        </div>
     }
 }

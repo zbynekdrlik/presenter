@@ -9,6 +9,7 @@ use std::rc::Rc;
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::bible::sermon::translation_short_code;
+use presenter_core::bible::SearchOrder;
 
 use super::{Console, Picked};
 use crate::api::bible::{self as api, BibleSearchHit};
@@ -42,7 +43,13 @@ pub(super) fn TextSearch(console: Console) -> impl IntoView {
         }
         *pending.borrow_mut() = Some(Timeout::new(SEARCH_DELAY_MS, move || {
             leptos::task::spawn_local(async move {
-                let answer = api::search(&input, &main, Some(SEARCH_LIMIT), None).await;
+                let answer = api::search(
+                    &input,
+                    &main,
+                    (Some(SEARCH_LIMIT), None),
+                    SearchOrder::Relevance,
+                )
+                .await;
                 if answer.is_err() {
                     leptos::logging::log!("console text search failed for {input:?}");
                 }
