@@ -324,3 +324,17 @@ paths:
   timeout. Child modules hold `impl SonioxCore` blocks: their methods are `pub(super)`, the parent's helpers
   stay private (`pub(super)` there leaks the private `Live` type → `private_interfaces` under `-D warnings`).
   Tests: hand-made `Instant`s, a frame's first two samples carry its index.
+- **Soniox driver (#852 C3-5, server `listen/asr.rs`, `listen/soniox/{conn,session}.rs`):** `StreamingAsr::open`
+  = one task per session (`SonioxAsr`), channels in/out; the driver only executes `SonioxCore`'s actions (no
+  rule of its own) and feeds it `tokio::time::Instant::now().into_std()` (the paused test clock drives it).
+  One connection = one task (`conn::spawn_connection`): 10 s connect timeout → `ConnectFailed` (status of a
+  refused upgrade; a URL / key that makes no request = 400 → stop, never a retry loop), audio as BINARY
+  s16le, empty TEXT = end, ONE closing report, never a WS ping; its command channel is unbounded (a stuck
+  socket must not stall the session task, the stall rule bounds it). The transport is the `Connector` seam
+  (TCP in production, `tokio::io::duplex` in tests) and both use the ONE `conn::handshake`. Key safety:
+  `Authorization` is `set_sensitive`, the `State` error text is redacted at the SOURCE (the status shows it),
+  and `main.rs` caps `tungstenite::handshake` at DEBUG — its TRACE line prints the raw upgrade with the key.
+  The reconnect WARN streak ends on EVERY state but `reconnecting` (a park between outages too, #484 reset).
+  Tests (`listen/soniox/tests/`): the scripted server (`mock.rs`: `Step`s, upgrade headers, a log of every
+  client frame) on `start_paused`; a tungstenite upgrade callback needs `#[allow(clippy::result_large_err)]`
+  (the http error response is its fixed type).
