@@ -130,6 +130,26 @@ class TableTests(unittest.TestCase):
             gen.short_defaults(curated, self.rows, codes)
 
 
+class EnglishLongNameTests(unittest.TestCase):
+    def test_long_names_follow_the_book_order(self):
+        names = gen.english_long_names(gen.DATA / "bprp-eng-preferred.yaml")
+        self.assertEqual(len(names), 66)
+        self.assertEqual(names[0], "Genesis")
+        self.assertEqual(names[18], "Psalms")
+        self.assertEqual(names[40], "Mark")
+        self.assertEqual(names[44], "Romans")
+        self.assertEqual(names[65], "Revelation")
+
+    def test_a_book_without_a_long_name_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bprp-eng-preferred.yaml"
+            source = gen.yaml.safe_load((gen.DATA / "bprp-eng-preferred.yaml").read_text(encoding="utf-8"))
+            del source["default"]["Jude"]["long"]
+            path.write_text(gen.yaml.safe_dump(source), encoding="utf-8")
+            with self.assertRaises(gen.GeneratorError):
+                gen.english_long_names(path)
+
+
 class CheckModeTests(unittest.TestCase):
     def test_check_passes_on_a_fresh_table_and_fails_on_drift(self):
         with tempfile.TemporaryDirectory() as tmp:

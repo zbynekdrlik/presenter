@@ -707,6 +707,7 @@ mod tests {
             rejected: Vec::new(),
             recorder,
             dante: DanteStatus::default(),
+            transcription: Default::default(),
         }
     }
 

@@ -286,3 +286,14 @@ paths:
   `listen/ws.rs` (camelCase, `type` tag) — server, UI and E2E share it. The test fixture
   `listen/testdata/soniox-assembly-fixture.jsonl` is hand-written (own text): never commit an eval log
   of a sermon.
+- **Transcription rules + context (#852 C3-2, core `listen/transcription.rs`, `listen/context.rs`, pure):**
+  ONE `start_decision` (switch → guest mic chosen → published → key → cap → today's `listen.session`
+  choice → Kázeň with the 60 s stop delay) used by the supervisor AND the status; the cap counts
+  connected ms (`>=` = reached), a start after it adds 60 min to today's row only. Save a
+  `listen.transcription` row with `validate_transcription_change(new, stored, published)`: a mic the
+  stored row names stays valid while missing (spec gap 7 — the switch must go off then). Context terms:
+  books (generated `BOOK_LONG_EN` — run `gen_bible_book_names.py`, never hand-edit) → today's refs
+  (`reference_term`, "Psalm 23:1") → tips → curated; dedup lowercase after collapsing whitespace; the
+  8 000-char cap counts compact serde_json chars (`context_json_chars`, pinned against serde_json — core
+  has serde_json only as a dev-dependency); a new wire field of `ListenStatus` is `#[serde(default)]`
+  and every `ListenStatus {` literal (server `health.rs`, two presenter-ui tests) gets it.

@@ -2,8 +2,10 @@
 //! C1a: the microphones ([`mics`]) and `GET /listen/status` ([`status`]).
 //! C1b: the recorder's contract ([`recorder`]).
 //! C3: the guest's live transcript — token assembly ([`transcript`]), the
-//! session state ([`transcription`]) and the `/listen/ws` wire ([`ws`]).
+//! session state, rows, start decision and cost ([`transcription`]), the
+//! `/listen/ws` wire ([`ws`]) and the Soniox context terms ([`context`]).
 
+pub mod context;
 pub mod mics;
 pub mod recorder;
 pub mod status;
