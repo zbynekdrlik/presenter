@@ -82,6 +82,11 @@ pub fn ends_sentence(text: &str) -> bool {
         .ends_with(['.', '!', '?', '…'])
 }
 
+/// `text` opens with punctuation that belongs to the word before it.
+fn attaches_to_previous(text: &str) -> bool {
+    text.starts_with(['.', ',', ';', ':', '!', '?', '…', ')', '”', '"', '’', '\''])
+}
+
 fn session_ms(offset_ms: u64, ms: Option<u64>) -> Option<u64> {
     ms.map(|ms| offset_ms.saturating_add(ms))
 }
@@ -95,6 +100,8 @@ struct OpenSentence {
     language: Option<String>,
     /// The connection of the last final appended.
     connection: Option<u32>,
+    /// The newest connection with a final in this sentence.
+    newest: Option<u32>,
 }
 
 /// Turns token batches into closed sentences and a live tail. One per
@@ -133,7 +140,7 @@ impl TranscriptAssembler {
             if token.text == END_MARKER || token.text == FIN_MARKER {
                 // A late marker of a draining older connection never closes
                 // a sentence that already holds a newer connection's words.
-                let ours = self.open.connection.is_none_or(|c| c <= batch.connection);
+                let ours = self.open.newest.is_none_or(|c| c <= batch.connection);
                 if token.is_final && ours {
                     self.close_into(&mut closed, batch.received_at);
                 }
@@ -194,7 +201,8 @@ impl TranscriptAssembler {
             || self.open.text.ends_with(char::is_whitespace);
         // A connection's first token carries no leading space: a final of
         // another connection than the open sentence's last one starts a word.
-        let other_connection = self.open.connection.is_some_and(|c| c != batch.connection);
+        let other_connection = self.open.connection.is_some_and(|c| c != batch.connection)
+            && !attaches_to_previous(&token.text);
         let starts_word = spaced || other_connection;
         if !self.open.text.is_empty()
             && starts_word
@@ -220,13 +228,14 @@ impl TranscriptAssembler {
             .or(session_ms(batch.offset_ms, token.end_ms))
             .unwrap_or(self.last_ms);
         let end = session_ms(batch.offset_ms, token.end_ms).unwrap_or(start);
-        self.last_ms = end;
+        self.last_ms = self.last_ms.max(end);
         self.open.start_ms.get_or_insert(start);
-        self.open.end_ms = end;
+        self.open.end_ms = self.open.end_ms.max(end);
         if self.open.language.is_none() {
             self.open.language.clone_from(&token.language);
         }
         self.open.connection = Some(batch.connection);
+        self.open.newest = self.open.newest.max(Some(batch.connection));
         self.open.text.push_str(text);
         self.pending_close = ends_sentence(&self.open.text);
     }
@@ -263,6 +272,7 @@ impl TranscriptAssembler {
         if other_connection
             && !partial_text.is_empty()
             && !partial_text.starts_with(char::is_whitespace)
+            && !attaches_to_previous(&partial_text)
             && !self.open.text.ends_with(char::is_whitespace)
         {
             partial_text.insert(0, ' ');
