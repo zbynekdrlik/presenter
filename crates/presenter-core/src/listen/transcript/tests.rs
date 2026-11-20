@@ -95,7 +95,9 @@ fn a_period_closes_only_when_the_next_final_starts_a_word() {
         "Read", " John", " 5", ":", "13", " and", " verse", " 5", ".", "13", " now",
     ]));
     assert!(out.closed.is_empty(), "{:?}", texts(&out));
-    // "Dr" "." then a continuation inside the token stream: no close.
+    // A period inside a token run ("Dr" "." "J") does not close; an
+    // abbreviation followed by a space ("Dr." " Smith") does — the accepted
+    // rule of Decision 7 (no abbreviation list).
     let out = a.apply(finals(&[" Dr", ".", "J", " said", " it", "."]));
     assert!(out.closed.is_empty());
     // The pending period waits for the next final.
@@ -212,11 +214,12 @@ fn a_connection_end_drops_its_tail_but_keeps_its_finals() {
             start_ms: Some(0),
         })
     );
-    // The resend connection recreates the rest; nothing is doubled.
+    // The resend connection recreates the rest; nothing is doubled. Its
+    // first token has no leading space, as Soniox sends it.
     let out = a.apply(batch(
         2,
         250,
-        vec![fin(" so", 0), fin(" loved", 100), fin(".", 160)],
+        vec![fin("so", 0), fin(" loved", 100), fin(".", 160)],
     ));
     assert_eq!(out.tail.unwrap().final_text, "For God so loved.");
     let out = a.flush(at(3));
@@ -234,6 +237,138 @@ fn a_draining_older_connection_adds_only_its_finals() {
     let tail = out.tail.unwrap();
     assert_eq!(tail.final_text, "Grace and");
     assert_eq!(tail.partial_text, " peace");
+}
+
+#[test]
+fn a_new_connection_starts_a_word_and_decides_a_pending_close() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(
+        1,
+        0,
+        vec![
+            fin("He", 0),
+            fin(" is", 100),
+            fin(" risen", 200),
+            fin(".", 260),
+        ],
+    ));
+    a.connection_ended(1);
+    // The resend's first word closes the pending sentence.
+    let out = a.apply(batch(2, 400, vec![fin("Then", 0), fin(" we", 100)]));
+    assert_eq!(texts(&out), ["He is risen."]);
+    assert_eq!(out.tail.unwrap().final_text, "Then we");
+    a.connection_ended(2);
+    // The next connection's live tail is shown as a new word, then its finals.
+    let out = a.apply(batch(3, 900, vec![part("went", 0)]));
+    let tail = out.tail.unwrap();
+    assert_eq!(
+        (tail.final_text.as_str(), tail.partial_text.as_str()),
+        ("Then we", " went")
+    );
+    let out = a.apply(batch(3, 900, vec![fin("went", 0), part(" home", 100)]));
+    let tail = out.tail.unwrap();
+    assert_eq!(
+        (tail.final_text.as_str(), tail.partial_text.as_str()),
+        ("Then we went", " home")
+    );
+}
+
+#[test]
+fn a_new_connection_counts_its_first_word_for_the_cap() {
+    let mut a = TranscriptAssembler::new();
+    let mut words: Vec<String> = (1..=19).map(|i| format!(" w{i}")).collect();
+    words[0] = "w1".into();
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    a.apply(finals(&refs));
+    a.apply(batch(2, 3_000, vec![fin("twenty", 0)]));
+    let out = a.apply(batch(2, 3_000, vec![fin(" more", 100)]));
+    assert_eq!(out.closed.len(), 1);
+    assert!(
+        out.closed[0].text.ends_with(" w19 twenty"),
+        "{}",
+        out.closed[0].text
+    );
+}
+
+#[test]
+fn a_late_fin_of_an_older_connection_never_splits_a_newer_sentence() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(1, 0, vec![fin("Grace", 0)]));
+    a.apply(batch(2, 1_000, vec![fin("and", 0), fin(" peace", 100)]));
+    let out = a.apply(batch(1, 0, vec![fin(FIN_MARKER, 0)]));
+    assert!(out.closed.is_empty());
+    assert_eq!(out.tail, None);
+    // The newer connection's own marker still closes it.
+    let out = a.apply(batch(2, 1_000, vec![fin(FIN_MARKER, 0)]));
+    assert_eq!(texts(&out), ["Grace and peace"]);
+    // An older marker with nothing open is harmless.
+    assert_eq!(
+        a.apply(batch(1, 0, vec![fin(FIN_MARKER, 0)])),
+        AssemblyOutput::default()
+    );
+}
+
+#[test]
+fn an_older_connections_partials_change_nothing() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(2, 0, vec![part("Lord", 0)]));
+    assert_eq!(a.apply(batch(1, 0, vec![part("junk", 0)])).tail, None);
+    // The end of a connection that never sent a batch clears the live tail.
+    assert_eq!(a.connection_ended(3).tail, Some(TailText::default()));
+}
+
+#[test]
+fn flush_starts_the_connection_numbering_again() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(5, 0, vec![fin("Amen", 0)]));
+    a.flush(at(2));
+    let out = a.apply(batch(1, 0, vec![fin("Next", 0), part(" day", 100)]));
+    let tail = out.tail.unwrap();
+    assert_eq!(
+        (tail.final_text.as_str(), tail.partial_text.as_str()),
+        ("Next", " day")
+    );
+}
+
+#[test]
+fn a_token_without_times_takes_the_newest_session_ms() {
+    let mut a = TranscriptAssembler::new();
+    a.apply(batch(1, 1_000, vec![fin("And", 200)]));
+    let mut untimed = fin(" so", 0);
+    untimed.start_ms = None;
+    untimed.end_ms = None;
+    let mut end_only = fin(" on", 0);
+    end_only.start_ms = None;
+    end_only.end_ms = Some(900);
+    a.apply(batch(1, 1_000, vec![untimed.clone(), end_only]));
+    let out = a.flush(at(3));
+    assert_eq!(
+        (out.closed[0].start_ms, out.closed[0].end_ms),
+        (1_200, 1_900)
+    );
+    // A sentence of untimed tokens only sits at the newest time known.
+    a.apply(batch(1, 0, vec![fin("x", 500)]));
+    a.flush(at(4));
+    a.apply(batch(1, 0, vec![fin("y", 700)]));
+    a.apply(batch(1, 0, vec![fin(FIN_MARKER, 0)]));
+    let mut alone = untimed;
+    alone.text = "z".into();
+    a.apply(batch(1, 0, vec![alone]));
+    let out = a.flush(at(5));
+    assert_eq!((out.closed[0].start_ms, out.closed[0].end_ms), (760, 760));
+}
+
+#[test]
+fn the_language_comes_from_the_first_final_that_names_one() {
+    let mut a = TranscriptAssembler::new();
+    let mut first = fin("Hello", 0);
+    first.language = None;
+    let mut second = fin(" church", 100);
+    second.language = Some("en".into());
+    let mut third = fin(" ahoj", 200);
+    third.language = Some("sk".into());
+    a.apply(batch(1, 0, vec![first, second, third]));
+    assert_eq!(a.flush(at(6)).closed[0].language.as_deref(), Some("en"));
 }
 
 #[test]
