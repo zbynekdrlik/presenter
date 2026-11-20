@@ -23,7 +23,7 @@ mod recording_file;
 mod resample;
 // #852 C3-3: the Soniox wire + env settings; the provider task (C3-5) and the
 // supervisor (C3-7) are its first users — C3-7 removes this allowance.
-#[allow(dead_code, unused_imports)]
+#[allow(dead_code)]
 mod soniox;
 #[cfg(test)]
 mod tests;

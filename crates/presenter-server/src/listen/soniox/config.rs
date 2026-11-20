@@ -3,7 +3,8 @@
 //! `PRESENTER_LISTEN_SONIOX_MODEL` (default [`DEFAULT_MODEL`]),
 //! `PRESENTER_LISTEN_SONIOX_URL` (default [`DEFAULT_URL`]; tests point it at
 //! a mock, `ws://` allowed) and `PRESENTER_LISTEN_SONIOX_ENDPOINT_DELAY_MS`
-//! (unset = endpoint detection off, the measured config). An empty or
+//! (unset = endpoint detection off, the measured config; any whole number,
+//! 0 included, turns it on, clamped to 500–3000 ms). An empty or
 //! whitespace-only value counts as unset. `Debug` never prints the key.
 
 use super::wire::{DEFAULT_MODEL, DEFAULT_URL};

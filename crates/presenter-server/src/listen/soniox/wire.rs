@@ -85,8 +85,10 @@ pub fn config_message(c: &SonioxConfig) -> String {
         enable_endpoint_detection: delay.map(|_| true),
         max_endpoint_delay_ms: delay,
     };
-    // Plain strings and numbers only: serialisation cannot fail.
-    serde_json::to_string(&json).unwrap_or_default()
+    // Plain strings and numbers only: serialisation cannot fail. Never fall
+    // back to "" — an empty TEXT frame ENDS the stream; "{}" is refused by
+    // Soniox as a bad request (a visible stop) instead.
+    serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// A control message (a TEXT frame).

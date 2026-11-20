@@ -40,8 +40,16 @@ fn the_config_matches_the_measured_one() {
 
 #[test]
 fn the_config_context_size_is_what_core_counts() {
-    let c = context();
-    let message = config_message(&config(None));
+    let mut c = context();
+    // Escapes (quote, backslash, a control char) and multi-byte letters.
+    c.terms.push("Ján \"5:1\" \\ a\u{1}b".to_string());
+    c.general.push(("note".to_string(), "Žalm\t23".to_string()));
+    let message = config_message(&SonioxConfig {
+        model: DEFAULT_MODEL.to_string(),
+        context: c.clone(),
+        endpoint_delay_ms: None,
+    });
+    assert!(message.contains(r#"Ján \"5:1\" \\ a\u0001b"#), "{message}");
     let value: serde_json::Value = serde_json::from_str(&message).unwrap_or_default();
     let context_json = serde_json::to_string(&value["context"]).unwrap_or_default();
     assert_eq!(
@@ -54,6 +62,7 @@ fn the_config_context_size_is_what_core_counts() {
 fn endpoint_delay_adds_detection_clamped_500_to_3000() {
     let cases = [
         (1_200, 1_200),
+        (0, 500),
         (100, 500),
         (500, 500),
         (3_000, 3_000),

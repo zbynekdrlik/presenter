@@ -42,6 +42,8 @@ fn empty_values_count_as_unset_and_a_bad_delay_is_ignored() {
     assert_eq!(blank.model, "stt-rt-v6");
     assert_eq!(blank.endpoint_delay_ms, None);
     assert_eq!(env(&[(ENDPOINT_DELAY_VAR, "-5")]).endpoint_delay_ms, None);
+    // 0 is a number: it turns detection on (config_message clamps it to 500).
+    assert_eq!(env(&[(ENDPOINT_DELAY_VAR, "0")]).endpoint_delay_ms, Some(0));
 }
 
 #[test]
