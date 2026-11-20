@@ -49,7 +49,13 @@ async fn a_bookmark_keeps_its_trimmed_name_and_the_translations_book_name() {
     let state = hebrews().await;
     let owner = Some("preacher@example.org");
     let made = state
-        .create_study_bookmark(owner, "  Kázeň  ", &place("SLK-SEB", "heb", 11, 3), None)
+        .create_study_bookmark(
+            owner,
+            None,
+            "  Kázeň  ",
+            &place("SLK-SEB", "heb", 11, 3),
+            None,
+        )
         .await
         .expect("create");
     assert_eq!(made.name, "Kázeň");
@@ -57,7 +63,7 @@ async fn a_bookmark_keeps_its_trimmed_name_and_the_translations_book_name() {
     assert_eq!(made.book_code, "HEB");
     assert_eq!(made.book, "Hebrejom");
     assert_eq!((made.chapter, made.verse), (11, 3));
-    let list = state.list_study_bookmarks(owner).await.expect("list");
+    let list = state.list_study_bookmarks(owner, None).await.expect("list");
     // The list adds the verse's text (#951); a write answers none.
     assert_eq!(made.text, None);
     let listed = StudyBookmark {
@@ -66,7 +72,7 @@ async fn a_bookmark_keeps_its_trimmed_name_and_the_translations_book_name() {
     };
     assert_eq!(list, vec![listed]);
     assert!(state
-        .list_study_bookmarks(None)
+        .list_study_bookmarks(None, None)
         .await
         .expect("lan")
         .is_empty());
@@ -100,13 +106,13 @@ async fn a_place_the_translation_lacks_is_refused_in_slovak() {
     ];
     for (asked, expected) in cases {
         let err = state
-            .create_study_bookmark(None, "Kázeň", &asked, None)
+            .create_study_bookmark(None, None, "Kázeň", &asked, None)
             .await
             .expect_err("refused");
         assert_eq!(refusal(&err), expected, "{asked:?}");
     }
     assert!(state
-        .list_study_bookmarks(None)
+        .list_study_bookmarks(None, None)
         .await
         .expect("list")
         .is_empty());
@@ -116,7 +122,7 @@ async fn a_place_the_translation_lacks_is_refused_in_slovak() {
 async fn the_nlt_is_checked_against_its_structure_without_a_request() {
     let state = hebrews().await;
     let made = state
-        .create_study_bookmark(None, "NLT", &place("eng-nlt", "HEB", 11, 2), None)
+        .create_study_bookmark(None, None, "NLT", &place("eng-nlt", "HEB", 11, 2), None)
         .await
         .expect("create");
     assert_eq!((made.translation.as_str(), made.verse), ("eng-nlt", 2));
@@ -128,13 +134,13 @@ async fn an_empty_or_too_long_name_is_refused() {
     let state = hebrews().await;
     let heb = place("slk-seb", "HEB", 11, 1);
     let empty = state
-        .create_study_bookmark(None, "   ", &heb, None)
+        .create_study_bookmark(None, None, "   ", &heb, None)
         .await
         .expect_err("empty");
     assert_eq!(refusal(&empty), "Záložka potrebuje názov");
     let long = "a".repeat(MAX_NAME_CHARS + 1);
     let too_long = state
-        .create_study_bookmark(None, &long, &heb, None)
+        .create_study_bookmark(None, None, &long, &heb, None)
         .await
         .expect_err("long");
     assert_eq!(
@@ -143,7 +149,7 @@ async fn an_empty_or_too_long_name_is_refused() {
     );
     let fits = "ž".repeat(MAX_NAME_CHARS);
     assert!(state
-        .create_study_bookmark(None, &fits, &heb, None)
+        .create_study_bookmark(None, None, &fits, &heb, None)
         .await
         .is_ok());
 }
@@ -154,12 +160,12 @@ async fn a_full_list_refuses_one_more() {
     let heb = place("slk-seb", "HEB", 11, 1);
     for index in 0..MAX_BOOKMARKS {
         state
-            .create_study_bookmark(None, &format!("Z {index}"), &heb, None)
+            .create_study_bookmark(None, None, &format!("Z {index}"), &heb, None)
             .await
             .expect("fits");
     }
     let err = state
-        .create_study_bookmark(None, "Navyše", &heb, None)
+        .create_study_bookmark(None, None, "Navyše", &heb, None)
         .await
         .expect_err("full");
     assert_eq!(
@@ -168,7 +174,7 @@ async fn a_full_list_refuses_one_more() {
     );
     // Another list is not full.
     assert!(state
-        .create_study_bookmark(Some("preacher@example.org"), "Moja", &heb, None)
+        .create_study_bookmark(Some("preacher@example.org"), None, "Moja", &heb, None)
         .await
         .is_ok());
 }
@@ -178,16 +184,16 @@ async fn the_list_is_newest_first_with_each_verses_text() {
     let state = hebrews().await;
     for verse in [1, 2, 3] {
         state
-            .create_study_bookmark(None, "x", &place("slk-seb", "HEB", 11, verse), None)
+            .create_study_bookmark(None, None, "x", &place("slk-seb", "HEB", 11, verse), None)
             .await
             .expect("create");
     }
     // The NLT is remote: no text of its own, and no main translation set → none.
     state
-        .create_study_bookmark(None, "nlt", &place("eng-nlt", "HEB", 11, 2), Some(3))
+        .create_study_bookmark(None, None, "nlt", &place("eng-nlt", "HEB", 11, 2), Some(3))
         .await
         .expect("nlt");
-    let list = state.list_study_bookmarks(None).await.expect("list");
+    let list = state.list_study_bookmarks(None, None).await.expect("list");
     let shown: Vec<(u16, Option<&str>)> = list
         .iter()
         .map(|row| (row.verse, row.text.as_deref()))
@@ -205,14 +211,14 @@ async fn the_list_is_newest_first_with_each_verses_text() {
     let mut prefs = state.get_bible_preferences().await.expect("prefs");
     prefs.main_translation = Some("eng-kjv".to_string());
     state.set_bible_preferences(prefs).await.expect("set prefs");
-    let list = state.list_study_bookmarks(None).await.expect("list");
+    let list = state.list_study_bookmarks(None, None).await.expect("list");
     assert_eq!(list[3].text.as_deref(), Some("verš 2"));
     assert_eq!(list[0].text.as_deref(), Some("verš 3"));
     // The NLT as the main translation: its rows borrow the KJV's text.
     let mut prefs = state.get_bible_preferences().await.expect("prefs");
     prefs.main_translation = Some("eng-nlt".to_string());
     state.set_bible_preferences(prefs).await.expect("set prefs");
-    let list = state.list_study_bookmarks(None).await.expect("list");
+    let list = state.list_study_bookmarks(None, None).await.expect("list");
     assert_eq!(list[3].text.as_deref(), Some("verš 2"));
 }
 
@@ -240,7 +246,7 @@ async fn a_reorder_and_a_bulk_delete_with_spat_keep_every_place() {
     let mut ids = Vec::new();
     for name in ["C", "B", "A"] {
         let made = state
-            .create_study_bookmark(None, name, &heb, None)
+            .create_study_bookmark(None, None, name, &heb, None)
             .await
             .expect("create");
         ids.push(made.id);
@@ -249,19 +255,19 @@ async fn a_reorder_and_a_bulk_delete_with_spat_keep_every_place() {
         list.into_iter().map(|bookmark| bookmark.name).collect()
     };
     assert_eq!(
-        names(state.list_study_bookmarks(None).await.expect("list")),
+        names(state.list_study_bookmarks(None, None).await.expect("list")),
         ["A", "B", "C"]
     );
     state
-        .reorder_study_bookmarks(None, &[ids[0], ids[2], ids[1]])
+        .reorder_study_bookmarks(None, None, &[ids[0], ids[2], ids[1]])
         .await
         .expect("reorder");
     assert_eq!(
-        names(state.list_study_bookmarks(None).await.expect("list")),
+        names(state.list_study_bookmarks(None, None).await.expect("list")),
         ["C", "A", "B"]
     );
     let deleted = state
-        .delete_study_bookmarks(None, &[ids[1], ids[0]])
+        .delete_study_bookmarks(None, None, &[ids[1], ids[0]])
         .await
         .expect("delete");
     let answered: Vec<(&str, usize)> = deleted
@@ -271,16 +277,16 @@ async fn a_reorder_and_a_bulk_delete_with_spat_keep_every_place() {
     assert_eq!(answered, [("C", 0), ("B", 2)]);
     for (bookmark, index) in &deleted {
         state
-            .create_study_bookmark(None, &bookmark.name, &heb, Some(*index))
+            .create_study_bookmark(None, None, &bookmark.name, &heb, Some(*index))
             .await
             .expect("back");
     }
     assert_eq!(
-        names(state.list_study_bookmarks(None).await.expect("list")),
+        names(state.list_study_bookmarks(None, None).await.expect("list")),
         ["C", "A", "B"]
     );
     let nothing = state
-        .delete_study_bookmarks(None, &[])
+        .delete_study_bookmarks(None, None, &[])
         .await
         .expect_err("nothing");
     assert_eq!(refusal(&nothing), "Nie je čo zmazať");

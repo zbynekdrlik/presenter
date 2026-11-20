@@ -4,8 +4,13 @@
 //! `POST /bible/study/bookmarks/delete` (the chosen ones at once). JSON camelCase. The list is the
 //! caller's: the reader's e-mail (`AccessEmail`: a verified Access login or a
 //! remembered device), nobody = the shared list. An id of another list answers 404, never its row.
+//!
+//! #952: every one of them names a FOLDER — `?folder=<id>` on the list, a
+//! `folder` field in a write's body; absent = the default folder "Kde som
+//! skončil". A folder of another reader is 404. The folders themselves are
+//! `bookmark_folders.rs`.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -19,6 +24,7 @@ use crate::state::AppState;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
+        .merge(super::bookmark_folders::routes())
         .route(
             "/bible/study/bookmarks",
             get(list_bookmarks).post(create_bookmark),
@@ -68,9 +74,19 @@ struct DeletedDto {
     index: usize,
 }
 
+/// A write's ids in a folder (`None` = the default folder).
 #[derive(Debug, Deserialize)]
 struct IdsBody {
     ids: Vec<i64>,
+    #[serde(default)]
+    folder: Option<i64>,
+}
+
+/// `?folder=<id>` of the list; none = the default folder.
+#[derive(Debug, Deserialize)]
+struct FolderQuery {
+    #[serde(default)]
+    folder: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,11 +117,13 @@ struct CreateBody {
     place: PlaceBody,
     #[serde(default)]
     index: Option<usize>,
+    #[serde(default)]
+    folder: Option<i64>,
 }
 
 /// `BookmarkRefusal` → 422 with its Slovak message; everything else through the
 /// central mapping (an unknown id is the repository's `NotFound` → 404).
-fn bookmark_error(err: anyhow::Error) -> AppError {
+pub(super) fn bookmark_error(err: anyhow::Error) -> AppError {
     tracing::warn!(
         target: "presenter::bible::bookmark",
         error = %err,
@@ -121,9 +139,10 @@ fn bookmark_error(err: anyhow::Error) -> AppError {
 async fn list_bookmarks(
     State(state): State<AppState>,
     AccessEmail(owner): AccessEmail,
+    Query(query): Query<FolderQuery>,
 ) -> Result<Json<Vec<BookmarkDto>>, AppError> {
     let list = state
-        .list_study_bookmarks(owner.as_deref())
+        .list_study_bookmarks(owner.as_deref(), query.folder)
         .await
         .map_err(bookmark_error)?;
     Ok(Json(list.into_iter().map(BookmarkDto::from).collect()))
@@ -137,7 +156,13 @@ async fn create_bookmark(
 ) -> Result<Json<BookmarkDto>, AppError> {
     let place = PlaceRequest::from(body.place);
     let made = state
-        .create_study_bookmark(owner.as_deref(), &body.name, &place, body.index)
+        .create_study_bookmark(
+            owner.as_deref(),
+            body.folder,
+            &body.name,
+            &place,
+            body.index,
+        )
         .await
         .map_err(bookmark_error)?;
     Ok(Json(made.into()))
@@ -150,7 +175,7 @@ async fn reorder_bookmarks(
     Json(body): Json<IdsBody>,
 ) -> Result<StatusCode, AppError> {
     state
-        .reorder_study_bookmarks(owner.as_deref(), &body.ids)
+        .reorder_study_bookmarks(owner.as_deref(), body.folder, &body.ids)
         .await
         .map_err(bookmark_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -163,7 +188,7 @@ async fn delete_bookmarks(
     Json(body): Json<IdsBody>,
 ) -> Result<Json<Vec<DeletedDto>>, AppError> {
     let deleted = state
-        .delete_study_bookmarks(owner.as_deref(), &body.ids)
+        .delete_study_bookmarks(owner.as_deref(), body.folder, &body.ids)
         .await
         .map_err(bookmark_error)?;
     Ok(Json(

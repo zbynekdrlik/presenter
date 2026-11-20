@@ -64,8 +64,10 @@ pub enum StudySheet {
     CrossRefs,
     /// A tagged word (`StudyRoute::word`), over the reader or compare.
     Word,
-    /// The named bookmarks (#915), from the header.
-    Bookmarks,
+    /// The named bookmarks (#915), from the header, showing one folder (#952):
+    /// `None` = the default "Kde som skončil" (`s=zalozky`), `Some(id)` one of
+    /// the reader's own (`s=zalozky<id>`).
+    Bookmarks(Option<i64>),
 }
 
 impl StudySheet {
@@ -86,7 +88,8 @@ impl StudySheet {
             Self::Preview => "nahlad".to_string(),
             Self::Reorder => "poradie".to_string(),
             Self::CrossRefs => "odkazy".to_string(),
-            Self::Bookmarks => "zalozky".to_string(),
+            Self::Bookmarks(None) => "zalozky".to_string(),
+            Self::Bookmarks(Some(folder)) => format!("zalozky{folder}"),
             Self::Word => return None,
         })
     }
@@ -99,9 +102,15 @@ impl StudySheet {
             "nahlad" => Some(Self::Preview),
             "poradie" => Some(Self::Reorder),
             "odkazy" => Some(Self::CrossRefs),
-            "zalozky" => Some(Self::Bookmarks),
+            "zalozky" => Some(Self::Bookmarks(None)),
             "preklady" => Some(Self::Translations),
             // `pridat` is no sheet of a URL: the passage it adds is gone.
+            other if other.starts_with("zalozky") => other
+                .strip_prefix("zalozky")?
+                .parse()
+                .ok()
+                .filter(|folder: &i64| *folder > 0)
+                .map(|folder| Self::Bookmarks(Some(folder))),
             other => other
                 .strip_prefix("preklad")?
                 .parse()

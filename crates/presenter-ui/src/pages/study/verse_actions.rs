@@ -6,6 +6,7 @@
 
 use leptos::prelude::*;
 
+use super::bookmark_folders::FolderPicker;
 use super::sheet::Sheet;
 use super::{add_to_sermon, bookmarks, compare, crossrefs, nav, reader, Chapter, Study};
 use crate::api::sermons::SermonPassage;
@@ -210,6 +211,8 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
     // An action that closes the sheet runs once: the close is a history step,
     // so a quick second tap would add a second bookmark and step back twice.
     let closing = StoredValue::new(false);
+    // ▾ beside "Pridať záložku" (#952): the folder picker under the actions.
+    let picking = RwSignal::new(false);
     let title = Signal::derive(move || selection(s).map(|(label, _)| label).unwrap_or_default());
     view! {
         <Sheet s=s role="verse-actions" title=title>
@@ -221,7 +224,7 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
                 {VERSE_ACTIONS
                     .into_iter()
                     .map(|action| {
-                        view! {
+                        let button = view! {
                             <button
                                 type="button"
                                 class="study-button study-button--primary"
@@ -234,7 +237,29 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
                             >
                                 {move || action.label(s)}
                             </button>
+                        };
+                        if action != VerseAction::SaveBookmark {
+                            return button.into_any();
                         }
+                        view! {
+                            <div class="study-split">
+                                {button}
+                                <button
+                                    type="button"
+                                    class="study-button study-button--primary study-split__more"
+                                    data-role="verse-save-bookmark-folder"
+                                    aria-label="Uložiť do priečinka"
+                                    aria-expanded=move || picking.get().to_string()
+                                    on:click=move |_| picking.update(|open| *open = !*open)
+                                >
+                                    "\u{25BE}"
+                                </button>
+                            </div>
+                            <Show when=move || picking.get()>
+                                <FolderPicker s=s closing=closing />
+                            </Show>
+                        }
+                            .into_any()
                     })
                     .collect_view()}
             </div>

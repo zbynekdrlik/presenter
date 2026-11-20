@@ -76,6 +76,7 @@ pub(crate) mod stream_assets;
 pub(crate) mod stream_fonts;
 pub(crate) mod stream_nameplates;
 mod stream_playback;
+pub(crate) mod study_bookmark_folders;
 pub(crate) mod study_bookmarks;
 pub(crate) mod sync;
 #[cfg(test)]
