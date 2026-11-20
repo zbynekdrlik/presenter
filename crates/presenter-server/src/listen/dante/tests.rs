@@ -689,7 +689,9 @@ fn the_real_device_refuses_an_interface_the_box_does_not_have() {
 #[test]
 fn the_device_advertises_a_5_ms_dante_latency() {
     for rate in [96_000, 48_000] {
-        let split = dlink_config(&plan(rate, DEFAULT_DEVICE_NAME)).split().unwrap();
+        let split = dlink_config(&plan(rate, DEFAULT_DEVICE_NAME))
+            .split()
+            .unwrap();
         assert_eq!(split.latency_ns, 5_000_000, "{rate}: {split:?}");
         assert_eq!(split.network_latency_ns, 1_000_000, "{rate}: {split:?}");
     }
