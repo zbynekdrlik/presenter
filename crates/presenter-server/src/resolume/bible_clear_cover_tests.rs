@@ -4,8 +4,9 @@
 //!
 //! Owner, 2026-10-12: "ked sa clearne v presentery vers alebo je clearnuty tak
 //! ma sa zapnut opacita bible clear a ked sa zapne vers tak sa ma stiahnut
-//! opacita bible clear aby bol vers vyditelny". The cover fades over its OWN
-//! layer's transition (SNV 2.3 s), so it is NOT part of the push (#848
+//! opacita bible clear aby bol vers vyditelny". The cover fades over a fixed
+//! 0.5 s (#987; #848 used its layer's transition, SNV 2.3 s), so it is NOT
+//! part of the push (#848
 //! review): the push returns after the Bible fade and the connects, and the
 //! host worker steps the cover afterwards, between its other commands. This
 //! file pins the mapping, the planners and the push side;
@@ -31,12 +32,13 @@ use std::time::Duration;
 pub(super) const COVER: i64 = 500;
 pub(super) const COVER_TEXT: i64 = 50;
 pub(super) const COVER_OPACITY: i64 = 150;
-/// The cover layer's transition where the length matters: far longer than the
-/// Bible layers' [`BIBLE_FADE`], as on SNV (2.3 s against 0.5 s), so "the
-/// push returned before the cover faded" has a wide margin on a loaded runner.
-pub(super) const COVER_FADE: Duration = Duration::from_millis(1500);
-/// A shorter cover transition for tests about the fade's shape, not its length.
-pub(super) const SHORT_COVER_FADE: Duration = Duration::from_millis(450);
+/// The `#bible-clear` cover fade the owner ruled (#987, 2026-11-20): "pevná
+/// dĺžka fadu `#bible-clear` v Presenteri, 0,5 s; prechod vrstvy 12 v
+/// Resolume sa nemení". Longer than the Bible layers' [`BIBLE_FADE`].
+pub(super) const RULED_COVER_FADE: Duration = Duration::from_millis(500);
+/// SNV layer 12's transition, which the cover no longer follows (#987): the
+/// cover layers here carry it to prove the cover ignores it.
+pub(super) const SNV_COVER_TRANSITION: Duration = Duration::from_millis(2300);
 /// The Bible layers' transition in the timing tests.
 pub(super) const BIBLE_FADE: Duration = Duration::from_millis(300);
 /// The `#timer` clip and its text parameter: the worker tests use timer frames
@@ -106,6 +108,27 @@ pub(super) fn assert_shown(steps: &[f64], base: f64) {
     );
 }
 
+/// The level each fade in `steps` ended at: a value where the direction
+/// turns, and the last one. A show to 1.0, a hide and a show to 0.6 are
+/// `[1.0, 0.0, 0.6]` (#987: no cover is set in one PUT any more, every one
+/// fades over [`RULED_COVER_FADE`]).
+pub(super) fn fade_ends(steps: &[f64]) -> Vec<f64> {
+    let mut ends = Vec::new();
+    for (index, &level) in steps.iter().enumerate() {
+        let next = steps.get(index + 1).copied();
+        let before = index.checked_sub(1).map(|prev| level - steps[prev]);
+        let turns = match (before, next) {
+            (_, None) => true,
+            (None, Some(_)) => false,
+            (Some(diff), Some(next)) => diff * (next - level) <= 0.0,
+        };
+        if turns {
+            ends.push(level);
+        }
+    }
+    ends
+}
+
 /// Assert that the cover opacities `steps` went only down, in at least three
 /// steps, and ended at 0.
 pub(super) fn assert_hidden(steps: &[f64]) {
@@ -123,7 +146,7 @@ pub(super) fn assert_hidden(steps: &[f64]) {
 #[test]
 fn the_sermon_title_tagged_bible_clear_is_an_optional_cover() {
     let mapping = ClipMapping::from_composition(
-        &json!({ "layers": cover_layers(Some(FADE), Some(COVER_FADE), 0.0) }),
+        &json!({ "layers": cover_layers(Some(FADE), Some(SNV_COVER_TRANSITION), 0.0) }),
     )
     .expect("mapping");
     let covers: Vec<(i64, Option<ClipOpacity>, Duration)> = mapping
@@ -139,7 +162,7 @@ fn the_sermon_title_tagged_bible_clear_is_an_optional_cover() {
                 param_id: COVER_OPACITY,
                 base: 0.0
             }),
-            COVER_FADE
+            SNV_COVER_TRANSITION
         )],
         "the tag after other words maps the clip with its opacity and layer fade"
     );
@@ -203,7 +226,7 @@ fn a_fade_level_within_same_opacity_of_its_target_is_the_target() {
 #[test]
 fn the_clear_fade_leaves_the_covers_to_the_deferred_cover_fade() {
     let mapping = ClipMapping::from_composition(
-        &json!({ "layers": cover_layers(Some(FADE), Some(COVER_FADE), 0.0) }),
+        &json!({ "layers": cover_layers(Some(FADE), Some(SNV_COVER_TRANSITION), 0.0) }),
     )
     .expect("mapping");
     let mut tracked = TrackedOpacities::default();
@@ -232,7 +255,7 @@ fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
             clip(501, "#bible-clear", 51, 0.0),
             clip(302, "#bible-a #bible-clear", 32, 1.0),
         ],
-        Some(SHORT_COVER_FADE),
+        Some(SNV_COVER_TRANSITION),
     ));
     let mapping = ClipMapping::from_composition(&json!({ "layers": layers })).expect("mapping");
 
@@ -246,7 +269,7 @@ fn the_hide_plan_fades_each_cover_once_from_where_it_is() {
             base: 0.7,
             from: 0.7,
             to: 0.0,
-            duration: SHORT_COVER_FADE,
+            duration: RULED_COVER_FADE,
             mapped: true,
         }]
     );
@@ -271,14 +294,15 @@ fn assert_duration(actual: Duration, expected: Duration) {
 }
 
 /// #848 second review, finding 1: a fade that replaced one cut short ran over
-/// the cover's WHOLE transition from where it was, so quick verses stretched
-/// the hide (the title stayed partly visible behind the verse ~2.3 s on SNV).
-/// A cover now fades over the share of its transition that the distance left
-/// is of its base: `fade × |to − from| / base`.
+/// the cover's WHOLE fade from where it was, so quick verses stretched the
+/// hide (the title stayed partly visible behind the verse ~2.3 s on SNV). A
+/// cover now fades over the share of the cover fade that the distance left is
+/// of its base: `COVER_FADE × |to − from| / base`; since #987 (owner ruling)
+/// that fade is a fixed 0.5 s, not the layer's transition.
 #[test]
-fn a_cover_fades_over_the_share_of_its_transition_left_to_go() {
+fn a_cover_fades_over_the_share_of_the_cover_fade_left_to_go() {
     let mapping = ClipMapping::from_composition(
-        &json!({ "layers": cover_layers(None, Some(COVER_FADE), 0.0) }),
+        &json!({ "layers": cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0) }),
     )
     .expect("mapping");
     let covers = cover_candidates(&mapping, &HashMap::new());
@@ -294,11 +318,11 @@ fn a_cover_fades_over_the_share_of_its_transition_left_to_go() {
     );
     assert_duration(
         planned_duration(&covers, &tracked, CoverDirection::Hide),
-        COVER_FADE.mul_f64(0.25),
+        RULED_COVER_FADE.mul_f64(0.25),
     );
     assert_duration(
         planned_duration(&covers, &tracked, CoverDirection::Show),
-        COVER_FADE.mul_f64(0.75),
+        RULED_COVER_FADE.mul_f64(0.75),
     );
 
     // Shown at its base: the hide is the whole way down.
@@ -311,16 +335,9 @@ fn a_cover_fades_over_the_share_of_its_transition_left_to_go() {
     );
     assert_duration(
         planned_duration(&covers, &tracked, CoverDirection::Hide),
-        COVER_FADE,
+        RULED_COVER_FADE,
     );
 }
-
-/// The `#bible-clear` cover fade the owner ruled (#987, 2026-11-20): "pevná
-/// dĺžka fadu `#bible-clear` v Presenteri, 0,5 s; prechod vrstvy 12 v
-/// Resolume sa nemení".
-pub(super) const RULED_COVER_FADE: Duration = Duration::from_millis(500);
-/// SNV layer 12's transition, which the cover no longer follows (#987).
-pub(super) const SNV_COVER_TRANSITION: Duration = Duration::from_millis(2300);
 
 /// #987: the cover fades over a fixed 0.5 s, scaled by the distance left as
 /// before (#848), whatever its layer's transition: SNV's 2.3 s, or none.
@@ -371,7 +388,12 @@ fn a_cover_fades_over_half_a_second_whatever_its_layer_transition() {
 /// review, finding 6).
 #[tokio::test]
 async fn a_clear_sends_the_cover_nothing_inside_its_push() {
-    let server = start_resolume(cover_layers(Some(BIBLE_FADE), Some(COVER_FADE), 0.0)).await;
+    let server = start_resolume(cover_layers(
+        Some(BIBLE_FADE),
+        Some(SNV_COVER_TRANSITION),
+        0.0,
+    ))
+    .await;
     let (mut driver, status) = driver_for(&server);
 
     driver
@@ -395,7 +417,7 @@ async fn a_clear_sends_the_cover_nothing_inside_its_push() {
 /// push sends it nothing; the worker hides it afterwards.
 #[tokio::test]
 async fn a_verse_sends_the_cover_nothing_inside_its_push() {
-    let server = start_resolume(cover_layers(None, Some(COVER_FADE), 1.0)).await;
+    let server = start_resolume(cover_layers(None, Some(SNV_COVER_TRANSITION), 1.0)).await;
     let (mut driver, status) = driver_for(&server);
     driver
         .handle_bible(clear_update(), &status)

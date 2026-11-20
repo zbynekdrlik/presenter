@@ -22,9 +22,8 @@
 
 use super::bible_clear::FADE_STEP;
 use super::bible_clear_cover_tests::{
-    assert_hidden, assert_shown, cover_layer, cover_layers, cover_layers_on, timer_layer,
-    BIBLE_FADE, COVER, COVER_FADE, COVER_OPACITY, RULED_COVER_FADE, SHORT_COVER_FADE,
-    SNV_COVER_TRANSITION,
+    assert_hidden, assert_shown, cover_layer, cover_layers, cover_layers_on, fade_ends,
+    timer_layer, BIBLE_FADE, COVER, COVER_OPACITY, RULED_COVER_FADE, SNV_COVER_TRANSITION,
 };
 use super::bible_clear_deck_tests::assert_faded;
 use super::bible_clear_tests::{
@@ -221,13 +220,17 @@ pub(super) async fn assert_healthy(worker: &Worker) {
 }
 
 /// The clear's push ends after the Bible fade; the cover then fades up over
-/// its own transition while the worker keeps taking commands: a timer frame
-/// sent mid-fade lands before the fade ends (the `#timer` countdown on SNV
-/// layer 15 must not freeze for 2.3 s).
+/// the 0.5 s cover fade (#987) while the worker keeps taking commands: a
+/// timer frame sent mid-fade lands before the fade ends (the `#timer`
+/// countdown on SNV layer 15 must not freeze).
 #[tokio::test]
 async fn a_timer_frame_lands_while_the_cover_fades_up_after_a_clear() {
-    let (server, _params) =
-        start_arena(cover_layers(Some(BIBLE_FADE), Some(COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(
+        Some(BIBLE_FADE),
+        Some(SNV_COVER_TRANSITION),
+        0.0,
+    ))
+    .await;
     let worker = Worker::spawn(&server);
 
     let start = Instant::now();
@@ -265,8 +268,8 @@ async fn a_timer_frame_lands_while_the_cover_fades_up_after_a_clear() {
         "the cover fades after the clear's Bible fade"
     );
     assert!(
-        took >= COVER_FADE,
-        "the cover fades over its layer's transition ({COVER_FADE:?}), took {took:?}"
+        took >= RULED_COVER_FADE,
+        "the cover fades over the ruled {RULED_COVER_FADE:?}, took {took:?}"
     );
     assert!(connects(&requests).is_empty(), "nothing is triggered");
 }
@@ -302,7 +305,7 @@ async fn the_worker_fades_a_cover_in_half_a_second_of_steps() {
 /// A verse is on air first; the cover fades out after its last `/connect`.
 #[tokio::test]
 async fn a_verse_hides_the_cover_after_its_last_connect() {
-    let (server, _params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     let after_clear = wait_for_opacity(&server, COVER_OPACITY, 1.0).await.len();
@@ -338,7 +341,7 @@ async fn a_verse_hides_the_cover_after_its_last_connect() {
 /// from the opacity the show reached: no jump up to full first.
 #[tokio::test]
 async fn a_verse_mid_show_hides_the_cover_from_where_the_show_got() {
-    let (server, _params) = start_arena(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     wait_for(&server, "the show under way", |requests| {
@@ -377,7 +380,7 @@ async fn a_verse_mid_show_hides_the_cover_from_where_the_show_got() {
 /// clear → verse → clear: the second clear shows the cover again from 0.
 #[tokio::test]
 async fn the_next_clear_shows_the_cover_again_from_zero() {
-    let (server, _params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
@@ -405,7 +408,8 @@ async fn the_verse_after_that_sends_no_cover_put() {
     worker.bible(clear_update()).await;
     wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
     worker.bible(verse_update()).await;
-    wait_for_opacity(&server, COVER_OPACITY, 0.0).await;
+    let hidden = wait_for_opacity(&server, COVER_OPACITY, 0.0).await;
+    let before = opacities_put(&hidden, COVER_OPACITY).len();
 
     worker.bible(verse_update()).await;
     wait_for(&server, "the second verse's cover read", |requests| {
@@ -414,7 +418,9 @@ async fn the_verse_after_that_sends_no_cover_put() {
     .await;
     let requests = worker.barrier(&server).await;
 
-    assert_eq!(opacities_put(&requests, COVER_OPACITY), vec![1.0, 0.0]);
+    let steps = opacities_put(&requests, COVER_OPACITY);
+    assert_eq!(fade_ends(&steps), vec![1.0, 0.0], "shown, then hidden");
+    assert_eq!(steps.len(), before, "the second verse sends no cover PUT");
     assert_eq!(
         values_put(&requests, 31).len(),
         1,
@@ -440,7 +446,8 @@ async fn a_clear_while_the_bible_clips_are_invisible_still_shows_the_cover() {
     let worker = Worker::spawn(&server);
 
     worker.bible(clear_update()).await;
-    wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    let shown = wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    let before = opacities_put(&shown, COVER_OPACITY).len();
     worker.bible(clear_update()).await;
     wait_for(&server, "the second clear's cover read", |requests| {
         cover_reads(requests) == 2
@@ -454,7 +461,9 @@ async fn a_clear_while_the_bible_clips_are_invisible_still_shows_the_cover() {
             "param {param} is already invisible"
         );
     }
-    assert_eq!(opacities_put(&requests, COVER_OPACITY), vec![1.0]);
+    let steps = opacities_put(&requests, COVER_OPACITY);
+    assert_shown(&steps, 1.0);
+    assert_eq!(steps.len(), before, "the second clear sends no cover PUT");
     assert!(connects(&requests).is_empty());
 }
 
@@ -483,10 +492,15 @@ async fn a_failed_cover_put_during_a_clear_fails_nothing() {
     for param in A_SIDE_OPACITY.into_iter().chain(B_SIDE_OPACITY) {
         assert_eq!(opacities_put(&requests, param), vec![0.0], "param {param}");
     }
+    let steps = opacities_put(&requests, COVER_OPACITY);
     assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![1.0, 1.0],
-        "exactly the failed step and one final step at the target; then the fade stops"
+        steps.len(),
+        2,
+        "exactly the failed step and one final step at the target; then the fade stops: {steps:?}"
+    );
+    assert!(
+        steps[0] < 1.0 && steps[1] == 1.0,
+        "a step on the way (#987: the cover fades), then the target: {steps:?}"
     );
     assert_healthy(&worker).await;
 }
@@ -566,7 +580,7 @@ async fn a_mapped_cover_404_refetches_the_mapping_once() {
 /// it from 0.4, never from the 1.0 Presenter remembers.
 #[tokio::test]
 async fn the_hide_starts_from_the_opacity_arena_reports() {
-    let (server, params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let (server, params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     let after_clear = wait_for_opacity(&server, COVER_OPACITY, 1.0).await.len();
@@ -594,7 +608,8 @@ async fn a_cover_already_at_its_target_gets_no_put() {
     let (server, params) = start_arena(cover_layers(None, None, 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
-    wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    let shown = wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    let before = opacities_put(&shown, COVER_OPACITY).len();
     params.set(COVER_OPACITY, 0.0);
 
     worker.bible(verse_update()).await;
@@ -604,7 +619,9 @@ async fn a_cover_already_at_its_target_gets_no_put() {
     .await;
     let requests = worker.barrier(&server).await;
 
-    assert_eq!(opacities_put(&requests, COVER_OPACITY), vec![1.0]);
+    let steps = opacities_put(&requests, COVER_OPACITY);
+    assert_shown(&steps, 1.0);
+    assert_eq!(steps.len(), before, "the verse sends no cover PUT");
 }
 
 /// A shown title dimmed in Arena keeps that opacity as its base: the verse
@@ -620,15 +637,21 @@ async fn a_cover_dimmed_in_arena_comes_back_at_that_opacity() {
     worker.bible(verse_update()).await;
     wait_for_opacity(&server, COVER_OPACITY, 0.0).await;
     worker.bible(clear_update()).await;
-    let requests = wait_for(&server, "the cover shown again", |requests| {
-        opacities_put(requests, COVER_OPACITY).len() == 3
-    })
-    .await;
+    let requests = wait_for_opacity(&server, COVER_OPACITY, 0.6).await;
 
+    let steps = opacities_put(&requests, COVER_OPACITY);
     assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
+        fade_ends(&steps),
         vec![1.0, 0.0, 0.6],
-        "shown, hidden from the dimmed value, then shown at it"
+        "shown, hidden from the dimmed value, then shown at it: {steps:?}"
+    );
+    let hide_start = steps
+        .iter()
+        .position(|level| *level == 1.0)
+        .map_or(0, |at| at + 1);
+    assert!(
+        steps[hide_start] < 0.6,
+        "the hide starts below the dimmed 0.6: {steps:?}"
     );
 }
 
@@ -645,11 +668,13 @@ async fn a_cover_mapped_below_full_opacity_is_shown_at_that_value() {
     worker.bible(clear_update()).await;
     let requests = wait_for_opacity(&server, COVER_OPACITY, 0.6).await;
 
+    let steps = opacities_put(&requests, COVER_OPACITY);
     assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
+        fade_ends(&steps),
         vec![0.0, 0.6],
-        "nothing for the first clear, then hidden and shown at 0.6"
+        "nothing for the first clear, then hidden and shown at 0.6: {steps:?}"
     );
+    assert!(steps[0] < 0.6, "hidden from 0.6: {steps:?}");
 }
 
 /// Switch to the second deck: the first deck's title stays on its layer, and
@@ -676,7 +701,7 @@ async fn a_remembered_cover_is_hidden_after_a_deck_switch() {
     worker.bible(verse_update()).await;
     let requests = wait_for_opacity(&server, COVER_OPACITY, 0.0).await;
 
-    assert_eq!(opacities_put(&requests, COVER_OPACITY), vec![0.0]);
+    assert_hidden(&opacities_put(&requests, COVER_OPACITY));
     assert!(
         opacities_put(&requests, COVER_OPACITY + DECK_TWO).is_empty(),
         "the second deck's title is already hidden"

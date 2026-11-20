@@ -3,10 +3,10 @@
 //! The REAL worker (`run_host_worker`) against the stateful mock Arena, with
 //! the `Worker` and the waits of `bible_clear_cover_worker_tests.rs`:
 //!
-//! - a fade lasts for the share of its transition that the distance left is
-//!   of the cover's base, so a hide right after a short show is short;
-//! - the first step starts each cover where it is: it PUTs nothing, except
-//!   on a layer without a transition, where it sets the target;
+//! - a fade lasts for the share of the fixed 0.5 s cover fade (#987) that
+//!   the distance left is of the cover's base, so a hide right after a short
+//!   show is short;
+//! - the first step starts each cover where it is: it PUTs nothing;
 //! - a failed step jumps to ONE final step that PUTs the target, so one
 //!   transient error never leaves the cover halfway;
 //! - covers are remembered per layer: a newer cover PLAYING on the layer
@@ -24,7 +24,7 @@
 use super::bible_clear::FADE_STEP;
 use super::bible_clear_cover_tests::{
     assert_hidden, assert_shown, cover_layer, cover_layers, timer_layer, BIBLE_FADE, COVER,
-    COVER_FADE, COVER_OPACITY, COVER_TEXT, SHORT_COVER_FADE, TIMER_TEXT,
+    COVER_OPACITY, COVER_TEXT, RULED_COVER_FADE, SNV_COVER_TRANSITION, TIMER_TEXT,
 };
 use super::bible_clear_cover_worker_tests::{
     answer_param_read, assert_healthy, compositions, cover_reads, is_connect, last_index,
@@ -89,13 +89,13 @@ async fn wait_out_backoff(worker: &Worker) {
 }
 
 /// Finding 1: a verse that cut the clear's show short hid the cover over its
-/// WHOLE transition, from the little opacity the show had reached, so quick
-/// verses stretched the hide (the title showed behind the verse ~2.3 s on
-/// SNV). The hide now lasts `fade × reached / base`, so it sends at most that
-/// over `FADE_STEP` plus the final step.
+/// WHOLE fade, from the little opacity the show had reached, so quick verses
+/// stretched the hide (the title showed behind the verse ~2.3 s on SNV). The
+/// hide now lasts `COVER_FADE × reached / base` (#987: the fixed 0.5 s), so
+/// it sends at most that over `FADE_STEP` plus the final step.
 #[tokio::test]
 async fn a_hide_right_after_a_short_show_lasts_only_for_the_distance_left() {
-    let (server, _params) = start_arena(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     wait_for(&server, "the show under way", |requests| {
@@ -120,7 +120,7 @@ async fn a_hide_right_after_a_short_show_lasts_only_for_the_distance_left() {
         .copied()
         .unwrap_or_default();
     let hidden = opacities_put(&requests[last_connect..], COVER_OPACITY);
-    let left = COVER_FADE.as_secs_f64() * reached;
+    let left = RULED_COVER_FADE.as_secs_f64() * reached;
     let most = (left / FADE_STEP.as_secs_f64()).floor() as usize + 2;
     assert!(
         hidden.len() <= most,
@@ -134,9 +134,9 @@ async fn a_hide_right_after_a_short_show_lasts_only_for_the_distance_left() {
 /// least one step into the fade, up and down.
 #[tokio::test]
 async fn a_cover_fade_never_puts_the_opacity_it_starts_from() {
-    let (server, _params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
-    let one_step = FADE_STEP.as_secs_f64() / SHORT_COVER_FADE.as_secs_f64();
+    let one_step = FADE_STEP.as_secs_f64() / RULED_COVER_FADE.as_secs_f64();
 
     worker.bible(clear_update()).await;
     let shown = opacities_put(
@@ -166,7 +166,7 @@ async fn a_cover_fade_never_puts_the_opacity_it_starts_from() {
 /// 2: the barrier runs before a further step could be due).
 #[tokio::test]
 async fn one_failed_cover_step_jumps_to_a_final_step_at_the_target() {
-    let (server, _params) = start_arena(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     answer_param(&server, COVER_OPACITY, 200, 2, 1).await;
     answer_param(&server, COVER_OPACITY, 500, 1, 2).await;
     let worker = Worker::spawn(&server);
@@ -257,14 +257,14 @@ async fn a_mapped_cover_put_404_refetches_the_mapping_once() {
 /// is forgotten (no refetch), and the other cover keeps fading to its target.
 #[tokio::test]
 async fn a_remembered_cover_gone_mid_fade_is_forgotten_and_the_others_keep_fading() {
-    let (server, _params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
     switch_to(
         &server,
         &worker,
-        deck_two_title_elsewhere(Some(SHORT_COVER_FADE), 1.0),
+        deck_two_title_elsewhere(Some(SNV_COVER_TRANSITION), 1.0),
     )
     .await;
     answer_param(&server, COVER_OPACITY, 404, 100, 1).await;
@@ -307,13 +307,11 @@ async fn a_mapped_cover_read_404_leaves_the_other_covers_fading() {
         cover_reads(requests) == 1 && param_requests(requests, "GET", COVER_OPACITY + DECK_TWO) == 1
     })
     .await;
-    let requests = worker.barrier(&server).await;
+    worker.barrier(&server).await;
+    let requests = wait_for_opacity(&server, COVER_OPACITY, 0.0).await;
 
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![0.0],
-        "the remembered title is still hidden"
-    );
+    // #987: hidden over the 0.5 s cover fade, no longer in one PUT.
+    assert_hidden(&opacities_put(&requests, COVER_OPACITY));
     assert_eq!(
         param_requests(&requests, "PUT", COVER_OPACITY + DECK_TWO),
         0
@@ -331,14 +329,14 @@ async fn a_mapped_cover_read_404_leaves_the_other_covers_fading() {
 /// first deck's remembered title fades on down to 0.
 #[tokio::test]
 async fn a_mapped_cover_put_404_mid_fade_leaves_the_other_covers_fading() {
-    let (server, _params) = start_arena(cover_layers(None, Some(SHORT_COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
     switch_to(
         &server,
         &worker,
-        deck_two_title_elsewhere(Some(SHORT_COVER_FADE), 1.0),
+        deck_two_title_elsewhere(Some(SNV_COVER_TRANSITION), 1.0),
     )
     .await;
     answer_param(&server, COVER_OPACITY + DECK_TWO, 404, 100, 1).await;
@@ -413,11 +411,11 @@ async fn two_broken_mapped_covers_in_one_fade_refetch_the_mapping_once() {
 #[tokio::test]
 async fn two_covers_404_in_one_mid_fade_step_are_both_left_out_and_the_other_fades_on() {
     let broken = [COVER_OPACITY + 1, COVER_OPACITY + 2];
-    let mut layers = cover_layers(None, Some(SHORT_COVER_FADE), 0.0);
+    let mut layers = cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0);
     for n in 1..=2 {
         layers.push(layer(
             vec![clip(COVER + n, "#bible-clear", COVER_TEXT + n, 0.0)],
-            Some(SHORT_COVER_FADE),
+            Some(SNV_COVER_TRANSITION),
         ));
     }
     let (server, _params) = start_arena(layers).await;
@@ -456,7 +454,7 @@ async fn two_covers_404_in_one_mid_fade_step_are_both_left_out_and_the_other_fad
 /// hide starts from the 1.0 Presenter tracks.
 #[tokio::test]
 async fn a_failed_cover_read_fades_from_the_tracked_opacity() {
-    let (server, params) = start_arena(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+    let (server, params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     worker.bible(clear_update()).await;
     let after_clear = wait_for_opacity(&server, COVER_OPACITY, 1.0).await.len();
@@ -561,7 +559,7 @@ async fn a_mapped_cover_404_after_a_newer_mapping_was_fetched_refetches_nothing(
 /// host state: no cover PUT after it, and the cover stays where the fade got.
 #[tokio::test]
 async fn a_config_change_mid_fade_drops_the_cover_fade() {
-    let (server, _params) = start_arena(cover_layers(None, Some(COVER_FADE), 0.0)).await;
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
     let worker = Worker::spawn(&server);
     let start = Instant::now();
     worker.bible(clear_update()).await;
@@ -578,7 +576,7 @@ async fn a_config_change_mid_fade_drops_the_cover_fade() {
     // Only waiting out the time the dropped fade would still run proves it
     // does not.
     let requests = wait_for(&server, "the end of the dropped fade's time", |_| {
-        start.elapsed() >= COVER_FADE + FADE_STEP * 10
+        start.elapsed() >= RULED_COVER_FADE + FADE_STEP * 10
     })
     .await;
 
