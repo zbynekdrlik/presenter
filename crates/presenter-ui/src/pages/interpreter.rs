@@ -5,17 +5,20 @@
 //!
 //! The tablet layout is a grid with a slot per area (§8.2): transcript
 //! (left), side column (tips, Bible, numbers and names) and the status bar.
-//! Areas render only when they have data, so until listening exists the tips
-//! area is the whole page (§8.1, §9.6) — `data-transcript="absent"`. C5a
-//! fills the transcript and Bible slots without moving the tips.
+//! Areas render only when they have data, so while no guest transcript runs
+//! the tips area is the whole page (§8.1, §9.6) — `data-transcript="absent"`.
+//! C3-9 fills the transcript column (62 %, the tips keep 38 %) from
+//! `GET /listen/ws` (`ws::listen`, a snapshot on every (re)connect); C5a adds
+//! the SK rows and the Bible area without moving the tips.
 //!
 //! Data: the main live hub through the per-event `ws::passive` socket
 //! (`InterpreterTips` = the full active list) and `GET /interpreter/tips` on
 //! load and after every (re)connect (the hub never replays).
 
-use crate::components::interpreter::{TipsArea, TipsModel};
+use crate::components::interpreter::{TipsArea, TipsModel, TranscriptColumn, TranscriptModel};
 use crate::components::version_label::VersionLabel;
 use crate::state::interpreter::InterpreterLayout;
+use crate::ws::listen::use_listen_websocket;
 use crate::ws::passive::{
     use_passive_websocket, LiveEventHandler, PassiveWsHandle, PassiveWsState,
 };
@@ -53,12 +56,19 @@ pub fn InterpreterPage() -> impl IntoView {
     }
 }
 
-/// Spec §8.2. `data-transcript` stays "absent" until C5a adds the transcript
-/// column; the side column then takes its 38 %.
+/// Spec §8.2: the EN transcript (62 %) once it has something to show, then
+/// the side column (38 %; the whole page while `data-transcript="absent"`).
 #[component]
 fn TabletLayout(model: TipsModel) -> impl IntoView {
+    let transcript = TranscriptModel::new();
+    let listen_ws = use_listen_websocket(Rc::new(move |message| transcript.apply(message)));
+    let present = transcript.present();
     view! {
-        <main class="interpreter__grid" data-role="interpreter-grid" data-transcript="absent">
+        <main class="interpreter__grid" data-role="interpreter-grid"
+            data-transcript=move || if present.get() { "present" } else { "absent" }>
+            <Show when=move || present.get()>
+                <TranscriptColumn model=transcript ws=listen_ws />
+            </Show>
             <aside class="interpreter__side" data-role="interpreter-side">
                 <TipsArea model=model />
             </aside>

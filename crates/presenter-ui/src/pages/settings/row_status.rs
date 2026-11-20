@@ -74,6 +74,14 @@ pub(super) fn state_label(state: &str) -> String {
         "enabled" => "Zapnuté",
         "tracking" => "Sleduje",
         "listening" => "Počúva",
+        // #852 C3-9: the guest transcription's states (core `TranscriptionState`)
+        "off" => "Vypnuté",
+        "armed" => "Pripravené",
+        "streaming" => "Prepisuje",
+        "gated" => "Čaká na hlas",
+        "parked" => "Odpojené — čaká na hlas",
+        "reconnecting" => "Obnovuje spojenie",
+        "stopped" => "Zastavené",
         _ => return capitalize(state),
     };
     label.to_string()
@@ -260,6 +268,13 @@ mod tests {
             ("enabled", "Zapnuté"),
             ("tracking", "Sleduje"),
             ("listening", "Počúva"),
+            ("off", "Vypnuté"),
+            ("armed", "Pripravené"),
+            ("streaming", "Prepisuje"),
+            ("gated", "Čaká na hlas"),
+            ("parked", "Odpojené — čaká na hlas"),
+            ("reconnecting", "Obnovuje spojenie"),
+            ("stopped", "Zastavené"),
         ] {
             assert_eq!(state_label(state), label, "{state}");
         }

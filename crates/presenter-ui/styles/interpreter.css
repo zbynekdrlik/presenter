@@ -1,6 +1,7 @@
 /* #852 interpreter display (/ui/interpreter), tablet layout (spec §8.2).
-   A grid with a transcript column (C5a) and a side column (tips, Bible,
-   numbers); while no transcript exists (data-transcript="absent") the side
+   A grid with the EN transcript column (C3-9; C5a adds the SK rows) and a
+   side column (tips, Bible, numbers); while no transcript shows
+   (data-transcript="absent") the side
    column is the whole page. --interpreter-scale is the A−/A+ hook (C5a).
    Bundled globally by trunk: every rule is scoped to body.interpreter or an
    .interpreter* class. */
@@ -35,6 +36,80 @@ body.interpreter *::after {
 .interpreter__grid[data-transcript="absent"] {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "side";
+}
+
+/* A phone: the transcript above the tips instead of beside them. */
+@media (max-width: 700px) {
+  .interpreter__grid[data-transcript="present"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas: "transcript" "side";
+  }
+}
+
+/* #852 C3-9: the guest's English transcript (spec §8.2, Decision 15). */
+.interpreter-transcript {
+  grid-area: transcript;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  gap: 8px;
+  border-right: 1px solid #1e293b;
+}
+
+.interpreter-transcript__banner {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #7f1d1d;
+  color: #fee2e2;
+  font-size: 18px;
+}
+
+.interpreter-transcript__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+/* Older sentences dimmed (#94a3b8 on #0b1220 ≈ 7:1); the newest ones (the
+   last three children: with an open sentence, the newest two + it) white. */
+.interpreter-transcript__sentence,
+.interpreter-transcript__tail {
+  margin: 0 0 10px;
+  font-size: calc(24px * var(--interpreter-scale, 1));
+  line-height: 1.35;
+  color: #94a3b8;
+}
+
+.interpreter-transcript__sentence:nth-last-child(-n + 3),
+.interpreter-transcript__tail {
+  color: #f8fafc;
+}
+
+/* The live (not yet final) words: lighter, never as strong as the final ones. */
+.interpreter-transcript__partial {
+  color: #cbd5e1;
+  font-style: italic;
+}
+
+.interpreter-transcript__live {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 22px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
 
 .interpreter__side {

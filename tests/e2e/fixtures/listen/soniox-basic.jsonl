@@ -1,0 +1,5 @@
+{"atAudioMs": 200, "response": {"tokens": [{"text": " Turn"}, {"text": " with"}]}}
+{"atAudioMs": 500, "response": {"tokens": [{"text": " Turn", "is_final": true}, {"text": " with", "is_final": true}, {"text": " me", "is_final": true}, {"text": " to"}, {"text": " the"}]}}
+{"atAudioMs": 900, "response": {"tokens": [{"text": " to", "is_final": true}, {"text": " the", "is_final": true}, {"text": " book", "is_final": true}, {"text": " of", "is_final": true}, {"text": " James", "is_final": true}, {"text": ".", "is_final": true}, {"text": " He"}]}}
+{"atAudioMs": 1300, "response": {"tokens": [{"text": " He", "is_final": true}, {"text": " wrote", "is_final": true}, {"text": " to", "is_final": true}, {"text": " the", "is_final": true}, {"text": " twelve", "is_final": true}, {"text": " tribes", "is_final": true}, {"text": ".", "is_final": true}, {"text": " Grace"}]}}
+{"atAudioMs": 1700, "response": {"tokens": [{"text": " Grace", "is_final": true}, {"text": " and", "is_final": true}, {"text": " peace", "is_final": true}, {"text": " to", "is_final": true}, {"text": " you", "is_final": true}, {"text": ".", "is_final": true}]}}

@@ -18,6 +18,10 @@ paths:
   - "crates/presenter-core/src/listen/context/**"
   - "tests/e2e/fake-soniox.ts"
   - "tests/e2e/listen-transcript.spec.ts"
+  - "tests/e2e/fixtures/listen/**"
+  - "crates/presenter-ui/src/pages/settings/listen_transcription.rs"
+  - "crates/presenter-ui/src/components/interpreter/transcript.rs"
+  - "crates/presenter-ui/src/ws/listen.rs"
 ---
 
 # Guest transcription — Soniox real-time (#852 C3, spec §22)
@@ -175,3 +179,18 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   terms only + WARN). Tests: `listen/transcription/tests.rs` (real `ListenService`, fake `StreamingAsr`
   answering a Stop / closed input with `Finished(None)`, fake store, `start_paused`, settable day clock via
   `set_recorder_env`); endpoints + the real sermon/tip context read in `state/listen_transcription/tests.rs`.
+- **UI + E2E (#852 C3-9, presenter-ui `pages/settings/listen_transcription.rs`, `components/interpreter/transcript.rs`,
+  `ws/listen.rs`):** the "Prepis hosťa" section reads the Počúvanie card's ONE `/listen/status` poll (never a
+  second poll) and calls the card's `refresh` after every PUT (a poll answered after the write must not show
+  the old setting); a refused PUT toasts and restores the controls from the stored setting. Without a guest
+  mic the status has no `MicTranscription`: the section derives the reason (Disabled / NoGuestMic) and the
+  cap from the setting. The `/listen/ws` client is NOT `ws::passive` (that one drops a socket silent for 5 s;
+  `/listen/ws` is quiet outside a sermon, only server pings the page never sees) but shares its back-off,
+  `Generation` and `watch_long_hide`; its read loop checks the generation every 500 ms. The column changes its
+  three signals IN PLACE through pure helpers (a tail every ~0.2 s must not copy 300 sentences); it shows only
+  with text, a session not `off`, or a banner reason; `gated` / `parked` are normal pauses, never a banner
+  ("no sound" needs the mic's packet age). The E2E fake replays its fixture in a LOOP over the audio since its
+  (re)start, assigns token times itself, `kill()` refuses connects; after `restart()` recovery is the 1 / 5 / 20 s
+  back-off (≤ 26 s). The no-key warning is pinned in `settings-listen.spec.ts` (its server has no key; a second
+  server per file would fight over the mock Resolume port 8091). Payload: the lane added raw +146 kB / br +23.5 kB
+  / gz +39 kB (local delta) — check `ui_size_budget.json` headroom before growing this UI.
