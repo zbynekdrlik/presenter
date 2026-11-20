@@ -126,7 +126,7 @@ impl SonioxCore {
                 next_keepalive: at + KEEPALIVE_EVERY,
             });
         }
-        self.onset_at = None;
+        self.onset = None;
         self.set_state(TranscriptionState::Gated, None, out);
     }
 
@@ -135,10 +135,9 @@ impl SonioxCore {
             live.gate = None;
             live.last_response_at = at;
         }
-        self.onset_at = Some(at);
+        self.onset = Some((at, self.sent_end_ms));
         self.set_state(TranscriptionState::Streaming, None, out);
-        let preroll: Vec<MicFrame> = self.preroll.drain(..).collect();
-        for frame in preroll {
+        for frame in self.take_preroll(at) {
             self.send_new(frame, out);
         }
     }
@@ -193,7 +192,7 @@ impl SonioxCore {
         if self.unfinalized {
             self.send_finalize(out);
         }
-        if self.finalize.is_none() {
+        if self.finalizes.is_empty() {
             self.switch_rollover(at, true, out);
         }
     }
@@ -254,7 +253,9 @@ impl SonioxCore {
         let connected = at.saturating_duration_since(live.connected_at);
         self.closed_connected_ms = self.closed_connected_ms.saturating_add(ms_u64(connected));
         self.unfinalized = false;
-        self.finalize = None;
+        self.finalizes.clear();
+        // An onset across a lost connection measures nothing.
+        self.onset = None;
         self.next_usage_at = None;
         out.push(self.usage(at));
     }

@@ -28,6 +28,7 @@ impl SonioxCore {
             let ms = frame_ms(&frame);
             self.send_audio(frame, ms, out);
         }
+        let onset_ms = self.sent_end_ms;
         let pending: Vec<MicFrame> = self.pending.drain(..).collect();
         self.pending_ms = 0;
         for frame in pending {
@@ -36,7 +37,7 @@ impl SonioxCore {
         self.next_usage_at.get_or_insert(at + USAGE_EVERY);
         if self.speaking(at) {
             if kind == ConnectKind::Lazy {
-                self.onset_at = Some(at);
+                self.onset = Some((at, onset_ms));
             }
             self.set_state(TranscriptionState::Streaming, None, out);
         } else {
@@ -69,7 +70,7 @@ impl SonioxCore {
         let tokens = to_tokens(&resp);
         let fin = self.take_tokens(conn, offset_ms, tokens, at, received_at, out);
         if fin {
-            if let Some(covered) = self.finalize.take() {
+            if let Some(covered) = self.finalizes.pop_front() {
                 self.confirm(covered);
             }
         }
@@ -91,7 +92,7 @@ impl SonioxCore {
         out: &mut Vec<Action>,
     ) -> bool {
         let mut fin = false;
-        let mut speech = false;
+        let mut onset_heard = false;
         for token in &tokens {
             if token.text == FIN_MARKER {
                 fin = true;
@@ -99,7 +100,11 @@ impl SonioxCore {
             if token.text == FIN_MARKER || token.text == END_MARKER || token.is_translation {
                 continue;
             }
-            speech = true;
+            // Only a word of the onset's own audio answers it (not the
+            // late finals of speech before a gate, not a resend).
+            if let (Some((_, onset_ms)), Some(start)) = (self.onset, token.start_ms) {
+                onset_heard |= offset_ms.saturating_add(start) >= onset_ms;
+            }
             if token.is_final {
                 self.stats.tokens_final += 1;
                 if let Some(end) = token.end_ms {
@@ -107,12 +112,11 @@ impl SonioxCore {
                 }
             }
         }
-        if speech {
-            if let Some(onset) = self.onset_at.take() {
-                out.push(Action::Onset {
-                    latency_ms: ms_u32(at.saturating_duration_since(onset)),
-                });
-            }
+        if let Some((sent_at, _)) = self.onset.filter(|_| onset_heard) {
+            self.onset = None;
+            out.push(Action::Onset {
+                latency_ms: ms_u32(at.saturating_duration_since(sent_at)),
+            });
         }
         if !tokens.is_empty() {
             out.push(Action::Emit(TokenBatch {

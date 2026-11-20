@@ -35,7 +35,7 @@ impl SonioxCore {
             conn,
             control: Control::Finalize,
         });
-        self.finalize = Some(self.sent_end_ms);
+        self.finalizes.push_back(self.sent_end_ms);
         self.unfinalized = false;
     }
 
@@ -87,10 +87,19 @@ impl SonioxCore {
         }
     }
 
-    pub(super) fn push_preroll(&mut self, pcm: MicFrame) {
-        self.preroll.push_back(pcm);
+    pub(super) fn push_preroll(&mut self, at: Instant, pcm: MicFrame) {
+        self.preroll.push_back((at, pcm));
         while self.preroll.len() > PRE_ROLL_FRAMES {
             self.preroll.pop_front();
         }
+    }
+
+    /// The pre-roll of an onset at `now`: the frames of the last second.
+    pub(super) fn take_preroll(&mut self, now: Instant) -> Vec<MicFrame> {
+        self.preroll
+            .drain(..)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < PRE_ROLL)
+            .map(|(_, pcm)| pcm)
+            .collect()
     }
 }

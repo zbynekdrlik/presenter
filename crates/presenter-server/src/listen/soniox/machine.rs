@@ -45,6 +45,8 @@ pub const KEEPALIVE_EVERY: Duration = Duration::from_secs(5);
 pub const PARK_AFTER: Duration = Duration::from_secs(5 * 60);
 /// 10 frames of 100 ms = the 1 s pre-roll.
 pub const PRE_ROLL_FRAMES: usize = 10;
+/// A pre-roll frame older than this is stale (the mic paused meanwhile).
+pub const PRE_ROLL: Duration = Duration::from_secs(1);
 /// The sent audio kept for a resend after a lost connection.
 pub const REPLAY_MAX_MS: u64 = 5_000;
 /// Frames kept while no connection takes audio.
@@ -118,6 +120,8 @@ pub enum Report {
         at: Instant,
     },
     /// `status` = the HTTP status of a refused upgrade, if there was one.
+    /// The machine has no connect deadline: the driver reports this after
+    /// its own connect timeout (10 s, C3-5).
     ConnectFailed {
         conn: u32,
         status: Option<u16>,
@@ -271,8 +275,8 @@ pub struct SonioxCore {
     phase: Phase,
     state: TranscriptionState,
     next_conn: u32,
-    /// Unsent frames before a voiced one (≤ 1 s).
-    preroll: VecDeque<MicFrame>,
+    /// Unsent frames before a voiced one, with their arrival (≤ 1 s).
+    preroll: VecDeque<(Instant, MicFrame)>,
     /// Frames waiting for a connection (≤ 5 s).
     pending: VecDeque<MicFrame>,
     pending_ms: u64,
@@ -282,12 +286,14 @@ pub struct SonioxCore {
     /// Session ms up to which Soniox gave finals (a final's end, or the
     /// audio a `<fin>` answered).
     confirmed_ms: u64,
-    /// The session ms a sent `finalize` covers, until its `<fin>`.
-    finalize: Option<u64>,
+    /// The session ms each sent `finalize` covers, oldest first, until
+    /// its `<fin>`.
+    finalizes: VecDeque<u64>,
     /// Audio went out on this connection since the last `finalize`.
     unfinalized: bool,
     last_voiced_at: Option<Instant>,
-    onset_at: Option<Instant>,
+    /// A voiced onset: when its first frame went out and its session ms.
+    onset: Option<(Instant, u64)>,
     backoff_step: usize,
     connects: VecDeque<Instant>,
     /// Ended connections waiting for `finished`; their tokens are ignored
@@ -311,10 +317,10 @@ impl SonioxCore {
             replay: VecDeque::new(),
             sent_end_ms: 0,
             confirmed_ms: 0,
-            finalize: None,
+            finalizes: VecDeque::new(),
             unfinalized: false,
             last_voiced_at: None,
-            onset_at: None,
+            onset: None,
             backoff_step: 0,
             connects: VecDeque::new(),
             draining: Vec::new(),
@@ -435,10 +441,9 @@ impl SonioxCore {
         };
         match (&self.phase, gated) {
             (Phase::Idle, _) => {
-                self.push_preroll(pcm);
+                self.push_preroll(at, pcm);
                 if voiced {
-                    let preroll: Vec<MicFrame> = self.preroll.drain(..).collect();
-                    for frame in preroll {
+                    for frame in self.take_preroll(at) {
                         self.queue(frame);
                     }
                     self.connect(at, ConnectKind::Lazy, out);
@@ -446,16 +451,22 @@ impl SonioxCore {
             }
             (Phase::Live(_), Some(false)) => self.send_new(pcm, out),
             (Phase::Live(_), _) => {
-                self.push_preroll(pcm);
+                self.push_preroll(at, pcm);
                 if voiced {
                     self.resume(at, out);
                 }
             }
             (Phase::Connecting { .. } | Phase::Backoff { .. } | Phase::Rolling { .. }, _) => {
+                // An onset while no connection takes audio keeps its pre-roll.
+                if voiced {
+                    for frame in self.take_preroll(at) {
+                        self.queue(frame);
+                    }
+                }
                 if self.speaking(at) {
                     self.queue(pcm);
                 } else {
-                    self.push_preroll(pcm);
+                    self.push_preroll(at, pcm);
                 }
             }
             (Phase::Stopping { .. } | Phase::Done, _) => {}

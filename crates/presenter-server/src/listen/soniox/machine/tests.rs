@@ -377,6 +377,8 @@ fn a_17_second_outage_connects_with_the_offset_of_the_last_final() {
         reason: String::new(),
         at: at(t0, 3_000),
     });
+    assert_eq!(core.state(), TranscriptionState::Reconnecting);
+    assert_eq!(core.next_deadline(), Some(at(t0, 4_000)));
     let actions = core.on_tick(at(t0, 4_000));
     assert_eq!(connects(&actions), vec![(2, 2_350, ConnectKind::Retry)]);
 }
@@ -397,6 +399,13 @@ fn a_stall_while_audio_flows_reconnects() {
     // Connected at 50 ms, so 15 s without a response ends at 15 050 ms.
     assert_eq!(dropped_at, Some(151));
     assert_eq!(core.stats().reconnects, 0);
+    // One second later: the last 5 s of sent audio go again (nothing was
+    // confirmed), frame 151 waits in the queue.
+    let actions = core.on_tick(at(t0, 16_100));
+    assert_eq!(connects(&actions), vec![(2, 10_100, ConnectKind::Retry)]);
+    let actions = connected(&mut core, t0, 2, 16_200);
+    let ids: Vec<u32> = sent(&actions).iter().map(|(_, i)| *i).collect();
+    assert_eq!(ids, (101..=151).collect::<Vec<u32>>());
 }
 
 #[test]
@@ -871,4 +880,98 @@ fn a_close_without_finished_backs_off_and_a_good_answer_resets_the_steps() {
     let _ = closed(&mut core, 2, 2_300);
     // The answer reset the steps: 1 s again, not 5 s.
     assert_eq!(core.next_deadline(), Some(at(t0, 3_300)));
+}
+
+#[test]
+fn an_onset_during_a_back_off_keeps_its_pre_roll() {
+    let t0 = Instant::now();
+    let mut core = streaming(t0);
+    let _ = respond(&mut core, t0, 1, error_response(503), 500);
+    let mut conn = 1;
+    for ms in [1_500, 6_500] {
+        let actions = core.on_tick(at(t0, ms));
+        conn = connects(&actions)[0].0;
+        let _ = core.on_report(Report::ConnectFailed {
+            conn,
+            status: None,
+            error: "dns".to_string(),
+            at: at(t0, ms),
+        });
+    }
+    // 20 s back-off: the guest pauses, then speaks before it ends.
+    for i in 70..200 {
+        let _ = feed(&mut core, t0, i, false);
+    }
+    let _ = feed(&mut core, t0, 200, true);
+    let actions = core.on_tick(at(t0, 26_500));
+    assert_eq!(connects(&actions)[0].0, conn + 1);
+    let ids: Vec<u32> = sent(&connected(&mut core, t0, conn + 1, 26_600))
+        .iter()
+        .map(|(_, i)| *i)
+        .collect();
+    let tail: Vec<u32> = ids.iter().rev().take(10).rev().copied().collect();
+    assert_eq!(tail, (191..=200).collect::<Vec<u32>>());
+}
+
+#[test]
+fn a_stale_pre_roll_is_not_sent() {
+    let t0 = Instant::now();
+    let mut core = keyed();
+    for i in 0..5 {
+        assert!(feed(&mut core, t0, i, false).is_empty());
+    }
+    // The mic paused for a minute: the old quiet frames are no pre-roll.
+    let _ = feed_at(&mut core, t0, 5, true, 60_000);
+    let actions = connected(&mut core, t0, 1, 60_100);
+    assert_eq!(sent(&actions), vec![(1, 5)]);
+}
+
+#[test]
+fn each_fin_confirms_only_its_own_finalize() {
+    let t0 = Instant::now();
+    let mut core = streaming(t0);
+    let gate_a = core.on_tick(at(t0, 10_000));
+    assert_eq!(controls(&gate_a), vec![Control::Finalize]);
+    for i in 1..=10 {
+        let _ = feed_at(&mut core, t0, i, true, 10_000 + u64::from(i) * 100);
+    }
+    let gate_b = core.on_tick(at(t0, 21_000));
+    assert_eq!(controls(&gate_b), vec![Control::Finalize]);
+    // The answer to the FIRST finalize arrives; the second is still open.
+    let _ = respond(&mut core, t0, 1, response(vec![fin()]), 21_100);
+    let _ = core.on_report(Report::Closed {
+        conn: 1,
+        code: Some(1006),
+        reason: String::new(),
+        at: at(t0, 21_200),
+    });
+    let _ = core.on_tick(at(t0, 22_200));
+    let actions = feed_at(&mut core, t0, 11, true, 30_000);
+    // Everything after the first finalize's 100 ms goes again.
+    assert_eq!(connects(&actions), vec![(2, 100, ConnectKind::Lazy)]);
+}
+
+#[test]
+fn late_finals_of_earlier_speech_do_not_answer_an_onset() {
+    let t0 = Instant::now();
+    let mut core = streaming(t0);
+    let _ = core.on_tick(at(t0, 10_000));
+    let _ = feed_at(&mut core, t0, 1, true, 20_000);
+    // The gate's finalize answered late: a word of frame 0.
+    let late = respond(
+        &mut core,
+        t0,
+        1,
+        response(vec![token("Old", 0, 90, true)]),
+        20_100,
+    );
+    assert!(!late.iter().any(|a| matches!(a, Action::Onset { .. })));
+    let actions = respond(
+        &mut core,
+        t0,
+        1,
+        response(vec![token(" new", 150, 190, false)]),
+        20_400,
+    );
+    assert!(actions.contains(&Action::Onset { latency_ms: 400 }));
 }
