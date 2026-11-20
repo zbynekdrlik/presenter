@@ -90,9 +90,9 @@ for (const [name, profile, touch] of [
     expect(searches[0].searchParams.get("order")).toBe("bible");
     expect(searches[0].searchParams.get("limit")).toBe("1000");
 
-    const found = await places(page);
     // SNV: 653 hits, relevance cut them at 100 (the owner's 19.11 search).
-    expect(found.length).toBeGreaterThan(100);
+    await expect.poll(() => hits(page).count()).toBeGreaterThan(100);
+    const found = await places(page);
     expect(found.length).toBeLessThan(1000);
     await expect(page.locator('[data-role="search-count"]')).toHaveText(`Výsledkov: ${found.length}`);
     expect(found[0][0], "the first hit is in the Pentateuch").toBeLessThanOrEqual(5);
@@ -188,6 +188,47 @@ for (const [name, profile, touch] of [
       "data-loaded-for",
       "eng-kjv:HEB.11",
     );
+    await finish(opened);
+  });
+
+  test(`${name}: a translation lacking the verse says so, acts in the hit's own, and is asked again later`, async ({
+    browser,
+  }) => {
+    const opened = await openStudy(
+      browser,
+      baseURL,
+      profile,
+      "/ui/study?view=search&t=slk-seb&q=viera+z%C3%A1rukou",
+      null,
+    );
+    const { page } = opened;
+    await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:viera zárukou");
+    // The server's answer for a chapter a translation lacks: 200, no verses.
+    const kjvChapter = /\/bible\/study\/chapter\?translation=eng-kjv&book_code=HEB&chapter=11$/;
+    await page.route(kjvChapter, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ book: "Hebrews", verses: [] }),
+      }),
+    );
+    const row = page.locator('[data-role="search-hit-row"]').filter({ hasText: "Hebrejom 11:1" }).first();
+    const hit = row.locator('[data-role="search-hit"]');
+    const text = row.locator('[data-role="search-hit-text"]');
+    const chip = (code: string) => row.locator(`[data-role="hit-translation"][data-translation="${code}"]`);
+
+    await press(chip("eng-kjv"), touch);
+    await expect(text).toHaveText("Tento preklad tento verš nemá.");
+    await expect(chip("eng-kjv")).toHaveAttribute("aria-pressed", "true");
+    // Nothing to read there: the row still opens the hit's own translation.
+    await expect(hit).toHaveAttribute("data-translation", "slk-seb");
+
+    // The empty chapter was never cached: once it answers, a tap reads it.
+    await page.unroute(kjvChapter);
+    await press(chip("slk-seb"), touch);
+    await press(chip("eng-kjv"), touch);
+    await expect(text).toContainText("Now faith is the substance");
+    await expect(hit).toHaveAttribute("data-translation", "eng-kjv");
     await finish(opened);
   });
 }

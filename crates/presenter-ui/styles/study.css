@@ -624,25 +624,18 @@ body[data-shell="phone"] .study-verse__number {
 
 /* Sermons (spec §7.6) ------------------------------------------------------- */
 
+/* #983: a search hit's translations, "Porovnať" and "+" in one line under its text. */
 .study-hit-row {
   display: flex;
   flex: none;
+  flex-direction: column;
   align-items: stretch;
   gap: 4px;
 }
 
 .study-hit-row .study-hit {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-/* #983: a hit's translations, "Porovnať" and "+" in one line under its text. */
-.study-hit-row {
-  flex-direction: column;
-}
-
-.study-hit-row > .study-hit {
   flex: none;
+  min-width: 0;
 }
 
 .study-hit-tools {

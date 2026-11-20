@@ -102,12 +102,17 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **Study search = every hit in the Bible's order (#983, owner 2026-11-20: "výsledky boli random miesta"):**
   Study sends `order=bible&limit=1000` (`results::fetch_search`, `SearchOrder::Bible`); the server orders
   book number, chapter, verse (both FTS and LIKE) and caps that order at 1000, relevance (the operator
-  console, no `order=`) stays at 100. The search view has its OWN translation row above the hits
-  (`search-translation` chips = the searchable favourites, `state::study_search`, + ▾); the header's
-  `study-favs` show on the reader only, so `favourite()` in a spec finds nothing on a search view. Each
-  hit row (`pages/study/hit.rs`) carries the favourites' codes (`hit-translation`): a tap reads that
-  chapter through the page's `ChapterCache` and shows the hit's verses inline, the hit's own code goes
-  back to the marked text; the label, "Porovnať", "+" and the row tap follow the translation shown.
+  console, no `order=`) stays at 100. The server sends no total, so at 1000 the count line says
+  "Zobrazených prvých 1000 výsledkov"; below it the count IS the total. The search view has its OWN
+  translation row above the hits (`search-translation` chips = every searchable favourite, no chip cap:
+  the row scrolls sideways; `state::study_search`, + ▾); the header's `study-favs` show on the reader
+  only, so `favourite()` in a spec finds nothing on a search view. The favourites are ONE `Memo` in
+  `SearchResults`, passed to every row (up to 1000 rows). Each hit row (`pages/study/hit.rs`) carries
+  the favourites' codes (`hit-translation`): a tap reads that chapter through the page's
+  `ChapterCache` (never an EMPTY chapter into the cache: the reader reads a cached chapter as Ready)
+  and shows the hit's verses inline, a failed read is retried by the same chip, the hit's own code
+  goes back to the marked text. The label names the chip pressed; the row tap, "Porovnať" and "+" act
+  in the other translation only while its text is shown (`Shown::acting`), else in the hit's own.
   `data-book-number` on `search-hit` lets a spec check the order.
 - **Back from a hit keeps the list:** `Search::Ready` stays for its key, nothing is asked again, and the
   offset by history index restores the scroll. Back with no offset: the route's verse, else the top.

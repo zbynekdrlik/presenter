@@ -12,7 +12,6 @@ use super::hit::Hit;
 use super::scroll::{self, ScrollPlan};
 use super::{nav, study_error, Chapter, Search, Study, REMOTE_TRANSLATION};
 use crate::api::bible as bible_api;
-use crate::state::bible_translations::study_chip_cap;
 use crate::state::study::{search_marker, visible_favourites, StudySheet, StudyView};
 use crate::state::study_search::search_translation_row;
 use crate::state::study_word::{search_scopes, SCOPE_ALL};
@@ -76,23 +75,16 @@ fn set_scope(s: Study, wanted: &str) {
 
 /// The reader's favourites that can be searched, in one row above the hits,
 /// and ▾ for every installed translation (#983: the header's chips are the
-/// reader's, and a phone's focused field hid them). A tap is the reader chip's
-/// `switch`: the search runs again in that translation, from the top.
-fn translation_row(s: Study) -> impl IntoView {
+/// reader's). A tap is the reader chip's `switch`: the search runs again in
+/// that translation, from the top. The row has its own line and scrolls
+/// sideways (`.study-scopes`), so every favourite shows, unlike the header's.
+fn translation_row(s: Study, favourites: Memo<Vec<(usize, String)>>) -> impl IntoView {
     let open_list = move |_| nav::open_sheet(s, nav::sheet_route(s, StudySheet::Translations));
     let chips = move || {
-        let installed = {
-            s.translations.track();
-            s.installed_codes()
-        };
-        let favourites = visible_favourites(&s.favourites.get(), &installed);
         let open = s.route.with(|route| route.translation.clone());
-        search_translation_row(
-            favourites,
-            open.as_deref(),
-            study_chip_cap(s.narrow.get()),
-            |code| code != REMOTE_TRANSLATION,
-        )
+        search_translation_row(favourites.get(), open.as_deref(), usize::MAX, |code| {
+            code != REMOTE_TRANSLATION
+        })
     };
     view! {
         <nav
@@ -192,6 +184,14 @@ fn scope_row(s: Study) -> impl IntoView {
 
 #[component]
 pub(super) fn SearchResults(s: Study) -> impl IntoView {
+    // Once for the translation row and every hit row (up to 1000).
+    let favourites = Memo::new(move |_| {
+        let installed = {
+            s.translations.track();
+            s.installed_codes()
+        };
+        visible_favourites(&s.favourites.get(), &installed)
+    });
     let query = move || {
         s.route.with(|route| match &route.view {
             StudyView::Search { query, .. } => query.clone(),
@@ -239,7 +239,7 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
                 data-loaded-for=loaded_for
                 data-state=state
             >
-                {translation_row(s)}
+                {translation_row(s, favourites)}
                 {move || (!remote()).then(|| scope_row(s))}
                 {move || {
                     match count() {
@@ -273,7 +273,7 @@ pub(super) fn SearchResults(s: Study) -> impl IntoView {
                 <For
                     each=hits
                     key=|(index, hit)| (*index, hit.reference.to_human_readable())
-                    children=move |(_, hit)| view! { <Hit s=s hit=hit query=query() /> }
+                    children=move |(_, hit)| view! { <Hit s=s hit=hit query=query() favourites=favourites /> }
                 />
                 {move || {
                     failure()

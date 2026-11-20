@@ -301,8 +301,8 @@ test("a search URL opens by itself and a chip searches the other translation", a
   const { page } = opened;
   await expect(results(page)).toHaveAttribute("data-loaded-for", "eng-kjv:faith");
   // #983: every hit (up to 1000), the count names them all.
+  await expect.poll(() => hits(page).count()).toBeGreaterThan(100);
   const count = await hits(page).count();
-  expect(count).toBeGreaterThan(100);
   await expect(page.locator('[data-role="search-count"]')).toHaveText(`Výsledkov: ${count}`);
   await expect(hits(page).first()).toContainText("· KJV");
 
