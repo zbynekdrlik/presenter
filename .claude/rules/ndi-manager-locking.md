@@ -65,13 +65,19 @@ via `ReconnectAction` from `pipeline_snapshots_checked("NDI reconnect ticker")`:
   viewer). Never a Repair (that rebuilt the receiver every 30 s and undid the saving). A streaming
   source (`parked: false`) is checked each tick by `park_if_no_viewer` → `NdiManager::park_if_idle`
   (`manager/park.rs`): consumers = live sessions + `joining` (POSTs still inside `add_consumer`);
-  0 for `PARK_AFTER_IDLE` (60 s, so 60–90 s with the tick) → slot removed if still the same
-  `Arc` (ptr_eq), supervisor aborted, pipeline stopped OUTSIDE the lock, INFO `NDI source parked`.
-  The WHEP POST handler calls `AppState::wake_parked_ndi_source` (`state/ndi_park.rs`) BEFORE
-  `whep_signaller_call`: under `activation_lock` it re-checks the park + the DB's active source and
-  runs `activate_video_source_locked` (≤ 8 s inline, then the POST adds its consumer). Every start /
-  `stop_*` ends the park (`ParkBook::forget/clear/retain_only`, mirrored by `FakeNdiControl`
-  `set_idle` / `set_parked`). `/healthz` `ndi_parked[]`, Settings row `parked` („Čaká na obrazovku").
+  0 for `PARK_AFTER_IDLE` (60 s, so 60–90 s with the tick) → `take_for_park` under the second
+  `active` lock: kept if the slot holds another `Arc` or `has_consumers_now()` (a POST takes its
+  `JoinTicket` UNDER the same lock in `joining_pipeline`, so the count→remove gap can't strand a
+  viewer); else `mark_parked` BEFORE the remove (a POST that finds no slot always finds the park),
+  supervisor aborted, pipeline stopped OUTSIDE the lock, INFO `NDI source parked`. The WHEP POST
+  goes through `AppState::post_whep_waking` (`state/ndi_park.rs`): wake first
+  (`wake_parked_ndi_source`, under `activation_lock`, re-checks the park + the DB's active source,
+  runs only `start_active_video_source_locked` — no DB write, no audit row), then the POST; a
+  `SourceNotActive` while parked = raced a park → wake + ONE retry. `start_pipeline` clears the park
+  book only AFTER the start is decided (a second POST during a wake waits on `activation_lock`);
+  `stop_*` end it at once (mirrored by `FakeNdiControl` `set_idle` / `set_parked`). A parked
+  heartbeat announces the source but never "connected". `/healthz` `ndi_parked[]`, Settings row
+  `parked` („Čaká na obrazovku"), read from the park book even while `active` is busy.
 
 It used to re-activate on every tick, so SNV logged a false "NDI auto-reconnect: source restored"
 every 30 s. Two things depended on that re-activation and must stay:
