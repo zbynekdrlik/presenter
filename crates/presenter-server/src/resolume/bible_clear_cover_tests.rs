@@ -315,6 +315,55 @@ fn a_cover_fades_over_the_share_of_its_transition_left_to_go() {
     );
 }
 
+/// The `#bible-clear` cover fade the owner ruled (#987, 2026-11-20): "pevná
+/// dĺžka fadu `#bible-clear` v Presenteri, 0,5 s; prechod vrstvy 12 v
+/// Resolume sa nemení".
+pub(super) const RULED_COVER_FADE: Duration = Duration::from_millis(500);
+/// SNV layer 12's transition, which the cover no longer follows (#987).
+pub(super) const SNV_COVER_TRANSITION: Duration = Duration::from_millis(2300);
+
+/// #987: the cover fades over a fixed 0.5 s, scaled by the distance left as
+/// before (#848), whatever its layer's transition: SNV's 2.3 s, or none.
+#[test]
+fn a_cover_fades_over_half_a_second_whatever_its_layer_transition() {
+    for transition in [Some(SNV_COVER_TRANSITION), None] {
+        let mapping = ClipMapping::from_composition(
+            &json!({ "layers": cover_layers(None, transition, 0.0) }),
+        )
+        .expect("mapping");
+        let covers = cover_candidates(&mapping, &HashMap::new());
+        let mut tracked = TrackedOpacities::default();
+
+        tracked.set(
+            COVER_OPACITY,
+            TrackedOpacity {
+                base: 0.8,
+                level: 0.8,
+            },
+        );
+        assert_duration(
+            planned_duration(&covers, &tracked, CoverDirection::Hide),
+            RULED_COVER_FADE,
+        );
+
+        tracked.set(
+            COVER_OPACITY,
+            TrackedOpacity {
+                base: 0.8,
+                level: 0.4,
+            },
+        );
+        assert_duration(
+            planned_duration(&covers, &tracked, CoverDirection::Hide),
+            RULED_COVER_FADE / 2,
+        );
+        assert_duration(
+            planned_duration(&covers, &tracked, CoverDirection::Show),
+            RULED_COVER_FADE / 2,
+        );
+    }
+}
+
 /// #848 review, finding 1: the clear held the worker for the cover's whole
 /// transition, so the `#timer` countdown froze and the next verse waited. The
 /// push ends once the Bible clips are faded; it sends the cover nothing (the

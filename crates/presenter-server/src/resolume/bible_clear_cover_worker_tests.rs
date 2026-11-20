@@ -23,7 +23,8 @@
 use super::bible_clear::FADE_STEP;
 use super::bible_clear_cover_tests::{
     assert_hidden, assert_shown, cover_layer, cover_layers, cover_layers_on, timer_layer,
-    BIBLE_FADE, COVER, COVER_FADE, COVER_OPACITY, SHORT_COVER_FADE,
+    BIBLE_FADE, COVER, COVER_FADE, COVER_OPACITY, RULED_COVER_FADE, SHORT_COVER_FADE,
+    SNV_COVER_TRANSITION,
 };
 use super::bible_clear_deck_tests::assert_faded;
 use super::bible_clear_tests::{
@@ -268,6 +269,34 @@ async fn a_timer_frame_lands_while_the_cover_fades_up_after_a_clear() {
         "the cover fades over its layer's transition ({COVER_FADE:?}), took {took:?}"
     );
     assert!(connects(&requests).is_empty(), "nothing is triggered");
+}
+
+/// #987: the real worker shows a cover on a 2.3 s-transition layer (SNV layer
+/// 12) in 0.5 s worth of steps: a later step goes out at least `FADE_STEP`
+/// after the one before and the fade ends at the step where 0.5 s has passed,
+/// so at most `0.5 s / FADE_STEP` PUTs (the layer's transition took ~46).
+#[tokio::test]
+async fn the_worker_fades_a_cover_in_half_a_second_of_steps() {
+    let (server, _params) = start_arena(cover_layers(None, Some(SNV_COVER_TRANSITION), 0.0)).await;
+    let worker = Worker::spawn(&server);
+
+    let start = Instant::now();
+    worker.bible(clear_update()).await;
+    let requests = wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
+    let took = start.elapsed();
+
+    let steps = opacities_put(&requests, COVER_OPACITY);
+    assert_shown(&steps, 1.0);
+    let most = (RULED_COVER_FADE.as_millis() / FADE_STEP.as_millis()) as usize;
+    assert!(
+        steps.len() <= most,
+        "a {RULED_COVER_FADE:?} fade is at most {most} steps of {FADE_STEP:?}: {steps:?}"
+    );
+    assert!(
+        took >= RULED_COVER_FADE,
+        "the cover still fades, over {RULED_COVER_FADE:?}: took {took:?}"
+    );
+    assert_healthy(&worker).await;
 }
 
 /// A verse is on air first; the cover fades out after its last `/connect`.
