@@ -585,7 +585,7 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
                 {move || recorder.with(|r| recorder_state_line(r.as_ref()))}
             </p>
             {card.render_list(row)}
-            <GuestTranscription status=status toast=toast />
+            <GuestTranscription status=status toast=toast refresh=Callback::new(move |()| refresh()) />
         </section>
     }
 }

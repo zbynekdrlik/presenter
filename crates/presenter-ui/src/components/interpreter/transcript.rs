@@ -4,15 +4,18 @@
 //! sentence: its final words normal, the live (non-final) rest lighter. The
 //! column follows the bottom while the reader is there; scrolling up pauses it
 //! and shows "▼ Naživo · N nové" (N = sentences closed since), a tap jumps
-//! back. A banner says when the transcript cannot come (C-S7). The column shows
-//! only once there is something to show — a sentence, a session that runs, or
-//! a reason worth a banner — so a box without transcription keeps the tips area
-//! full width (`data-transcript="absent"`).
+//! back. A banner says when the transcript cannot come (C-S7) or the socket is
+//! down. The column shows only once there is something to show — a sentence, a
+//! session that runs, or a reason worth a banner — so a box without
+//! transcription keeps the tips area full width (`data-transcript="absent"`).
 //!
-//! Every (re)connect starts with the server's snapshot, which REPLACES the
-//! model; the messages after it are applied in arrival order. The pure half
-//! ([`Transcript`]) is host-tested; [`TranscriptModel`] holds it in signals.
+//! Every (re)connect starts with the server's snapshot, which REPLACES what the
+//! column held; the messages after it are applied in arrival order, in place.
+//! [`TranscriptModel`] holds sentences, tails and sessions in their own signals
+//! and changes them only through the pure functions below (host-tested), so a
+//! tail every ~0.2 s neither copies nor re-diffs the sentence list.
 
+use crate::ws::passive::PassiveWsState;
 use leptos::prelude::*;
 use presenter_core::listen::transcription::{MicTranscription, OffReason, TranscriptionState};
 use presenter_core::listen::ws::{
@@ -23,68 +26,27 @@ use presenter_core::listen::ws::{
 pub const MAX_SENTENCES: usize = 300;
 /// The reader is "at the bottom" within this many pixels.
 const BOTTOM_SLACK_PX: i32 = 24;
+/// The banner while `/listen/ws` itself is down (no other banner applies).
+const SOCKET_DOWN: &str = "Prepis: bez spojenia so serverom — obnovujem…";
 
-/// The client half of the transcript: what `/listen/ws` delivered so far.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Transcript {
-    pub sentences: Vec<TranscriptSentence>,
-    pub tails: Vec<TranscriptTail>,
-    pub sessions: Vec<MicTranscription>,
-}
+/// What a snapshot leaves: its newest [`MAX_SENTENCES`] sentences (oldest
+/// first), its non-empty tails and its sessions.
+type Parts = (
+    Vec<TranscriptSentence>,
+    Vec<TranscriptTail>,
+    Vec<MicTranscription>,
+);
 
-impl Transcript {
-    /// What a snapshot leaves: its newest [`MAX_SENTENCES`] sentences, its
-    /// non-empty tails and its sessions — everything held before is replaced.
-    pub fn from_snapshot(snapshot: TranscriptSnapshot) -> Self {
-        Self {
-            sentences: newest(snapshot.sentences),
-            tails: snapshot
-                .tails
-                .into_iter()
-                .filter(|tail| !tail_is_empty(tail))
-                .collect(),
-            sessions: snapshot.sessions,
-        }
-    }
-
-    /// Apply one message; returns how many sentences it added (the "N nové"
-    /// count while the reader looks back). A snapshot adds nothing to count.
-    pub fn apply(&mut self, message: ListenWsMessage) -> usize {
-        match message {
-            ListenWsMessage::Snapshot { snapshot } => {
-                *self = Self::from_snapshot(snapshot);
-                0
-            }
-            ListenWsMessage::Sentence { sentence } => {
-                usize::from(push_sentence(&mut self.sentences, sentence))
-            }
-            ListenWsMessage::Tail { tail } => {
-                apply_tail(&mut self.tails, tail);
-                0
-            }
-            ListenWsMessage::Session { session } => {
-                apply_session(&mut self.sessions, session);
-                0
-            }
-        }
-    }
-
-    pub fn session(&self) -> Option<&MicTranscription> {
-        current_session(&self.sessions)
-    }
-
-    pub fn tail(&self) -> Option<&TranscriptTail> {
-        newest_tail(&self.tails)
-    }
-
-    /// Whether the column has anything to show (`data-transcript`).
-    pub fn present(&self) -> bool {
-        shows(
-            !self.sentences.is_empty(),
-            self.tail().is_some(),
-            self.session(),
-        )
-    }
+fn snapshot_parts(snapshot: TranscriptSnapshot) -> Parts {
+    let mut sentences = snapshot.sentences;
+    sentences.sort_by_key(|s| s.id);
+    let cut = sentences.len().saturating_sub(MAX_SENTENCES);
+    let tails = snapshot
+        .tails
+        .into_iter()
+        .filter(|tail| !tail_is_empty(tail))
+        .collect();
+    (sentences.split_off(cut), tails, snapshot.sessions)
 }
 
 /// Append a sentence newer than every one held (a repeat or an older one is
@@ -104,6 +66,16 @@ fn is_newer(sentences: &[TranscriptSentence], sentence: &TranscriptSentence) -> 
     sentences.last().is_none_or(|last| last.id < sentence.id)
 }
 
+/// The "N nové" count after a sentence arrived: counted only while the reader
+/// looks back.
+fn unseen_after(unseen: usize, following: bool) -> usize {
+    if following {
+        unseen
+    } else {
+        unseen + 1
+    }
+}
+
 /// A mic's tail replaces its previous one; an empty one clears it.
 fn apply_tail(tails: &mut Vec<TranscriptTail>, tail: TranscriptTail) {
     tails.retain(|t| t.mic_id != tail.mic_id);
@@ -120,7 +92,7 @@ fn apply_session(sessions: &mut Vec<MicTranscription>, session: MicTranscription
 
 /// The session the column speaks about: one that runs, else the newest one
 /// received (a replaced guest mic comes once as `off`).
-pub fn current_session(sessions: &[MicTranscription]) -> Option<&MicTranscription> {
+fn current_session(sessions: &[MicTranscription]) -> Option<&MicTranscription> {
     sessions
         .iter()
         .rev()
@@ -129,7 +101,7 @@ pub fn current_session(sessions: &[MicTranscription]) -> Option<&MicTranscriptio
 }
 
 /// The open sentence shown under the closed ones: the newest non-empty tail.
-pub fn newest_tail(tails: &[TranscriptTail]) -> Option<&TranscriptTail> {
+fn newest_tail(tails: &[TranscriptTail]) -> Option<&TranscriptTail> {
     tails.iter().max_by_key(|tail| tail.updated_at)
 }
 
@@ -141,23 +113,17 @@ fn shows(has_sentences: bool, has_tail: bool, session: Option<&MicTranscription>
         || session.is_some_and(|s| s.state != TranscriptionState::Off || banner_text(s).is_some())
 }
 
-/// The newest [`MAX_SENTENCES`] of a snapshot, oldest first.
-fn newest(mut sentences: Vec<TranscriptSentence>) -> Vec<TranscriptSentence> {
-    sentences.sort_by_key(|s| s.id);
-    let cut = sentences.len().saturating_sub(MAX_SENTENCES);
-    sentences.split_off(cut)
-}
-
 fn tail_is_empty(tail: &TranscriptTail) -> bool {
     tail.final_text.trim().is_empty() && tail.partial_text.trim().is_empty()
 }
 
-/// The banner (C-S7) for a session, or none when the transcript just runs /
-/// waits for the next words.
-pub fn banner_text(session: &MicTranscription) -> Option<&'static str> {
+/// The banner (C-S7) for a session, or none when the transcript runs or waits
+/// for the next words (a gated or parked session is a normal pause — the
+/// "no sound from the guest mic" banner needs the mic's packet age, which the
+/// session does not carry).
+fn banner_text(session: &MicTranscription) -> Option<&'static str> {
     match (session.state, session.reason) {
         (TranscriptionState::Reconnecting, _) => Some("Služba prepisu nedostupná — skúšam znova"),
-        (TranscriptionState::Parked, _) => Some("Nie je zvuk z mikrofónu hosťa"),
         (_, Some(OffReason::Auth | OffReason::Payment)) => {
             Some("Prepis vypnutý — problém s účtom služby")
         }
@@ -169,8 +135,15 @@ pub fn banner_text(session: &MicTranscription) -> Option<&'static str> {
     }
 }
 
+/// The banner shown: the session's, else the socket's own when it is down.
+fn shown_banner(session: Option<&MicTranscription>, ws: PassiveWsState) -> Option<&'static str> {
+    session
+        .and_then(banner_text)
+        .or((ws == PassiveWsState::Reconnecting).then_some(SOCKET_DOWN))
+}
+
 /// The "▼ Naživo" button's text.
-pub fn live_button_text(unseen: usize) -> String {
+fn live_button_text(unseen: usize) -> String {
     if unseen == 0 {
         "▼ Naživo".to_string()
     } else {
@@ -178,9 +151,14 @@ pub fn live_button_text(unseen: usize) -> String {
     }
 }
 
-/// Client state of the column. `Copy` (signals only): sentences, tails and
-/// sessions in their own signals and changed in place, so a tail every ~0.2 s
-/// neither copies nor re-diffs the sentence list.
+/// The server's token of a state (`data-state`).
+fn state_token(state: TranscriptionState) -> Option<String> {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+}
+
+/// Client state of the column. `Copy` (signals only).
 #[derive(Clone, Copy)]
 pub struct TranscriptModel {
     sentences: RwSignal<Vec<TranscriptSentence>>,
@@ -207,19 +185,18 @@ impl TranscriptModel {
     pub fn apply(self, message: ListenWsMessage) {
         match message {
             ListenWsMessage::Snapshot { snapshot } => {
-                let fresh = Transcript::from_snapshot(snapshot);
-                self.sentences.set(fresh.sentences);
-                self.tails.set(fresh.tails);
-                self.sessions.set(fresh.sessions);
+                let (sentences, tails, sessions) = snapshot_parts(snapshot);
+                self.sentences.set(sentences);
+                self.tails.set(tails);
+                self.sessions.set(sessions);
             }
             ListenWsMessage::Sentence { sentence } => {
                 if self.sentences.with_untracked(|s| is_newer(s, &sentence)) {
                     self.sentences.update(|s| {
                         push_sentence(s, sentence);
                     });
-                    if !self.following.get_untracked() {
-                        self.unseen.update(|n| *n += 1);
-                    }
+                    let following = self.following.get_untracked();
+                    self.unseen.update(|n| *n = unseen_after(*n, following));
                 }
             }
             ListenWsMessage::Tail { tail } => self.tails.update(|t| apply_tail(t, tail)),
@@ -254,19 +231,23 @@ fn scroll_to_bottom(el: &web_sys::Element) {
     el.set_scroll_top(el.scroll_height());
 }
 
-/// The EN column (spec §8.2).
+/// The EN column (spec §8.2); `ws` is the `/listen/ws` socket's state.
 #[component]
-pub fn TranscriptColumn(model: TranscriptModel) -> impl IntoView {
+pub fn TranscriptColumn(model: TranscriptModel, ws: ReadSignal<PassiveWsState>) -> impl IntoView {
     let list = NodeRef::<leptos::html::Div>::new();
     let session = Memo::new(move |_| model.sessions.with(|s| current_session(s).cloned()));
-    let banner = Memo::new(move |_| session.with(|s| s.as_ref().and_then(banner_text)));
+    let banner = Memo::new(move |_| session.with(|s| shown_banner(s.as_ref(), ws.get())));
     let tail = Memo::new(move |_| model.tails.with(|t| newest_tail(t).cloned()));
-    // New text while following: scroll it into view once it is rendered.
+    // New text while following: scroll it into view once it is rendered —
+    // unless the reader scrolled up between the change and the frame.
     Effect::new(move |_| {
         model.sentences.track();
         tail.track();
         if model.following.get_untracked() {
             request_animation_frame(move || {
+                if !model.following.get_untracked() {
+                    return;
+                }
                 if let Some(el) = list.get_untracked() {
                     scroll_to_bottom(&el);
                 }
@@ -293,7 +274,8 @@ pub fn TranscriptColumn(model: TranscriptModel) -> impl IntoView {
     };
     view! {
         <section class="interpreter-transcript" data-role="transcript"
-            data-state=move || session.with(|s| s.as_ref().map(|s| format!("{:?}", s.state).to_lowercase()))>
+            data-ws=move || ws.get().as_str()
+            data-state=move || session.with(|s| s.as_ref().and_then(|s| state_token(s.state)))>
             <Show when=move || banner.with(Option::is_some)>
                 <p class="interpreter-transcript__banner" data-role="transcript-banner" role="status">
                     {move || banner.get().unwrap_or_default()}
@@ -363,109 +345,95 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_replaces_everything_and_keeps_the_newest_300_in_order() {
-        let mut model = Transcript::default();
-        assert_eq!(
-            model.apply(ListenWsMessage::Sentence {
-                sentence: sentence(1)
-            }),
-            1
-        );
+    fn a_snapshot_keeps_its_newest_300_in_order_and_drops_empty_tails() {
         let snapshot = TranscriptSnapshot {
             sentences: (10..=320).rev().map(sentence).collect(),
-            tails: vec![tail("", " ", 1)],
+            tails: vec![tail("", " ", 1), tail("For God", " so", 2)],
             sessions: vec![session(TranscriptionState::Streaming, None)],
         };
-        assert_eq!(
-            model.apply(ListenWsMessage::Snapshot { snapshot }),
-            0,
-            "nothing counted as new"
-        );
-        assert_eq!(model.sentences.len(), MAX_SENTENCES);
-        assert_eq!(model.sentences[0].id, 21, "the oldest beyond 300 are gone");
-        assert_eq!(model.sentences.last().map(|s| s.id), Some(320));
-        assert!(model.tails.is_empty(), "an empty tail is not shown");
-        assert!(model.present());
+        let (sentences, tails, sessions) = snapshot_parts(snapshot);
+        assert_eq!(sentences.len(), MAX_SENTENCES);
+        assert_eq!(sentences[0].id, 21, "the oldest beyond 300 are gone");
+        assert_eq!(sentences.last().map(|s| s.id), Some(320));
+        assert_eq!(tails.len(), 1, "an empty tail is not shown");
+        assert_eq!(sessions.len(), 1);
     }
 
     #[test]
-    fn sentences_append_once_and_a_tail_replaces_its_mics_tail() {
-        let mut model = Transcript::default();
-        model.apply(ListenWsMessage::Tail {
-            tail: tail("For God", " so lo", 1),
-        });
-        model.apply(ListenWsMessage::Tail {
-            tail: tail("For God so", " loved", 2),
-        });
+    fn sentences_append_once_and_the_oldest_goes_past_300() {
+        let mut sentences = Vec::new();
+        assert!(push_sentence(&mut sentences, sentence(5)));
+        assert!(!push_sentence(&mut sentences, sentence(5)), "a repeat");
+        assert!(!push_sentence(&mut sentences, sentence(4)), "an older one");
+        for id in 6..=305 {
+            assert!(push_sentence(&mut sentences, sentence(id)));
+        }
+        assert_eq!(sentences.len(), MAX_SENTENCES);
+        assert_eq!(sentences[0].id, 6);
+    }
+
+    #[test]
+    fn only_a_reader_looking_back_counts_new_sentences() {
+        assert_eq!(unseen_after(0, true), 0, "following: nothing to count");
+        assert_eq!(unseen_after(2, false), 3);
+        assert_eq!(live_button_text(0), "▼ Naživo");
+        assert_eq!(live_button_text(3), "▼ Naživo · 3 nové");
+    }
+
+    #[test]
+    fn a_tail_replaces_its_mics_tail_and_an_empty_one_clears_it() {
+        let mut tails = Vec::new();
+        apply_tail(&mut tails, tail("For God", " so lo", 1));
+        apply_tail(&mut tails, tail("For God so", " loved", 2));
         assert_eq!(
-            model.tail().map(|t| t.partial_text.as_str()),
+            newest_tail(&tails).map(|t| t.partial_text.as_str()),
             Some(" loved")
         );
+        assert_eq!(tails.len(), 1);
+        apply_tail(&mut tails, tail("", "", 3));
         assert_eq!(
-            model.apply(ListenWsMessage::Sentence {
-                sentence: sentence(5)
-            }),
-            1
+            newest_tail(&tails),
+            None,
+            "an empty tail clears the open sentence"
         );
-        assert_eq!(
-            model.apply(ListenWsMessage::Sentence {
-                sentence: sentence(5)
-            }),
-            0,
-            "a repeat"
-        );
-        assert_eq!(
-            model.apply(ListenWsMessage::Sentence {
-                sentence: sentence(4)
-            }),
-            0,
-            "an older one"
-        );
-        model.apply(ListenWsMessage::Tail {
-            tail: tail("", "", 3),
-        });
-        assert_eq!(model.tail(), None, "an empty tail clears the open sentence");
-        assert_eq!(model.sentences.len(), 1);
     }
 
     #[test]
     fn the_column_shows_only_when_there_is_something_to_show() {
-        let mut model = Transcript::default();
         assert!(
-            !model.present(),
+            !shows(false, false, None),
             "no session, no text: the tips stay full width"
         );
-        model.apply(ListenWsMessage::Session {
-            session: session(TranscriptionState::Off, Some(OffReason::NotPreach)),
-        });
+        let waiting = session(TranscriptionState::Off, Some(OffReason::NotPreach));
         assert!(
-            !model.present(),
+            !shows(false, false, Some(&waiting)),
             "waiting for the Kázeň layout is not worth a column"
         );
-        model.apply(ListenWsMessage::Session {
-            session: session(TranscriptionState::Off, Some(OffReason::CapReached)),
-        });
-        assert!(model.present(), "the cap is worth a banner");
-        model.apply(ListenWsMessage::Session {
-            session: session(TranscriptionState::Gated, None),
-        });
-        assert!(model.present());
+        let cap = session(TranscriptionState::Off, Some(OffReason::CapReached));
+        assert!(shows(false, false, Some(&cap)), "the cap is worth a banner");
+        let gated = session(TranscriptionState::Gated, None);
+        assert!(shows(false, false, Some(&gated)));
+        assert!(shows(true, false, None), "text from before stays readable");
+        assert!(shows(false, true, None));
     }
 
     #[test]
     fn the_running_session_wins_over_a_replaced_mics_off() {
-        let mut model = Transcript::default();
-        model.apply(ListenWsMessage::Session {
-            session: session(TranscriptionState::Streaming, None),
-        });
+        let mut sessions = Vec::new();
+        apply_session(&mut sessions, session(TranscriptionState::Streaming, None));
         let mut old = session(TranscriptionState::Off, Some(OffReason::NoGuestMic));
         old.mic_id = "old".into();
-        model.apply(ListenWsMessage::Session { session: old });
-        assert_eq!(model.session().map(|s| s.mic_id.as_str()), Some("guest"));
+        apply_session(&mut sessions, old);
+        assert_eq!(
+            current_session(&sessions).map(|s| s.mic_id.as_str()),
+            Some("guest")
+        );
+        apply_session(&mut sessions, session(TranscriptionState::Gated, None));
+        assert_eq!(sessions.len(), 2, "a mic's session replaces its own");
     }
 
     #[test]
-    fn the_banners_follow_c_s7() {
+    fn the_banners_follow_c_s7_and_name_a_dead_socket() {
         let banner = |state, reason| banner_text(&session(state, reason));
         assert_eq!(
             banner(TranscriptionState::Reconnecting, None),
@@ -479,17 +447,35 @@ mod tests {
             banner(TranscriptionState::Off, Some(OffReason::CapReached)),
             Some("Denný limit prepisu dosiahnutý")
         );
-        assert_eq!(
-            banner(TranscriptionState::Parked, None),
-            Some("Nie je zvuk z mikrofónu hosťa")
-        );
         assert_eq!(banner(TranscriptionState::Streaming, None), None);
         assert_eq!(
             banner(TranscriptionState::Gated, None),
             None,
             "a pause is normal"
         );
-        assert_eq!(live_button_text(0), "▼ Naživo");
-        assert_eq!(live_button_text(3), "▼ Naživo · 3 nové");
+        assert_eq!(
+            banner(TranscriptionState::Parked, None),
+            None,
+            "five quiet minutes (a song, a prayer) are normal too"
+        );
+        let streaming = session(TranscriptionState::Streaming, None);
+        assert_eq!(
+            shown_banner(Some(&streaming), PassiveWsState::Reconnecting),
+            Some(SOCKET_DOWN)
+        );
+        assert_eq!(
+            shown_banner(Some(&streaming), PassiveWsState::Connected),
+            None
+        );
+        let outage = session(TranscriptionState::Reconnecting, None);
+        assert_eq!(
+            shown_banner(Some(&outage), PassiveWsState::Reconnecting),
+            banner_text(&outage),
+            "the service's own reason first"
+        );
+        assert_eq!(
+            state_token(TranscriptionState::Reconnecting).as_deref(),
+            Some("reconnecting")
+        );
     }
 }

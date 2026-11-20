@@ -86,10 +86,8 @@ fn status_line(mic: &MicTranscription) -> String {
         mic.connected_ms_today / MS_PER_MINUTE,
         mic.cap_ms / MS_PER_MINUTE
     ));
-    parts.push(format!(
-        "≈ ${} dnes",
-        format!("{:.2}", mic.cost_usd_today).replace('.', ",")
-    ));
+    let cost = format!("{:.2}", mic.cost_usd_today).replace('.', ",");
+    parts.push(format!("≈ ${cost} dnes"));
     if let (Some(p50), Some(p90)) = (mic.latency_p50_ms, mic.latency_p90_ms) {
         parts.push(format!(
             "oneskorenie {} / {} s (p50 / p90)",
@@ -132,6 +130,9 @@ struct Section {
     status: RwSignal<Option<ListenStatus>>,
     busy: RwSignal<bool>,
     toast: ToastHandle,
+    /// The card's poll, fetched anew after every write: a poll sent before the
+    /// write and answered after it is dropped, never shown over the answer.
+    refresh: Callback<()>,
     switch_ref: NodeRef<leptos::html::Input>,
     mic_ref: NodeRef<leptos::html::Select>,
     cap_ref: NodeRef<leptos::html::Input>,
@@ -178,6 +179,7 @@ impl Section {
             }
         }
         self.busy.set(false);
+        self.refresh.run(());
     }
 
     /// `PUT /listen/transcription` of the stored setting with `change` applied.
@@ -256,11 +258,13 @@ fn mode_button(
 pub(super) fn GuestTranscription(
     status: RwSignal<Option<ListenStatus>>,
     toast: ToastHandle,
+    refresh: Callback<()>,
 ) -> impl IntoView {
     let section = Section {
         status,
         busy: RwSignal::new(false),
         toast,
+        refresh,
         switch_ref: NodeRef::new(),
         mic_ref: NodeRef::new(),
         cap_ref: NodeRef::new(),

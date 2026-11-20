@@ -1,6 +1,7 @@
 /* #852 interpreter display (/ui/interpreter), tablet layout (spec §8.2).
-   A grid with a transcript column (C5a) and a side column (tips, Bible,
-   numbers); while no transcript exists (data-transcript="absent") the side
+   A grid with the EN transcript column (C3-9; C5a adds the SK rows) and a
+   side column (tips, Bible, numbers); while no transcript shows
+   (data-transcript="absent") the side
    column is the whole page. --interpreter-scale is the A−/A+ hook (C5a).
    Bundled globally by trunk: every rule is scoped to body.interpreter or an
    .interpreter* class. */

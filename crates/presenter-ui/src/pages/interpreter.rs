@@ -61,13 +61,13 @@ pub fn InterpreterPage() -> impl IntoView {
 #[component]
 fn TabletLayout(model: TipsModel) -> impl IntoView {
     let transcript = TranscriptModel::new();
-    let _ = use_listen_websocket(Rc::new(move |message| transcript.apply(message)));
+    let listen_ws = use_listen_websocket(Rc::new(move |message| transcript.apply(message)));
     let present = transcript.present();
     view! {
         <main class="interpreter__grid" data-role="interpreter-grid"
             data-transcript=move || if present.get() { "present" } else { "absent" }>
             <Show when=move || present.get()>
-                <TranscriptColumn model=transcript />
+                <TranscriptColumn model=transcript ws=listen_ws />
             </Show>
             <aside class="interpreter__side" data-role="interpreter-side">
                 <TipsArea model=model />

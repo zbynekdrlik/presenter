@@ -98,10 +98,18 @@ async function transcription(page: Page): Promise<Transcription> {
   return (await reply.json()).transcription;
 }
 
+/** The VBAN socket's port, once it is bound (the mic list was just saved). */
 async function vbanPort(page: Page): Promise<number> {
-  const reply = await page.request.get(url("/listen/status"));
-  const localAddr: string = (await reply.json()).socket.localAddr ?? "";
-  return Number(localAddr.split(":").pop());
+  let port = 0;
+  await expect
+    .poll(async () => {
+      const reply = await page.request.get(url("/listen/status"));
+      const localAddr: string = (await reply.json()).socket.localAddr ?? "";
+      port = Number(localAddr.split(":").pop());
+      return port;
+    })
+    .toBeGreaterThan(0);
+  return port;
 }
 
 async function openPage(
@@ -252,16 +260,26 @@ test("the interpreter reads the guest live, through an outage, and can look back
     // an outage: the banner within 3 s (C-S7), the words again after it
     await fake.kill();
     const banner = column.locator('[data-role="transcript-banner"]');
-    await expect.poll(async () => banner.textContent(), { timeout: 3_000 }).toBe(OUTAGE_BANNER);
+    // C-S7: the banner within 3 s — a delivery bound, read without back-off
+    await expect
+      .poll(async () => ((await banner.count()) > 0 ? banner.textContent() : null), {
+        timeout: 3_000,
+        intervals: [25],
+      })
+      .toBe(OUTAGE_BANNER);
     await fake.restart();
     const before = await sentences.count();
+    // The session retries 1, 5, 20 s after the drop (listen-asr.md): the fake is
+    // back before the 2nd retry, so recovery takes ≤ ~6 s, ≤ 26 s on a slow
+    // runner that missed it — hence 40 s, not the config's expect timeout.
     await expect(banner).toHaveCount(0, { timeout: 40_000 });
     await expect.poll(async () => sentences.count(), { timeout: 40_000 }).toBeGreaterThan(before);
 
     // enough text to scroll: look back, new sentences are counted, a tap returns
     const list = column.locator('[data-role="transcript-list"]');
+    // ~1.5 sentences per second of audio; the column holds ~17 one-line ones
     await expect
-      .poll(async () => list.evaluate((el) => el.scrollHeight - el.clientHeight), { timeout: 60_000 })
+      .poll(async () => list.evaluate((el) => el.scrollHeight - el.clientHeight), { timeout: 30_000 })
       .toBeGreaterThan(200);
     await list.evaluate((el) => {
       el.scrollTop = 0;

@@ -8,7 +8,15 @@
 //! reopened with the `ws::passive` back-off (1 s doubling to 10 s, reset by a
 //! delivered frame); a page visible again after more than 30 s hidden
 //! reconnects at once (A+B §6.7, iOS suspends sockets). Attempts are numbered
-//! ([`Generation`]): an older socket, read loop or timer stands down quietly.
+//! ([`Generation`]): an older socket, read loop or timer stands down quietly
+//! (the read loop checks every 500 ms, so a superseded socket is closed even
+//! while the hub is quiet).
+//!
+//! Why not `ws::passive` itself: that socket decodes `LiveEvent`s and drops a
+//! socket silent for 5 s (the live hub heartbeats every 1.5 s), while
+//! `/listen/ws` is legitimately quiet outside a sermon — only the server's
+//! pings, which the page never sees, keep it alive. The back-off, the
+//! generation numbering and the long-hide listener are the passive socket's own.
 
 use super::passive::{
     next_reconnect_delay, watch_long_hide, Generation, PassiveWsState, INITIAL_RECONNECT_MS,
@@ -19,6 +27,9 @@ use leptos::prelude::*;
 use presenter_core::listen::ws::ListenWsMessage;
 use std::cell::Cell;
 use std::rc::Rc;
+
+/// How often a read loop checks that it is still the current attempt.
+const CHECK_INTERVAL_MS: u32 = 500;
 
 /// Called synchronously for every message, in arrival order.
 pub type ListenMessageHandler = Rc<dyn Fn(ListenWsMessage)>;
@@ -83,19 +94,31 @@ fn connect(shared: Rc<Shared>) {
     });
 }
 
-/// Read until the socket closes or errors, or a newer attempt supersedes it.
+/// Read until the socket closes or errors, or a newer attempt supersedes it
+/// (checked every [`CHECK_INTERVAL_MS`] too, so a quiet superseded socket is
+/// let go).
 async fn read_until_closed(
     mut read: futures_util::stream::SplitStream<WebSocket>,
     shared: &Rc<Shared>,
     generation: u32,
 ) {
+    use futures_util::future::{select, Either};
     use futures_util::StreamExt;
 
     let mut opened = false;
-    while let Some(frame) = read.next().await {
+    loop {
+        let next = read.next();
+        let tick = gloo_timers::future::TimeoutFuture::new(CHECK_INTERVAL_MS);
+        futures_util::pin_mut!(next, tick);
+        let step = select(next, tick).await;
         if !shared.generation.is_current(generation) {
             return;
         }
+        let frame = match step {
+            Either::Left((Some(frame), _)) => frame,
+            Either::Left((None, _)) => return,
+            Either::Right(((), _)) => continue,
+        };
         match frame {
             Ok(Message::Text(text)) => {
                 if !opened {
