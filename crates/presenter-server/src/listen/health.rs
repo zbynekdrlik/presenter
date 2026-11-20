@@ -19,6 +19,7 @@ use presenter_core::listen::status::{
     DanteStatus, ListenStatus, MicState, MicStatus, RejectedSender, SocketState, SocketStatus,
     UnmatchedStream,
 };
+use presenter_core::listen::transcription::TranscriptionStatus;
 use tokio::time::Instant;
 
 use super::NO_AUDIO_AFTER;
@@ -666,6 +667,8 @@ impl ListenHealth {
             rejected: self.rejected_senders(now),
             recorder: self.recorder.snapshot(mics),
             dante: self.dante.clone(),
+            // #852 C3: the transcription supervisor (lane C3-7) fills it.
+            transcription: TranscriptionStatus::default(),
         }
     }
 

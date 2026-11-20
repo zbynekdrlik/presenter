@@ -825,3 +825,19 @@ pub static FREQUENCY_RANK: [u8; 66] = [
     5, 14, 17, 25, 13, 26, 23, 36, 48, 37, 34,
     45, 64, 11, 24, 18, 42, 20, 62, 65, 54, 10,
 ];
+
+/// The English long name per book index (BPRP preferred `long`): Soniox context
+/// terms and references of the guest's transcript (#852 C3).
+pub static BOOK_LONG_EN: [&str; 66] = [
+    "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua",
+    "Judges", "Ruth", "1 Samuel", "2 Samuel", "1 Kings", "2 Kings",
+    "1 Chronicles", "2 Chronicles", "Ezra", "Nehemiah", "Esther", "Job",
+    "Psalms", "Proverbs", "Ecclesiastes", "Song of Songs", "Isaiah", "Jeremiah",
+    "Lamentations", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos",
+    "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah",
+    "Haggai", "Zechariah", "Malachi", "Matthew", "Mark", "Luke",
+    "John", "Acts", "Romans", "1 Corinthians", "2 Corinthians", "Galatians",
+    "Ephesians", "Philippians", "Colossians", "1 Thessalonians", "2 Thessalonians", "1 Timothy",
+    "2 Timothy", "Titus", "Philemon", "Hebrews", "James", "1 Peter",
+    "2 Peter", "1 John", "2 John", "3 John", "Jude", "Revelation",
+];

@@ -8,6 +8,7 @@
 use crate::audio::vban::VbanAudioFormat;
 use crate::listen::mics::MicConfig;
 use crate::listen::recorder::RecorderStatus;
+use crate::listen::transcription::TranscriptionStatus;
 use serde::{Deserialize, Serialize};
 
 /// The VBAN receive socket's life cycle.
@@ -142,6 +143,10 @@ pub struct ListenStatus {
     /// The Dante device (#852): absent from a status written before it.
     #[serde(default)]
     pub dante: DanteStatus,
+    /// The guest's live transcript (#852 C3): absent from a status written
+    /// before it.
+    #[serde(default)]
+    pub transcription: TranscriptionStatus,
 }
 
 #[cfg(test)]
@@ -225,6 +230,7 @@ mod tests {
                 interface: Some("enp2s0.70".into()),
                 error: None,
             },
+            transcription: TranscriptionStatus::default(),
         };
         let wire = serde_json::to_value(&status).unwrap();
         assert_eq!(
@@ -249,7 +255,10 @@ mod tests {
                     "lastPacketAgeMs": 10}],
                 "recorder": {"enabled": false, "enabledFor": null, "root": "", "mics": []},
                 "dante": {"state": "running", "device": "presenter-listen",
-                    "interface": "enp2s0.70", "error": null}
+                    "interface": "enp2s0.70", "error": null},
+                "transcription": {"keyConfigured": false, "model": "",
+                    "setting": {"enabled": false, "guestMic": null, "dailyCapMinutes": 240},
+                    "mode": "auto", "mics": []}
             })
         );
         let back: ListenStatus = serde_json::from_value(wire).unwrap();
@@ -274,5 +283,29 @@ mod tests {
             DanteStatus::default(),
             "a status without the Dante part reads"
         );
+    }
+
+    #[test]
+    fn a_status_without_transcription_still_deserialises() {
+        // A status as v0.4.394 wrote it: no `transcription` key.
+        let old = json!({
+            "socket": {"state": "idle", "bindAddr": null, "localAddr": null, "error": null},
+            "mics": [], "unmatched": [], "rejected": [],
+            "recorder": {"enabled": false, "enabledFor": null, "root": "", "mics": []},
+            "dante": {"state": "no_interface", "device": null, "interface": null, "error": null}
+        });
+        let read: ListenStatus = serde_json::from_value(old).unwrap();
+        assert_eq!(read.transcription, TranscriptionStatus::default());
+        assert!(!read.transcription.setting.enabled);
+        assert_eq!(read.transcription.setting.daily_cap_minutes, 240);
+        let partial = json!({"keyConfigured": true, "setting": {"enabled": true}});
+        let read: TranscriptionStatus = serde_json::from_value(partial).unwrap();
+        assert!(read.key_configured);
+        assert!(read.setting.enabled);
+        assert_eq!(
+            read.setting.guest_mic, None,
+            "a partial row keeps the defaults"
+        );
+        assert_eq!(read.mode, crate::listen::transcription::SessionMode::Auto);
     }
 }
