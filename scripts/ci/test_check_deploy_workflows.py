@@ -564,6 +564,57 @@ class ListenEnvTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("argv", found[0])
 
+    def test_a_key_in_the_argv_after_the_ssh_pipe_is_flagged(self) -> None:
+        steps = LISTEN_STEP.replace(
+            """| ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'\"""",
+            """| ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE' && echo $LISTEN_SONIOX_API_KEY\"""",
+        )
+        self.assertNotEqual(steps, LISTEN_STEP)
+        found = self._messages(SAFE_SETUP + steps + START_STEP)
+        self.assertEqual(len(found), 1)
+        self.assertIn("argv", found[0])
+
+    def test_a_key_teed_to_the_log_is_flagged(self) -> None:
+        steps = LISTEN_STEP.replace("              | ssh deploy-target", "              | tee /dev/stderr | ssh deploy-target")
+        self.assertNotEqual(steps, LISTEN_STEP)
+        found = self._messages(SAFE_SETUP + steps + START_STEP)
+        self.assertEqual(len(found), 1)
+        self.assertIn("outside a `[ -n ... ]` test", found[0])
+
+    def test_a_key_echoed_on_the_test_line_is_flagged(self) -> None:
+        steps = LISTEN_STEP.replace(
+            'if [ -n "$LISTEN_SONIOX_API_KEY" ]; then',
+            'if [ -n "$LISTEN_SONIOX_API_KEY" ]; then echo "$LISTEN_SONIOX_API_KEY"',
+        )
+        self.assertNotEqual(steps, LISTEN_STEP)
+        found = self._messages(SAFE_SETUP + steps + START_STEP)
+        self.assertEqual(len(found), 1)
+
+    def test_removing_another_file_does_not_count(self) -> None:
+        steps = LISTEN_STEP.replace("sudo rm -f $SECRET_FILE", "sudo rm -f /tmp/other")
+        self.assertNotEqual(steps, LISTEN_STEP)
+        found = self._messages(SAFE_SETUP + steps + START_STEP)
+        self.assertEqual(len(found), 1)
+        self.assertIn("rm -f", found[0])
+
+    def test_a_plain_write_next_to_a_umask_write_elsewhere_is_flagged(self) -> None:
+        steps = LISTEN_STEP.replace(
+            "umask 077 && cat > $SECRET_FILE",
+            "cat > $SECRET_FILE",
+        ).replace("          else\n", "            ssh deploy-target \"sh -c 'umask 077 && cat > /tmp/other'\" < /dev/null\n          else\n")
+        found = self._messages(SAFE_SETUP + steps + START_STEP)
+        self.assertEqual(len(found), 1)
+        self.assertIn("umask 077", found[0])
+
+    def test_a_umask_write_and_a_plain_write_of_the_file_is_flagged(self) -> None:
+        steps = LISTEN_STEP.replace(
+            "          else\n",
+            "            ssh deploy-target \"cat > $SECRET_FILE\" < /dev/null\n          else\n",
+        )
+        found = self._messages(SAFE_SETUP + steps + START_STEP)
+        self.assertEqual(len(found), 1)
+        self.assertIn("not under `umask 077`", found[0])
+
 
 if __name__ == "__main__":
     unittest.main()

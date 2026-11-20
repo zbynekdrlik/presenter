@@ -212,7 +212,8 @@ REMOVES the file and the deploy goes on: no key, transcription off. The key is
 piped over ssh stdin (never an argv) and never printed.
 `scripts/ci/check_deploy_workflows.py` (invariant 7) fails CI when a service
 deploy job lacks this step, writes the file without `umask 077`, never removes
-it, or uses the key outside the `printf … | ssh` pipe.
+it, or uses the key anywhere but the `[ -n … ]` test and a `printf … | ssh` pipe
+(stdin only — never a remote argv, never a `tee` to the log).
 
 The dev deploy copies prod's database and then deletes the rows
 `listen.transcription`, `listen.session` and `listen.usage` (with

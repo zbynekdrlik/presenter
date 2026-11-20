@@ -58,7 +58,10 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    creation), REMOVED with ``rm -f`` when the secret is empty (no key = the
    transcription stays off, the deploy goes on), and the key variable only
    tested (``[ -n ... ]``) or piped by ``printf`` into ``ssh`` stdin — never
-   echoed, never a remote argv.
+   echoed, never a remote argv. A service deploy job is recognised by
+   ``systemctl enable ${{ env.SERVICE_NAME }}``: a job that starts the service
+   another way (``restart`` only, ``enable --now``, a literal unit name) is not
+   checked, so deploy jobs keep the shared ``enable … && start`` shape.
 
 Usage: check_deploy_workflows.py [WORKFLOW.yml ...]
        (default: every .github/workflows/*.yml)
@@ -99,7 +102,6 @@ ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SERVICE_DEPLOY_RE = re.compile(r"systemctl\s+enable\s+\$\{\{\s*env\.SERVICE_NAME\s*\}\}")
 LISTEN_SECRET = "secrets.LISTEN_SONIOX_API_KEY"
 LISTEN_FILE_RE = re.compile(r"/listen\.env\b")
-UMASK_WRITE_RE = re.compile(r"umask\s+077\s*&&\s*cat\s+>")
 
 # Words that run a LATER word as the command:
 # wrapper -> (options that take an argument, positional words before the command).
@@ -407,23 +409,54 @@ def _key_variable(step: dict[str, Any]) -> str | None:
     return next((str(name) for name, value in env.items() if LISTEN_SECRET in str(value)), None)
 
 
+def _file_targets(script: str) -> str:
+    """A regex for how the step names `listen.env`: the literal path or a
+    variable assigned to it (`SECRET_FILE=/etc/presenter/listen.env`)."""
+    targets = [r"\S*/listen\.env\b"]
+    for match in re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=.*/listen\.env\s*$", script):
+        targets.append(r"\$\{?" + re.escape(match.group(1)) + r"\b\}?")
+    return "(?:" + "|".join(targets) + ")"
+
+
+def _key_line_problem(line: str, key: str) -> str | None:
+    """Why one line's use of the key is unsafe, None when it is safe. Safe:
+    the `[ -n "$KEY" ]` test (the rest of the line must not use the key), or
+    a `printf … "$KEY" …` segment piped STRAIGHT into `ssh` (stdin), with the
+    key in no other segment (never a remote argv, never a `tee` to the log)."""
+    key_use = re.compile(r"\$\{?" + re.escape(key) + r"\b")
+    rest = re.sub(r"\[\s+-n\s+\"?\$\{?" + re.escape(key) + r"\}?\"?\s+\]", "", line)
+    if not key_use.search(rest):
+        return None
+    segments = re.split(r"(?<!\|)\|(?!\|)", rest)
+    for index, segment in enumerate(segments):
+        if not key_use.search(segment):
+            continue
+        into_ssh = index + 1 < len(segments) and re.match(r"\s*ssh\b", segments[index + 1])
+        plain_printf = re.match(r"\s*printf\b", segment) and not re.search(r"&&|;", segment)
+        if not (plain_printf and into_ssh):
+            return f"uses `${key}` outside a `[ -n ... ]` test or a `printf ... | ssh` pipe (the key would reach a log or an argv)"
+    return None
+
+
 def _listen_step_problems(script: str, key: str) -> list[str]:
-    """What a `listen.env` step does wrong (#852 C3-8), empty when it is right."""
+    """What a `listen.env` step does wrong (#852 C3-8), empty when it is right.
+    The write and the remove must target `listen.env` itself (its literal path
+    or the variable assigned to it), never just any file."""
     problems: list[str] = []
     if not LISTEN_FILE_RE.search(script):
         problems.append("does not name the `listen.env` file")
-    if not UMASK_WRITE_RE.search(script):
-        problems.append("does not write the key file under `umask 077 && cat >` (0600 from creation)")
-    if not re.search(r"\brm\s+-f\b", script):
-        problems.append("never removes the file with `rm -f` — an empty secret must delete a stale key file")
-    key_use = re.compile(r"\$\{?" + re.escape(key) + r"\b")
+    target = _file_targets(script)
+    writes = list(re.finditer(r"(umask\s+077\s*&&\s*)?\bcat\s+>\s*" + target, script))
+    if not writes:
+        problems.append("does not write `listen.env` under `umask 077 && cat >` (0600 from creation)")
+    elif any(write.group(1) is None for write in writes):
+        problems.append("writes `listen.env` with a `cat >` not under `umask 077` (readable before a chmod)")
+    if not re.search(r"\brm\s+-f\s+" + target, script):
+        problems.append("never removes `listen.env` with `rm -f` — an empty secret must delete a stale key file")
     for line in script.splitlines():
-        if not key_use.search(line):
-            continue
-        tested = re.search(r"\[\s+-n\s+\"?\$\{?" + re.escape(key) + r"\}?\"?\s+\]", line)
-        piped = re.search(r"\bprintf\b", line) and re.search(r"\|\s*ssh\b", line)
-        if not (tested or piped):
-            problems.append(f"uses `${key}` outside a `[ -n ... ]` test or a `printf ... | ssh` pipe (the key would reach a log or an argv)")
+        problem = _key_line_problem(line, key)
+        if problem:
+            problems.append(problem)
     return problems
 
 

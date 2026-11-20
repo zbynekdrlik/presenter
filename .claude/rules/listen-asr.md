@@ -52,7 +52,8 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   (`Connector` over `tokio::io::duplex`), a fake `StreamingAsr` for the supervisor, and in E2E
   `tests/e2e/support.ts` points `PRESENTER_LISTEN_SONIOX_URL` at the dead loopback `ws://127.0.0.1:9`
   with an EMPTY key (empty = unset); a spec that needs Soniox sets its own fake URL + a
-  `e2e-test-key-not-real` key in `process.env`. Keys in tests: `test-key-not-real` only.
+  `e2e-test-key-not-real` key in `process.env`. Keys in tests: `test-key-not-real` (Rust) /
+  `e2e-test-key-not-real` (E2E), never a real one.
 - **Deploy (C3-8):** every service deploy job (`pipeline.yml`, `deploy-site.yml`, `release.yml`) runs
   "Configure listening transcription" before the start: the `LISTEN_SONIOX_API_KEY` secret →
   0600 `<etc dir>/listen.env` (`printf` piped into ssh stdin, written under `umask 077`), an empty
