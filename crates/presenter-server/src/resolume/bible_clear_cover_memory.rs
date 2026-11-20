@@ -27,8 +27,8 @@
 //!
 //! A remembered cover costs what a mapped one does: every clear shows it and
 //! every verse hides it, one GET at the first step, then one PUT per 50 ms
-//! step over its layer's transition (~46 PUTs over SNV's 2.3 s, each on a
-//! fresh connection, #808). Four titles plus a mapped one on another layer
+//! step over the fixed 0.5 s cover fade (#987: ~10 PUTs, each on a fresh
+//! connection, #808). Four titles plus a mapped one on another layer
 //! are 5 PUTs per step, below the #841 Bible fade's 8. Fading a cover that
 //! does not play is invisible. A title that drops out of the memory (a
 //! collapse or the cap) keeps the level the last fade left it at in Arena (0
@@ -121,7 +121,6 @@ pub(super) fn mapped_covers(mapping: &ClipMapping) -> Vec<CoverClip> {
                 clip_id: target.clip_id,
                 param_id: opacity.param_id,
                 mapped_base: opacity.base,
-                fade: target.fade,
                 layer: target.layer,
                 connected: target.connected,
                 mapped: true,

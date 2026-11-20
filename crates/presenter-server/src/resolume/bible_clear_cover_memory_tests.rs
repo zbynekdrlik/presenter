@@ -30,7 +30,8 @@
 
 use super::bible_clear_cover_memory::{remember_mapping, RememberedCovers, REMEMBERED_PER_LAYER};
 use super::bible_clear_cover_tests::{
-    cover_layers, cover_layers_on, timer_layer, COVER, COVER_OPACITY, COVER_TEXT,
+    assert_hidden, assert_shown, cover_layers, cover_layers_on, timer_layer, COVER, COVER_OPACITY,
+    COVER_TEXT,
 };
 use super::bible_clear_cover_worker_tests::{
     cover_reads, param_requests, wait_for, wait_for_opacity, Worker, DECK_TWO,
@@ -60,20 +61,35 @@ async fn switch_deck(
 }
 
 /// Send `push` and wait until the cover fade it schedules has read `param`
-/// and finished that first step (the barrier waits for the step in flight).
-/// The titles here have no transition, so the first step sets each target.
+/// and finished that first step (the barrier waits for the step in flight),
+/// then until each `(param, level)` of `faded` got its last PUT at `level`:
+/// every cover fades over the 0.5 s cover fade (#987), so a fade that sends
+/// anything is only over once those arrived. A fade with nothing to send
+/// ends at its first step.
 async fn push_and_read(
     server: &MockServer,
     worker: &Worker,
     push: BibleUpdate,
     param: i64,
+    faded: &[(i64, f64)],
 ) -> Vec<Request> {
     worker.bible(push).await;
     wait_for(server, &format!("the cover read of {param}"), |requests| {
         param_requests(requests, "GET", param) >= 1
     })
     .await;
-    worker.barrier(server).await
+    let requests = worker.barrier(server).await;
+    if faded.is_empty() {
+        return requests;
+    }
+    wait_for(server, &format!("the covers {faded:?} faded"), |requests| {
+        faded.iter().all(|&(param, level)| {
+            opacities_put(requests, param)
+                .last()
+                .is_some_and(|last| (last - level).abs() < 1e-9)
+        })
+    })
+    .await
 }
 
 /// `layers` with its `#bible-clear` title PLAYING (Resolume `connected`).
@@ -104,7 +120,15 @@ async fn back_on_deck_a_with_deck_b_title(title_opacity: f64) -> (MockServer, Wo
     wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
     let deck_b = cover_layers_on(DECK_TWO, None, None, 0.0);
     switch_deck(&server, &worker, deck_b, &[(COVER_OPACITY, 1.0)]).await;
-    push_and_read(&server, &worker, verse_update(), COVER_OPACITY + DECK_TWO).await;
+    let hidden = [(COVER_OPACITY, 0.0)];
+    push_and_read(
+        &server,
+        &worker,
+        verse_update(),
+        COVER_OPACITY + DECK_TWO,
+        &hidden,
+    )
+    .await;
 
     let kept = [(COVER_OPACITY + DECK_TWO, title_opacity)];
     switch_deck(&server, &worker, cover_layers(None, None, 0.0), &kept).await;
@@ -117,13 +141,11 @@ async fn back_on_deck_a_with_deck_b_title(title_opacity: f64) -> (MockServer, Wo
 async fn a_title_triggered_after_its_decks_fetch_is_hidden_by_a_verse_on_another_deck() {
     let (server, worker) = back_on_deck_a_with_deck_b_title(1.0).await;
 
-    let requests = push_and_read(&server, &worker, verse_update(), COVER_OPACITY).await;
+    let hidden = [(COVER_OPACITY + DECK_TWO, 0.0)];
+    let requests = push_and_read(&server, &worker, verse_update(), COVER_OPACITY, &hidden).await;
 
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY + DECK_TWO),
-        vec![0.0],
-        "deck B's title still plays over deck A, so the verse hides it"
-    );
+    // Deck B's title still plays over deck A, so the verse hides it.
+    assert_hidden(&opacities_put(&requests, COVER_OPACITY + DECK_TWO));
 }
 
 /// The mirror: deck B's title plays hidden (a verse is on air), and a clear
@@ -132,13 +154,11 @@ async fn a_title_triggered_after_its_decks_fetch_is_hidden_by_a_verse_on_another
 async fn a_title_triggered_after_its_decks_fetch_is_shown_by_a_clear_on_another_deck() {
     let (server, worker) = back_on_deck_a_with_deck_b_title(0.0).await;
 
-    let requests = push_and_read(&server, &worker, clear_update(), COVER_OPACITY).await;
+    let shown = [(COVER_OPACITY + DECK_TWO, 1.0)];
+    let requests = push_and_read(&server, &worker, clear_update(), COVER_OPACITY, &shown).await;
 
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY + DECK_TWO),
-        vec![1.0],
-        "deck B's title still plays on its layer, so the clear shows it"
-    );
+    // Deck B's title still plays on its layer, so the clear shows it.
+    assert_shown(&opacities_put(&requests, COVER_OPACITY + DECK_TWO), 1.0);
 }
 
 /// A title seen PLAYING collapses its layer's set to itself: Resolume plays
@@ -151,13 +171,22 @@ async fn a_title_seen_playing_drops_every_other_title_remembered_on_its_layer() 
     wait_for_opacity(&server, COVER_OPACITY, 1.0).await;
     let deck_b = cover_layers_on(DECK_TWO, None, None, 0.0);
     switch_deck(&server, &worker, deck_b, &[(COVER_OPACITY, 1.0)]).await;
-    push_and_read(&server, &worker, verse_update(), COVER_OPACITY + DECK_TWO).await;
+    let hidden = [(COVER_OPACITY, 0.0)];
+    push_and_read(
+        &server,
+        &worker,
+        verse_update(),
+        COVER_OPACITY + DECK_TWO,
+        &hidden,
+    )
+    .await;
 
     let deck_c = with_title_playing(cover_layers_on(2 * DECK_TWO, None, None, 1.0));
     let kept = [(COVER_OPACITY, 1.0), (COVER_OPACITY + DECK_TWO, 1.0)];
     switch_deck(&server, &worker, deck_c, &kept).await;
     let title_c = COVER_OPACITY + 2 * DECK_TWO;
-    let requests = push_and_read(&server, &worker, verse_update(), title_c).await;
+    let requests =
+        push_and_read(&server, &worker, verse_update(), title_c, &[(title_c, 0.0)]).await;
 
     for param in [COVER_OPACITY, COVER_OPACITY + DECK_TWO] {
         assert_eq!(
@@ -166,7 +195,7 @@ async fn a_title_seen_playing_drops_every_other_title_remembered_on_its_layer() 
             "title {param} is no longer faded once deck C's title plays on its layer"
         );
     }
-    assert_eq!(opacities_put(&requests, title_c), vec![0.0]);
+    assert_hidden(&opacities_put(&requests, title_c));
 }
 
 /// A layer remembers at most four titles; a fifth drops the oldest. Five
@@ -185,7 +214,7 @@ async fn a_layer_remembers_at_most_four_titles_and_drops_the_oldest() {
         let kept: Vec<(i64, f64)> = titles[..deck].iter().map(|&param| (param, 0.0)).collect();
         let layers = cover_layers_on(title - COVER_OPACITY, None, None, 0.0);
         switch_deck(&server, &worker, layers, &kept).await;
-        push_and_read(&server, &worker, verse_update(), title).await;
+        push_and_read(&server, &worker, verse_update(), title, &[]).await;
     }
 
     let kept: Vec<(i64, f64)> = titles[..4].iter().map(|&param| (param, 1.0)).collect();
@@ -196,7 +225,8 @@ async fn a_layer_remembers_at_most_four_titles_and_drops_the_oldest() {
         &kept,
     )
     .await;
-    let requests = push_and_read(&server, &worker, verse_update(), titles[4]).await;
+    let hidden: Vec<(i64, f64)> = titles[1..4].iter().map(|&param| (param, 0.0)).collect();
+    let requests = push_and_read(&server, &worker, verse_update(), titles[4], &hidden).await;
 
     assert_eq!(
         param_requests(&requests, "GET", titles[0]) + param_requests(&requests, "PUT", titles[0]),
@@ -204,11 +234,8 @@ async fn a_layer_remembers_at_most_four_titles_and_drops_the_oldest() {
         "the oldest title was dropped when the fifth came"
     );
     for &param in &titles[1..4] {
-        assert_eq!(
-            opacities_put(&requests, param),
-            vec![0.0],
-            "title {param} is remembered, so the verse hides it"
-        );
+        // Title `param` is remembered, so the verse hides it.
+        assert_hidden(&opacities_put(&requests, param));
     }
 }
 
@@ -225,18 +252,17 @@ async fn a_title_moved_to_another_layer_is_remembered_once() {
     let mut shifted = vec![layer(Vec::new(), None)];
     shifted.extend(cover_layers(None, None, 1.0));
     switch_deck(&server, &worker, shifted, &[]).await;
-    push_and_read(&server, &worker, verse_update(), COVER_OPACITY).await;
+    let hidden = [(COVER_OPACITY, 0.0)];
+    push_and_read(&server, &worker, verse_update(), COVER_OPACITY, &hidden).await;
 
     let deck_b = cover_layers_on(DECK_TWO, None, None, 0.0);
     switch_deck(&server, &worker, deck_b, &[(COVER_OPACITY, 1.0)]).await;
-    let requests = push_and_read(&server, &worker, verse_update(), COVER_OPACITY + DECK_TWO).await;
+    let title_b = COVER_OPACITY + DECK_TWO;
+    let requests = push_and_read(&server, &worker, verse_update(), title_b, &hidden).await;
 
     assert_eq!(cover_reads(&requests), 1, "the moved title is read once");
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![0.0],
-        "and hidden once"
-    );
+    // And hidden once: one fade, only down.
+    assert_hidden(&opacities_put(&requests, COVER_OPACITY));
 }
 
 /// `clip` PLAYING (Resolume `connected`).
@@ -295,19 +321,25 @@ async fn a_title_beside_a_later_playing_one_is_hidden_after_a_deck_switch() {
     deck_a.push(timer_layer(0));
     let (server, _params) = start_arena(deck_a).await;
     let worker = Worker::spawn(&server);
-    push_and_read(&server, &worker, clear_update(), COVER_OPACITY).await;
+    let shown = [(COVER_OPACITY, 1.0), (COVER_OPACITY + 1, 1.0)];
+    push_and_read(&server, &worker, clear_update(), COVER_OPACITY, &shown).await;
 
     // Both titles were shown; the first one now plays in Arena.
     let kept = [(COVER_OPACITY, 1.0), (COVER_OPACITY + 1, 1.0)];
     let deck_b = cover_layers_on(DECK_TWO, None, None, 0.0);
     switch_deck(&server, &worker, deck_b, &kept).await;
-    let requests = push_and_read(&server, &worker, verse_update(), COVER_OPACITY + DECK_TWO).await;
+    let hidden = [(COVER_OPACITY, 0.0)];
+    let requests = push_and_read(
+        &server,
+        &worker,
+        verse_update(),
+        COVER_OPACITY + DECK_TWO,
+        &hidden,
+    )
+    .await;
 
-    assert_eq!(
-        opacities_put(&requests, COVER_OPACITY),
-        vec![0.0],
-        "the first title plays over the second deck, so the verse hides it"
-    );
+    // The first title plays over the second deck, so the verse hides it.
+    assert_hidden(&opacities_put(&requests, COVER_OPACITY));
 }
 
 /// #848 fourth review, finding 1, pure: `schedule_cover_fade` remembers a
