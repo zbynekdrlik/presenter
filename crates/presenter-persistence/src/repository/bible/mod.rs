@@ -8,6 +8,7 @@
 //! - [`presentations`] — bible-presentation CRUD + slide row-mapping helpers.
 //! - [`sermons`]    — sermons: a presentation plus its source items.
 //! - [`study_bookmarks`] — the study page's named bookmarks (#915).
+//! - [`study_bookmark_folders`] — their folders (#952).
 //! - [`study_sources`] — Strong's dictionaries and cross-references.
 //!
 //! Every method stays a method on [`crate::repository::Repository`], so all
@@ -20,6 +21,7 @@ mod presentation_order;
 mod presentations;
 mod query;
 mod sermons;
+mod study_bookmark_folders;
 mod study_bookmarks;
 mod study_sources;
 
@@ -27,6 +29,9 @@ pub use occurrences::StrongsVerse;
 pub use sermons::{
     NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot, SermonSummary, SermonWrite,
     SERMON_CONFLICT, SERMON_NOT_FOUND,
+};
+pub use study_bookmark_folders::{
+    StudyBookmarkFolderRecord, FOLDER_NAME_TAKEN, FOLDER_NOT_FOUND, FOLDER_ORDER_STALE,
 };
 pub use study_bookmarks::{
     BookmarkPlace, DeletedStudyBookmark, StudyBookmarkRecord, BOOKMARK_NOT_FOUND,

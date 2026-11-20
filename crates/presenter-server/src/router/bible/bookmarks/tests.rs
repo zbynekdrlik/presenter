@@ -305,3 +305,195 @@ async fn a_refusal_is_422_with_the_slovak_sentence() {
         (StatusCode::UNPROCESSABLE_ENTITY, json!("Nie je čo zmazať"))
     );
 }
+
+/// #952: a folder over HTTP — create, its own list, rename, delete with its
+/// bookmarks; the default folder (no `folder`) keeps the rest.
+#[tokio::test]
+async fn folders_hold_their_own_list_and_a_delete_takes_it_whole() {
+    let app = app().await;
+    let folders = "/bible/study/bookmark-folders";
+    let (status, viera) = call(
+        &app,
+        "POST",
+        folders,
+        Some(json!({ "name": " Viera " })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viera}");
+    assert_eq!(viera["name"], "Viera");
+    assert_eq!(viera["count"], 0);
+    let id = viera["id"].as_i64().expect("id");
+
+    let mut in_folder = heb(2);
+    in_folder["folder"] = json!(id);
+    let (status, made) = call(
+        &app,
+        "POST",
+        "/bible/study/bookmarks",
+        Some(in_folder),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/bible/study/bookmarks",
+        Some(heb(3)),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(verses(&list(&app, &[email()], false).await), [3]);
+    let (status, shown) = call(
+        &app,
+        "GET",
+        &format!("/bible/study/bookmarks?folder={id}"),
+        None,
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(verses(&shown), [2]);
+    assert_eq!(shown[0]["text"], "verš 2");
+
+    // Rename; a name in use is 409, an empty one 422.
+    let (status, renamed) = call(
+        &app,
+        "PUT",
+        &format!("{folders}/{id}"),
+        Some(json!({ "name": "Viera a nádej" })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Viera a nádej");
+    let (status, _) = call(
+        &app,
+        "POST",
+        folders,
+        Some(json!({ "name": "viera A NÁDEJ" })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, refusal) = call(
+        &app,
+        "POST",
+        folders,
+        Some(json!({ "name": "  " })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refusal["message"], "Priečinok potrebuje názov");
+
+    let (status, listed) = call(&app, "GET", folders, None, &[email()], false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listed,
+        json!([{ "id": id, "name": "Viera a nádej", "count": 1 }])
+    );
+
+    let (status, gone) = call(
+        &app,
+        "POST",
+        &format!("{folders}/delete"),
+        Some(json!({ "id": id })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{gone}");
+    assert_eq!(gone["count"], 1);
+    let (status, listed) = call(&app, "GET", folders, None, &[email()], false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed, json!([]));
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("/bible/study/bookmarks?folder={id}"),
+        None,
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(verses(&list(&app, &[email()], false).await), [3]);
+}
+
+/// #952: a folder of another reader is 404 for every use; the LAN has its own.
+#[tokio::test]
+async fn another_readers_folder_is_404() {
+    let app = app().await;
+    let folders = "/bible/study/bookmark-folders";
+    let (_, mine) = call(
+        &app,
+        "POST",
+        folders,
+        Some(json!({ "name": "Moje" })),
+        &[email()],
+        false,
+    )
+    .await;
+    let id = mine["id"].as_i64().expect("id");
+    // The LAN (nobody) does not see it and cannot touch it.
+    let (status, listed) = call(&app, "GET", folders, None, &[], true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed, json!([]));
+    let mut into = heb(1);
+    into["folder"] = json!(id);
+    for (method, uri, body) in [
+        ("GET", format!("/bible/study/bookmarks?folder={id}"), None),
+        ("POST", "/bible/study/bookmarks".to_string(), Some(into)),
+        (
+            "PUT",
+            "/bible/study/bookmarks/order".to_string(),
+            Some(json!({ "ids": [], "folder": id })),
+        ),
+        (
+            "PUT",
+            format!("{folders}/{id}"),
+            Some(json!({ "name": "Cudzie" })),
+        ),
+        (
+            "POST",
+            format!("{folders}/delete"),
+            Some(json!({ "id": id })),
+        ),
+    ] {
+        let (status, answer) = call(&app, method, &uri, body, &[], true).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}: {answer}");
+    }
+    // A folder order that is not the whole list is a stale 409.
+    let (status, _) = call(
+        &app,
+        "PUT",
+        &format!("{folders}/order"),
+        Some(json!({ "ids": [] })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &app,
+        "PUT",
+        &format!("{folders}/order"),
+        Some(json!({ "ids": [id] })),
+        &[email()],
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, listed) = call(&app, "GET", folders, None, &[email()], false).await;
+    assert_eq!(listed[0]["name"], "Moje");
+}

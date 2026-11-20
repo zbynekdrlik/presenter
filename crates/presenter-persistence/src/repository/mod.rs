@@ -63,8 +63,9 @@ mod video_source_tests;
 
 pub use bible::{
     BookmarkPlace, DeletedStudyBookmark, NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot,
-    SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkRecord, BOOKMARK_NOT_FOUND,
-    SERMON_CONFLICT, SERMON_NOT_FOUND,
+    SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkFolderRecord, StudyBookmarkRecord,
+    BOOKMARK_NOT_FOUND, FOLDER_NAME_TAKEN, FOLDER_NOT_FOUND, FOLDER_ORDER_STALE, SERMON_CONFLICT,
+    SERMON_NOT_FOUND,
 };
 pub use interpreter_tips::NewInterpreterTip;
 pub use library::TrashedLibrary;
