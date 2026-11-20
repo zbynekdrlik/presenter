@@ -34,7 +34,7 @@ jobs:
         run: rm -rf ~/.cargo/advisory-db
 
       - name: Run cargo audit
-        # Advisory ignores (incl. RUSTSEC-2026-0097 and RUSTSEC-2026-0173) live
+        # Advisory ignores (incl. RUSTSEC-2026-0173) live
         # in .cargo/audit.toml — the single source cargo-audit reads — each with
         # its justification. Do NOT add --ignore flags here (consolidation #366).
         run: cargo audit --deny warnings

@@ -6,16 +6,8 @@
 # For the cargo-deny side, see deny.toml.
 [advisories]
 ignore = [
-  "RUSTSEC-2024-0421", # idna
   "RUSTSEC-2024-0436", # paste
-  "RUSTSEC-2024-0370", # proc-macro-error
   "RUSTSEC-2023-0071", # rsa vulnerability (no upstream fix)
-  "RUSTSEC-2026-0001", # rkyv OOM edge case (transitive dep, low risk)
-  # rand soundness issue only triggers with a custom logger that recursively
-  # calls rand::rng() — we use tracing_subscriber which does not. Affects
-  # rand 0.8.5 (via sqlx) which has no patched 0.8.x release; rand 0.9.3+ is
-  # patched and we use 0.9.3+. (Moved here from the CI --ignore flags, #366.)
-  "RUSTSEC-2026-0097", # rand soundness (not reachable in our usage)
   # proc-macro-error2 unmaintained — transitive build-time proc-macro dep of
   # both leptos (leptos_macro / reactive_stores_macro / syn_derive) and sea-orm
   # (sea-bae). Build-time only, not a runtime vulnerability; no upgrade path
