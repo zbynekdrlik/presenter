@@ -66,8 +66,8 @@ fn prepared_references_follow_the_books() {
 #[test]
 fn duplicates_are_dropped_case_insensitively() {
     let inputs = ContextInputs {
-        prepared_refs: strings(&["romans", "  John 3:16 ", "john 3:16", ""]),
-        tip_terms: strings(&["holy spirit", "   ", "Agape"]),
+        prepared_refs: strings(&["romans", "  John 3:16 ", "john  3:16", ""]),
+        tip_terms: strings(&["holy \t spirit", "   ", "Agape"]),
     };
     let context = context_terms(&inputs);
     let count = |needle: &str| {
@@ -86,7 +86,7 @@ fn duplicates_are_dropped_case_insensitively() {
     );
     assert!(
         context.terms.contains(&"holy spirit".to_string()),
-        "the earlier group's spelling wins"
+        "the earlier group's spelling wins, inner whitespace collapsed"
     );
     assert!(!context.terms.contains(&"Holy Spirit".to_string()));
     assert!(context

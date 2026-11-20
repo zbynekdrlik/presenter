@@ -167,6 +167,8 @@ pub enum SessionMode {
 #[serde(rename_all = "camelCase")]
 pub struct SessionOverride {
     pub day: NaiveDate,
+    /// Absent = `auto`.
+    #[serde(default)]
     pub mode: SessionMode,
     /// Minutes added to the cap by starts after the cap was reached.
     #[serde(default)]
@@ -275,7 +277,9 @@ pub fn cost_usd(connected_ms: u64) -> f64 {
 }
 
 /// The Kázeň automation: the stage shows `preach`, or left it less than
-/// [`PREACH_STOP_DELAY`] ago (`left_preach_at`).
+/// [`PREACH_STOP_DELAY`] ago (`left_preach_at`). `std` instants: a tokio
+/// caller passes `tokio::time::Instant::into_std()` (exact under the paused
+/// test clock too).
 pub fn preach_active(layout: &str, left_preach_at: Option<Instant>, now: Instant) -> bool {
     layout == PREACH_LAYOUT
         || left_preach_at
@@ -313,10 +317,23 @@ pub enum TranscriptionValidationError {
     UnknownMic(String),
 }
 
-/// Validate a row before it is saved: the cap in 10–600 minutes, the guest
-/// mic one of the published mics (or none).
+/// Validate a new row: the cap in 10–600 minutes, the guest mic one of the
+/// published mics (or none).
 pub fn validate_transcription(
     s: &TranscriptionSetting,
+    published: &[MicConfig],
+) -> Result<(), TranscriptionValidationError> {
+    validate_transcription_change(s, None, published)
+}
+
+/// Validate a row replacing `stored`. A guest mic the stored row already
+/// names is kept even while it is not published (spec gap 7: it comes back
+/// with the mic, status `GuestMicMissing`), so the switch can still be turned
+/// off and the cap changed while it is missing; a NEWLY chosen mic must be
+/// published.
+pub fn validate_transcription_change(
+    s: &TranscriptionSetting,
+    stored: Option<&TranscriptionSetting>,
     published: &[MicConfig],
 ) -> Result<(), TranscriptionValidationError> {
     if !DAILY_CAP_MINUTES_RANGE.contains(&s.daily_cap_minutes) {
@@ -324,8 +341,9 @@ pub fn validate_transcription(
             s.daily_cap_minutes,
         ));
     }
+    let kept = |id: &str| stored.and_then(|row| row.guest_mic.as_deref()) == Some(id);
     match s.guest_mic.as_deref() {
-        Some(id) if !published.iter().any(|mic| mic.id == id) => {
+        Some(id) if !kept(id) && !published.iter().any(|mic| mic.id == id) => {
             Err(TranscriptionValidationError::UnknownMic(id.to_string()))
         }
         _ => Ok(()),

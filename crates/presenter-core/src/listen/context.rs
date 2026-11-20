@@ -115,10 +115,10 @@ pub fn context_terms(i: &ContextInputs) -> ContextTerms {
         .chain(i.tip_terms.iter().map(String::as_str))
         .chain(CHRISTIAN_TERMS.iter().copied());
     let mut seen = HashSet::new();
+    // Whitespace runs collapse to one space, so "Holy  Spirit" is "Holy Spirit".
     let mut terms: Vec<String> = ordered
-        .map(str::trim)
+        .map(|term| term.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|term| !term.is_empty() && seen.insert(term.to_lowercase()))
-        .map(str::to_string)
         .collect();
     let mut chars = context_json_chars(&general, &terms);
     while chars > CONTEXT_MAX_CHARS {

@@ -52,7 +52,7 @@ fn absent_rows_mean_off() {
     assert!(!status.key_configured);
     assert_eq!(status.mode, SessionMode::Auto);
     assert_eq!(
-        serde_json::to_value(&enabled()).unwrap(),
+        serde_json::to_value(enabled()).unwrap(),
         json!({"enabled": true, "guestMic": "dante-mic-1", "dailyCapMinutes": 240})
     );
     let mut row = UsageRow {
@@ -294,6 +294,53 @@ fn validation_refuses_an_unknown_mic_and_a_cap_outside_ten_to_six_hundred() {
             );
         }
     }
+}
+
+#[test]
+fn a_stored_guest_mic_that_went_missing_still_lets_the_row_change() {
+    let stored = enabled(); // dante-mic-1, now not published (no Dante interface)
+    let switch_off = TranscriptionSetting {
+        enabled: false,
+        daily_cap_minutes: 120,
+        ..enabled()
+    };
+    assert_eq!(
+        validate_transcription_change(&switch_off, Some(&stored), &[]),
+        Ok(()),
+        "the switch can go off and the cap change while the mic is missing"
+    );
+    assert_eq!(
+        validate_transcription(&switch_off, &[]),
+        Err(TranscriptionValidationError::UnknownMic(
+            "dante-mic-1".into()
+        )),
+        "a new row must name a published mic"
+    );
+    let other = TranscriptionSetting {
+        guest_mic: Some("dante-mic-2".into()),
+        ..enabled()
+    };
+    assert_eq!(
+        validate_transcription_change(&other, Some(&stored), &[]),
+        Err(TranscriptionValidationError::UnknownMic(
+            "dante-mic-2".into()
+        )),
+        "a newly chosen mic must be published"
+    );
+    let bad_cap = TranscriptionSetting {
+        daily_cap_minutes: 5,
+        ..enabled()
+    };
+    assert_eq!(
+        validate_transcription_change(&bad_cap, Some(&stored), &[]),
+        Err(TranscriptionValidationError::CapOutOfRange(5))
+    );
+    let session: SessionOverride = serde_json::from_value(json!({"day": "2026-11-15"})).unwrap();
+    assert_eq!(
+        session.mode,
+        SessionMode::Auto,
+        "a row without a mode is auto"
+    );
 }
 
 #[test]
