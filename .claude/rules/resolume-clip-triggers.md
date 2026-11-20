@@ -127,11 +127,15 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     `schedule_cover_fade(Hide)` after `trigger_clips` and the lane flips. A schedule REPLACES
     the pending fade (INFO line when a started fade is replaced). Show = up to the base, hide =
     down to 0.
-  - **Length = the distance left** (#848 second review): each cover fades over
-    `fade × |to − from| / base` of its OWN layer transition (capped by `MAX_CLEAR_FADE`;
-    `cover_duration`). A whole show or hide is the whole transition; a hide that replaces a
-    show cut short at 0.1 takes a tenth of it. A full fade from a replacement's start level
-    stretched quick verses: the title stayed partly visible behind the verse ~2.3 s on SNV.
+  - **Length = 0.5 s fixed, scaled by the distance left** (#987 owner ruling 2026-11-20:
+    "pevná dĺžka fadu `#bible-clear` v Presenteri, 0,5 s; prechod vrstvy 12 v Resolume sa
+    nemení"; #848 second review for the scaling): each cover fades over
+    `COVER_FADE × |to − from| / base` (`COVER_FADE` = 500 ms in `bible_clear_cover.rs`,
+    `cover_duration`). The cover does NOT read its layer's transition any more (SNV layer 12
+    stays 2.3 s for its other clips; `CoverClip` has no `fade` field); the #841 Bible lane fade
+    still does. A whole show or hide is 0.5 s (~10 steps); a hide that replaces a show cut
+    short at 0.1 takes a tenth of it. A full fade from a replacement's start level stretched
+    quick verses: the title stayed partly visible behind the verse ~2.3 s on SNV.
   - **Worker branch:** `run_host_worker`'s biased `select!` has
     `cover_fade_deadline(driver.cover_fade_due()) => driver.step_cover_fade()` right AFTER the
     commands branch (then the follow-up deadline, then the tick). The deadline is pending while
@@ -146,14 +150,13 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
     cover at 0 is hidden from its mapped value, full when that is 0). A cover already at its
     target gets no PUT; a fade a replacement cut short goes on from the reached level (no jump).
     A failed read (non-404) keeps the tracked level (DEBUG). So every fade reads each cover
-    once (a tiny GET) before its PUT steps. The first step PUTs nothing, except for a cover on
-    a layer WITHOUT a transition: its duration is 0, so the first step sets its target.
+    once (a tiny GET) before its PUT steps. The first step PUTs nothing (#987: every cover
+    fades over the fixed 0.5 s, a layer without a transition included).
   - Each step is one `put_opacities` batch at `fade_toward(from, to, elapsed, duration)`,
     landed PUTs recorded; it ends at the step where `elapsed >= longest duration` (exact `to`).
     Targets are tracked before the first PUT. The first step plans at elapsed 0, and every step
     skips a cover whose level would not move (`cover_levels`, within `SAME_OPACITY`), so no
-    fade re-sends the level it starts from; the first PUT is one step into the fade (a layer
-    without a transition: the first step sets the target).
+    fade re-sends the level it starts from; the first PUT is one step into the fade.
   - **A level within `SAME_OPACITY` of `to` IS `to`** (`fade_toward`, shared with the #841
     Bible fade): both fades stop counting a clip once it is that close, so a step landing a
     rounding short of the end must send `to` itself. CI run 38288218234: a replacement hide
@@ -171,8 +174,7 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
       title still playing stayed over the verse). A remembered one is forgotten (below).
       The first step leaves EVERY gone cover out before it plans and only then logs each
       (#848 fourth review: dropped one at a time before the plan, it listed other 404'd
-      covers and covers already at their target). A no-transition cover's first-step PUT
-      and every later step's PUTs go through `drop_gone_covers` on a 404: it takes all of
+      covers and covers already at their target). Every step's PUTs go through `drop_gone_covers` on a 404: it takes all of
       the step's `puts.missing` out of the covers AND targets, then `drop_cover` logs each
       (#848 fifth review: one at a time, X's stale WARN listed Y). A 404 for a parameter
       that is not a cover of the fade is one DEBUG line listing only those ids. So the
@@ -242,8 +244,8 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
       `cover_candidates` dedups by param id, so it was never faded twice).
     - A remembered cover costs what a mapped one does (#848 fourth review): every clear
       shows it and every verse hides it, one GET at the first step, then one PUT per 50 ms
-      step over its layer's transition (~46 PUTs over SNV's 2.3 s, each on a fresh
-      connection, #808). Four titles plus a mapped one on another layer are 5 PUTs per
+      step over the fixed 0.5 s cover fade (#987: ~10 PUTs, each on a fresh connection,
+      #808). Four titles plus a mapped one on another layer are 5 PUTs per
       step, below the #841 Bible fade's 8. Fading a cover that does not play is invisible.
     - Residual: a title that drops out of the memory (a collapse or the cap) keeps the
       level the last fade left it at in Arena (0 after a verse) until the next Bible push
@@ -269,7 +271,7 @@ vyditelny". On SNV the clip is the sermon title `NAZOV #bible-clear` (a TextBloc
   - **Residual: a restart or host config change mid-fade.** It drops the fade and the tracked
     state (`update_config` resets `CoverState`). The next fade reads the cover where the
     dropped one left it and adopts that partial value as its base, so a later clear shows the
-    title only that far. It needs a restart (a deploy counts) inside the ~2.3 s fade window;
+    title only that far. It needs a restart (a deploy counts) inside the ~0.5 s fade window;
     the operator fixes it by setting the opacity in Arena. Preferring the mapped base would
     not help: the composition fetched after the restart reads the same partial value.
 - **`sync_with_fetch` skips the covers:** the deferred fade can write between a fetch and its
@@ -332,6 +334,13 @@ the smaller file or a new sibling:
   `cover_refetch_pending`'s `is_none()` ran with `refetched_mapping == None`, so the equality
   already made it false; the conjuncts are now pinned by
   `a_cached_newer_mapping_ends_a_pending_cover_refetch`).
+- **Every cover fades over the 0.5 s `COVER_FADE`, never in one PUT** (#987): a test that
+  needs the fade OVER waits for each faded cover's last PUT at its target (the memory tests'
+  `push_and_read(.., faded)`), asserts a fade with `assert_shown` / `assert_hidden`, and a
+  sequence of fades with `fade_ends` (`[1.0, 0.0, 0.6]`), never `vec![0.0]`. "No PUT" for a
+  cover is the count unchanged since before the push. The tests pin the ruled length in their
+  own `RULED_COVER_FADE` (500 ms) and give the cover layers SNV's 2.3 s transition
+  (`SNV_COVER_TRANSITION`) to prove it is ignored.
 - **Bound a fade's length by its step COUNT, not the clock.** A step is due `FADE_STEP` after
   the previous one ended, so a fade of length `d` sends at most `floor(d / FADE_STEP) + 1`
   PUTs (`a_hide_right_after_a_short_show_lasts_only_for_the_distance_left`). Load only lowers
@@ -381,8 +390,8 @@ the smaller file or a new sibling:
   `resolume bible clear: faded … faded_clip_ids=[…] steps=N ok=true` and, after a start,
   `resolume lanes seeded … seeded=[...]` confirm the server side.
 - #848 on SNV: also read layer 12 (`NAZOV #bible-clear`). After a clear its opacity rises to
-  its base over ~2.3 s while the push has already returned; after the next verse it falls to 0
-  over ~2.3 s (`resolume bible: faded the #bible-clear cover … direction="show"|"hide" … ok=true`),
+  its base over ~0.5 s (#987) while the push has already returned; after the next verse it
+  falls to 0 over ~0.5 s (`resolume bible: faded the #bible-clear cover … direction="show"|"hide" … ok=true`),
   and its `connected.value` never changes. A transient cover error ends in that line with
   `error_before_final_step=…`; a second failure is one WARN `a #bible-clear cover fade step
   failed and so did its final step`, never a host error.
