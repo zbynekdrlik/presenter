@@ -5,6 +5,7 @@ mod presentation;
 mod reference;
 pub mod resolver;
 pub mod search;
+mod search_order;
 pub mod sermon;
 mod study_sources;
 mod translation;
@@ -17,6 +18,7 @@ pub use markup::{normalize_strongs, MarkupSegment, SegmentKind, VerseMarkup};
 pub use presentation::{BiblePresentation, BiblePresentationSlide, BiblePresentationSummary};
 pub use reference::{BibleReference, BibleReferenceError};
 pub use search::normalise_book_key;
+pub use search_order::SearchOrder;
 pub use study_sources::{CrossReference, LexiconEntry, StudySource};
 pub use translation::{
     BibleBookChapterSummary, BibleBroadcast, BibleIngestionBatch, BibleIngestionError,

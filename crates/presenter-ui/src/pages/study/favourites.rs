@@ -17,7 +17,7 @@ use crate::state::study::{
     set_favourite, visible_favourites, StudySheet, StudyView, KEY_FAVOURITES,
 };
 
-fn switch(s: Study, code: &str) {
+pub(super) fn switch(s: Study, code: &str) {
     let mut route = s.route.get_untracked().without_sheet();
     if route.translation.as_deref() == Some(code) {
         return;

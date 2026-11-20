@@ -6,7 +6,7 @@ use sea_orm::{
 use tracing::instrument;
 
 use crate::entities::{bible_passage, bible_translation};
-use presenter_core::bible::{BibleBookChapterSummary, BookScope};
+use presenter_core::bible::{BibleBookChapterSummary, BookScope, SearchOrder};
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 
 use crate::repository::util::{sanitize_like_input, to_domain_passage, to_domain_translation};
@@ -88,7 +88,7 @@ impl Repository {
         &self,
         translation_code: &str,
         query: &str,
-        scope: BookScope,
+        (scope, order): (BookScope, SearchOrder),
         limit: u32,
     ) -> anyhow::Result<Vec<BiblePassage>> {
         if query.trim().is_empty() {
@@ -103,7 +103,7 @@ impl Repository {
         };
 
         let rows = self
-            .fts_search(query, Some(translation_code), scope, limit)
+            .fts_search(query, Some(translation_code), (scope, order), limit)
             .await?;
 
         let mut results = Vec::with_capacity(rows.len());
@@ -118,11 +118,13 @@ impl Repository {
         &self,
         translation_code: Option<&str>,
         query: &str,
-        scope: BookScope,
+        (scope, order): (BookScope, SearchOrder),
         limit: u32,
     ) -> anyhow::Result<Vec<BiblePassage>> {
         if let Some(code) = translation_code {
-            return self.search_bible_passages(code, query, scope, limit).await;
+            return self
+                .search_bible_passages(code, query, (scope, order), limit)
+                .await;
         }
 
         if query.trim().is_empty() {
@@ -141,7 +143,7 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let rows = self.fts_search(query, None, scope, limit).await?;
+        let rows = self.fts_search(query, None, (scope, order), limit).await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
@@ -154,12 +156,14 @@ impl Repository {
     }
 
     /// Execute a full-text search against `bible_passage_fts`.
-    /// Falls back to LIKE if the FTS table does not exist.
+    /// Falls back to LIKE if the FTS table does not exist. `order` picks the
+    /// FTS rows' order; LIKE has no rank, so it always runs in the Bible's
+    /// order (#983).
     async fn fts_search(
         &self,
         query: &str,
         translation_code: Option<&str>,
-        scope: BookScope,
+        (scope, order): (BookScope, SearchOrder),
         limit: u32,
     ) -> anyhow::Result<Vec<bible_passage::Model>> {
         let phrase = quoted_phrase(query);
@@ -171,7 +175,7 @@ impl Repository {
         }
         if let Some(fts_query) = build_fts_query(query) {
             let result = self
-                .fts_search_raw(&fts_query, translation_code, scope, limit)
+                .fts_search_raw(&fts_query, translation_code, (scope, order), limit)
                 .await;
             match result {
                 Ok(rows) => return Ok(rows),
@@ -205,7 +209,7 @@ impl Repository {
         &self,
         fts_query: &str,
         translation_code: Option<&str>,
-        scope: BookScope,
+        (scope, order): (BookScope, SearchOrder),
         limit: u32,
     ) -> anyhow::Result<Vec<bible_passage::Model>> {
         let (first_book, last_book) = scope.book_numbers();
@@ -222,6 +226,12 @@ impl Repository {
             None => "",
         };
         values.push(sea_orm::Value::from(limit as i32));
+        // #983: Study lists hits the way the Bible runs; the console keeps the
+        // best match first.
+        let order_by = match order {
+            SearchOrder::Relevance => "fts.rank",
+            SearchOrder::Bible => "bp.book_number, bp.chapter, bp.verse_start, bp.translation_code",
+        };
         let sql = format!(
             "SELECT bp.id, bp.translation_code, bp.book, bp.book_code, \
                     bp.book_number, bp.chapter, bp.verse_start, bp.verse_end, \
@@ -231,7 +241,7 @@ impl Repository {
              WHERE bible_passage_fts MATCH ? \
                AND bp.book_number BETWEEN ? AND ? \
                {translation_filter} \
-             ORDER BY fts.rank \
+             ORDER BY {order_by} \
              LIMIT ?"
         );
 

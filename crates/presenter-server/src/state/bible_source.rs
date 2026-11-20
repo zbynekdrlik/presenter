@@ -12,7 +12,7 @@ use super::AppState;
 use crate::bible_remote;
 use presenter_core::bible::resolver::{resolve_book_name, BookCandidate};
 use presenter_core::bible::{
-    canonical_book_by_code, BibleBookCanonical, BibleBookChapterSummary, BookScope,
+    canonical_book_by_code, BibleBookCanonical, BibleBookChapterSummary, BookScope, SearchOrder,
 };
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 
@@ -45,7 +45,7 @@ impl AppState {
         &self,
         translation_code: Option<&str>,
         query: &str,
-        scope: BookScope,
+        (scope, order): (BookScope, SearchOrder),
         limit: u32,
     ) -> anyhow::Result<Vec<BiblePassage>> {
         if let Some(code) =
@@ -58,7 +58,7 @@ impl AppState {
             return Ok(Vec::new());
         }
         self.repository
-            .search_bible_passages_cross(translation_code, query, scope, limit)
+            .search_bible_passages_cross(translation_code, query, (scope, order), limit)
             .await
     }
 
