@@ -342,9 +342,14 @@ the smaller file or a new sibling:
   own `RULED_COVER_FADE` (500 ms) and give the cover layers SNV's 2.3 s transition
   (`SNV_COVER_TRANSITION`) to prove it is ignored.
 - **Bound a fade's length by its step COUNT, not the clock.** A step is due `FADE_STEP` after
-  the previous one ended, so a fade of length `d` sends at most `floor(d / FADE_STEP) + 1`
-  PUTs (`a_hide_right_after_a_short_show_lasts_only_for_the_distance_left`). Load only lowers
-  the count.
+  the previous one ended and a cover's first step PUTs nothing, so a cover fade of length `d`
+  sends at most `floor(d / FADE_STEP)` PUTs (`the_worker_fades_a_cover_in_half_a_second_of_steps`;
+  a replacement hide allows one more for rounding,
+  `a_hide_right_after_a_short_show_lasts_only_for_the_distance_left`, which also asserts the
+  verse really cut the show short). Load only lowers the count.
+- **The 0.5 s window is short** (#987, it was a 1.5 s test transition): a test that must land
+  a command MID-fade waits for the FIRST cover PUT above 0 (the first step PUTs nothing, so one
+  PUT proves the fade is under way), never for two or more.
 - **Push-level tests prove "not inside the push" by the requests, never by `took <`**: seed the
   cover where a synchronous fade WOULD send a PUT (shown at 1.0 for a verse's hide), then
   assert no cover PUT after the direct `handle_bible` call.

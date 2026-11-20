@@ -120,6 +120,10 @@ async fn a_hide_right_after_a_short_show_lasts_only_for_the_distance_left() {
         .copied()
         .unwrap_or_default();
     let hidden = opacities_put(&requests[last_connect..], COVER_OPACITY);
+    assert!(
+        reached < 1.0 - 1e-9,
+        "the verse cut the show short, else this pins nothing: reached {reached}"
+    );
     let left = RULED_COVER_FADE.as_secs_f64() * reached;
     let most = (left / FADE_STEP.as_secs_f64()).floor() as usize + 2;
     assert!(
@@ -564,7 +568,9 @@ async fn a_config_change_mid_fade_drops_the_cover_fade() {
     let start = Instant::now();
     worker.bible(clear_update()).await;
     wait_for(&server, "the show under way", |requests| {
-        param_requests(requests, "PUT", COVER_OPACITY) >= 2
+        // The first step PUTs nothing, so the first PUT proves the fade is
+        // under way; waiting for more eats the 0.5 s window (#987).
+        param_requests(requests, "PUT", COVER_OPACITY) >= 1
     })
     .await;
 

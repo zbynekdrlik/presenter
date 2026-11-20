@@ -346,7 +346,9 @@ async fn a_verse_mid_show_hides_the_cover_from_where_the_show_got() {
     worker.bible(clear_update()).await;
     wait_for(&server, "the show under way", |requests| {
         let steps = opacities_put(requests, COVER_OPACITY);
-        steps.len() >= 2 && steps.last().is_some_and(|last| *last > 0.0)
+        // One PUT above 0 is the fade under way: the first step PUTs
+        // nothing, and the 0.5 s fade leaves little room to wait (#987).
+        steps.last().is_some_and(|last| *last > 0.0)
     })
     .await;
 
@@ -420,6 +422,7 @@ async fn the_verse_after_that_sends_no_cover_put() {
 
     let steps = opacities_put(&requests, COVER_OPACITY);
     assert_eq!(fade_ends(&steps), vec![1.0, 0.0], "shown, then hidden");
+    assert!(steps.len() > 2, "each one a fade, not a jump: {steps:?}");
     assert_eq!(steps.len(), before, "the second verse sends no cover PUT");
     assert_eq!(
         values_put(&requests, 31).len(),
@@ -645,6 +648,7 @@ async fn a_cover_dimmed_in_arena_comes_back_at_that_opacity() {
         vec![1.0, 0.0, 0.6],
         "shown, hidden from the dimmed value, then shown at it: {steps:?}"
     );
+    assert!(steps.len() > 3, "each one a fade, not a jump: {steps:?}");
     let hide_start = steps
         .iter()
         .position(|level| *level == 1.0)
@@ -674,6 +678,7 @@ async fn a_cover_mapped_below_full_opacity_is_shown_at_that_value() {
         vec![0.0, 0.6],
         "nothing for the first clear, then hidden and shown at 0.6: {steps:?}"
     );
+    assert!(steps.len() > 2, "each one a fade, not a jump: {steps:?}");
     assert!(steps[0] < 0.6, "hidden from 0.6: {steps:?}");
 }
 
