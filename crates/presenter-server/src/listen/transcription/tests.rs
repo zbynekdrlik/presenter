@@ -320,11 +320,15 @@ async fn preach_starts_the_guest_session_and_leaving_it_stops_after_sixty_second
 #[tokio::test(start_paused = true)]
 async fn an_on_override_starts_without_preach_and_off_stops_for_the_rest_of_the_day() {
     let rig = rig(on(240));
-    rig.listen
+    wait(1).await;
+    let generation = rig
+        .listen
         .transcription()
         .set_override(choice(SessionMode::On));
-    wait(1).await;
+    // What a PUT does before it answers: the answer shows the started session.
+    rig.listen.transcription_decided_on(generation).await;
     assert_eq!(rig.asr.opens(), 1, "on runs without Kázeň");
+    assert_eq!(rig.guest(), (TranscriptionState::Armed, None));
     rig.listen
         .transcription()
         .set_override(choice(SessionMode::Off));
@@ -578,4 +582,213 @@ async fn a_slow_session_never_blocks_the_chain() {
     let dropped = capture.events_with_message("frames dropped");
     assert!(!dropped.is_empty(), "a full session input counts drops");
     assert_eq!(dropped.last().unwrap().field("dropped"), Some("32"));
+}
+
+async fn usage(events: &mpsc::Sender<AsrEvent>, audio_ms: u64, connected_ms: u64) {
+    let event = AsrEvent::Usage {
+        audio_ms,
+        connected_ms,
+    };
+    events.send(event).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn usage_totals_add_up_as_deltas_across_events_and_sessions() {
+    let stored = UsageRow {
+        day: day(),
+        mics: [(
+            "guest".to_string(),
+            MicUsage {
+                audio_ms: 1_000,
+                connected_ms: 10_000,
+            },
+        )]
+        .into(),
+    };
+    let rig = rig_with(
+        on(240),
+        Some(stored),
+        true,
+        FakeAsr::default(),
+        ContextInputs::default(),
+    );
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    usage(&rig.asr.events(0), 2_000, 100_000).await;
+    usage(&rig.asr.events(0), 5_000, 250_000).await;
+    wait(1).await;
+    let first = transcription.status(day()).mics[0].clone();
+    assert_eq!(
+        (first.audio_ms_today, first.connected_ms_today),
+        (6_000, 260_000),
+        "running totals count once, on top of the stored day"
+    );
+    transcription.set_override(choice(SessionMode::Off));
+    wait(2).await;
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    assert_eq!(rig.asr.opens(), 2);
+    usage(&rig.asr.events(1), 500, 50_000).await;
+    wait(1).await;
+    let second = transcription.status(day()).mics[0].clone();
+    assert_eq!(
+        (second.audio_ms_today, second.connected_ms_today),
+        (6_500, 310_000),
+        "a new session's totals start at 0"
+    );
+    let saved = rig.store.saved.lock().unwrap().clone();
+    assert_eq!(saved.last().unwrap().mics["guest"].connected_ms, 260_000);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_that_does_not_end_within_five_seconds_is_ended() {
+    let capture = Capture::install();
+    let stuck = FakeAsr {
+        stuck: true,
+        ..FakeAsr::default()
+    };
+    let rig = rig_with(on(240), None, true, stuck, ContextInputs::default());
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    transcription.set_override(choice(SessionMode::Off));
+    wait(3).await;
+    assert_eq!(rig.guest().0, TranscriptionState::Armed, "still waiting");
+    wait(4).await;
+    assert_eq!(
+        rig.guest(),
+        (TranscriptionState::Off, Some(OffReason::OverrideOff))
+    );
+    let ended = capture.events_with_message("did not end within 5 s");
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(ended[0].level, tracing::Level::WARN);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_guest_mic_stops_the_old_session_and_shows_it_off() {
+    let rig = rig(on(240));
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    transcription.set_setting(TranscriptionSetting {
+        guest_mic: Some("interp".to_string()),
+        ..on(240)
+    });
+    wait(2).await;
+    assert!(rig.asr.closed(0), "the old guest's session ended");
+    assert_eq!(rig.asr.opens(), 2);
+    assert_eq!(rig.asr.opened.lock().unwrap()[1].cfg.mic_id, "interp");
+    let sessions = rig.listen.transcripts().snapshot().sessions;
+    let old = sessions.iter().find(|s| s.mic_id == "guest").unwrap();
+    assert_eq!(
+        (old.state, old.reason),
+        (TranscriptionState::Off, Some(OffReason::NoGuestMic))
+    );
+    let status = transcription.status(day());
+    assert_eq!(status.mics.len(), 1, "only the current guest is shown");
+    assert_eq!(status.mics[0].mic_id, "interp");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_provider_stop_is_lifted_by_a_new_guest_mic_or_a_new_day() {
+    let rig = rig(on(240));
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    let refuse = |n: usize| {
+        let events = rig.asr.events(n);
+        async move {
+            let refusal = AsrEvent::Finished(Some(OffReason::Payment));
+            events.send(refusal).await.unwrap();
+        }
+    };
+    refuse(0).await;
+    wait(3).await;
+    assert_eq!(rig.guest().1, Some(OffReason::Payment));
+    transcription.set_setting(TranscriptionSetting {
+        guest_mic: Some("interp".to_string()),
+        ..on(240)
+    });
+    wait(1).await;
+    assert_eq!(rig.asr.opens(), 2, "another guest mic runs");
+    refuse(1).await;
+    wait(3).await;
+    assert_eq!(rig.asr.opens(), 2);
+    rig.set_layout("preach").await;
+    wait(2).await;
+    assert_eq!(rig.asr.opens(), 2, "Kázeň does not lift a refusal");
+    *rig.now.lock().unwrap() = "2026-11-23T08:00:00".parse().unwrap();
+    wait(2).await;
+    assert_eq!(rig.asr.opens(), 3, "a new day runs again");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unexpected_end_is_retried_after_a_growing_pause() {
+    let capture = Capture::install();
+    let rig = rig(on(240));
+    rig.listen
+        .transcription()
+        .set_override(choice(SessionMode::On));
+    wait(1).await;
+    rig.asr
+        .events(0)
+        .send(AsrEvent::Finished(None))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rig.asr.opens(), 1, "never reopened on the next tick");
+    wait(2).await;
+    assert_eq!(rig.asr.opens(), 2, "retried after 1 s");
+    rig.asr
+        .events(1)
+        .send(AsrEvent::Finished(None))
+        .await
+        .unwrap();
+    wait(1).await;
+    assert_eq!(rig.asr.opens(), 2, "the second pause is 2 s");
+    wait(2).await;
+    assert_eq!(rig.asr.opens(), 3);
+    let warned = capture.events_with_message("ended unexpectedly");
+    let ends: Vec<_> = warned.iter().map(|e| e.field("ends")).collect();
+    assert_eq!(ends, [Some("1"), Some("2")]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn onsets_reconnects_and_lost_frames_reach_the_status_and_the_log() {
+    let capture = Capture::install();
+    let rig = rig(on(240));
+    let transcription = rig.listen.transcription();
+    transcription.set_override(choice(SessionMode::On));
+    wait(1).await;
+    let events = rig.asr.events(0);
+    for latency_ms in (1..=10).map(|n| n * 100) {
+        events.send(AsrEvent::Onset { latency_ms }).await.unwrap();
+    }
+    for state in [
+        TranscriptionState::Reconnecting,
+        TranscriptionState::Reconnecting,
+        TranscriptionState::Streaming,
+        TranscriptionState::Reconnecting,
+    ] {
+        let error = Some("timeout".to_string());
+        events.send(AsrEvent::State { state, error }).await.unwrap();
+    }
+    for value in 0..200 {
+        rig.send("guest", value);
+    }
+    wait(1).await;
+    let status = transcription.status(day()).mics[0].clone();
+    assert_eq!(
+        (
+            status.latency_last_ms,
+            status.latency_p50_ms,
+            status.latency_p90_ms
+        ),
+        (Some(1_000), Some(500), Some(900))
+    );
+    assert_eq!(status.reconnects, 2, "two outages, three retries");
+    let lost = capture.events_with_message("frames lost");
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert_eq!(lost[0].field("lost"), Some("72"));
 }

@@ -367,9 +367,15 @@ paths:
   frame channel = counted lost frames, both #484-gated WARNs — the chain never waits), events → assembler →
   hub (`push_sentence` / `set_tail`), `State` / `Usage` (session RUNNING TOTALS → the mic task adds deltas
   to the meter) / `Onset` → `Transcription`'s std-mutex view. Stop = `AsrInput::Stop` + drop the sender,
-  wait ≤ 5 s for the task's `Finished` reason, else abort. Any `Finished(Some(reason))` blocks the mic until
-  `BlockKey` changes (day, switch, guest mic, or a NEW `PUT /listen/session` — `Rows.choice` counts them, so
-  repeating "on" retries; a cap change does not). `listen.usage` = the meter's row, written every 60 s while
+  wait ≤ 5 s for the task's `Finished` reason, else abort. Any `Finished(Some(reason))` blocks the rows the
+  session STARTED under (`Running.key`) until `BlockKey` changes (day, switch, guest mic, or a NEW
+  `PUT /listen/session` — `Rows.choice` counts them, so repeating "on" retries; a cap change does not); the
+  start is decided AFTER a stop (that stop may have been refused). A session that ends by itself without a
+  reason, or whose task panicked, is retried after `bind_retry_delay` (1, 2, 4 … 60 s, reset by a session
+  that ran ≥ 60 s), WARN on power-of-two ends — never reopened on the next tick. A PUT answers only after the
+  supervisor decided on its rows generation (`Transcription::decided_on`, ≤ 7 s; no wait when no
+  supervisor runs). Meter counters: `connections` = connection numbers that delivered words or ended,
+  `reconnects` = entries into `reconnecting` (an outage, not each retry), lost frames summed. `listen.usage` = the meter's row, written every 60 s while
   it changed and at every session end (a failure keeps it dirty, WARN gated); `listen.transcription` /
   `listen.session` are written only by the PUTs (`validate_transcription_change` → 422, one audit row each,
   audit WARN under `presenter::listen::asr`). The status shows only the CURRENT guest mic; a guest mic that

@@ -2,9 +2,11 @@
 //! per local day the audio sent and the connected time (what the cap counts),
 //! fed by the session's running totals; the `listen.usage` row is written
 //! every 60 s while it changed and at every session end (the supervisor), so
-//! the cap survives an auto-deploy. Also per mic: the connections and
-//! reconnects of the day and the latency of the last 50 voiced onsets (p50 /
-//! p90) — kept in memory only.
+//! the cap survives an auto-deploy. Also per mic, in memory only: the day's
+//! `connections` (connection numbers that delivered words or ended — a
+//! connect that failed before either is not counted), `reconnects` (outages:
+//! entries into `reconnecting`, not each retry) and the latency of the last
+//! 50 voiced onsets (p50 / p90).
 
 use std::collections::{BTreeMap, VecDeque};
 

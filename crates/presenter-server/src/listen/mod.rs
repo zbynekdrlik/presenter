@@ -212,6 +212,14 @@ impl ListenService {
         })
     }
 
+    /// After a rows write: wait until the supervisor decided on it (no wait
+    /// when no supervisor runs — validate mode, a test that never started it).
+    pub(crate) async fn transcription_decided_on(&self, generation: u64) {
+        if self.inner.transcription_started.load(Ordering::SeqCst) {
+            self.inner.transcription.decided_on(generation).await;
+        }
+    }
+
     /// Start the supervisor once with `deps` (tests: a fake provider).
     pub(crate) fn start_transcription_with(&self, deps: TranscriptionDeps) -> bool {
         if self

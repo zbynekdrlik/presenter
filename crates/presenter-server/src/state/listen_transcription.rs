@@ -7,7 +7,8 @@
 //! through [`TranscriptionStore`]. All three are read at startup under the
 //! same lock, before the supervisor starts (never in validate mode). The
 //! store also gives the supervisor today's prepared references and active
-//! šepkár terms for the Soniox context.
+//! šepkár terms for the Soniox context. A PUT answers after the supervisor
+//! decided on the new rows (bounded), so its status shows what it caused.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -61,16 +62,25 @@ impl AppState {
         setting: TranscriptionSetting,
         actor: &str,
     ) -> anyhow::Result<TranscriptionStatus> {
-        let _save = self.listen.save_guard().await;
+        let save = self.listen.save_guard().await;
         let before = self.repository.get_app_setting(TRANSCRIPTION_KEY).await?;
-        let stored = before
+        let stored = match before
             .as_deref()
-            .and_then(|raw| serde_json::from_str::<TranscriptionSetting>(raw).ok());
-        validate_transcription_change(&setting, stored.as_ref(), &self.listen.mics())?;
+            .map(serde_json::from_str::<TranscriptionSetting>)
+        {
+            Some(Ok(stored)) => stored,
+            Some(Err(err)) => {
+                // The row in use is the one loaded (or the default).
+                tracing::warn!(target: ASR_TARGET, error = %err, "the stored listen.transcription is corrupt — validated against the setting in use");
+                self.listen.transcription().rows().setting
+            }
+            None => self.listen.transcription().rows().setting,
+        };
+        validate_transcription_change(&setting, Some(&stored), &self.listen.mics())?;
         self.repository
             .set_app_setting(TRANSCRIPTION_KEY, &serde_json::to_string(&setting)?)
             .await?;
-        self.listen.transcription().set_setting(setting.clone());
+        let generation = self.listen.transcription().set_setting(setting.clone());
         tracing::info!(
             target: ASR_TARGET,
             enabled = setting.enabled,
@@ -88,6 +98,8 @@ impl AppState {
             actor,
         )
         .await;
+        drop(save);
+        self.listen.transcription_decided_on(generation).await;
         Ok(self.listen_status().transcription)
     }
 
@@ -98,7 +110,7 @@ impl AppState {
         mode: SessionMode,
         actor: &str,
     ) -> anyhow::Result<TranscriptionStatus> {
-        let _save = self.listen.save_guard().await;
+        let save = self.listen.save_guard().await;
         let today = self.listen.today();
         let transcription = self.listen.transcription();
         let current = transcription.rows().over;
@@ -112,7 +124,7 @@ impl AppState {
         self.repository
             .set_app_setting(SESSION_KEY, &serde_json::to_string(&row)?)
             .await?;
-        transcription.set_override(row.clone());
+        let generation = transcription.set_override(row.clone());
         tracing::info!(
             target: ASR_TARGET,
             mode = ?mode,
@@ -129,6 +141,8 @@ impl AppState {
             actor,
         )
         .await;
+        drop(save);
+        self.listen.transcription_decided_on(generation).await;
         Ok(self.listen_status().transcription)
     }
 

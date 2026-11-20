@@ -36,7 +36,7 @@ use self::mic::MicTask;
 use super::asr::{AsrSessionConfig, StreamingAsr};
 use super::soniox::config::SonioxEnv;
 use super::transcript_hub::TranscriptHub;
-use super::{should_log_event, ListenService};
+use super::{bind_retry_delay, should_log_event, ListenService};
 
 /// The target of every transcription log line (plan Decision 16).
 pub(crate) const ASR_TARGET: &str = "presenter::listen::asr";
@@ -46,6 +46,10 @@ const TICK: Duration = Duration::from_secs(1);
 const STOP_WAIT: Duration = Duration::from_secs(5);
 /// `listen.usage` is written at most this often while a session runs.
 const USAGE_SAVE_EVERY: Duration = Duration::from_secs(60);
+/// A write's answer waits for the supervisor's decision at most a stop plus this.
+const DECIDE_SLACK: Duration = Duration::from_secs(2);
+/// A session that ran this long resets the unexpected-end back-off.
+const STABLE_SESSION: Duration = Duration::from_secs(60);
 
 /// The two settings rows the supervisor follows.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -55,6 +59,8 @@ pub(crate) struct Rows {
     /// Counts today's choices (`PUT /listen/session`): a new choice lets a
     /// stopped mic run again, even when it repeats the stored mode.
     pub(crate) choice: u64,
+    /// Counts every change; the supervisor reports the one it decided on.
+    pub(crate) generation: u64,
 }
 
 /// What the supervisor reads from and writes to the database.
@@ -97,14 +103,18 @@ struct View {
 /// The transcription state every `ListenService` clone shares.
 pub(crate) struct Transcription {
     rows: watch::Sender<Rows>,
+    /// The rows generation the supervisor last decided on.
+    decided: watch::Sender<u64>,
     view: Mutex<View>,
 }
 
 impl Transcription {
     pub(crate) fn new(env: &SonioxEnv) -> Self {
         let (rows, _) = watch::channel(Rows::default());
+        let (decided, _) = watch::channel(0);
         Self {
             rows,
+            decided,
             view: Mutex::new(View {
                 key_configured: env.key.is_some(),
                 model: env.model.clone(),
@@ -120,22 +130,48 @@ impl Transcription {
 
     /// The stored rows, read at startup.
     pub(crate) fn load(&self, setting: TranscriptionSetting, over: Option<SessionOverride>) {
-        self.rows.send_modify(|rows| {
+        let _generation = self.change(|rows| {
             rows.setting = setting;
             rows.over = over;
         });
     }
 
-    pub(crate) fn set_setting(&self, setting: TranscriptionSetting) {
-        self.rows.send_modify(|rows| rows.setting = setting);
+    /// A saved setting; the generation to wait for ([`Self::decided_on`]).
+    pub(crate) fn set_setting(&self, setting: TranscriptionSetting) -> u64 {
+        self.change(|rows| rows.setting = setting)
     }
 
     /// Today's choice: also counted, so it unblocks a stopped mic.
-    pub(crate) fn set_override(&self, over: SessionOverride) {
-        self.rows.send_modify(|rows| {
+    pub(crate) fn set_override(&self, over: SessionOverride) -> u64 {
+        self.change(|rows| {
             rows.over = Some(over);
             rows.choice += 1;
+        })
+    }
+
+    fn change(&self, f: impl FnOnce(&mut Rows)) -> u64 {
+        let mut generation = 0;
+        self.rows.send_modify(|rows| {
+            f(rows);
+            rows.generation += 1;
+            generation = rows.generation;
         });
+        generation
+    }
+
+    /// Wait until the supervisor decided on rows `generation`, so a write's
+    /// answer shows the state it caused; bounded, since a stop may take
+    /// [`STOP_WAIT`].
+    pub(crate) async fn decided_on(&self, generation: u64) {
+        let mut decided = self.decided.subscribe();
+        let waited = tokio::time::timeout(
+            STOP_WAIT + DECIDE_SLACK,
+            decided.wait_for(|done| *done >= generation),
+        )
+        .await;
+        if waited.is_err() {
+            tracing::warn!(target: ASR_TARGET, generation, "the transcription supervisor did not decide in time — the answer shows the state before it");
+        }
     }
 
     /// Today's usage from the stored row (another day's starts at 0).
@@ -234,19 +270,41 @@ impl BlockKey {
     }
 }
 
+/// How a session ended.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Ended {
+    /// The provider stopped it for a person to fix: the mic is blocked.
+    Refused(OffReason),
+    /// The supervisor stopped it.
+    Stopped,
+    /// It ended by itself without a reason, or its task panicked: retried
+    /// after a back-off, never on the next tick.
+    Unexpected,
+}
+
 /// Why the supervisor woke.
 enum Wake {
-    /// The running session ended by itself, with its reason.
-    Finished(Option<OffReason>),
+    /// The running session's task ended by itself (`Err` = it panicked).
+    Finished(Result<Option<OffReason>, tokio::task::JoinError>),
     Check,
-    Closed,
+}
+
+/// The running session and what it ran under.
+struct Running {
+    task: MicTask,
+    /// The rows it started with: a provider stop blocks THOSE rows.
+    key: BlockKey,
+    started: Instant,
 }
 
 struct Supervisor {
     listen: ListenService,
     deps: TranscriptionDeps,
-    running: Option<MicTask>,
+    running: Option<Running>,
     blocked: Option<Block>,
+    /// Sessions that ended unexpectedly in a row, and when to try again.
+    unexpected: u32,
+    retry_at: Option<Instant>,
     was_preach: bool,
     left_preach_at: Option<Instant>,
     last_saved: Instant,
@@ -255,7 +313,8 @@ struct Supervisor {
     shown: Option<String>,
 }
 
-/// Run the supervisor until the service is gone (never in validate mode).
+/// Run the supervisor for the life of the process (never in validate mode;
+/// the service it holds owns the watches it waits on).
 pub(crate) async fn supervise(listen: ListenService, deps: TranscriptionDeps) {
     listen.transcription().with_view(|view| {
         view.key_configured = deps.key;
@@ -270,6 +329,8 @@ pub(crate) async fn supervise(listen: ListenService, deps: TranscriptionDeps) {
         deps,
         running: None,
         blocked: None,
+        unexpected: 0,
+        retry_at: None,
         was_preach: false,
         left_preach_at: None,
         last_saved: Instant::now(),
@@ -279,32 +340,44 @@ pub(crate) async fn supervise(listen: ListenService, deps: TranscriptionDeps) {
     loop {
         let wake = tokio::select! {
             biased;
-            outcome = sup.join_running() => Wake::Finished(outcome),
-            changed = rows.changed() => if changed.is_ok() { Wake::Check } else { Wake::Closed },
-            changed = mics.changed() => if changed.is_ok() { Wake::Check } else { Wake::Closed },
+            joined = sup.join_running() => Wake::Finished(joined),
+            // The senders live in the service the supervisor holds: never closed.
+            _ = rows.changed() => Wake::Check,
+            _ = mics.changed() => Wake::Check,
             _ = tick.tick() => Wake::Check,
         };
-        match wake {
-            Wake::Closed => break,
-            Wake::Finished(outcome) => {
-                if let Some(task) = sup.running.take() {
-                    tracing::info!(target: ASR_TARGET, mic = task.mic_id.as_str(), reason = ?outcome, "guest transcription session ended by itself");
-                    sup.after_session(&task.mic_id, outcome).await;
-                }
-            }
-            Wake::Check => {}
+        if let Wake::Finished(joined) = wake {
+            sup.ended_by_itself(joined).await;
         }
         sup.reconcile().await;
     }
 }
 
 impl Supervisor {
-    /// The running session's outcome; pending while none runs.
-    async fn join_running(&mut self) -> Option<OffReason> {
+    /// The running session's task result; pending while none runs.
+    async fn join_running(&mut self) -> Result<Option<OffReason>, tokio::task::JoinError> {
         match self.running.as_mut() {
-            Some(task) => (&mut task.handle).await.unwrap_or(None),
+            Some(running) => (&mut running.task.handle).await,
             None => std::future::pending().await,
         }
+    }
+
+    /// The running session's task ended without being asked to.
+    async fn ended_by_itself(&mut self, joined: Result<Option<OffReason>, tokio::task::JoinError>) {
+        let Some(running) = self.running.take() else {
+            return;
+        };
+        let mic = running.task.mic_id.as_str();
+        let ended = match joined {
+            Ok(Some(reason)) => Ended::Refused(reason),
+            Ok(None) => Ended::Unexpected,
+            Err(err) => {
+                tracing::warn!(target: ASR_TARGET, mic, error = %err, "the guest transcription task failed");
+                Ended::Unexpected
+            }
+        };
+        tracing::info!(target: ASR_TARGET, mic, ended = ?ended, "guest transcription session ended by itself");
+        self.after_session(&running, ended).await;
     }
 
     async fn reconcile(&mut self) {
@@ -332,24 +405,29 @@ impl Supervisor {
             tracing::info!(target: ASR_TARGET, "the setting changed, the stopped guest transcription may run again");
             self.blocked = None;
         }
-        let want = decision
-            .as_ref()
-            .ok()
-            .filter(|_| self.blocked.is_none())
-            .cloned();
+        let want = decision.as_ref().ok().cloned();
+        let blocked = self.blocked.is_some();
         if self
             .running
             .as_ref()
-            .is_some_and(|task| Some(&task.mic_id) != want.as_ref())
+            .is_some_and(|r| blocked || Some(&r.task.mic_id) != want.as_ref())
         {
             let why = off.map_or("blocked", |reason| reason.slovak());
             self.stop(why).await;
         }
-        if let (Some(mic), None) = (want, self.running.as_ref()) {
-            self.start(mic, today, &published).await;
+        // Decided AFTER the stop: the stopped session may have been refused.
+        let backing_off = self.retry_at.is_some_and(|at| Instant::now() < at);
+        let start = want.filter(|_| self.blocked.is_none() && !backing_off);
+        if let (Some(mic), None) = (start, self.running.as_ref()) {
+            self.start(mic, today, &published, key).await;
         }
         self.show_guest(&rows, off, today);
         self.save_usage(false).await;
+        let _previous = self
+            .listen
+            .transcription()
+            .decided
+            .send_replace(rows.generation);
     }
 
     /// Follow the stage layout: the moment it left Kázeň starts the delay.
@@ -370,7 +448,13 @@ impl Supervisor {
         )
     }
 
-    async fn start(&mut self, mic: String, today: NaiveDate, published: &[MicConfig]) {
+    async fn start(
+        &mut self,
+        mic: String,
+        today: NaiveDate,
+        published: &[MicConfig],
+        key: BlockKey,
+    ) {
         let inputs = match self.deps.store.context_inputs(today).await {
             Ok(inputs) => inputs,
             Err(err) => {
@@ -398,43 +482,69 @@ impl Supervisor {
                 cap_ms: 0,
             });
         });
-        self.running = Some(mic::spawn(mic, frames, session, self.listen.clone()));
+        self.running = Some(Running {
+            task: mic::spawn(mic, frames, session, self.listen.clone()),
+            key,
+            started: Instant::now(),
+        });
     }
 
     /// End the running session: its last words go out, then it is gone.
     async fn stop(&mut self, why: &str) {
-        let Some(mut task) = self.running.take() else {
+        let Some(mut running) = self.running.take() else {
             return;
         };
-        task.stop();
-        let outcome = match tokio::time::timeout(STOP_WAIT, &mut task.handle).await {
-            Ok(joined) => joined.unwrap_or(None),
+        let mic = running.task.mic_id.clone();
+        running.task.stop();
+        let ended = match tokio::time::timeout(STOP_WAIT, &mut running.task.handle).await {
+            Ok(Ok(Some(reason))) => Ended::Refused(reason),
+            Ok(Ok(None)) => Ended::Stopped,
+            Ok(Err(err)) => {
+                tracing::warn!(target: ASR_TARGET, mic = mic.as_str(), error = %err, "the guest transcription task failed while stopping");
+                Ended::Stopped
+            }
             Err(_) => {
-                task.handle.abort();
-                tracing::warn!(target: ASR_TARGET, mic = task.mic_id.as_str(), "the guest transcription did not end within 5 s — ended");
-                None
+                running.task.handle.abort();
+                tracing::warn!(target: ASR_TARGET, mic = mic.as_str(), "the guest transcription did not end within 5 s — ended");
+                Ended::Stopped
             }
         };
-        tracing::info!(target: ASR_TARGET, mic = task.mic_id.as_str(), why, "guest transcription stopped");
-        self.after_session(&task.mic_id, outcome).await;
+        tracing::info!(target: ASR_TARGET, mic = mic.as_str(), why, "guest transcription stopped");
+        self.after_session(&running, ended).await;
     }
 
-    /// A session ended: a provider stop blocks the mic, the usage is written.
-    async fn after_session(&mut self, mic: &str, outcome: Option<OffReason>) {
-        if let Some(reason) = outcome {
-            let rows = self.listen.transcription().rows();
-            let error = self.listen.transcription().with_view(|view| {
-                view.guest
-                    .as_ref()
-                    .filter(|guest| guest.mic_id == mic)
-                    .and_then(|guest| guest.error.clone())
-            });
-            tracing::warn!(target: ASR_TARGET, mic, reason = ?reason, "guest transcription stopped until the setting or today's choice changes");
-            self.blocked = Some(Block {
-                reason,
-                error,
-                key: BlockKey::of(&rows, self.listen.today()),
-            });
+    /// A session ended: a provider refusal blocks the rows it ran under, an
+    /// unexpected end backs off (1, 2, 4 … 60 s), the usage is written.
+    async fn after_session(&mut self, running: &Running, ended: Ended) {
+        let mic = running.task.mic_id.as_str();
+        if ended == Ended::Stopped || running.started.elapsed() >= STABLE_SESSION {
+            self.unexpected = 0;
+            self.retry_at = None;
+        }
+        match ended {
+            Ended::Refused(reason) => {
+                let error = self.listen.transcription().with_view(|view| {
+                    view.guest
+                        .as_ref()
+                        .filter(|guest| guest.mic_id == mic)
+                        .and_then(|guest| guest.error.clone())
+                });
+                tracing::warn!(target: ASR_TARGET, mic, reason = ?reason, "guest transcription stopped until the setting or today's choice changes");
+                self.blocked = Some(Block {
+                    reason,
+                    error,
+                    key: running.key.clone(),
+                });
+            }
+            Ended::Unexpected => {
+                self.unexpected = self.unexpected.saturating_add(1);
+                let wait = bind_retry_delay(self.unexpected);
+                self.retry_at = Some(Instant::now() + wait);
+                if should_log_event(u64::from(self.unexpected)) {
+                    tracing::warn!(target: ASR_TARGET, mic, ends = self.unexpected, retry_in_s = wait.as_secs(), "the guest transcription ended unexpectedly — retried after a pause");
+                }
+            }
+            Ended::Stopped => {}
         }
         self.save_usage(true).await;
     }
@@ -452,7 +562,7 @@ impl Supervisor {
             });
         }
         let cap = cap_ms(&rows.setting, rows.over.as_ref(), today);
-        let running = self.running.as_ref().map(|task| task.mic_id.clone());
+        let running = self.running.as_ref().map(|r| r.task.mic_id.clone());
         let blocked = self.blocked.as_ref().map(|b| (b.reason, b.error.clone()));
         transcription.with_view(|view| {
             view.guest = guest.clone().map(|mic_id| {

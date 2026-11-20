@@ -47,8 +47,10 @@ pub(super) fn spawn(
         assembler: TranscriptAssembler::new(),
         totals: (0, 0),
         newest_connection: 0,
+        last_state: TranscriptionState::Armed,
         dropped: 0,
         lag_events: 0,
+        lost: 0,
     };
     let handle = tokio::spawn(task.run(frames, session, stopped));
     MicTask {
@@ -65,8 +67,12 @@ struct MicRun {
     /// The session's last reported `(audio_ms, connected_ms)` totals.
     totals: (u64, u64),
     newest_connection: u32,
+    /// The provider's last state: an outage is counted once, not per retry.
+    last_state: TranscriptionState,
     dropped: u64,
     lag_events: u64,
+    /// Frames lost because this task fell behind the mic.
+    lost: u64,
 }
 
 impl MicRun {
@@ -120,8 +126,9 @@ impl MicRun {
 
     fn lagged(&mut self, lost: u64) {
         self.lag_events += 1;
+        self.lost = self.lost.saturating_add(lost);
         if should_log_event(self.lag_events) {
-            tracing::warn!(target: ASR_TARGET, mic = self.mic_id.as_str(), lost, events = self.lag_events, "the transcription task fell behind the mic — frames lost");
+            tracing::warn!(target: ASR_TARGET, mic = self.mic_id.as_str(), lost, lost_total = self.lost, events = self.lag_events, "the transcription task fell behind the mic — frames lost");
         }
     }
 
@@ -140,8 +147,11 @@ impl MicRun {
             }
             AsrEvent::State { state, error } => {
                 let mic = self.mic_id.as_str();
+                let outage = state == TranscriptionState::Reconnecting
+                    && self.last_state != TranscriptionState::Reconnecting;
+                self.last_state = state;
                 transcription.with_view(|view| {
-                    if state == TranscriptionState::Reconnecting {
+                    if outage {
                         view.meter.add_reconnect(mic);
                     }
                     if let Some(guest) = view.guest.as_mut().filter(|g| g.mic_id == mic) {
@@ -157,7 +167,10 @@ impl MicRun {
             } => {
                 let (audio, connected) = self.totals;
                 self.totals = (audio_ms, connected_ms);
+                // Rolled here too: time metered after midnight is the new day's.
+                let today = self.listen.today();
                 transcription.with_view(|view| {
+                    view.meter.roll(today);
                     view.meter.add_usage(
                         &self.mic_id,
                         audio_ms.saturating_sub(audio),
@@ -198,8 +211,8 @@ impl MicRun {
     fn finish(&mut self, reason: Option<OffReason>) -> Option<OffReason> {
         let out = self.assembler.flush(Utc::now());
         self.publish(out);
-        if self.dropped > 0 || self.lag_events > 0 {
-            tracing::info!(target: ASR_TARGET, mic = self.mic_id.as_str(), dropped = self.dropped, lag_events = self.lag_events, "guest transcription session lost frames");
+        if self.dropped > 0 || self.lost > 0 {
+            tracing::info!(target: ASR_TARGET, mic = self.mic_id.as_str(), dropped = self.dropped, lost = self.lost, lag_events = self.lag_events, "guest transcription session lost frames");
         }
         reason
     }
