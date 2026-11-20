@@ -244,3 +244,105 @@ async fn search_takes_a_scope_and_a_quoted_phrase() {
     let (status, _) = get(&app, "/bible/search?query=love&scope=nowhere").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// #983: `count` verses that all hold "light", seeded so that relevance runs
+/// against the Bible's order: the longest (weakest) match is Genesis.
+async fn light_app(count: u16) -> Router {
+    let state = AppState::in_memory().await.expect("state");
+    let translation = BibleTranslation::new("eng-kjv", "KJV", "en");
+    let verse = |book: &str, code: &str, number: u16, verse: u16, text: &str| {
+        let reference =
+            BibleReference::new_with_code(book, code, number, 1, verse, verse).expect("reference");
+        BiblePassage::new(reference, translation.clone(), text.to_string())
+    };
+    let mut passages = vec![verse(
+        "Genesis",
+        "GEN",
+        1,
+        1,
+        "and God said let there be light and there was a great deal of other words here",
+    )];
+    for n in 1..count.saturating_sub(1) {
+        passages.push(verse("Psalms", "PSA", 19, n, "light light"));
+    }
+    passages.push(verse("Revelation", "REV", 66, 1, "light"));
+    let batch = BibleIngestionBatch::new(translation, passages).expect("batch");
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch)
+        .await
+        .expect("seed");
+    build_router(state)
+}
+
+fn places(hits: &Value) -> Vec<(String, u64)> {
+    hits.as_array()
+        .map(|hits| {
+            hits.iter()
+                .map(|hit| {
+                    (
+                        hit["reference"]["bookCode"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        hit["reference"]["verseStart"].as_u64().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn study_search_lists_hits_in_bible_order() {
+    let app = light_app(5).await;
+    let (status, hits) = get(
+        &app,
+        "/bible/search?translation=eng-kjv&query=light&order=bible&limit=1000",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let found = places(&hits);
+    assert_eq!(
+        found,
+        vec![
+            ("GEN".to_string(), 1),
+            ("PSA".to_string(), 1),
+            ("PSA".to_string(), 2),
+            ("PSA".to_string(), 3),
+            ("REV".to_string(), 1),
+        ]
+    );
+
+    // The console's word search keeps relevance: Genesis's long verse is last.
+    let (_, ranked) = get(&app, "/bible/search?translation=eng-kjv&query=light").await;
+    assert_eq!(
+        places(&ranked).last(),
+        Some(&("GEN".to_string(), 1)),
+        "relevance order stays the default"
+    );
+
+    let (status, _) = get(
+        &app,
+        "/bible/search?translation=eng-kjv&query=light&order=random",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn bible_order_answers_up_to_1000_hits_and_relevance_100() {
+    let app = light_app(1005).await;
+    let (_, all) = get(
+        &app,
+        "/bible/search?translation=eng-kjv&query=light&order=bible&limit=5000",
+    )
+    .await;
+    assert_eq!(all.as_array().map(Vec::len), Some(1000));
+    let (_, ranked) = get(
+        &app,
+        "/bible/search?translation=eng-kjv&query=light&limit=5000",
+    )
+    .await;
+    assert_eq!(ranked.as_array().map(Vec::len), Some(100));
+}
