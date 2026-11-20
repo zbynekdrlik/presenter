@@ -599,11 +599,73 @@ class ListenEnvTest(unittest.TestCase):
         document["jobs"]["deploy"]["env"] = {"K": "${{ secrets.LISTEN_SONIOX_API_KEY }}"}
         found = [v.message for v in cdw.check_workflow("wf.yml", document)]
         self.assertEqual(len(found), 1)
-        self.assertIn("job-level `env`", found[0])
+        self.assertIn("the job's own keys", found[0])
 
     def test_a_condition_on_the_step_is_flagged(self) -> None:
         found = self._mutated("      - name: Configure listening transcription\n", "      - name: Configure listening transcription\n        if: vars.X != ''\n")
         self.assertTrue(any("no `if:`" in message for message in found), found)
+
+    def test_every_spelling_of_the_secret_in_another_step_is_flagged(self) -> None:
+        for spelling in ("${{ secrets.listen_soniox_api_key }}", "${{ secrets['LISTEN_SONIOX_API_KEY'] }}", "${{ toJSON(secrets) }}"):
+            with self.subTest(spelling=spelling):
+                other = f"""
+      - name: Leak
+        run: echo "{spelling}" > /tmp/k
+"""
+                found = self._messages(SAFE_SETUP + LISTEN_STEP + other + START_STEP)
+                self.assertEqual(len(found), 1, found)
+                self.assertIn("is not the `Configure listening transcription` step", found[0])
+
+    def test_the_secret_in_workflow_env_or_a_job_container_is_flagged(self) -> None:
+        document = yaml.safe_load(_normalize(SAFE_SETUP + LISTEN_STEP + START_STEP))
+        document["env"] = {"K": "${{ secrets.LISTEN_SONIOX_API_KEY }}"}
+        found = [v.message for v in cdw.check_workflow("wf.yml", document)]
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("workflow-level keys", found[0])
+        document = yaml.safe_load(_normalize(SAFE_SETUP + LISTEN_STEP + START_STEP))
+        document["jobs"]["deploy"]["container"] = {"image": "x", "env": {"K": "${{ secrets.LISTEN_SONIOX_API_KEY }}"}}
+        found = [v.message for v in cdw.check_workflow("wf.yml", document)]
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("the job's own keys", found[0])
+
+    def test_a_tracing_shell_around_the_step_is_flagged(self) -> None:
+        for where, key, value in (
+            ("job", "defaults", {"run": {"shell": "bash -x {0}"}}),
+            ("job", "env", {"SHELLOPTS": "xtrace"}),
+            ("workflow", "defaults", {"run": {"shell": "bash -x {0}"}}),
+            ("workflow", "env", {"BASH_ENV": "/tmp/trace.sh"}),
+        ):
+            with self.subTest(where=where, key=key):
+                document = yaml.safe_load(_normalize(SAFE_SETUP + LISTEN_STEP + START_STEP))
+                holder = document["jobs"]["deploy"] if where == "job" else document
+                holder[key] = value
+                found = [v.message for v in cdw.check_workflow("wf.yml", document)]
+                self.assertEqual(len(found), 1, found)
+                self.assertIn("traced or replaced shell", found[0])
+
+    def test_a_broken_line_join_is_flagged(self) -> None:
+        for label, (old, new) in {
+            "space after the backslash": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\\n', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\ \n'),
+            "blank line after the backslash": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\\n', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\\n\n'),
+        }.items():
+            with self.subTest(edit=label):
+                found = self._mutated(old, new)
+                self.assertEqual(len(found), 1, found)
+                self.assertIn(DIFFERS, found[0])
+
+    def test_two_etc_dirs_in_one_step_are_flagged(self) -> None:
+        found = self._mutated('"sudo install -d -m 755 /etc/presenter"', '"sudo install -d -m 755 /etc/presenter-zz"')
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("more than one etc dir", found[0])
+
+    def test_continue_on_error_on_the_step_is_flagged(self) -> None:
+        found = self._mutated(
+            "      - name: Configure listening transcription\n",
+            "      - name: Configure listening transcription\n        continue-on-error: true\n",
+        )
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("exactly the keys", found[0])
+
 
 if __name__ == "__main__":
     unittest.main()

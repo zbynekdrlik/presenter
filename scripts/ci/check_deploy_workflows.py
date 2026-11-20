@@ -61,7 +61,11 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    echoed or in an argv. A shape comparison, not a shell parser: any edit of
    the step (a ``tee``, a ``set -x``, a redirect, another write) fails until
    the canonical text here is changed with it, in review. The secret appears
-   in no other step and in no job-level ``env``. A service deploy job is
+   in no other step, no other job key and no workflow-level key (any
+   spelling GitHub accepts, ``toJSON(secrets)`` too); the step has exactly
+   ``name``/``env``/``run``, names ONE etc dir, and its job / workflow sets no
+   ``defaults.run.shell`` and no shell-tracing env (``SHELLOPTS``, ``BASH_ENV``
+   …). ``vars.LISTEN_SONIOX_MODEL`` is trusted (repository admins only). A service deploy job is
    recognised by ``systemctl enable ${{ env.SERVICE_NAME }}``: a job that
    starts the service another way is not checked, so deploy jobs keep the
    shared ``enable … && start`` shape.
@@ -105,6 +109,13 @@ ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SERVICE_DEPLOY_RE = re.compile(r"systemctl\s+enable\s+\$\{\{\s*env\.SERVICE_NAME\s*\}\}")
 LISTEN_SECRET = "secrets.LISTEN_SONIOX_API_KEY"
 LISTEN_STEP_NAME = "Configure listening transcription"
+# GitHub reads secret names case-insensitively, by property or index, and
+# `toJSON(secrets)` dumps them all.
+LISTEN_SECRET_RE = re.compile(
+    r"secrets\s*(?:\.\s*|\[\s*['\"])LISTEN_SONIOX_API_KEY\b|toJSON\s*\(\s*secrets\s*\)", re.IGNORECASE
+)
+# Env names that trace or replace the shell of a `run` step.
+TRACE_ENV = {"SHELLOPTS", "BASHOPTS", "BASH_ENV", "ENV", "PS4"}
 LISTEN_STEP_ENV = {
     "LISTEN_SONIOX_API_KEY": "${{ secrets.LISTEN_SONIOX_API_KEY }}",
     "LISTEN_SONIOX_MODEL": "${{ vars.LISTEN_SONIOX_MODEL }}",
@@ -427,37 +438,74 @@ def check_runner_image(workflow: str, job: str, spec: dict[str, Any]) -> list[Vi
     return []
 
 
-def _normalized_run(run: str) -> list[str]:
-    """A `run` script as its non-blank lines, indentation stripped, the etc
-    dir replaced by `<ETC>` (the only part that differs per workflow)."""
-    lines = (ETC_DIR_RE.sub("<ETC>", line.strip()) for line in str(run).splitlines())
-    return [line for line in lines if line]
+def _normalized_run(run: str) -> tuple[list[str], set[str]]:
+    """A `run` script as its lines with only the INDENTATION removed (trailing
+    whitespace and inner blank lines stay: either can break a backslash line join),
+    the etc dir replaced by `<ETC>`; plus the set of etc dirs it named (one
+    step must name ONE etc dir)."""
+    etc_dirs: set[str] = set()
+
+    def etc(match: re.Match[str]) -> str:
+        etc_dirs.add(match.group(0))
+        return "<ETC>"
+
+    lines = [ETC_DIR_RE.sub(etc, line.lstrip()) for line in str(run).strip("\n").splitlines()]
+    return lines, etc_dirs
 
 
 def _listen_step_problem(step: dict[str, Any]) -> str | None:
     """Why a step that carries the Soniox secret is not the canonical one."""
     if step.get("name") != LISTEN_STEP_NAME:
-        return f"carries `{LISTEN_SECRET}` but is not the `{LISTEN_STEP_NAME}` step — the key belongs only there"
+        return f"carries the `{LISTEN_SECRET}` secret but is not the `{LISTEN_STEP_NAME}` step — the key belongs only there"
+    if set(step) != {"name", "env", "run"}:
+        return "must have exactly the keys `name`, `env`, `run` (no `if:`, `shell:`, `continue-on-error:`, `working-directory:` …)"
     env = {str(name): str(value) for name, value in (step.get("env") or {}).items()}
     if env != LISTEN_STEP_ENV:
         return f"`env` must be exactly {LISTEN_STEP_ENV} (the secret under one name, nothing else)"
-    if step.get("if") is not None or step.get("shell") is not None:
-        return "must have no `if:` / `shell:` (it runs on every deploy, with the default bash -e)"
-    if _normalized_run(step.get("run", "")) != _normalized_run(LISTEN_STEP_RUN):
+    lines, etc_dirs = _normalized_run(step.get("run", ""))
+    canonical, _ = _normalized_run(LISTEN_STEP_RUN)
+    if lines != canonical:
         return "differs from the canonical step (LISTEN_STEP_RUN in check_deploy_workflows.py): 0600 via `umask 077` over ssh stdin, `rm -f` on an empty secret, the key never echoed — change both together, in review"
+    if len(etc_dirs) != 1:
+        return f"names more than one etc dir ({', '.join(sorted(etc_dirs))}) — the directory created and the file written must be the same"
     return None
 
 
-def check_listen_env(workflow: str, job: str, spec: dict[str, Any]) -> list[Violation]:
+def _carries_secret(value: Any) -> bool:
+    """Does this YAML value reach the Soniox secret (any spelling GitHub accepts)?
+    Every key and scalar is searched as its own text (a `repr` would escape the
+    quotes of `secrets['…']`)."""
+    if isinstance(value, dict):
+        return any(_carries_secret(key) or _carries_secret(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_carries_secret(item) for item in value)
+    return bool(LISTEN_SECRET_RE.search(str(value)))
+
+
+def _trace_settings(where: str, holder: dict[str, Any]) -> list[str]:
+    """Settings that would trace a step's commands (and the key) into the log."""
+    found: list[str] = []
+    shell = ((holder.get("defaults") or {}).get("run") or {}).get("shell") if isinstance(holder.get("defaults"), dict) else None
+    if shell is not None:
+        found.append(f"{where} `defaults.run.shell: {shell}`")
+    env = holder.get("env")
+    if isinstance(env, dict):
+        found.extend(f"{where} env `{name}`" for name in env if str(name) in TRACE_ENV)
+    return found
+
+
+def check_listen_env(workflow: str, job: str, spec: dict[str, Any], document: dict[Any, Any] | None = None) -> list[Violation]:
     """Invariant 7: a presenter service deploy writes `listen.env` the one
-    canonical way, before the start (#852 C3-8)."""
+    canonical way, before the start, and the secret reaches nothing else in
+    the job (#852 C3-8)."""
     steps = [step for step in spec.get("steps") or [] if isinstance(step, dict)]
     scripts = [_script(step) for step in steps]
     start = next((i for i, script in enumerate(scripts) if SERVICE_DEPLOY_RE.search(script)), None)
     violations: list[Violation] = []
-    if LISTEN_SECRET in str(spec.get("env") or ""):
-        violations.append(Violation(workflow, job, "env", f"job-level `env` carries `{LISTEN_SECRET}` — every step would see the key (#852 C3-8)"))
-    carriers = [i for i, step in enumerate(steps) if LISTEN_SECRET in str(step)]
+    outside_steps = {key: value for key, value in spec.items() if key != "steps"}
+    if _carries_secret(outside_steps):
+        violations.append(Violation(workflow, job, "job", f"the job's own keys (env, container, services, …) carry the `{LISTEN_SECRET}` secret — every step would see the key (#852 C3-8)"))
+    carriers = [i for i, step in enumerate(steps) if _carries_secret(step)]
     for index in carriers:
         name = _step_name(steps[index], index)
         problem = _listen_step_problem(steps[index])
@@ -465,9 +513,21 @@ def check_listen_env(workflow: str, job: str, spec: dict[str, Any]) -> list[Viol
             violations.append(Violation(workflow, job, name, f"{problem} (#852 C3-8)"))
         if start is not None and index > start:
             violations.append(Violation(workflow, job, name, "writes `listen.env` AFTER the service start — the started service never reads it (#852 C3-8)"))
+    if carriers:
+        traces = _trace_settings("job", spec) + _trace_settings("workflow", document or {})
+        if traces:
+            violations.append(Violation(workflow, job, LISTEN_STEP_NAME, f"runs the key step under {', '.join(traces)} — a traced or replaced shell prints the key (#852 C3-8)"))
     if start is not None and not any(steps[i].get("name") == LISTEN_STEP_NAME for i in carriers):
         violations.append(Violation(workflow, job, _step_name(steps[start], start), f"deploys the presenter service but has no `{LISTEN_STEP_NAME}` step writing `listen.env` from `{LISTEN_SECRET}` — the transcription key never reaches this site (#852 C3-8)"))
     return violations
+
+
+def check_workflow_secret(workflow: str, document: dict[Any, Any]) -> list[Violation]:
+    """Invariant 7: the Soniox secret never sits in workflow-level keys."""
+    outside_jobs = {key: value for key, value in document.items() if key != "jobs"}
+    if _carries_secret(outside_jobs):
+        return [Violation(workflow, "workflow", "env", f"workflow-level keys carry the `{LISTEN_SECRET}` secret — every job would see the key (#852 C3-8)")]
+    return []
 
 
 def check_workflow(path: str, document: Any) -> list[Violation]:
@@ -475,13 +535,13 @@ def check_workflow(path: str, document: Any) -> list[Violation]:
         return []
     jobs = document.get("jobs") or {}
     on_dev_push = _runs_on_dev_push(document)
-    violations: list[Violation] = []
+    violations: list[Violation] = check_workflow_secret(path, document)
     for job, spec in jobs.items():
         if isinstance(spec, dict):
             violations.extend(check_job(path, str(job), spec))
             violations.extend(check_staged_tools(path, str(job), spec))
             violations.extend(check_runner_image(path, str(job), spec))
-            violations.extend(check_listen_env(path, str(job), spec))
+            violations.extend(check_listen_env(path, str(job), spec, document))
             if on_dev_push:
                 violations.extend(check_companion_deploys(path, str(job), spec))
     return violations

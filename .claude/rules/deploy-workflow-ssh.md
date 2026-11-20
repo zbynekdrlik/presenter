@@ -67,8 +67,9 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
 - **Every service deploy job has the canonical "Configure listening transcription" step before the
   start** (invariant 7, #852 C3-8): the step must equal `LISTEN_STEP_ENV` / `LISTEN_STEP_RUN` in the
   checker line for line (only the etc dir varies: `/etc/presenter`, `/etc/presenter-prba`,
-  `${{ env.ETC_DIR }}`), and `secrets.LISTEN_SONIOX_API_KEY` appears in no other step and no job
-  `env`. It is a shape comparison on purpose — a heuristic shell check passed `tee`, `set -x`, `>&2`
+  `${{ env.ETC_DIR }}`, ONE per step), has only `name`/`env`/`run`, and the secret (any spelling,
+  `toJSON(secrets)` too) appears in no other step, job key or workflow key; no `defaults.run.shell`
+  or shell-tracing env (`SHELLOPTS`, `BASH_ENV` …) around it. It is a shape comparison on purpose — a heuristic shell check passed `tee`, `set -x`, `>&2`
   and argv leaks (round-2 review); change the canonical text and the three workflows together. A job
   is a "service deploy" by `systemctl enable ${{ env.SERVICE_NAME }}`: keep that `enable … && start`
   shape in a new deploy job, or it is not checked.
