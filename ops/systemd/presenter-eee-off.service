@@ -14,7 +14,9 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 # Every physical wired interface (en*), skipping VLAN sub-interfaces (they have no PHY).
-ExecStart=/bin/sh -c 'set -e; for i in /sys/class/net/en*; do n=$(basename "$i"); [ -e "$i/device" ] || continue; /usr/sbin/ethtool --set-eee "$n" eee off; done'
+# Touches only a NIC whose EEE is still enabled ("enabled - inactive" counts), so a
+# NIC already off is never re-set (no needless renegotiation on the Dante/NDI uplink).
+ExecStart=/bin/sh -c 'set -e; for i in /sys/class/net/en*; do n=$(basename "$i"); [ -e "$i/device" ] || continue; if /usr/sbin/ethtool --show-eee "$n" 2>/dev/null | grep -q "EEE status: enabled"; then /usr/sbin/ethtool --set-eee "$n" eee off; echo "$n: EEE turned off"; fi; done'
 
 [Install]
 WantedBy=multi-user.target

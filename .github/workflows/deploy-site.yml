@@ -511,6 +511,33 @@ jobs:
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
+      # #988: Energy-Efficient Ethernet OFF on every wired NIC of a rig PC (dstack NIC
+      # standard #465; owner 2026-11-20: "povazujem to za vazny fail ze ktory kolvek z
+      # nasich zariadeni co su v rigu ma eee povolene!!"). Installs the committed oneshot
+      # unit (ethtool --set-eee off at every boot), runs it now, then FAILS the deploy if
+      # any physical wired NIC still reports EEE enabled ("enabled - inactive" counts).
+      - name: Enforce EEE off on wired NICs (rig PC)
+        if: inputs.hardware
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/id_deploy ops/systemd/presenter-eee-off.service deploy-target:/tmp/presenter-eee-off.service
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -euo pipefail
+          sudo install -m 644 /tmp/presenter-eee-off.service /etc/systemd/system/presenter-eee-off.service
+          rm -f /tmp/presenter-eee-off.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable presenter-eee-off.service
+          sudo systemctl restart presenter-eee-off.service
+          bad=0
+          for i in /sys/class/net/en*; do
+            n=$(basename "$i"); [ -e "$i/device" ] || continue
+            status=$(sudo ethtool --show-eee "$n" 2>&1 | sed -n 's/^[[:space:]]*EEE status:[[:space:]]*//p')
+            echo "$n EEE status: ${status:-not supported}"
+            case "$status" in enabled*) bad=1 ;; esac
+          done
+          if [ "$bad" -ne 0 ]; then echo "::error::EEE is still enabled on a wired NIC (#988)"; exit 1; fi
+          REMOTE_SCRIPT
+
       # #852 C3-8: the listening transcription key (Soniox) → 0600 root-only
       # EnvironmentFile `listen.env`, the same shape as the AI step above (the
       # committed unit reads it as `EnvironmentFile=-`). The key is a SECRET:
