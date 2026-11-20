@@ -1,7 +1,12 @@
 //! Sermon listening (#852 / #850 part C): the shared config and status types.
 //! C1a: the microphones ([`mics`]) and `GET /listen/status` ([`status`]).
 //! C1b: the recorder's contract ([`recorder`]).
+//! C3: the guest's live transcript — token assembly ([`transcript`]), the
+//! session state ([`transcription`]) and the `/listen/ws` wire ([`ws`]).
 
 pub mod mics;
 pub mod recorder;
 pub mod status;
+pub mod transcript;
+pub mod transcription;
+pub mod ws;
