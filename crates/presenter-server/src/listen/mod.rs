@@ -15,11 +15,10 @@
 //! the mic list every consumer reads ([`ListenService::mics`]) is the saved
 //! VBAN list followed by those two, whenever the box names a Dante interface.
 //! The guest's transcript (#852 C3-6) lives in the [`transcript_hub`] the
-//! service owns; `GET /listen/ws` serves it.
+//! service owns; `GET /listen/ws` serves it. The guest's transcription
+//! (#852 C3-7, [`transcription`]): one supervisor decides whether the guest
+//! mic's Soniox session runs; its rows, meter and state live in the service.
 
-// #852 C3-5: the provider seam; the supervisor (C3-7) is its first user —
-// C3-7 removes this allowance.
-#[allow(dead_code)]
 mod asr;
 mod dante;
 pub(crate) mod health;
@@ -27,13 +26,11 @@ mod mic_chain;
 pub(crate) mod recorder;
 mod recording_file;
 mod resample;
-// #852 C3-3: the Soniox wire + env settings; the provider task (C3-5) and the
-// supervisor (C3-7) are its first users — C3-7 removes this allowance.
-#[allow(dead_code)]
 mod soniox;
 #[cfg(test)]
 mod tests;
 pub(crate) mod transcript_hub;
+pub(crate) mod transcription;
 mod vban_rx;
 
 use std::collections::HashMap;
@@ -52,7 +49,10 @@ use tokio::time::Instant;
 
 use self::health::ListenHealth;
 use self::recorder::RecorderEnv;
+use self::soniox::config::SonioxEnv;
+use self::soniox::session::SonioxAsr;
 use self::transcript_hub::TranscriptHub;
+use self::transcription::{Transcription, TranscriptionDeps, TranscriptionStore};
 
 /// The target of every receiver log line (spec §14 `presenter::listen::mic`).
 pub(crate) const MIC_TARGET: &str = "presenter::listen::mic";
@@ -99,6 +99,11 @@ struct Inner {
     recorder_cleared: watch::Sender<Option<NaiveDate>>,
     /// The guest's transcript `GET /listen/ws` serves (#852 C3-6).
     transcripts: TranscriptHub,
+    /// The Soniox env settings, read once (#852 C3-3).
+    soniox: SonioxEnv,
+    /// The guest's transcription rows, meter and state (#852 C3-7).
+    transcription: Transcription,
+    transcription_started: AtomicBool,
 }
 
 /// Where the published mic list comes from (#933).
@@ -122,6 +127,8 @@ impl ListenService {
         let (config, _) = watch::channel(Arc::new(Vec::new()));
         let (recorder, _) = watch::channel(None);
         let (recorder_cleared, _) = watch::channel(None);
+        let soniox = SonioxEnv::from_env();
+        let transcription = Transcription::new(&soniox);
         Self {
             inner: Arc::new(Inner {
                 config,
@@ -134,6 +141,9 @@ impl ListenService {
                 recorder,
                 recorder_cleared,
                 transcripts: TranscriptHub::new(),
+                soniox,
+                transcription,
+                transcription_started: AtomicBool::new(false),
             }),
         }
     }
@@ -180,6 +190,41 @@ impl ListenService {
         self.inner.transcripts.clone()
     }
 
+    /// The guest's transcription rows, meter and state (#852 C3-7).
+    pub(crate) fn transcription(&self) -> &Transcription {
+        &self.inner.transcription
+    }
+
+    /// Start the transcription supervisor once with the real Soniox provider
+    /// (never in validate mode); `false` when it was already started.
+    pub(crate) fn start_transcription(
+        &self,
+        layout: Arc<tokio::sync::RwLock<String>>,
+        store: Arc<dyn TranscriptionStore>,
+    ) -> bool {
+        let env = self.inner.soniox.clone();
+        self.start_transcription_with(TranscriptionDeps {
+            key: env.key.is_some(),
+            model: env.model.clone(),
+            asr: Arc::new(SonioxAsr::production(env)),
+            layout,
+            store,
+        })
+    }
+
+    /// Start the supervisor once with `deps` (tests: a fake provider).
+    pub(crate) fn start_transcription_with(&self, deps: TranscriptionDeps) -> bool {
+        if self
+            .inner
+            .transcription_started
+            .swap(true, Ordering::SeqCst)
+        {
+            return false;
+        }
+        tokio::spawn(transcription::supervise(self.clone(), deps));
+        true
+    }
+
     /// Hand the stored recorder toggle to the recorder (`None` = off).
     pub(crate) fn apply_recorder(&self, enabled_for: Option<NaiveDate>) {
         let _previous = self.inner.recorder.send_replace(enabled_for);
@@ -205,6 +250,7 @@ impl ListenService {
         status.recorder.enabled = RecorderSetting { enabled_for }.records_on(env.now().date());
         status.recorder.enabled_for = enabled_for;
         status.recorder.root = env.root.display().to_string();
+        status.transcription = self.inner.transcription.status(env.now().date());
         status
     }
 

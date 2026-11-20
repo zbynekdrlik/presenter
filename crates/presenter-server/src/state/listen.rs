@@ -3,9 +3,12 @@
 //! `settings_audit` row, the `ai-settings` pattern, #661). C1b: the recorder's
 //! per-day toggle `listen.recorder` the same way — read at startup, written by
 //! `set_listen_recorder`, cleared when the clock steps back before its day.
+//! C3-7: the transcription rows (`listen_transcription.rs`) are read in the
+//! same startup block; the supervisor starts after them.
 
 use super::AppState;
 use crate::listen::recorder::RECORDER_TARGET;
+use crate::listen::transcription::ASR_TARGET;
 use crate::listen::{vban_bind_addr, MIC_TARGET};
 use chrono::NaiveDate;
 use presenter_core::listen::mics::{
@@ -13,6 +16,7 @@ use presenter_core::listen::mics::{
 };
 use presenter_core::listen::recorder::{RecorderSetting, LISTEN_RECORDER_KEY};
 use presenter_core::listen::status::ListenStatus;
+use presenter_core::listen::transcription::{SESSION_KEY, TRANSCRIPTION_KEY};
 use presenter_persistence::SettingsAuditSource;
 use std::net::SocketAddr;
 use tokio::sync::watch;
@@ -260,12 +264,18 @@ impl AppState {
                     "listen.recorder cannot be read — the recorder stays off until it is switched again"
                 ),
             }
+            self.load_transcription_rows().await;
         }
         // subscribed before the supervisor exists: its first notice is never missed
         let cleared = self.listen.recorder_cleared();
         let started = self.listen.start(bind);
         if started {
             self.spawn_recorder_row_cleaner(cleared);
+            // #852 C3-7: after the rows above, so it decides on the stored ones.
+            let _first = self.listen.start_transcription(
+                std::sync::Arc::clone(&self.stage_layout),
+                std::sync::Arc::new(self.clone()),
+            );
         }
         started
     }
@@ -279,7 +289,7 @@ impl AppState {
     }
 
     /// Best effort: the write already succeeded, an audit failure only WARNs.
-    async fn audit_listen_setting(
+    pub(super) async fn audit_listen_setting(
         &self,
         key: &str,
         source: SettingsAuditSource,
@@ -298,6 +308,8 @@ impl AppState {
             // a tracing target is a constant: one call per target
             if key == LISTEN_RECORDER_KEY {
                 tracing::warn!(target: RECORDER_TARGET, ?err, key, "{AUDIT_FAILED}");
+            } else if key == TRANSCRIPTION_KEY || key == SESSION_KEY {
+                tracing::warn!(target: ASR_TARGET, ?err, key, "{AUDIT_FAILED}");
             } else {
                 tracing::warn!(target: MIC_TARGET, ?err, key, "{AUDIT_FAILED}");
             }
