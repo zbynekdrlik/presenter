@@ -333,7 +333,7 @@ paths:
   socket must not stall the session task, the stall rule bounds it). The transport is the `Connector` seam
   (TCP in production, `tokio::io::duplex` in tests) and both use the ONE `conn::handshake`. Key safety:
   `Authorization` is `set_sensitive`, the `State` error text is redacted at the SOURCE (the status shows it),
-  and `main.rs` caps `tungstenite::handshake` at DEBUG — its TRACE line prints the raw upgrade with the key.
+  and `main.rs` caps `tungstenite::handshake` at INFO — its TRACE line prints the raw upgrade with the key.
   The reconnect WARN streak ends on EVERY state but `reconnecting` (a park between outages too, #484 reset).
   Tests (`listen/soniox/tests/`): the scripted server (`mock.rs`: `Step`s, upgrade headers, a log of every
   client frame) on `start_paused`; a tungstenite upgrade callback needs `#[allow(clippy::result_large_err)]`

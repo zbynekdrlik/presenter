@@ -139,9 +139,9 @@ fn setup_tracing() {
     }
 
     // #852 C3-5: tungstenite TRACE-logs the raw upgrade request, the Soniox
-    // `Authorization: Bearer` key included — capped whatever RUST_LOG says.
+    // `Authorization: Bearer` key included — capped at info whatever RUST_LOG says.
     let mut filter = tracing_subscriber::EnvFilter::from_default_env();
-    if let Ok(cap) = "tungstenite::handshake=debug".parse() {
+    if let Ok(cap) = "tungstenite::handshake=info".parse() {
         filter = filter.add_directive(cap);
     }
     tracing_subscriber::registry()
