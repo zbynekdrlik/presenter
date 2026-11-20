@@ -358,3 +358,23 @@ paths:
   disconnect with `reason` / `resyncs` / `connected_ms`, resync). The upgrade is NOT a poll: it stays out of
   `request_log.rs`'s quiet lists. Tests: a real axum server on loopback + `tokio_tungstenite`; the lag test
   runs on the CURRENT-thread runtime (600 synchronous pushes → exactly 88 missed) with `Capture`.
+- **Transcription supervisor (#852 C3-7, server `listen/transcription/{mod,mic,meter}.rs`,
+  `state/listen_transcription.rs`):** ONE supervisor task (`ListenService::start_transcription`, from
+  `start_listen` after the three rows are read under the save lock — never in validate mode) runs core
+  `start_decision` on every rows / mic-list change and a 1 s tick that also reads `AppState.stage_layout`
+  (the moment it left `preach` starts the 60 s delay); it never adds a channel into `state/mod.rs`. A
+  running session = ONE mic task: frames → `rms_dbfs` → `try_send` (a full input = a counted drop, a lagging
+  frame channel = counted lost frames, both #484-gated WARNs — the chain never waits), events → assembler →
+  hub (`push_sentence` / `set_tail`), `State` / `Usage` (session RUNNING TOTALS → the mic task adds deltas
+  to the meter) / `Onset` → `Transcription`'s std-mutex view. Stop = `AsrInput::Stop` + drop the sender,
+  wait ≤ 5 s for the task's `Finished` reason, else abort. Any `Finished(Some(reason))` blocks the mic until
+  `BlockKey` changes (day, switch, guest mic, or a NEW `PUT /listen/session` — `Rows.choice` counts them, so
+  repeating "on" retries; a cap change does not). `listen.usage` = the meter's row, written every 60 s while
+  it changed and at every session end (a failure keeps it dirty, WARN gated); `listen.transcription` /
+  `listen.session` are written only by the PUTs (`validate_transcription_change` → 422, one audit row each,
+  audit WARN under `presenter::listen::asr`). The status shows only the CURRENT guest mic; a guest mic that
+  was replaced is sent to `/listen/ws` once as `off` / `noGuestMic`. Context = today's sermon items
+  (`reference_term(book_number − 1, …)`) + active tips' `source_term`, read per start (a read error = fixed
+  terms only + WARN). Tests: `listen/transcription/tests.rs` (real `ListenService`, fake `StreamingAsr`
+  answering a Stop / closed input with `Finished(None)`, fake store, `start_paused`, settable day clock via
+  `set_recorder_env`); endpoints + the real sermon/tip context read in `state/listen_transcription/tests.rs`.
