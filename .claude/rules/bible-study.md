@@ -3,6 +3,9 @@ paths:
   - "crates/presenter-ui/src/pages/study/**"
   - "crates/presenter-ui/src/state/study.rs"
   - "crates/presenter-ui/src/state/study_history.rs"
+  - "crates/presenter-ui/src/state/study_search.rs"
+  - "crates/presenter-persistence/src/repository/bible/query.rs"
+  - "crates/presenter-server/src/router/bible/browse.rs"
   - "crates/presenter-ui/src/state/study_word.rs"
   - "crates/presenter-ui/src/state/study_field.rs"
   - "crates/presenter-ui/src/api/study.rs"
@@ -96,6 +99,16 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **A verse number works only on the route's chapter** (`reader::chapter_settled`): during a load
   the URL has moved on and the old text is on screen, so numbers are disabled and the sheet reads
   nothing from a chapter the route does not name.
+- **Study search = every hit in the Bible's order (#983, owner 2026-11-20: "výsledky boli random miesta"):**
+  Study sends `order=bible&limit=1000` (`results::fetch_search`, `SearchOrder::Bible`); the server orders
+  book number, chapter, verse (both FTS and LIKE) and caps that order at 1000, relevance (the operator
+  console, no `order=`) stays at 100. The search view has its OWN translation row above the hits
+  (`search-translation` chips = the searchable favourites, `state::study_search`, + ▾); the header's
+  `study-favs` show on the reader only, so `favourite()` in a spec finds nothing on a search view. Each
+  hit row (`pages/study/hit.rs`) carries the favourites' codes (`hit-translation`): a tap reads that
+  chapter through the page's `ChapterCache` and shows the hit's verses inline, the hit's own code goes
+  back to the marked text; the label, "Porovnať", "+" and the row tap follow the translation shown.
+  `data-book-number` on `search-hit` lets a spec check the order.
 - **Back from a hit keeps the list:** `Search::Ready` stays for its key, nothing is asked again, and the
   offset by history index restores the scroll. Back with no offset: the route's verse, else the top.
 - **A failed `/bible/books` is not silent** (`structures_failed`): inline card + retry, a neutral bar
