@@ -308,3 +308,12 @@ Killing a `cargo test` mid-build (e.g. to restart with new sources) can leave th
 `ld.lld` stack dump in `MergeInputSection::splitNonStrings`. It is not your change. Fix:
 `cargo clean -p gst-plugin-rtp -p gst-plugin-webrtc`, then rebuild (on a loaded shared box
 add `-j 4`). Prefer letting a stale build finish over killing it.
+
+## The Quality job's test-integrity gate counts assertions IN the `#[test]` fn (#852 C3-1)
+
+`quality-check.sh` fails a test fn with NO `assert*!` of its own — asserts inside a shared helper
+(`fn round_trip(..) { assert_eq!(..) }` called from the test) do not count, and fewer than ~1 assert
+per 20 lines is a warning. Run 44702639646 lost a cycle on four wire tests written that way. Keep
+helpers pure (`encode` / `decode` returning values) and assert in the test itself; run
+`./scripts/dev/quality-check.sh --strict --against origin/main < /dev/null` before the push — the
+Tier-0 scripts alone (fn-length, line count, no-panic) do not run this check.
