@@ -30,11 +30,13 @@ use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 mod activation;
 mod drift_guard;
 mod lifecycle;
+mod park;
 mod silent_streak;
 mod supervisor;
 mod whep;
 
 pub use lifecycle::PipelineStartError;
+pub use park::PARK_AFTER_IDLE;
 pub use silent_streak::{
     should_log_silent_attempt, should_warn_silent_but_advertised, unreachable_address,
     unreached_address, SilentStreak, SILENT_BUT_ADVERTISED_WARN_ATTEMPT,
@@ -279,6 +281,9 @@ pub struct NdiManager {
     /// power-of-two gated. Ended when the source reaches Streaming or is
     /// stopped. A std mutex held only for the count, never across an await.
     pub(in crate::manager) silent_streaks: silent_streak::SilentStreaks,
+    /// #979: idle times and parked sources (no stage viewer → no pipeline).
+    /// A std mutex held only for a map read or write, never across an await.
+    pub(in crate::manager) park_book: park::ParkBook,
 }
 
 // Re-export the supervisor's pure-state types into the module root so the

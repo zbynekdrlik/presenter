@@ -61,6 +61,17 @@ via `ReconnectAction` from `pipeline_snapshots_checked("NDI reconnect ticker")`:
   `NdiSourceActivated` + `NdiConnectionStatus "connected"`. `Heartbeat { leftovers }` additionally
   reaps (WARN) any other pipeline still up.
 - **Wait** — starting or busy: nothing.
+- **Parked (#979)** — `Heartbeat { parked: true }`: the source has no pipeline ON PURPOSE (no stage
+  viewer). Never a Repair (that rebuilt the receiver every 30 s and undid the saving). A streaming
+  source (`parked: false`) is checked each tick by `park_if_no_viewer` → `NdiManager::park_if_idle`
+  (`manager/park.rs`): consumers = live sessions + `joining` (POSTs still inside `add_consumer`);
+  0 for `PARK_AFTER_IDLE` (60 s, so 60–90 s with the tick) → slot removed if still the same
+  `Arc` (ptr_eq), supervisor aborted, pipeline stopped OUTSIDE the lock, INFO `NDI source parked`.
+  The WHEP POST handler calls `AppState::wake_parked_ndi_source` (`state/ndi_park.rs`) BEFORE
+  `whep_signaller_call`: under `activation_lock` it re-checks the park + the DB's active source and
+  runs `activate_video_source_locked` (≤ 8 s inline, then the POST adds its consumer). Every start /
+  `stop_*` ends the park (`ParkBook::forget/clear/retain_only`, mirrored by `FakeNdiControl`
+  `set_idle` / `set_parked`). `/healthz` `ndi_parked[]`, Settings row `parked` („Čaká na obrazovku").
 
 It used to re-activate on every tick, so SNV logged a false "NDI auto-reconnect: source restored"
 every 30 s. Two things depended on that re-activation and must stay:

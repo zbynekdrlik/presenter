@@ -92,6 +92,7 @@ impl NdiManager {
             snapshot_contention_streak: std::sync::atomic::AtomicU32::new(0),
             drift_guards: std::sync::Mutex::new(HashMap::new()),
             silent_streaks: SilentStreaks::default(),
+            park_book: super::park::ParkBook::default(),
         })
     }
 
@@ -141,7 +142,24 @@ impl NdiManager {
     /// An 8-second timeout caps the wait — long enough for ndisrc to find the
     /// source on a healthy LAN, short enough that a missing/dead broadcaster
     /// reports back quickly to the operator.
+    ///
+    /// #979: a start makes this the one active source, so every park ends —
+    /// once the start is decided, never before: a source being woken stays
+    /// parked until then, so a second stage's POST in the meantime waits for
+    /// that wake (`activation_lock`) instead of finding neither a park nor a
+    /// pipeline. A failed switch never leaves the old source listed as parked.
     pub async fn start_pipeline(
+        self: &std::sync::Arc<Self>,
+        source_id: &str,
+        ndi_name: &str,
+    ) -> std::result::Result<(), PipelineStartError> {
+        let outcome = self.start_pipeline_unparked(source_id, ndi_name).await;
+        self.park_book.clear();
+        outcome
+    }
+
+    /// [`Self::start_pipeline`] without the park bookkeeping.
+    async fn start_pipeline_unparked(
         self: &std::sync::Arc<Self>,
         source_id: &str,
         ndi_name: &str,
@@ -367,6 +385,7 @@ impl NdiManager {
         // A stopped source's silence is over (#858) — also when it never got a
         // pipeline (a silent start leaves no active entry, only the streak).
         self.silent_streaks.reset(source_id);
+        self.park_book.forget(source_id);
         let mut active = self.active.lock().await;
         if let Some(mut src) = active.remove(source_id) {
             if let Some(handle) = src.supervisor.take() {
@@ -389,6 +408,7 @@ impl NdiManager {
         // The siblings' silent streaks end with them (#858); `keep_id`'s own
         // streak stays — this reap runs after every silent activation.
         self.silent_streaks.retain_only(keep_id);
+        self.park_book.retain_only(keep_id);
         let mut active = self.active.lock().await;
         super::retain_only_active(&mut active, keep_id).await;
     }
@@ -396,6 +416,7 @@ impl NdiManager {
     /// Stop ALL pipelines.
     pub async fn stop_all(&self) {
         self.silent_streaks.clear();
+        self.park_book.clear();
         let mut active = self.active.lock().await;
         for (_, src) in active.drain() {
             if let Some(handle) = src.supervisor {

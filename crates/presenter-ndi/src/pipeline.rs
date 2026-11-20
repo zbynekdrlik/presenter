@@ -61,6 +61,8 @@ pub mod encoder_timing;
 pub mod health;
 pub mod health_window;
 mod ingest_timing;
+mod joining;
+pub use joining::JoinTicket;
 mod keyframe_throttle;
 mod lifecycle;
 pub mod link_probe;
@@ -255,6 +257,10 @@ pub struct NdiPipeline {
     bus_watch: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Active per-consumer sessions (each owns its OWN consumer pipeline).
     sessions: Arc<tokio::sync::Mutex<HashMap<String, WhepSession>>>,
+    /// WHEP POSTs inside `add_consumer` whose session is not in `sessions` yet
+    /// (#979): the manager's idle park counts them as consumers, so a viewer
+    /// that is still joining never has its pipeline parked under it.
+    joining: std::sync::atomic::AtomicUsize,
     /// StreamProducer wrapping the shared 720p H264 encoder appsink — the
     /// fanout that feeds every consumer pipeline's appsrc. Clone-cheap
     /// (internally Arc'd).

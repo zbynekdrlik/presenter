@@ -103,7 +103,7 @@ fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
 /// How far an activation got on the NDI side (#858). The reconnect ticker needs it
 /// to report "re-activated" only for a repair that produced a STREAMING pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NdiActivation {
+pub(super) enum NdiActivation {
     /// `start_pipeline` returned Ok: the source's pipeline is Streaming.
     Streaming,
     /// Nothing streams (yet): the broadcaster is silent (#448), the start was
@@ -436,6 +436,13 @@ impl AppState {
                     .map(|(id, state)| (id, video_source_status::pipeline_state_str(&state)))
                     .collect()
             });
+        // #979: a parked source has no pipeline on purpose. The park book is read
+        // without the manager's lock, so it is known even while that lock is busy.
+        let parked: std::collections::HashSet<String> = manager
+            .parked_sources()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
 
         let discovery = match &discovered {
             Some(names) => Discovery::Names(names),
@@ -446,7 +453,11 @@ impl AppState {
             .into_iter()
             .map(|row| {
                 let id = row.id.to_string();
-                let pipeline = pipelines.as_ref().map(|map| map.get(&id).cloned());
+                let pipeline = if parked.contains(&id) {
+                    Some(Some(("parked", None)))
+                } else {
+                    pipelines.as_ref().map(|map| map.get(&id).cloned())
+                };
                 // #925: the streak's "could not connect" address, when that is the
                 // diagnosis (WARN attempt reached, no address of the sender answered).
                 let streak = manager.silent_streak(&id);
@@ -546,7 +557,7 @@ impl AppState {
     /// `Mutex` — that atomicity is what closes the reconnect ticker's
     /// read-then-activate TOCTOU (a deactivate landing in the old read→activate
     /// gap could otherwise revive a just-deactivated source).
-    async fn activate_video_source_locked(
+    pub(super) async fn activate_video_source_locked(
         &self,
         id: VideoSourceId,
         audit_source: presenter_persistence::SettingsAuditSource,
@@ -556,6 +567,17 @@ impl AppState {
             .repository
             .activate_video_source(id, audit_source, actor)
             .await?;
+        self.start_active_video_source_locked(source).await
+    }
+
+    /// The manager half of an activation, for a source the DB already holds as
+    /// the active one: announce it, start its pipeline, publish the status and
+    /// reap the siblings. The caller holds `activation_lock`. The #979 wake uses
+    /// it alone (no DB write, no audit row per stage open).
+    pub(super) async fn start_active_video_source_locked(
+        &self,
+        source: VideoSource,
+    ) -> anyhow::Result<(VideoSource, NdiActivation)> {
         self.live_hub.publish(LiveEvent::NdiSourceActivated {
             source_id: source.id.to_string(),
             ndi_name: source.ndi_name.clone(),
@@ -687,7 +709,7 @@ impl AppState {
         let source_id = source.id.to_string();
         match self.reconnect_action(&source_id).await {
             ReconnectAction::Repair => {}
-            ReconnectAction::Heartbeat { leftovers } => {
+            ReconnectAction::Heartbeat { leftovers, parked } => {
                 if leftovers {
                     if let Some(manager) = &self.ndi_manager {
                         tracing::warn!(
@@ -699,13 +721,19 @@ impl AppState {
                         manager.stop_other_pipelines(&source_id).await;
                     }
                 }
+                let parked = parked || self.park_if_no_viewer(&source_id).await;
                 self.live_hub.publish(LiveEvent::NdiSourceActivated {
                     source_id,
                     ndi_name: source.ndi_name,
                 });
-                self.live_hub.publish(LiveEvent::NdiConnectionStatus {
-                    status: "connected".to_string(),
-                });
+                // #979: a parked source has no receiver, so "connected" would be a
+                // claim nobody checked (its sender may be gone). The wake publishes
+                // the real status when a stage opens it.
+                if !parked {
+                    self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                        status: "connected".to_string(),
+                    });
+                }
                 return Ok(None);
             }
             ReconnectAction::Wait => return Ok(None),
@@ -734,9 +762,16 @@ impl AppState {
             );
             return ReconnectAction::Wait;
         };
+        let leftovers = snapshots.iter().any(|(id, _)| id != source_id);
         match snapshots.iter().find(|(id, _)| id == source_id) {
             Some((_, PipelineState::Streaming)) => ReconnectAction::Heartbeat {
-                leftovers: snapshots.iter().any(|(id, _)| id != source_id),
+                leftovers,
+                parked: false,
+            },
+            // #979: parked on purpose (no stage viewer) — healthy, never repaired.
+            None if manager.is_parked(source_id) => ReconnectAction::Heartbeat {
+                leftovers,
+                parked: true,
             },
             Some((_, PipelineState::Starting)) => ReconnectAction::Wait,
             Some((_, PipelineState::Errored(_) | PipelineState::Stopped)) | None => {
@@ -758,7 +793,9 @@ enum ReconnectAction {
     /// stage leaves its frames gate alone for a same-source announcement
     /// (#757). `leftovers`: another pipeline is still up (a switch whose #370
     /// reap never ran, e.g. its HTTP handler was dropped mid-start) — reap it.
-    Heartbeat { leftovers: bool },
+    /// `parked` (#979): the source has no pipeline because no stage watches it;
+    /// a streaming one (`parked: false`) is checked for a missing viewer.
+    Heartbeat { leftovers: bool, parked: bool },
     /// An activation is in flight (starting) or the manager is busy ("could
     /// not look", #546): leave it for the next tick.
     Wait,
@@ -1142,6 +1179,15 @@ mod tests {
         )
     }
 
+    /// #979 review: a parked source is still announced, but never as
+    /// "connected" — it has no receiver behind it.
+    fn is_parked_announcement(published: &[LiveEvent], id: &str) -> bool {
+        matches!(
+            published,
+            [LiveEvent::NdiSourceActivated { source_id, .. }] if source_id == id
+        )
+    }
+
     /// The 30 s reconnect ticker only REPAIRS: a source whose pipeline is
     /// already streaming is not re-activated (no start_pipeline, no DB
     /// activate, no false "NDI auto-reconnect: source restored" — logged
@@ -1223,6 +1269,235 @@ mod tests {
             is_activation_announcement(&published, &a_str),
             "got {published:?}"
         );
+    }
+
+    /// #979: a streaming active source with no stage viewer for the park limit is
+    /// parked by the ticker — its pipeline goes, no re-activation follows, and
+    /// the state heartbeat is still announced.
+    #[tokio::test]
+    async fn reconnect_parks_a_streaming_source_no_stage_watches() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_pipeline(&a_str, presenter_ndi::pipeline::PipelineState::Streaming);
+        fake.set_idle(&a_str);
+        let calls_before = fake.calls();
+        let mut rx = state.live_hub().subscribe();
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert!(
+            result.is_none(),
+            "parking is not a reconnect; got {result:?}"
+        );
+        let mut expected = calls_before;
+        expected.push(NdiCall::Park {
+            source_id: a_str.clone(),
+        });
+        assert_eq!(fake.calls(), expected, "one park, no start_pipeline");
+        assert!(
+            is_parked_announcement(&drain(&mut rx), &a_str),
+            "the source is still announced, but not as connected"
+        );
+    }
+
+    /// #979: a PARKED source has no pipeline on purpose — the ticker must not
+    /// repair it (that would rebuild the receiver every 30 s and undo the park).
+    #[tokio::test]
+    async fn reconnect_leaves_a_parked_source_parked() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_parked(&a_str);
+        let calls_before = fake.calls();
+        let mut rx = state.live_hub().subscribe();
+
+        let result = state
+            .reconnect_active_video_source(SettingsAuditSource::StartupDefault, "system")
+            .await
+            .expect("reconnect");
+
+        assert!(result.is_none(), "got {result:?}");
+        assert_eq!(
+            fake.calls(),
+            calls_before,
+            "no start_pipeline for a parked source"
+        );
+        assert!(is_parked_announcement(&drain(&mut rx), &a_str));
+    }
+
+    async fn audit_rows(state: &AppState) -> usize {
+        state
+            .repository
+            .list_settings_audit(None, None, None, 1000)
+            .await
+            .expect("audit")
+            .len()
+    }
+
+    /// #979 review: a POST that finds no pipeline because the source was
+    /// parked between its wake check and the POST wakes it and tries once more.
+    #[tokio::test]
+    async fn a_post_that_raced_a_park_wakes_the_source_and_retries() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let reply = state
+            .post_whep_waking(&a_str, || {
+                let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt == 0 {
+                    // The ticker parks it right after the POST's wake check.
+                    fake.set_parked(&a_str);
+                }
+                async move {
+                    if attempt == 0 {
+                        Err(presenter_ndi::manager::NdiSessionError::SourceNotActive.into())
+                    } else {
+                        Ok(presenter_ndi::manager::WhepReply {
+                            status: 201,
+                            headers: Vec::new(),
+                            body: None,
+                        })
+                    }
+                }
+            })
+            .await
+            .expect("second attempt answers");
+        assert_eq!(reply.status, 201);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(
+            fake.calls().contains(&NdiCall::StartPipeline {
+                source_id: a_str.clone(),
+                ndi_name: "STREAM-SNV (stream)".to_string(),
+            }),
+            "the retry woke the source"
+        );
+        assert!(!state.ndi_manager().expect("fake").is_parked(&a_str));
+    }
+
+    /// #979 review: a source that is simply not producing (not parked) answers
+    /// once — no retry, no start.
+    #[tokio::test]
+    async fn a_post_for_a_silent_source_that_is_not_parked_is_not_retried() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        let calls_before = fake.calls();
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result = state
+            .post_whep_waking(&a_str, || {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async {
+                    Err::<presenter_ndi::manager::WhepReply, _>(
+                        presenter_ndi::manager::NdiSessionError::SourceNotActive.into(),
+                    )
+                }
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(fake.calls(), calls_before);
+    }
+
+    /// #979 review: the park book is read without the manager's lock, so a
+    /// parked source reads as parked even while that lock is busy.
+    #[tokio::test]
+    async fn a_parked_source_reads_as_parked_while_the_manager_is_busy() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        fake.set_parked(&a_str);
+        fake.set_snapshots_unreadable();
+        let snapshot = state.video_source_status().await.expect("status");
+        let entry = snapshot.sources.first().expect("one source");
+        assert_eq!(entry.state, "parked");
+    }
+
+    /// #979: a stage opening a parked source starts it again through the normal
+    /// activation (start, then the sibling reap) and ends the park.
+    #[tokio::test]
+    async fn a_stage_opening_a_parked_source_wakes_it() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        fake.set_parked(&a_str);
+        let calls_before = fake.calls();
+        let audit_before = audit_rows(&state).await;
+
+        state.wake_parked_ndi_source(&a_str).await;
+
+        assert_eq!(
+            audit_rows(&state).await,
+            audit_before,
+            "a wake is no settings change: no DB write, no audit row"
+        );
+
+        let mut expected = calls_before;
+        expected.push(NdiCall::StartPipeline {
+            source_id: a_str.clone(),
+            ndi_name: "STREAM-SNV (stream)".to_string(),
+        });
+        expected.push(NdiCall::StopOtherPipelines {
+            keep_id: a_str.clone(),
+        });
+        assert_eq!(fake.calls(), expected);
+        assert!(
+            !state.ndi_manager().expect("fake").is_parked(&a_str),
+            "the start ends the park"
+        );
+        let active = state
+            .repository
+            .get_active_video_source()
+            .await
+            .expect("read")
+            .expect("still active");
+        assert_eq!(active.id, a_id, "the DB row stays active");
+    }
+
+    /// #979: a WHEP POST for a source that is NOT parked must not start anything
+    /// (the normal streaming / not-producing paths own it).
+    #[tokio::test]
+    async fn a_stage_opening_a_source_that_is_not_parked_starts_nothing() {
+        let (state, a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        state
+            .activate_video_source(a_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activate A");
+        let calls_before = fake.calls();
+
+        state.wake_parked_ndi_source(&a_str).await;
+
+        assert_eq!(fake.calls(), calls_before);
+    }
+
+    /// #979: a parked source that is no longer the DB's active one (a stale park
+    /// entry) is never woken — the operator's choice wins.
+    #[tokio::test]
+    async fn a_parked_source_that_is_no_longer_active_is_not_woken() {
+        let (state, _a_id, a_str, fake) = state_with_fake(StartOutcome::Ok).await;
+        // Never activated: the DB has no active source.
+        fake.set_parked(&a_str);
+
+        state.wake_parked_ndi_source(&a_str).await;
+
+        assert!(fake.calls().is_empty(), "got {:?}", fake.calls());
     }
 
     /// A pipeline that is still STARTING belongs to an activation in flight
@@ -1649,6 +1924,23 @@ mod tests {
         let entry = snapshot.sources.first().expect("one source");
         assert_eq!(entry.state, "live");
         assert_eq!(entry.detail, None);
+    }
+
+    /// #979: the Settings row of a parked source says `parked`, never the amber
+    /// "on the network but sending nothing".
+    #[tokio::test]
+    async fn video_source_status_reports_a_parked_source_as_parked() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::Ok).await;
+        fake.set_discovered(&["STREAM-SNV (stream)"]);
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activation succeeds");
+        fake.set_parked(&id);
+
+        let snapshot = state.video_source_status().await.expect("status snapshot");
+        let entry = snapshot.sources.first().expect("one source");
+        assert_eq!(entry.state, "parked");
     }
 
     /// #925 THE SNV CASE on the Settings row: the source is on the network at an

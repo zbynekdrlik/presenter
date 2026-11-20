@@ -50,6 +50,7 @@ impl NdiPipeline {
             state_rx,
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            joining: std::sync::atomic::AtomicUsize::new(0),
             producer: StreamProducer::from(&appsink),
             keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
             encoder_timing: Arc::new(super::encoder_timing::EncoderTiming::new(
@@ -119,6 +120,7 @@ impl NdiPipeline {
             state_rx,
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            joining: std::sync::atomic::AtomicUsize::new(0),
             producer,
             keyframe_throttle: super::keyframe_throttle::KeyframeThrottle::new(),
             encoder_timing: Arc::new(super::encoder_timing::EncoderTiming::new(

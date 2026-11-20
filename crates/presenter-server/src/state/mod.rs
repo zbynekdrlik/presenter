@@ -49,6 +49,7 @@ mod integrations;
 pub(crate) mod interpreter_tips;
 mod listen;
 mod ndi_control;
+mod ndi_park;
 #[cfg(test)]
 pub(crate) use ndi_control::{FakeNdiControl, NdiManagerHandle, WhepOutcome};
 mod osc;
