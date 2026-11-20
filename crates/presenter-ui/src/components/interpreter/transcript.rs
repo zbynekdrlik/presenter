@@ -15,7 +15,9 @@
 
 use leptos::prelude::*;
 use presenter_core::listen::transcription::{MicTranscription, OffReason, TranscriptionState};
-use presenter_core::listen::ws::{ListenWsMessage, TranscriptSentence, TranscriptTail};
+use presenter_core::listen::ws::{
+    ListenWsMessage, TranscriptSentence, TranscriptSnapshot, TranscriptTail,
+};
 
 /// Sentences kept (and in the DOM).
 pub const MAX_SENTENCES: usize = 300;
@@ -31,79 +33,112 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// What a snapshot leaves: its newest [`MAX_SENTENCES`] sentences, its
+    /// non-empty tails and its sessions — everything held before is replaced.
+    pub fn from_snapshot(snapshot: TranscriptSnapshot) -> Self {
+        Self {
+            sentences: newest(snapshot.sentences),
+            tails: snapshot
+                .tails
+                .into_iter()
+                .filter(|tail| !tail_is_empty(tail))
+                .collect(),
+            sessions: snapshot.sessions,
+        }
+    }
+
     /// Apply one message; returns how many sentences it added (the "N nové"
-    /// count while the reader looks back). A snapshot replaces everything and
-    /// adds nothing new to count.
+    /// count while the reader looks back). A snapshot adds nothing to count.
     pub fn apply(&mut self, message: ListenWsMessage) -> usize {
         match message {
             ListenWsMessage::Snapshot { snapshot } => {
-                *self = Self {
-                    sentences: newest(snapshot.sentences),
-                    tails: snapshot
-                        .tails
-                        .into_iter()
-                        .filter(|tail| !tail_is_empty(tail))
-                        .collect(),
-                    sessions: snapshot.sessions,
-                };
+                *self = Self::from_snapshot(snapshot);
                 0
             }
-            ListenWsMessage::Sentence { sentence } => usize::from(self.push_sentence(sentence)),
+            ListenWsMessage::Sentence { sentence } => {
+                usize::from(push_sentence(&mut self.sentences, sentence))
+            }
             ListenWsMessage::Tail { tail } => {
-                self.tails.retain(|t| t.mic_id != tail.mic_id);
-                if !tail_is_empty(&tail) {
-                    self.tails.push(tail);
-                }
+                apply_tail(&mut self.tails, tail);
                 0
             }
             ListenWsMessage::Session { session } => {
-                self.sessions.retain(|s| s.mic_id != session.mic_id);
-                self.sessions.push(session);
+                apply_session(&mut self.sessions, session);
                 0
             }
         }
     }
 
-    /// A sentence newer than every one held (a repeat is ignored); the oldest
-    /// goes past [`MAX_SENTENCES`].
-    fn push_sentence(&mut self, sentence: TranscriptSentence) -> bool {
-        if self
-            .sentences
-            .last()
-            .is_some_and(|last| last.id >= sentence.id)
-        {
-            return false;
-        }
-        self.sentences.push(sentence);
-        if self.sentences.len() > MAX_SENTENCES {
-            self.sentences.remove(0);
-        }
-        true
-    }
-
-    /// The session the column speaks about: one that runs, else the newest
-    /// one received (a replaced guest mic comes once as `off`).
     pub fn session(&self) -> Option<&MicTranscription> {
-        self.sessions
-            .iter()
-            .rev()
-            .find(|s| s.state != TranscriptionState::Off)
-            .or_else(|| self.sessions.last())
+        current_session(&self.sessions)
     }
 
-    /// The open sentence shown under the closed ones: the newest non-empty tail.
     pub fn tail(&self) -> Option<&TranscriptTail> {
-        self.tails.iter().max_by_key(|tail| tail.updated_at)
+        newest_tail(&self.tails)
     }
 
     /// Whether the column has anything to show (`data-transcript`).
     pub fn present(&self) -> bool {
-        !self.sentences.is_empty()
-            || self.tail().is_some()
-            || self
-                .session()
-                .is_some_and(|s| s.state != TranscriptionState::Off || banner_text(s).is_some())
+        shows(
+            !self.sentences.is_empty(),
+            self.tail().is_some(),
+            self.session(),
+        )
     }
+}
+
+/// Append a sentence newer than every one held (a repeat or an older one is
+/// ignored → `false`); the oldest goes past [`MAX_SENTENCES`].
+fn push_sentence(sentences: &mut Vec<TranscriptSentence>, sentence: TranscriptSentence) -> bool {
+    if !is_newer(sentences, &sentence) {
+        return false;
+    }
+    sentences.push(sentence);
+    if sentences.len() > MAX_SENTENCES {
+        sentences.remove(0);
+    }
+    true
+}
+
+fn is_newer(sentences: &[TranscriptSentence], sentence: &TranscriptSentence) -> bool {
+    sentences.last().is_none_or(|last| last.id < sentence.id)
+}
+
+/// A mic's tail replaces its previous one; an empty one clears it.
+fn apply_tail(tails: &mut Vec<TranscriptTail>, tail: TranscriptTail) {
+    tails.retain(|t| t.mic_id != tail.mic_id);
+    if !tail_is_empty(&tail) {
+        tails.push(tail);
+    }
+}
+
+/// A mic's session replaces its previous one (the newest last).
+fn apply_session(sessions: &mut Vec<MicTranscription>, session: MicTranscription) {
+    sessions.retain(|s| s.mic_id != session.mic_id);
+    sessions.push(session);
+}
+
+/// The session the column speaks about: one that runs, else the newest one
+/// received (a replaced guest mic comes once as `off`).
+pub fn current_session(sessions: &[MicTranscription]) -> Option<&MicTranscription> {
+    sessions
+        .iter()
+        .rev()
+        .find(|s| s.state != TranscriptionState::Off)
+        .or_else(|| sessions.last())
+}
+
+/// The open sentence shown under the closed ones: the newest non-empty tail.
+pub fn newest_tail(tails: &[TranscriptTail]) -> Option<&TranscriptTail> {
+    tails.iter().max_by_key(|tail| tail.updated_at)
+}
+
+/// The column shows once it has text, a session that runs, or a reason worth
+/// a banner — never for "waiting for the Kázeň layout".
+fn shows(has_sentences: bool, has_tail: bool, session: Option<&MicTranscription>) -> bool {
+    has_sentences
+        || has_tail
+        || session.is_some_and(|s| s.state != TranscriptionState::Off || banner_text(s).is_some())
 }
 
 /// The newest [`MAX_SENTENCES`] of a snapshot, oldest first.
@@ -144,8 +179,8 @@ pub fn live_button_text(unseen: usize) -> String {
 }
 
 /// Client state of the column. `Copy` (signals only): sentences, tails and
-/// sessions in their own signals, so a tail every ~0.2 s never re-diffs the
-/// sentence list.
+/// sessions in their own signals and changed in place, so a tail every ~0.2 s
+/// neither copies nor re-diffs the sentence list.
 #[derive(Clone, Copy)]
 pub struct TranscriptModel {
     sentences: RwSignal<Vec<TranscriptSentence>>,
@@ -168,36 +203,40 @@ impl TranscriptModel {
         }
     }
 
-    /// One `/listen/ws` message (the socket's handler).
+    /// One `/listen/ws` message (the socket's handler), applied in place.
     pub fn apply(self, message: ListenWsMessage) {
-        let snapshot = matches!(message, ListenWsMessage::Snapshot { .. });
-        let mut model = Transcript {
-            sentences: self.sentences.get_untracked(),
-            tails: self.tails.get_untracked(),
-            sessions: self.sessions.get_untracked(),
-        };
-        let added = model.apply(message);
-        if snapshot || added > 0 {
-            self.sentences.set(model.sentences);
-        }
-        self.tails.set(model.tails);
-        self.sessions.set(model.sessions);
-        if !self.following.get_untracked() {
-            self.unseen.update(|n| *n += added);
-        }
-    }
-
-    fn view(self) -> Transcript {
-        Transcript {
-            sentences: self.sentences.get(),
-            tails: self.tails.get(),
-            sessions: self.sessions.get(),
+        match message {
+            ListenWsMessage::Snapshot { snapshot } => {
+                let fresh = Transcript::from_snapshot(snapshot);
+                self.sentences.set(fresh.sentences);
+                self.tails.set(fresh.tails);
+                self.sessions.set(fresh.sessions);
+            }
+            ListenWsMessage::Sentence { sentence } => {
+                if self.sentences.with_untracked(|s| is_newer(s, &sentence)) {
+                    self.sentences.update(|s| {
+                        push_sentence(s, sentence);
+                    });
+                    if !self.following.get_untracked() {
+                        self.unseen.update(|n| *n += 1);
+                    }
+                }
+            }
+            ListenWsMessage::Tail { tail } => self.tails.update(|t| apply_tail(t, tail)),
+            ListenWsMessage::Session { session } => {
+                self.sessions.update(|s| apply_session(s, session));
+            }
         }
     }
 
     /// `data-transcript`: the column has something to show.
     pub fn present(self) -> Memo<bool> {
-        Memo::new(move |_| self.view().present())
+        Memo::new(move |_| {
+            let has_sentences = self.sentences.with(|s| !s.is_empty());
+            let has_tail = self.tails.with(|t| !t.is_empty());
+            self.sessions
+                .with(|s| shows(has_sentences, has_tail, current_session(s)))
+        })
     }
 }
 
@@ -219,27 +258,9 @@ fn scroll_to_bottom(el: &web_sys::Element) {
 #[component]
 pub fn TranscriptColumn(model: TranscriptModel) -> impl IntoView {
     let list = NodeRef::<leptos::html::Div>::new();
-    let session = Memo::new(move |_| {
-        model.sessions.with(|s| {
-            Transcript {
-                sessions: s.clone(),
-                ..Transcript::default()
-            }
-            .session()
-            .cloned()
-        })
-    });
+    let session = Memo::new(move |_| model.sessions.with(|s| current_session(s).cloned()));
     let banner = Memo::new(move |_| session.with(|s| s.as_ref().and_then(banner_text)));
-    let tail = Memo::new(move |_| {
-        model.tails.with(|t| {
-            Transcript {
-                tails: t.clone(),
-                ..Transcript::default()
-            }
-            .tail()
-            .cloned()
-        })
-    });
+    let tail = Memo::new(move |_| model.tails.with(|t| newest_tail(t).cloned()));
     // New text while following: scroll it into view once it is rendered.
     Effect::new(move |_| {
         model.sentences.track();
@@ -304,7 +325,6 @@ pub fn TranscriptColumn(model: TranscriptModel) -> impl IntoView {
 mod tests {
     use super::*;
     use chrono::{DateTime, TimeZone, Utc};
-    use presenter_core::listen::ws::TranscriptSnapshot;
 
     fn at(second: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 22, 9, 30, second)
