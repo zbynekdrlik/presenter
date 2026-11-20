@@ -217,6 +217,11 @@ impl AppState {
         });
     }
 
+    /// The transcript `GET /listen/ws` serves (#852 C3-6).
+    pub(crate) fn listen_transcripts(&self) -> crate::listen::transcript_hub::TranscriptHub {
+        self.listen.transcripts()
+    }
+
     /// `GET /listen/status`.
     pub(crate) fn listen_status(&self) -> ListenStatus {
         self.listen.status()

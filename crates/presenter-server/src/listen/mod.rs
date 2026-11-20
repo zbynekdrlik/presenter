@@ -14,6 +14,8 @@
 //! own in-process Dante device (dstack's `dlink`) and feed the same chain:
 //! the mic list every consumer reads ([`ListenService::mics`]) is the saved
 //! VBAN list followed by those two, whenever the box names a Dante interface.
+//! The guest's transcript (#852 C3-6) lives in the [`transcript_hub`] the
+//! service owns; `GET /listen/ws` serves it.
 
 // #852 C3-5: the provider seam; the supervisor (C3-7) is its first user —
 // C3-7 removes this allowance.
@@ -31,6 +33,7 @@ mod resample;
 mod soniox;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transcript_hub;
 mod vban_rx;
 
 use std::collections::HashMap;
@@ -49,6 +52,7 @@ use tokio::time::Instant;
 
 use self::health::ListenHealth;
 use self::recorder::RecorderEnv;
+use self::transcript_hub::TranscriptHub;
 
 /// The target of every receiver log line (spec §14 `presenter::listen::mic`).
 pub(crate) const MIC_TARGET: &str = "presenter::listen::mic";
@@ -93,6 +97,8 @@ struct Inner {
     /// The day the supervisor switched the recorder off because it lay after
     /// today: the state layer clears the stored row (#852 C1b-5).
     recorder_cleared: watch::Sender<Option<NaiveDate>>,
+    /// The guest's transcript `GET /listen/ws` serves (#852 C3-6).
+    transcripts: TranscriptHub,
 }
 
 /// Where the published mic list comes from (#933).
@@ -127,6 +133,7 @@ impl ListenService {
                 recorder_env: Mutex::new(RecorderEnv::from_env()),
                 recorder,
                 recorder_cleared,
+                transcripts: TranscriptHub::new(),
             }),
         }
     }
@@ -166,6 +173,11 @@ impl ListenService {
             .inner
             .config
             .send_replace(Arc::new(sources.published()));
+    }
+
+    /// The transcript hub (#852 C3-6): the same hub on every call.
+    pub(crate) fn transcripts(&self) -> TranscriptHub {
+        self.inner.transcripts.clone()
     }
 
     /// Hand the stored recorder toggle to the recorder (`None` = off).
