@@ -300,7 +300,10 @@ mod fast_import_tests {
             .search_bible_passages(
                 "eng-fast",
                 "beginning",
-                presenter_core::bible::BookScope::All,
+                (
+                    presenter_core::bible::BookScope::All,
+                    presenter_core::bible::SearchOrder::Relevance,
+                ),
                 10,
             )
             .await
@@ -335,7 +338,10 @@ mod fast_import_tests {
             .search_bible_passages(
                 "eng-idem",
                 "beginning",
-                presenter_core::bible::BookScope::All,
+                (
+                    presenter_core::bible::BookScope::All,
+                    presenter_core::bible::SearchOrder::Relevance,
+                ),
                 10,
             )
             .await
@@ -349,7 +355,10 @@ mod fast_import_tests {
             .search_bible_passages(
                 "eng-idem",
                 "beginning",
-                presenter_core::bible::BookScope::All,
+                (
+                    presenter_core::bible::BookScope::All,
+                    presenter_core::bible::SearchOrder::Relevance,
+                ),
                 10,
             )
             .await
@@ -392,6 +401,116 @@ mod fast_import_tests {
             repo.get_bible_source_digest("eng-dig").await.unwrap(),
             Some("keepme".to_string()),
             "re-import must NOT nuke an existing digest",
+        );
+    }
+}
+
+#[cfg(test)]
+mod search_order_tests {
+    use crate::repository::Repository;
+    use presenter_core::bible::{BibleIngestionBatch, BookScope, SearchOrder};
+    use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+    /// #983: three books whose relevance runs against the Bible's order: the
+    /// shortest verse (the best FTS5 rank) is Revelation, the longest Genesis.
+    async fn seeded() -> Repository {
+        let repo = Repository::connect_in_memory()
+            .await
+            .expect("in-memory repo");
+        let translation = BibleTranslation::new("slk-ord", "Order", "sk");
+        let verse =
+            |book: &str, code: &str, number: u16, (chapter, verse): (u16, u16), text: &str| {
+                let reference =
+                    BibleReference::new_with_code(book, code, number, chapter, verse, verse)
+                        .expect("reference");
+                BiblePassage::new(reference, translation.clone(), text.to_string())
+            };
+        let passages = vec![
+            verse("Zjavenie", "REV", 66, (1, 8), "moc"),
+            verse("Žalmy", "PSA", 19, (62, 12), "moc patrí Bohu, moc"),
+            verse(
+                "Genesis",
+                "GEN",
+                1,
+                (49, 3),
+                "Rúben, ty si môj prvorodený, moja sila a prvotina mojej moci, prednosť dôstojnosti",
+            ),
+            verse("Genesis", "GEN", 1, (31, 29), "Mám moc vám ublížiť, ale Boh vášho otca mi povedal"),
+            verse("Žalmy", "PSA", 19, (21, 14), "Povstaň, Hospodin, vo svojej moci"),
+        ];
+        let batch = BibleIngestionBatch::new(translation, passages).expect("batch");
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .expect("import");
+        repo
+    }
+
+    fn places(hits: &[BiblePassage]) -> Vec<(String, u16, u16)> {
+        hits.iter()
+            .map(|hit| {
+                (
+                    hit.reference.book_code.clone().unwrap_or_default(),
+                    hit.reference.chapter,
+                    hit.reference.verse_start,
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn bible_order_beats_the_rank() {
+        let repo = seeded().await;
+        let hits = repo
+            .search_bible_passages("slk-ord", "moc", (BookScope::All, SearchOrder::Bible), 1000)
+            .await
+            .expect("search");
+        assert_eq!(
+            places(&hits),
+            vec![
+                ("GEN".to_string(), 31, 29),
+                ("GEN".to_string(), 49, 3),
+                ("PSA".to_string(), 21, 14),
+                ("PSA".to_string(), 62, 12),
+                ("REV".to_string(), 1, 8),
+            ]
+        );
+
+        let ranked = repo
+            .search_bible_passages(
+                "slk-ord",
+                "moc",
+                (BookScope::All, SearchOrder::Relevance),
+                1000,
+            )
+            .await
+            .expect("search");
+        assert_eq!(ranked.len(), 5);
+        assert_ne!(
+            places(&ranked),
+            places(&hits),
+            "the rank must differ, or this test proves nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn bible_order_keeps_the_scope_and_the_limit() {
+        let repo = seeded().await;
+        let hits = repo
+            .search_bible_passages(
+                "slk-ord",
+                "moc",
+                (BookScope::OldTestament, SearchOrder::Bible),
+                3,
+            )
+            .await
+            .expect("search");
+        assert_eq!(
+            places(&hits),
+            vec![
+                ("GEN".to_string(), 31, 29),
+                ("GEN".to_string(), 49, 3),
+                ("PSA".to_string(), 21, 14),
+            ]
         );
     }
 }

@@ -1,4 +1,5 @@
 use super::{get_json, post_json, post_json_detail, post_json_refusal, post_no_content, ApiError};
+use presenter_core::bible::SearchOrder;
 use presenter_core::{
     BibleBroadcast, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
 };
@@ -116,23 +117,35 @@ impl BibleSearchReference {
     }
 }
 
-/// Search Bible text. Server endpoint: GET /bible/search?query=&translation=&limit=
+/// Search Bible text. Server endpoint:
+/// GET /bible/search?query=&translation=&limit=&scope=&order=
+/// `SearchOrder::Relevance` (the console) names no order; Study asks for the
+/// Bible's order (#983).
 pub async fn search(
     query: &str,
     translation: &str,
-    limit: Option<u32>,
-    scope: Option<&str>,
+    (limit, scope): (Option<u32>, Option<&str>),
+    order: SearchOrder,
 ) -> Result<Vec<BibleSearchHit>, ApiError> {
-    get_json(&search_path(query, translation, limit, scope)).await
+    get_json(&search_path(query, translation, (limit, scope), order)).await
 }
 
-fn search_path(query: &str, translation: &str, limit: Option<u32>, scope: Option<&str>) -> String {
+fn search_path(
+    query: &str,
+    translation: &str,
+    (limit, scope): (Option<u32>, Option<&str>),
+    order: SearchOrder,
+) -> String {
     let limit_param = limit.map(|l| format!("&limit={l}")).unwrap_or_default();
     let scope_param = scope
         .map(|s| format!("&scope={}", urlencoding::encode(s)))
         .unwrap_or_default();
+    let order_param = match order {
+        SearchOrder::Relevance => String::new(),
+        SearchOrder::Bible => format!("&order={}", order.as_param()),
+    };
     format!(
-        "/bible/search?query={}&translation={}{limit_param}{scope_param}",
+        "/bible/search?query={}&translation={}{limit_param}{scope_param}{order_param}",
         urlencoding::encode(query),
         urlencoding::encode(translation),
     )
@@ -553,17 +566,30 @@ pub async fn reorder_presentation_slides(
 
 #[cfg(test)]
 mod tests {
-    use super::search_path;
+    use super::{search_path, SearchOrder};
 
     #[test]
     fn a_search_names_its_scope_only_when_it_has_one() {
         assert_eq!(
-            search_path("viera", "slk-seb", Some(100), Some("HEB")),
+            search_path(
+                "viera",
+                "slk-seb",
+                (Some(100), Some("HEB")),
+                SearchOrder::Relevance
+            ),
             "/bible/search?query=viera&translation=slk-seb&limit=100&scope=HEB"
         );
         assert_eq!(
-            search_path("viera", "slk-seb", Some(20), None),
+            search_path("viera", "slk-seb", (Some(20), None), SearchOrder::Relevance),
             "/bible/search?query=viera&translation=slk-seb&limit=20"
+        );
+    }
+
+    #[test]
+    fn a_study_search_asks_for_the_bible_order() {
+        assert_eq!(
+            search_path("moc", "slk-seb", (Some(1000), None), SearchOrder::Bible),
+            "/bible/search?query=moc&translation=slk-seb&limit=1000&order=bible"
         );
     }
 }

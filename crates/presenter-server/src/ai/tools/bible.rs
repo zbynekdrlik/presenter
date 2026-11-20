@@ -5,7 +5,7 @@ use crate::state::bible::BibleTriggerOverrides;
 use crate::state::bible_show_log::{BibleShowOrigin, BibleShowSource};
 use crate::state::AppState;
 use presenter_core::bible::resolver::resolve_translation_code;
-use presenter_core::bible::BookScope;
+use presenter_core::bible::{BookScope, SearchOrder};
 use presenter_core::BibleReference;
 use serde_json::{json, Value};
 
@@ -19,7 +19,12 @@ pub(super) async fn search_bible(
         None => None,
     };
     let passages = state
-        .search_bible_passages_cross(translation.as_deref(), &query, BookScope::All, 10)
+        .search_bible_passages_cross(
+            translation.as_deref(),
+            &query,
+            (BookScope::All, SearchOrder::Relevance),
+            10,
+        )
         .await?;
     let results: Vec<Value> = passages
         .iter()

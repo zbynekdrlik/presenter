@@ -11,6 +11,7 @@ use tracing::instrument;
 
 use super::super::AppError;
 use crate::state::AppState;
+use presenter_core::bible::SearchOrder;
 use presenter_core::{BiblePassage, BiblePreferences, BibleReference};
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +135,9 @@ pub(crate) struct BibleSearchQuery {
     pub(crate) limit: Option<u32>,
     #[serde(default)]
     pub(crate) scope: Option<String>,
+    /// `bible` = book, chapter, verse (Study, #983); empty = relevance.
+    #[serde(default)]
+    pub(crate) order: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -147,7 +151,9 @@ pub(crate) async fn search_bible_passages(
             "query must be at least 2 characters",
         ));
     }
-    let limit = params.limit.unwrap_or(25).min(100);
+    let order = SearchOrder::parse(params.order.as_deref().unwrap_or_default())
+        .ok_or_else(|| AppError::bad_request_message("Neznáme poradie výsledkov"))?;
+    let limit = params.limit.unwrap_or(25).min(order.max_limit());
     let translation_code = params
         .translation
         .as_deref()
@@ -155,7 +161,7 @@ pub(crate) async fn search_bible_passages(
         .filter(|s| !s.is_empty());
     let scope = super::study::parse_scope(params.scope.as_deref())?;
     let passages = state
-        .search_bible_passages_cross(translation_code, trimmed, scope, limit)
+        .search_bible_passages_cross(translation_code, trimmed, (scope, order), limit)
         .await?;
     Ok(Json(passages))
 }

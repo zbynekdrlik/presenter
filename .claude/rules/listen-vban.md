@@ -276,3 +276,13 @@ paths:
   boundary); `dlink_config(plan).device()` is dlink's own check of the config, no network. E2E
   `settings-listen-dante.spec.ts` runs its own server with a Dante interface that does not exist on
   the runner: the real start is refused (`retrying`) and the card shows both fixed mics read-only.
+- **Transcript assembly (#852 C3-1, core `listen/transcript.rs`, pure):** one `TranscriptAssembler` per
+  transcription session (`flush` restarts the connection numbering). Soniox sends a connection's FIRST
+  token without a leading space, so a final of another connection than the open sentence's last one is
+  a word start (decides a pending close, counts for the 20-word cap, gets one space unless it is
+  punctuation); a marker closes only a sentence with no finals of a NEWER connection (a rollover's late
+  finalize answer is "its last finals + `<fin>`" in one response); session ms and a sentence's end
+  never move back; untimed tokens take the newest ms. The `/listen/ws` JSON shape lives once in core
+  `listen/ws.rs` (camelCase, `type` tag) — server, UI and E2E share it. The test fixture
+  `listen/testdata/soniox-assembly-fixture.jsonl` is hand-written (own text): never commit an eval log
+  of a sermon.

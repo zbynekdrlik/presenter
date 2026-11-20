@@ -300,13 +300,15 @@ test("a search URL opens by itself and a chip searches the other translation", a
   const opened = await openStudy(browser, baseURL, PHONE_390, "/ui/study?view=search&t=eng-kjv&q=faith", null);
   const { page } = opened;
   await expect(results(page)).toHaveAttribute("data-loaded-for", "eng-kjv:faith");
-  await expect(page.locator('[data-role="search-count"]')).toHaveText(
-    "Zobrazených prvých 100 výsledkov",
-  );
-  await expect(hits(page)).toHaveCount(100);
+  // #983: every hit (up to 1000), the count names them all.
+  await expect.poll(() => hits(page).count()).toBeGreaterThan(100);
+  const count = await hits(page).count();
+  await expect(page.locator('[data-role="search-count"]')).toHaveText(`Výsledkov: ${count}`);
   await expect(hits(page).first()).toContainText("· KJV");
 
-  await favourite(page, "slk-seb").tap();
+  // The search view's own translation row (#983); the header's is the reader's.
+  await expect(favourite(page, "slk-seb")).toHaveCount(0);
+  await page.locator('[data-role="search-translation"][data-translation="slk-seb"]').tap();
   await expect(results(page)).toHaveAttribute("data-loaded-for", "slk-seb:faith");
   await finish(opened);
 });
