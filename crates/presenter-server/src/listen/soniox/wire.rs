@@ -36,7 +36,9 @@ pub struct SonioxConfig {
     pub endpoint_delay_ms: Option<u32>,
 }
 
+/// Soniox's wire is snake_case (not the repo's camelCase for our own APIs).
 #[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 struct ConfigJson<'a> {
     model: &'a str,
     audio_format: &'a str,
