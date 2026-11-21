@@ -22,7 +22,14 @@ before the push (one CI cycle is ~25 min).
   `cargo build --release -p presenter-server -p presenter-importer --features
   presenter-server/mock-integrations,presenter-server/test-helpers`. The server
   embeds `crates/presenter-ui/dist`: edit UI sources only before the build or
-  after it, never while `presenter-ui` compiles.
+  after it, never while `presenter-ui` compiles. Start the release build only
+  AFTER `build-ui.sh` printed "UI build complete": a `presenter-server` compiled
+  earlier embeds the old (or empty) dist and every spec runs the old UI (#952).
+  Check before the run: `grep -a -c '<a data-role your change adds>'
+  target/release/presenter-server` must be ≥ 1; if 0, `touch
+  crates/presenter-ui/dist/index.html` (the build script's rerun trigger) and
+  build again. `presenter-dev` can come back up during a long session (another
+  lane restarts it): check `ss -ltnp | grep 8091` before each run.
 - **Port 8091:** the mock-integrations build binds the embedded mock Resolume on
   127.0.0.1:8091, and so does the running `presenter-dev` service. Stop it for
   the run (`sudo systemctl stop presenter-dev`), start it again afterwards.

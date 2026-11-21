@@ -7,6 +7,7 @@
 //! components only read `Study`.
 
 mod add_to_sermon;
+mod bookmark_folders;
 mod bookmarks;
 mod compare;
 mod crossrefs;
@@ -144,6 +145,8 @@ enum Undo {
     },
     /// Deleted bookmarks (#951 "Zmazať (N)"), each back at its index.
     Bookmarks {
+        /// The folder they came from (#952; `None` = the default one).
+        folder: Option<i64>,
         items: Vec<(crate::api::bookmarks::Bookmark, usize)>,
     },
 }
@@ -210,6 +213,11 @@ struct Study {
     live: RwSignal<Option<u32>>,
     /// The named bookmarks, as the Záložky sheet last read them.
     bookmarks: RwSignal<BookmarkList>,
+    /// The reader's own bookmark folders (#952), as last read; `None` until
+    /// they answered.
+    bookmark_folders: RwSignal<Option<Vec<crate::api::bookmarks::Folder>>>,
+    /// Their reads: only the newest lands (#952).
+    folder_reads: RwSignal<bookmark_folders::FolderReads>,
     /// Their writes, one at a time, outliving the sheet (#951).
     bookmark_writes: StoredValue<BookmarkWrites, LocalStorage>,
     /// Bumped by a retry button: asks again for the same chapter or search.
@@ -316,7 +324,7 @@ fn run_undo(s: Study) {
             position,
             edits,
         } => sermon_undo::undo_removed(s, sermon, *item, position, edits),
-        Undo::Bookmarks { items } => bookmarks::undo_delete(s, items),
+        Undo::Bookmarks { folder, items } => bookmarks::undo_delete(s, folder, items),
     }
 }
 
@@ -575,6 +583,8 @@ pub fn StudyPage() -> impl IntoView {
         owner: StoredValue::new_local(Owner::current().unwrap_or_default()),
         live: RwSignal::new(None),
         bookmarks: RwSignal::new(BookmarkList::default()),
+        bookmark_folders: RwSignal::new(None),
+        folder_reads: RwSignal::new(bookmark_folders::FolderReads::default()),
         bookmark_writes: StoredValue::new_local(BookmarkWrites::default()),
         retry: RwSignal::new(0),
         cache: StoredValue::new(ChapterCache::default()),
@@ -685,7 +695,9 @@ pub fn StudyPage() -> impl IntoView {
         Some(StudySheet::AddToSermon) => view! { <AddToSermonSheet s=s /> }.into_any(),
         Some(StudySheet::CrossRefs) => view! { <CrossRefSheet s=s /> }.into_any(),
         Some(StudySheet::Word) => view! { <WordSheet s=s /> }.into_any(),
-        Some(StudySheet::Bookmarks) => view! { <BookmarksSheet s=s /> }.into_any(),
+        Some(StudySheet::Bookmarks(folder)) => {
+            view! { <BookmarksSheet s=s folder=folder /> }.into_any()
+        }
         Some(StudySheet::Preview) => open_editor(s)
             .map(|e| view! { <PreviewSheet e=e /> })
             .into_any(),

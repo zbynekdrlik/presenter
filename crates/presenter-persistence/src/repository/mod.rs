@@ -9,6 +9,7 @@ mod library_sync;
 mod library_sync_tests;
 #[cfg(test)]
 mod library_trash_tests;
+mod listen_transcript;
 mod playlist;
 mod presentation;
 #[cfg(test)]
@@ -63,12 +64,14 @@ mod video_source_tests;
 
 pub use bible::{
     BookmarkPlace, DeletedStudyBookmark, NewSermon, SermonItemRecord, SermonRecord, SermonSnapshot,
-    SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkRecord, BOOKMARK_NOT_FOUND,
-    SERMON_CONFLICT, SERMON_NOT_FOUND,
+    SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkFolderRecord, StudyBookmarkRecord,
+    BOOKMARK_NOT_FOUND, FOLDER_NAME_TAKEN, FOLDER_NOT_FOUND, FOLDER_ORDER_STALE, SERMON_CONFLICT,
+    SERMON_NOT_FOUND,
 };
 pub use interpreter_tips::NewInterpreterTip;
 pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;
+pub use listen_transcript::{ListenTranscriptError, NewTranscriptSentence};
 pub use stream_assets::NewStreamAsset;
 pub use stream_fonts::NewStreamFont;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};

@@ -23,6 +23,9 @@ Environment=RUST_LOG=info,tower_http=debug,sqlx=warn
 Environment=GST_REGISTRY=/opt/presenter-prba/gstreamer-registry.bin
 # #761: the OpenRouter AI backend (0600 root-only, written by deploy-site.yml).
 EnvironmentFile=-/etc/presenter-prba/ai.env
+# #852 C3-8: the listening transcription key (0600 root-only, written by
+# deploy-site.yml; absent → transcription stays off).
+EnvironmentFile=-/etc/presenter-prba/listen.env
 
 ProtectSystem=strict
 ProtectHome=read-only

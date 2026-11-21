@@ -25,7 +25,7 @@ use std::rc::Rc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-const INITIAL_RECONNECT_MS: u32 = 1_000;
+pub(super) const INITIAL_RECONNECT_MS: u32 = 1_000;
 const MAX_RECONNECT_MS: u32 = 10_000;
 const CHECK_INTERVAL_MS: u32 = 500;
 const SILENT_SOCKET_MS: f64 = 5_000.0;
@@ -61,23 +61,23 @@ pub struct PassiveWsHandle {
 
 /// Numbers the connection attempts: only the newest one is current.
 #[derive(Debug, Default)]
-struct Generation(Cell<u32>);
+pub(super) struct Generation(Cell<u32>);
 
 impl Generation {
     /// Start a new attempt; every older one is superseded from now on.
-    fn begin(&self) -> u32 {
+    pub(super) fn begin(&self) -> u32 {
         let next = self.0.get().wrapping_add(1);
         self.0.set(next);
         next
     }
 
-    fn is_current(&self, generation: u32) -> bool {
+    pub(super) fn is_current(&self, generation: u32) -> bool {
         self.0.get() == generation
     }
 }
 
 /// The backoff after a failed attempt: doubles up to the cap.
-fn next_reconnect_delay(current_ms: u32) -> u32 {
+pub(super) fn next_reconnect_delay(current_ms: u32) -> u32 {
     current_ms.saturating_mul(2).min(MAX_RECONNECT_MS)
 }
 
@@ -99,7 +99,6 @@ struct Shared {
     set_connects: WriteSignal<u32>,
     last_frame_at: Cell<f64>,
     reconnect_delay: Cell<u32>,
-    hidden_since: Cell<Option<f64>>,
     generation: Generation,
 }
 
@@ -113,10 +112,10 @@ pub fn use_passive_websocket(surface: &'static str, on_event: LiveEventHandler) 
         set_connects,
         last_frame_at: Cell::new(js_sys::Date::now()),
         reconnect_delay: Cell::new(INITIAL_RECONNECT_MS),
-        hidden_since: Cell::new(None),
         generation: Generation::default(),
     });
-    watch_visibility(Rc::clone(&shared));
+    let back = Rc::clone(&shared);
+    watch_long_hide(move || reconnect_now(&back));
     connect(shared);
     PassiveWsHandle { state, connects }
 }
@@ -212,22 +211,24 @@ fn reconnect_now(shared: &Rc<Shared>) {
     connect(Rc::clone(shared));
 }
 
-/// Remember when the page was hidden; back after more than 30 s → reconnect
-/// at once ([`reconnect_now`]). The closure lives as long as the page.
-fn watch_visibility(shared: Rc<Shared>) {
+/// Call `on_back` when the page is visible again after more than 30 s hidden
+/// (iOS suspends sockets meanwhile). Shared by every page socket (`/live/ws`,
+/// `/listen/ws`); the listener lives as long as the page.
+pub(super) fn watch_long_hide(on_back: impl Fn() + 'static) {
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
     };
     let doc = document.clone();
+    let hidden_since = Cell::new(None::<f64>);
     let callback = Closure::<dyn FnMut()>::new(move || {
         let now = js_sys::Date::now();
         if doc.visibility_state() == web_sys::VisibilityState::Hidden {
-            shared.hidden_since.set(Some(now));
+            hidden_since.set(Some(now));
             return;
         }
-        if let Some(since) = shared.hidden_since.take() {
+        if let Some(since) = hidden_since.take() {
             if hidden_long_enough(now - since) {
-                reconnect_now(&shared);
+                on_back();
             }
         }
     });
@@ -235,7 +236,7 @@ fn watch_visibility(shared: Rc<Shared>) {
         .add_event_listener_with_callback("visibilitychange", callback.as_ref().unchecked_ref())
         .is_err()
     {
-        leptos::logging::log!("passive ws: visibilitychange listener not registered");
+        leptos::logging::log!("ws: visibilitychange listener not registered");
     }
     callback.forget();
 }

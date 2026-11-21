@@ -2310,7 +2310,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-bible"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "anyhow",
  "presenter-core",
@@ -3606,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-core"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3624,7 +3624,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-importer"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3646,7 +3646,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-migration"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3662,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-ndi"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "anyhow",
  "axum",
@@ -3687,7 +3687,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-persistence"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3708,7 +3708,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-server"
-version = "0.4.394"
+version = "0.4.395"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4314,7 +4314,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -5862,8 +5862,12 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -6488,6 +6492,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]

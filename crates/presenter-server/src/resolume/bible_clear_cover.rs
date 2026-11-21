@@ -6,10 +6,11 @@
 //! tagged `#bible-clear` (the sermon title on SNV) UP to its opacity, a verse
 //! fades it DOWN to 0. Nothing is triggered; only `video.opacity` is PUT.
 //!
-//! The cover fades over its own layer's transition (SNV layer 12: 2.3 s), and
-//! the host worker is serial. Inside the push that froze the `#timer`
-//! countdown and held the next verse for as long (#848 review), so the fade is
-//! a step machine the worker runs between its commands:
+//! The cover fades over a fixed [`COVER_FADE`] (#987: 0.5 s, owner ruling;
+//! #848 followed its layer's transition, 2.3 s on SNV layer 12), and the host
+//! worker is serial. Inside the push that froze the `#timer` countdown and
+//! held the next verse for as long (#848 review), so the fade is a step
+//! machine the worker runs between its commands:
 //!
 //! - A clear whose Bible fade succeeded schedules a SHOW; a connected verse
 //!   schedules a HIDE after its connects and lane flips
@@ -23,12 +24,12 @@
 //!   (`GET /parameter/by-id/{id}`, a `RangeParameter` whose `value` is the
 //!   opacity) and plans from it: a change made in Arena counts, a fade that a
 //!   replacement cut short goes on from where it got, and a cover already at
-//!   its target gets nothing. It PUTs nothing, except on a layer without a
-//!   transition, where it sets the target. A failed read keeps the tracked
-//!   value.
-//! - Each cover fades over the share of its layer's transition that the
-//!   distance left is of its base (`fade × |to − from| / base`), so a hide
-//!   right after a short show is short too (#848 second review).
+//!   its target gets nothing. It PUTs nothing. A failed read keeps the
+//!   tracked value.
+//! - Each cover fades over the share of [`COVER_FADE`] that the distance left
+//!   is of its base (`COVER_FADE × |to − from| / base`), so a hide right
+//!   after a short show is short too (#848 second review). The layer's own
+//!   transition is not read (#987); the Bible lane fade (#841) still is.
 //! - It is best-effort. An error never fails a push and never touches the host
 //!   status or the #484 backoff. A failed step jumps to ONE final step that
 //!   PUTs each target `FADE_STEP` later; if that fails too, one WARN and the
@@ -45,7 +46,7 @@
 
 use super::bible_clear::{
     fade_toward, put_opacities, FadeTarget, TrackedOpacities, TrackedOpacity, FADE_STEP,
-    MAX_CLEAR_FADE, SAME_OPACITY,
+    SAME_OPACITY,
 };
 // Re-exported: the planner tests import `cover_candidates` from here.
 pub(super) use super::bible_clear_cover_memory::cover_candidates;
@@ -64,6 +65,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
+
+/// A whole cover fade, whatever its layer's transition (#987, owner ruling).
+pub(super) const COVER_FADE: Duration = Duration::from_millis(500);
 
 /// Which way a cover fade goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,8 +95,6 @@ pub(super) struct CoverClip {
     pub(super) param_id: i64,
     /// The opacity its mapping showed.
     pub(super) mapped_base: f64,
-    /// Its layer's transition.
-    pub(super) fade: Duration,
     /// Its layer (1-based): the key it is remembered by.
     pub(super) layer: usize,
     /// Playing when its mapping was fetched.
@@ -228,21 +230,20 @@ fn cover_read(tracked: Option<TrackedOpacity>, shown: f64, mapped_base: f64) -> 
     }
 }
 
-/// How long a cover takes from `from` to `to`: the share of its layer's
-/// transition (capped by [`MAX_CLEAR_FADE`]) that the distance is of its
-/// base (#848 second review: a fade that replaced one cut short ran the
-/// whole transition, so quick verses stretched the hide).
-fn cover_duration(fade: Duration, from: f64, to: f64, base: f64) -> Duration {
-    let full = fade.min(MAX_CLEAR_FADE);
+/// How long a cover takes from `from` to `to`: the share of [`COVER_FADE`]
+/// that the distance is of its base (#848 second review: a fade that
+/// replaced one cut short ran the whole length, so quick verses stretched
+/// the hide).
+fn cover_duration(from: f64, to: f64, base: f64) -> Duration {
     let share = (to - from).abs() / base;
     if base <= 0.0 || !share.is_finite() || share >= 1.0 {
-        return full;
+        return COVER_FADE;
     }
-    Duration::try_from_secs_f64(full.as_secs_f64() * share).unwrap_or(full)
+    Duration::try_from_secs_f64(COVER_FADE.as_secs_f64() * share).unwrap_or(COVER_FADE)
 }
 
 /// The fade from where each cover is now up to its base (show) or down to 0
-/// (hide), over the share of its layer's transition left to go. A cover
+/// (hide), over the share of [`COVER_FADE`] left to go. A cover
 /// already there is left out. Pure, so the planning is unit-tested without a
 /// mock Resolume.
 pub(super) fn plan_cover_fade(
@@ -264,7 +265,7 @@ pub(super) fn plan_cover_fade(
                 base: now.base,
                 from: now.level,
                 to,
-                duration: cover_duration(cover.fade, now.level, to, now.base),
+                duration: cover_duration(now.level, to, now.base),
                 mapped: cover.mapped,
             })
         })
@@ -274,8 +275,7 @@ pub(super) fn plan_cover_fade(
 /// Whether a target is still short of its `to`, and the level to PUT for
 /// each such target `elapsed` into the fade. A level equal to the tracked
 /// one is left out, so the first step (at 0) PUTs nothing (#848 second
-/// review: it re-sent the level each fade starts from), except for a cover
-/// on a layer without a transition: its duration is 0, so it gets its `to`.
+/// review: it re-sent the level each fade starts from).
 fn cover_levels(
     targets: &[FadeTarget],
     tracked: &TrackedOpacities,
@@ -424,8 +424,8 @@ impl HostDriver {
         self.cover.fade = Some(fade);
     }
 
-    /// One step. The first reads Arena and plans (it PUTs only a cover on a
-    /// layer without a transition: its target); each later one PUTs every
+    /// One step. The first reads Arena and plans (it PUTs nothing); each
+    /// later one PUTs every
     /// cover's level for the time since the first step, and the step after a
     /// failed one is the final one, at each target. The fade ends at the step
     /// where that time reaches the longest duration (every level sent then

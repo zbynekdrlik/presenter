@@ -7,6 +7,36 @@ use presenter_core::bible::sermon::translation_short_code;
 
 use crate::state::study::{StudyRoute, StudyView};
 
+/// The default folder (#952): the bookmarks with no folder, the list #915/#951
+/// always had. "Pridať záložku" saves here in one tap.
+pub const DEFAULT_FOLDER_NAME: &str = "Kde som skončil";
+
+/// The notice after an add: the place, and the folder when it is not the
+/// default one.
+pub fn added_notice(place: &str, folder: Option<&str>) -> String {
+    match folder {
+        Some(folder) => format!("Záložka pridaná do „{folder}“: {place}"),
+        None => format!("Záložka pridaná: {place}"),
+    }
+}
+
+/// The question before a folder goes (owner: "zmazanie sa pýta, záložky v ňom
+/// zmiznú"), naming how many bookmarks go with it.
+pub fn folder_delete_question(name: &str, count: usize) -> String {
+    let with = match count {
+        0 => return format!("Zmazať priečinok „{name}“? Je prázdny."),
+        1 => "aj s 1 záložkou".to_string(),
+        _ => format!("aj s {count} záložkami"),
+    };
+    format!("Zmazať priečinok „{name}“ {with}? Záložky v ňom zmiznú.")
+}
+
+/// A folder the URL names that the reader no longer has (deleted elsewhere,
+/// another reader's link): the sheet goes back to the default one.
+pub fn folder_gone(folder: Option<i64>, held: &[i64]) -> bool {
+    folder.is_some_and(|id| !held.contains(&id))
+}
+
 /// A new bookmark's stored name and a row's label: the place, `Hebrejom 11:4`
 /// (#951: the label IS the place, nothing is renamed).
 pub fn offered_name(book: &str, chapter: u16, verse: u16) -> String {
@@ -113,6 +143,54 @@ mod tests {
     use crate::state::study::StudySheet;
 
     #[test]
+    fn the_folder_words_name_the_folder_and_its_bookmarks() {
+        assert_eq!(
+            added_notice("Hebrejom 11:4", None),
+            "Záložka pridaná: Hebrejom 11:4"
+        );
+        assert_eq!(
+            added_notice("Hebrejom 11:4", Some("Viera")),
+            "Záložka pridaná do „Viera“: Hebrejom 11:4"
+        );
+        assert_eq!(
+            folder_delete_question("Viera", 0),
+            "Zmazať priečinok „Viera“? Je prázdny."
+        );
+        assert_eq!(
+            folder_delete_question("Viera", 1),
+            "Zmazať priečinok „Viera“ aj s 1 záložkou? Záložky v ňom zmiznú."
+        );
+        assert_eq!(
+            folder_delete_question("Viera", 5),
+            "Zmazať priečinok „Viera“ aj s 5 záložkami? Záložky v ňom zmiznú."
+        );
+    }
+
+    #[test]
+    fn a_folder_gone_from_the_list_falls_back_to_the_default() {
+        assert!(!folder_gone(None, &[]));
+        assert!(!folder_gone(Some(3), &[1, 3]));
+        assert!(folder_gone(Some(4), &[1, 3]));
+    }
+
+    #[test]
+    fn a_folder_has_its_own_url_and_a_bad_one_none() {
+        let route = StudyRoute::reader("slk-seb", "HEB", 11);
+        let folder = route
+            .clone()
+            .with_sheet(Some(StudySheet::Bookmarks(Some(7))));
+        assert_eq!(folder.to_url(), "/ui/study?t=slk-seb&p=HEB.11&s=zalozky7");
+        assert_eq!(
+            StudyRoute::parse("?t=slk-seb&p=HEB.11&s=zalozky7"),
+            Some(folder)
+        );
+        for bad in ["zalozky0", "zalozky-2", "zalozkyx", "zalozky 3"] {
+            let parsed = StudyRoute::parse(&format!("?t=slk-seb&p=HEB.11&s={bad}")).expect("route");
+            assert_eq!(parsed.sheet, None, "{bad}");
+        }
+    }
+
+    #[test]
     fn a_row_names_the_place_and_tags_the_translation() {
         assert_eq!(offered_name("Hebrejom", 11, 4), "Hebrejom 11:4");
         assert_eq!(translation_tag("slk-seb"), "SEB");
@@ -160,7 +238,7 @@ mod tests {
         assert_eq!(place(&reader, Some(9)), Some(("HEB".to_string(), 11, 9)));
         assert_eq!(place(&reader, None), Some(("HEB".to_string(), 11, 1)));
         // The sheet over the reader does not change the place.
-        let over = reader.with_sheet(Some(StudySheet::Bookmarks));
+        let over = reader.with_sheet(Some(StudySheet::Bookmarks(None)));
         assert_eq!(place(&over, Some(2)), Some(("HEB".to_string(), 11, 2)));
     }
 
@@ -196,7 +274,8 @@ mod tests {
 
     #[test]
     fn the_bookmark_list_has_a_url_and_the_old_save_sheet_none() {
-        let list = StudyRoute::reader("slk-seb", "HEB", 11).with_sheet(Some(StudySheet::Bookmarks));
+        let list =
+            StudyRoute::reader("slk-seb", "HEB", 11).with_sheet(Some(StudySheet::Bookmarks(None)));
         assert_eq!(list.to_url(), "/ui/study?t=slk-seb&p=HEB.11&s=zalozky");
         assert_eq!(
             StudyRoute::parse("?t=slk-seb&p=HEB.11&s=zalozky"),
@@ -209,6 +288,6 @@ mod tests {
         assert_eq!(old_save.verses, Some((4, 4)));
         // The list opens over any view, the sermon list too.
         let sermons = StudyRoute::parse("?view=sermons&s=zalozky").expect("route");
-        assert_eq!(sermons.sheet, Some(StudySheet::Bookmarks));
+        assert_eq!(sermons.sheet, Some(StudySheet::Bookmarks(None)));
     }
 }

@@ -25,6 +25,7 @@ mod list_sync;
 mod listen;
 mod listen_dante;
 mod listen_form;
+mod listen_transcription;
 mod preferences;
 mod resolume;
 mod row_status;

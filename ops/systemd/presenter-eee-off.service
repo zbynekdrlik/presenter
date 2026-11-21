@@ -1,0 +1,22 @@
+# Energy-Efficient Ethernet off on every wired NIC of a presenter PC (#988).
+# dstack NIC standard (dstack#465, docs/nic-standard.json): EEE must be off on
+# the Realtek uplinks that also carry Dante (VLAN 70) and NDI. netplan/networkd
+# cannot set EEE, so this oneshot runs ethtool once the links exist.
+# Install: sudo install -m 644 presenter-eee-off.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now presenter-eee-off.service
+[Unit]
+Description=Turn Energy-Efficient Ethernet off on wired NICs (presenter #988)
+After=network-pre.target systemd-udev-settle.service
+Before=network.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Every physical wired interface (en*), skipping VLAN sub-interfaces (they have no PHY).
+# Touches only a NIC whose EEE is still enabled ("enabled - inactive" counts), so a
+# NIC already off is never re-set (no needless renegotiation on the Dante/NDI uplink).
+ExecStart=/bin/sh -c 'set -e; for i in /sys/class/net/en*; do n=$(basename "$i"); [ -e "$i/device" ] || continue; if /usr/sbin/ethtool --show-eee "$n" 2>/dev/null | grep -q "EEE status: enabled"; then /usr/sbin/ethtool --set-eee "$n" eee off; echo "$n: EEE turned off"; fi; done'
+
+[Install]
+WantedBy=multi-user.target

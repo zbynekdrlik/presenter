@@ -10,6 +10,12 @@
 //! already on SNV, 0..n oldest to newest, show newest first as they are), and
 //! every list and index this layer speaks is TOP-FIRST: `list` reads
 //! `position DESC`, an index 0 is the top, `renumber` writes `len - 1 - i`.
+//!
+//! **A list = an owner AND a folder (#952):** `folder` `None` is the default
+//! folder "Kde som skončil" (`folder_id IS NULL`, every bookmark stored before
+//! #952), `Some(id)` one of the owner's own folders (`study_bookmark_folders`).
+//! A folder of another owner, or none at all, is `NotFound` (404) before any
+//! row is read or written.
 
 use std::collections::HashSet;
 
@@ -22,6 +28,7 @@ use tracing::instrument;
 
 use super::super::util::RepositoryError;
 use super::super::Repository;
+use super::study_bookmark_folders::ensure_folder;
 
 /// The refusal of an id that is not in the caller's list.
 pub const BOOKMARK_NOT_FOUND: &str = "Záložka neexistuje";
@@ -46,6 +53,8 @@ pub struct BookmarkPlace {
 pub struct StudyBookmarkRecord {
     pub id: i64,
     pub owner_email: Option<String>,
+    /// The folder (#952); `None` = the default folder.
+    pub folder_id: Option<i64>,
     pub name: String,
     pub translation_code: String,
     pub book_code: String,
@@ -66,7 +75,8 @@ pub struct DeletedStudyBookmark {
     pub index: usize,
 }
 
-const COLUMNS: &str = "id, owner_email, name, translation_code, book_code, book_name, chapter, \
+const COLUMNS: &str =
+    "id, owner_email, folder_id, name, translation_code, book_code, book_name, chapter, \
      verse, position, created_at, updated_at";
 
 /// The verse's text in translation `{t}` (a column or `?`), one passage, served
@@ -80,8 +90,12 @@ fn verse_text(translation: &str) -> String {
     )
 }
 
-fn owner_value(owner: Option<&str>) -> Value {
+pub(super) fn owner_value(owner: Option<&str>) -> Value {
     owner.map(str::to_string).into()
+}
+
+fn folder_value(folder: Option<i64>) -> Value {
+    folder.into()
 }
 
 impl Repository {
@@ -92,11 +106,13 @@ impl Repository {
     pub async fn list_study_bookmarks(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         fallback_translation: Option<&str>,
     ) -> anyhow::Result<Vec<StudyBookmarkRecord>> {
+        ensure_folder(&self.db, owner, folder).await?;
         let sql = format!(
             "SELECT {COLUMNS}, COALESCE({}, {}) AS text FROM study_bookmarks b \
-             WHERE owner_email IS ? ORDER BY position DESC, id DESC",
+             WHERE owner_email IS ? AND folder_id IS ? ORDER BY position DESC, id DESC",
             verse_text("b.translation_code"),
             verse_text("?"),
         );
@@ -106,6 +122,7 @@ impl Repository {
             [
                 fallback_translation.map(str::to_string).into(),
                 owner_value(owner),
+                folder_value(folder),
             ],
         ))
         .all(&self.db)
@@ -113,10 +130,15 @@ impl Repository {
         .context("bookmark: list")
     }
 
-    /// How many bookmarks the owner's list holds (the limit check).
+    /// How many bookmarks the owner's folder holds (the limit check).
     #[instrument(skip_all)]
-    pub async fn count_study_bookmarks(&self, owner: Option<&str>) -> anyhow::Result<usize> {
-        Ok(ids_in(&self.db, owner).await?.len())
+    pub async fn count_study_bookmarks(
+        &self,
+        owner: Option<&str>,
+        folder: Option<i64>,
+    ) -> anyhow::Result<usize> {
+        ensure_folder(&self.db, owner, folder).await?;
+        Ok(ids_in(&self.db, owner, folder).await?.len())
     }
 
     /// A new bookmark at `index` of the owner's list (top-first; the TOP when
@@ -126,21 +148,25 @@ impl Repository {
     pub async fn insert_study_bookmark(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         name: &str,
         place: &BookmarkPlace,
         index: Option<usize>,
     ) -> anyhow::Result<StudyBookmarkRecord> {
         let backend = self.db.get_database_backend();
         let txn = self.db.begin().await.context("bookmark: begin")?;
+        // Inside the transaction: a folder deleted meanwhile takes no new row.
+        ensure_folder(&txn, owner, folder).await?;
         let now = Utc::now().to_rfc3339();
         let inserted = txn
             .execute(Statement::from_sql_and_values(
                 backend,
-                "INSERT INTO study_bookmarks (owner_email, name, translation_code, book_code, \
-                 book_name, chapter, verse, position, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, -1, ?, ?)",
+                "INSERT INTO study_bookmarks (owner_email, folder_id, name, translation_code, \
+                 book_code, book_name, chapter, verse, position, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, -1, ?, ?)",
                 [
                     owner_value(owner),
+                    folder_value(folder),
                     name.into(),
                     place.translation_code.clone().into(),
                     place.book_code.clone().into(),
@@ -154,7 +180,7 @@ impl Repository {
             .await
             .context("bookmark: insert")?;
         let id = i64::try_from(inserted.last_insert_id()).context("bookmark: id")?;
-        let mut ids: Vec<i64> = ids_in(&txn, owner)
+        let mut ids: Vec<i64> = ids_in(&txn, owner, folder)
             .await?
             .into_iter()
             .filter(|row_id| *row_id != id)
@@ -162,7 +188,7 @@ impl Repository {
         let at = index.unwrap_or(0).min(ids.len());
         ids.insert(at, id);
         renumber(&txn, &ids).await?;
-        let row = find_in(&txn, owner, id).await?;
+        let row = find_in(&txn, owner, folder, id).await?;
         txn.commit().await.context("bookmark: commit")?;
         Ok(row)
     }
@@ -173,10 +199,12 @@ impl Repository {
     pub async fn reorder_study_bookmarks(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         ids: &[i64],
     ) -> anyhow::Result<()> {
         let txn = self.db.begin().await.context("bookmark: begin")?;
-        let held: HashSet<i64> = ids_in(&txn, owner).await?.into_iter().collect();
+        ensure_folder(&txn, owner, folder).await?;
+        let held: HashSet<i64> = ids_in(&txn, owner, folder).await?.into_iter().collect();
         let asked: HashSet<i64> = ids.iter().copied().collect();
         if asked.len() != ids.len() || asked != held {
             return Err(RepositoryError::Conflict(BOOKMARK_ORDER_STALE).into());
@@ -194,16 +222,18 @@ impl Repository {
     pub async fn delete_study_bookmarks(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         ids: &[i64],
     ) -> anyhow::Result<Vec<DeletedStudyBookmark>> {
         let backend = self.db.get_database_backend();
         let txn = self.db.begin().await.context("bookmark: begin")?;
-        let held = ids_in(&txn, owner).await?;
+        ensure_folder(&txn, owner, folder).await?;
+        let held = ids_in(&txn, owner, folder).await?;
         let gone: HashSet<i64> = ids.iter().copied().collect();
         let mut deleted = Vec::with_capacity(gone.len());
         for (index, id) in held.iter().enumerate() {
             if gone.contains(id) {
-                let row = find_in(&txn, owner, *id).await?;
+                let row = find_in(&txn, owner, folder, *id).await?;
                 deleted.push(DeletedStudyBookmark { row, index });
             }
         }
@@ -226,16 +256,21 @@ impl Repository {
     }
 }
 
-/// The owner's ids, top-first.
-async fn ids_in(db: &impl ConnectionTrait, owner: Option<&str>) -> anyhow::Result<Vec<i64>> {
+/// The ids of the owner's folder, top-first.
+async fn ids_in(
+    db: &impl ConnectionTrait,
+    owner: Option<&str>,
+    folder: Option<i64>,
+) -> anyhow::Result<Vec<i64>> {
     #[derive(FromQueryResult)]
     struct IdRow {
         id: i64,
     }
     let rows = IdRow::find_by_statement(Statement::from_sql_and_values(
         db.get_database_backend(),
-        "SELECT id FROM study_bookmarks WHERE owner_email IS ? ORDER BY position DESC, id DESC",
-        [owner_value(owner)],
+        "SELECT id FROM study_bookmarks WHERE owner_email IS ? AND folder_id IS ? \
+         ORDER BY position DESC, id DESC",
+        [owner_value(owner), folder_value(folder)],
     ))
     .all(db)
     .await
@@ -246,14 +281,16 @@ async fn ids_in(db: &impl ConnectionTrait, owner: Option<&str>) -> anyhow::Resul
 async fn find_in(
     db: &impl ConnectionTrait,
     owner: Option<&str>,
+    folder: Option<i64>,
     id: i64,
 ) -> anyhow::Result<StudyBookmarkRecord> {
     let row = StudyBookmarkRecord::find_by_statement(Statement::from_sql_and_values(
         db.get_database_backend(),
         format!(
-            "SELECT {COLUMNS}, NULL AS text FROM study_bookmarks WHERE id = ? AND owner_email IS ?"
+            "SELECT {COLUMNS}, NULL AS text FROM study_bookmarks \
+             WHERE id = ? AND owner_email IS ? AND folder_id IS ?"
         ),
-        [id.into(), owner_value(owner)],
+        [id.into(), owner_value(owner), folder_value(folder)],
     ))
     .one(db)
     .await
@@ -320,7 +357,7 @@ mod tests {
     }
 
     async fn add(repo: &Repository, owner: Option<&str>, name: &str) -> i64 {
-        repo.insert_study_bookmark(owner, name, &place("HEB", 11, 1), None)
+        repo.insert_study_bookmark(owner, None, name, &place("HEB", 11, 1), None)
             .await
             .unwrap()
             .id
@@ -332,15 +369,15 @@ mod tests {
         let owner = Some("preacher@example.org");
         add(&repo, owner, "Prvá").await;
         add(&repo, owner, "Druhá").await;
-        assert_eq!(repo.count_study_bookmarks(owner).await.unwrap(), 2);
-        assert_eq!(repo.count_study_bookmarks(None).await.unwrap(), 0);
-        repo.insert_study_bookmark(owner, "Stred", &place("JHN", 3, 16), Some(1))
+        assert_eq!(repo.count_study_bookmarks(owner, None).await.unwrap(), 2);
+        assert_eq!(repo.count_study_bookmarks(None, None).await.unwrap(), 0);
+        repo.insert_study_bookmark(owner, None, "Stred", &place("JHN", 3, 16), Some(1))
             .await
             .unwrap();
-        repo.insert_study_bookmark(owner, "Ďaleko", &place("GEN", 1, 1), Some(99))
+        repo.insert_study_bookmark(owner, None, "Ďaleko", &place("GEN", 1, 1), Some(99))
             .await
             .unwrap();
-        let rows = repo.list_study_bookmarks(owner, None).await.unwrap();
+        let rows = repo.list_study_bookmarks(owner, None, None).await.unwrap();
         assert_eq!(names(&rows), vec!["Druhá", "Stred", "Prvá", "Ďaleko"]);
         // Stored ascending = older: the top holds the highest position.
         let positions: Vec<i64> = rows.iter().map(|row| row.position).collect();
@@ -367,10 +404,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let rows = repo.list_study_bookmarks(None, None).await.unwrap();
+        let rows = repo.list_study_bookmarks(None, None, None).await.unwrap();
         assert_eq!(names(&rows), vec!["12:1", "10:26", "10:1"]);
         add(&repo, None, "nová").await;
-        let rows = repo.list_study_bookmarks(None, None).await.unwrap();
+        let rows = repo.list_study_bookmarks(None, None, None).await.unwrap();
         assert_eq!(names(&rows), vec!["nová", "12:1", "10:26", "10:1"]);
     }
 
@@ -389,7 +426,7 @@ mod tests {
             ("nlt2", at("eng-nlt", 2)),
             ("seb-none", at("slk-seb", 9)),
         ] {
-            repo.insert_study_bookmark(None, name, &place, Some(99))
+            repo.insert_study_bookmark(None, None, name, &place, Some(99))
                 .await
                 .unwrap();
         }
@@ -397,7 +434,7 @@ mod tests {
             rows.iter().map(|row| row.text.clone()).collect()
         };
         let rows = repo
-            .list_study_bookmarks(None, Some("slk-seb"))
+            .list_study_bookmarks(None, None, Some("slk-seb"))
             .await
             .unwrap();
         assert_eq!(names(&rows), vec!["seb1", "roh3", "nlt2", "seb-none"]);
@@ -412,7 +449,7 @@ mod tests {
             ]
         );
         // No main translation: the NLT has no text.
-        let rows = repo.list_study_bookmarks(None, None).await.unwrap();
+        let rows = repo.list_study_bookmarks(None, None, None).await.unwrap();
         assert_eq!(rows[2].text, None);
     }
 
@@ -423,21 +460,21 @@ mod tests {
         let kept = add(&repo, mine, "Moja").await;
         add(&repo, None, "Spoločná").await;
         assert_eq!(
-            names(&repo.list_study_bookmarks(mine, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(mine, None, None).await.unwrap()),
             vec!["Moja"]
         );
         assert_eq!(
-            names(&repo.list_study_bookmarks(None, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(None, None, None).await.unwrap()),
             vec!["Spoločná"]
         );
         assert!(repo
-            .list_study_bookmarks(Some("other@example.org"), None)
+            .list_study_bookmarks(Some("other@example.org"), None, None)
             .await
             .unwrap()
             .is_empty());
         // Another owner's id is not found, and not reorderable.
         let err = repo
-            .delete_study_bookmarks(Some("other@example.org"), &[kept])
+            .delete_study_bookmarks(Some("other@example.org"), None, &[kept])
             .await
             .unwrap_err();
         assert!(matches!(
@@ -445,7 +482,7 @@ mod tests {
             Some(RepositoryError::NotFound(BOOKMARK_NOT_FOUND))
         ));
         let err = repo
-            .reorder_study_bookmarks(None, &[kept])
+            .reorder_study_bookmarks(None, None, &[kept])
             .await
             .unwrap_err();
         assert!(matches!(
@@ -453,7 +490,7 @@ mod tests {
             Some(RepositoryError::Conflict(BOOKMARK_ORDER_STALE))
         ));
         assert_eq!(
-            names(&repo.list_study_bookmarks(mine, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(mine, None, None).await.unwrap()),
             vec!["Moja"]
         );
     }
@@ -464,16 +501,16 @@ mod tests {
         let a = add(&repo, None, "A").await;
         let b = add(&repo, None, "B").await;
         let c = add(&repo, None, "C").await;
-        repo.reorder_study_bookmarks(None, &[a, c, b])
+        repo.reorder_study_bookmarks(None, None, &[a, c, b])
             .await
             .unwrap();
         assert_eq!(
-            names(&repo.list_study_bookmarks(None, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(None, None, None).await.unwrap()),
             vec!["A", "C", "B"]
         );
         for stale in [vec![a, b], vec![a, b, c, c], vec![a, b, 999], vec![]] {
             let err = repo
-                .reorder_study_bookmarks(None, &stale)
+                .reorder_study_bookmarks(None, None, &stale)
                 .await
                 .unwrap_err();
             assert!(
@@ -485,7 +522,7 @@ mod tests {
             );
         }
         assert_eq!(
-            names(&repo.list_study_bookmarks(None, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(None, None, None).await.unwrap()),
             vec!["A", "C", "B"]
         );
     }
@@ -499,18 +536,22 @@ mod tests {
         }
         // Shown: A B C D E. Delete A (top), C and E (bottom).
         let (a, c, e) = (ids[4], ids[2], ids[0]);
-        let deleted = repo.delete_study_bookmarks(None, &[e, a, c]).await.unwrap();
+        let deleted = repo
+            .delete_study_bookmarks(None, None, &[e, a, c])
+            .await
+            .unwrap();
         let answered: Vec<(&str, usize)> = deleted
             .iter()
             .map(|item| (item.row.name.as_str(), item.index))
             .collect();
         assert_eq!(answered, vec![("A", 0), ("C", 2), ("E", 4)]);
         assert_eq!(
-            names(&repo.list_study_bookmarks(None, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(None, None, None).await.unwrap()),
             vec!["B", "D"]
         );
         for item in &deleted {
             repo.insert_study_bookmark(
+                None,
                 None,
                 &item.row.name,
                 &place("HEB", 11, 1),
@@ -520,7 +561,7 @@ mod tests {
             .unwrap();
         }
         assert_eq!(
-            names(&repo.list_study_bookmarks(None, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(None, None, None).await.unwrap()),
             vec!["A", "B", "C", "D", "E"]
         );
     }
@@ -530,7 +571,7 @@ mod tests {
         let repo = repo().await;
         let a = add(&repo, None, "A").await;
         let err = repo
-            .delete_study_bookmarks(None, &[a, 999])
+            .delete_study_bookmarks(None, None, &[a, 999])
             .await
             .unwrap_err();
         assert!(matches!(
@@ -538,7 +579,7 @@ mod tests {
             Some(RepositoryError::NotFound(_))
         ));
         assert_eq!(
-            names(&repo.list_study_bookmarks(None, None).await.unwrap()),
+            names(&repo.list_study_bookmarks(None, None, None).await.unwrap()),
             vec!["A"]
         );
     }

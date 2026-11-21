@@ -143,6 +143,8 @@ test("the sheet offers only what works today", async ({ browser }) => {
   // #936: the range row's − / + sit above the actions; the actions are the list.
   await expect(actions(page).locator(".study-sheet__actions button")).toHaveText([
     "Pridať záložku",
+    // #952: the ▾ next to it picks another bookmark folder.
+    "▾",
     "Porovnať",
     "Pridať do kázne",
     /^Odkazy \(\d+\)$/,

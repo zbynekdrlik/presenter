@@ -16,7 +16,8 @@ SITE = ROOT / ".github/workflows/deploy-site.yml"
 DEPLOY = ROOT / ".github/workflows/deploy.yml"
 
 # The SNV deploy job's steps before #918 (deploy.yml at d0381c73), in order, plus
-# "Ensure the service user" (#929).
+# "Ensure the service user" (#929), "Enforce EEE off on wired NICs (rig PC)" (#988)
+# and "Configure listening transcription" (#852 C3-8).
 SNV_STEPS = [
     "Check out the private Bible modules (#859)",
     "Download build artifacts",
@@ -36,6 +37,8 @@ SNV_STEPS = [
     "Deploy systemd service",
     "Configure TURN credentials",
     "Configure AI backend",
+    "Enforce EEE off on wired NICs (rig PC)",
+    "Configure listening transcription",
     "Swap staged binaries and restart service",
     "Verify deployment",
     "Post-deploy smoke test",
@@ -53,6 +56,7 @@ HARDWARE_STEPS = [
     "Ensure NDI SDK and avahi-daemon are installed",
     "Ensure GStreamer + VA-API are installed",
     "Configure TURN credentials",
+    "Enforce EEE off on wired NICs (rig PC)",
     "NDI fan-out self-heal (#768)",
     "Deploy Companion module",
 ]

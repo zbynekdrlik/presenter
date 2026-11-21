@@ -6,6 +6,8 @@ paths:
   - "crates/presenter-server/src/listen/dante/**"
   - "crates/presenter-server/src/state/listen.rs"
   - "crates/presenter-server/src/router/listen.rs"
+  - "crates/presenter-server/src/router/listen_ws.rs"
+  - "crates/presenter-server/src/router/listen_ws/**"
   - "scripts/dev/listen/**"
 ---
 
@@ -276,24 +278,8 @@ paths:
   boundary); `dlink_config(plan).device()` is dlink's own check of the config, no network. E2E
   `settings-listen-dante.spec.ts` runs its own server with a Dante interface that does not exist on
   the runner: the real start is refused (`retrying`) and the card shows both fixed mics read-only.
-- **Transcript assembly (#852 C3-1, core `listen/transcript.rs`, pure):** one `TranscriptAssembler` per
-  transcription session (`flush` restarts the connection numbering). Soniox sends a connection's FIRST
-  token without a leading space, so a final of another connection than the open sentence's last one is
-  a word start (decides a pending close, counts for the 20-word cap, gets one space unless it is
-  punctuation); a marker closes only a sentence with no finals of a NEWER connection (a rollover's late
-  finalize answer is "its last finals + `<fin>`" in one response); session ms and a sentence's end
-  never move back; untimed tokens take the newest ms. The `/listen/ws` JSON shape lives once in core
-  `listen/ws.rs` (camelCase, `type` tag) — server, UI and E2E share it. The test fixture
-  `listen/testdata/soniox-assembly-fixture.jsonl` is hand-written (own text): never commit an eval log
-  of a sermon.
-- **Transcription rules + context (#852 C3-2, core `listen/transcription.rs`, `listen/context.rs`, pure):**
-  ONE `start_decision` (switch → guest mic chosen → published → key → cap → today's `listen.session`
-  choice → Kázeň with the 60 s stop delay) used by the supervisor AND the status; the cap counts
-  connected ms (`>=` = reached), a start after it adds 60 min to today's row only. Save a
-  `listen.transcription` row with `validate_transcription_change(new, stored, published)`: a mic the
-  stored row names stays valid while missing (spec gap 7 — the switch must go off then). Context terms:
-  books (generated `BOOK_LONG_EN` — run `gen_bible_book_names.py`, never hand-edit) → today's refs
-  (`reference_term`, "Psalm 23:1") → tips → curated; dedup lowercase after collapsing whitespace; the
-  8 000-char cap counts compact serde_json chars (`context_json_chars`, pinned against serde_json — core
-  has serde_json only as a dev-dependency); a new wire field of `ListenStatus` is `#[serde(default)]`
-  and every `ListenStatus {` literal (server `health.rs`, two presenter-ui tests) gets it.
+- **Dante latency (dstack#381, owner 21.11.2026):** `dlink_config` sets `receive_buffer_ns(RECEIVE_BUFFER_NS)` = 4 ms, so
+  with dlink's default 1 ms network latency the device advertises P = 5 ms (was dlink's default buffer, 12.35 ms).
+  dstack watches dcontroller's history 24 h after it goes live; one late packet means back to 12.35 ms.
+- **Guest transcription (#852 C3, Soniox):** its rules (assembly, wire, session machine, driver, hub,
+  supervisor, deploy `listen.env`) live in `.claude/rules/listen-asr.md`.

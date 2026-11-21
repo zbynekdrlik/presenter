@@ -48,6 +48,7 @@ mod companion_manager;
 mod integrations;
 pub(crate) mod interpreter_tips;
 mod listen;
+mod listen_transcription;
 mod ndi_control;
 mod ndi_park;
 #[cfg(test)]
@@ -76,6 +77,7 @@ pub(crate) mod stream_assets;
 pub(crate) mod stream_fonts;
 pub(crate) mod stream_nameplates;
 mod stream_playback;
+pub(crate) mod study_bookmark_folders;
 pub(crate) mod study_bookmarks;
 pub(crate) mod sync;
 #[cfg(test)]

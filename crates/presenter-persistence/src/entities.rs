@@ -697,6 +697,8 @@ pub mod slide_stage_layout {
 /// #852 šepkár tips — its own file (`entities/interpreter_tip.rs`) because this
 /// file sits near the 1000-line gate.
 pub mod interpreter_tip;
+/// #852 C3-persist: the guest transcript store (`entities/listen_transcript.rs`).
+pub mod listen_transcript;
 
 // ---------------------------------------------------------------------------
 // #703 stream-graphics (epic #718): the four tables created by

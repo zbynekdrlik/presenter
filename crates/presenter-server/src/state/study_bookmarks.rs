@@ -17,13 +17,14 @@ use super::AppState;
 
 /// The longest name, in characters.
 pub(crate) const MAX_NAME_CHARS: usize = 80;
-/// The most bookmarks one list keeps.
+/// The most bookmarks one list keeps — one FOLDER since #952 (each folder,
+/// the default one too, holds up to this many).
 pub(crate) const MAX_BOOKMARKS: usize = 100;
 /// The most characters of a verse a list row carries (#951): the row shows one
 /// ellipsized line, so the rest would only travel.
 pub(crate) const EXCERPT_CHARS: usize = 160;
 
-const LOG_TARGET: &str = "presenter::bible::bookmark";
+pub(crate) const LOG_TARGET: &str = "presenter::bible::bookmark";
 
 /// A bookmark request the server refuses with 422 and this Slovak message (no
 /// name, a name too long, a full list, a place the translation does not have).
@@ -104,9 +105,11 @@ pub(crate) fn check_name(name: &str) -> Result<String, BookmarkRefusal> {
 }
 
 impl AppState {
+    /// The list of one folder (#952: `folder` `None` = "Kde som skončil").
     pub(crate) async fn list_study_bookmarks(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
     ) -> anyhow::Result<Vec<StudyBookmark>> {
         // A row's text: its own translation, else the main one; the remote NLT
         // has no text in the database, so it borrows its structure source's
@@ -114,7 +117,7 @@ impl AppState {
         let main = self.get_bible_preferences().await?.main_translation;
         let rows = self
             .repository
-            .list_study_bookmarks(owner, main.as_deref().map(structure_source))
+            .list_study_bookmarks(owner, folder, main.as_deref().map(structure_source))
             .await?;
         rows.into_iter().map(StudyBookmark::try_from).collect()
     }
@@ -124,19 +127,14 @@ impl AppState {
     pub(crate) async fn create_study_bookmark(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         name: &str,
         place: &PlaceRequest,
         index: Option<usize>,
     ) -> anyhow::Result<StudyBookmark> {
         let name = check_name(name)?;
         let place = self.bookmark_place(place).await?;
-        if self
-            .repository
-            .list_study_bookmarks(owner, None)
-            .await?
-            .len()
-            >= MAX_BOOKMARKS
-        {
+        if self.repository.count_study_bookmarks(owner, folder).await? >= MAX_BOOKMARKS {
             return Err(BookmarkRefusal(format!(
                 "Záložiek môže byť najviac {MAX_BOOKMARKS} — niektorú zmaž"
             ))
@@ -144,7 +142,7 @@ impl AppState {
         }
         let row = self
             .repository
-            .insert_study_bookmark(owner, &name, &place, index)
+            .insert_study_bookmark(owner, folder, &name, &place, index)
             .await?;
         log_write("create", owner, &row);
         row.try_into()
@@ -155,13 +153,17 @@ impl AppState {
     pub(crate) async fn reorder_study_bookmarks(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         ids: &[i64],
     ) -> anyhow::Result<()> {
-        self.repository.reorder_study_bookmarks(owner, ids).await?;
+        self.repository
+            .reorder_study_bookmarks(owner, folder, ids)
+            .await?;
         tracing::info!(
             target: LOG_TARGET,
             op = "reorder",
             owner = ?owner.unwrap_or("-"),
+            folder = ?folder,
             ids = ?ids,
             "study bookmark write"
         );
@@ -173,12 +175,16 @@ impl AppState {
     pub(crate) async fn delete_study_bookmarks(
         &self,
         owner: Option<&str>,
+        folder: Option<i64>,
         ids: &[i64],
     ) -> anyhow::Result<Vec<(StudyBookmark, usize)>> {
         if ids.is_empty() {
             return Err(BookmarkRefusal("Nie je čo zmazať".to_string()).into());
         }
-        let deleted = self.repository.delete_study_bookmarks(owner, ids).await?;
+        let deleted = self
+            .repository
+            .delete_study_bookmarks(owner, folder, ids)
+            .await?;
         deleted
             .into_iter()
             .map(|DeletedStudyBookmark { row, index }| {
@@ -250,6 +256,7 @@ fn log_write(op: &str, owner: Option<&str>, row: &StudyBookmarkRecord) {
         op,
         id = row.id,
         owner = ?owner.unwrap_or("-"),
+        folder = ?row.folder_id,
         name = ?row.name,
         place = %format!("{} {} {}:{}", row.translation_code, row.book_code, row.chapter, row.verse),
         "study bookmark write"

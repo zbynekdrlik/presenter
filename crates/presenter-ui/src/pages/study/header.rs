@@ -119,7 +119,7 @@ pub(super) fn StudyHeader(s: Study) -> impl IntoView {
                         aria-label="Záložky"
                         title="Záložky"
                         on:click=move |_| {
-                            nav::open_sheet(s, nav::sheet_route(s, StudySheet::Bookmarks))
+                            nav::open_sheet(s, nav::sheet_route(s, StudySheet::Bookmarks(None)))
                         }
                     >
                         <svg
