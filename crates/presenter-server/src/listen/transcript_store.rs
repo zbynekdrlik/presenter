@@ -154,18 +154,20 @@ pub(crate) async fn start(listen: &ListenService, store: Arc<dyn TranscriptRows>
     drop(tokio::spawn(run_writer(store, rx, listen.clone())));
 }
 
-/// Today's newest sentences and the next id. A failed read WARNs and seeds
-/// nothing (ids then start at 1: a stored id may repeat, nothing breaks).
+/// Today's newest sentences and the next id: after the highest stored id
+/// AND after every seeded one (a reader ignores a sentence whose id is not
+/// above the last it has). A failed read WARNs; with neither read, ids start
+/// at 1 and the transcript starts empty.
 async fn read_seed(store: &dyn TranscriptRows, today: NaiveDate) -> (Vec<TranscriptSentence>, u64) {
-    let next_id = match store.max_sentence_id().await {
-        Ok(max) => max.map_or(1, |max| max.saturating_add(1)),
+    let stored_max = match store.max_sentence_id().await {
+        Ok(max) => max,
         Err(err) => {
             tracing::warn!(
                 target: STORE_TARGET,
                 error = %err,
-                "the highest stored sentence id cannot be read — ids start at 1"
+                "the highest stored sentence id cannot be read — ids continue after today's"
             );
-            1
+            None
         }
     };
     let limit = u64::try_from(SENTENCES_KEPT).unwrap_or(u64::MAX);
@@ -180,11 +182,16 @@ async fn read_seed(store: &dyn TranscriptRows, today: NaiveDate) -> (Vec<Transcr
             Vec::new()
         }
     };
+    let seeded_max = stored.iter().map(|sentence| sentence.id).max();
+    let next_id = stored_max
+        .max(seeded_max)
+        .map_or(1, |max| max.saturating_add(1));
     (stored, next_id)
 }
 
 /// The writer: batches of received sentences, and retention once per date.
-/// Ends when the hub (the only sender) is gone.
+/// Ends when every sender is gone — never in the server (the hub, which holds
+/// the sender, lives as long as the process); a test drops its own sender.
 pub(crate) async fn run_writer(
     store: Arc<dyn TranscriptRows>,
     mut rx: mpsc::Receiver<TranscriptSentence>,

@@ -192,7 +192,10 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   WARN, no retry loop) and deletes dates more than 7 days back once per local date (at start, then the first
   60 s tick of a new date; one attempt, failed or not). `transcript_store::start` (from `start_listen`, before
   the supervisor, never in validate mode) seeds the hub with today's newest 500 and sets the next id after the
-  highest stored id of ANY date (never reused). Values cross the column ↔ wire boundary through the typed
+  highest stored id of ANY date and every seeded id (a reader drops an id not above its last; a failed max
+  read still continues after the seeded ones); the seed sends a `snapshot` message (a reader may connect
+  before `start_listen` reads the store). `service_date` = the local date when the BATCH is written (a
+  sentence closed just before midnight can land on the next date). Values cross the column ↔ wire boundary through the typed
   `ListenTranscriptError` (u64 > i64 refused on write, a negative stored value refused on read). No read API:
   the seeded `/listen/ws` snapshot is the reader. The `TranscriptRows` trait is the seam (tests: `FakeRows`).
 - **UI + E2E (#852 C3-9, presenter-ui `pages/settings/listen_transcription.rs`, `components/interpreter/transcript.rs`,

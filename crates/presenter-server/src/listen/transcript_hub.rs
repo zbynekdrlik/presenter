@@ -123,8 +123,9 @@ impl TranscriptHub {
 
     /// Startup (#852 C3-persist): put the stored sentences (oldest first)
     /// before any already kept, keep the newest [`SENTENCES_KEPT`], and let
-    /// new ids start at `next_id` or later. No message: readers get them in
-    /// their snapshot.
+    /// new ids start at `next_id` or later. A reader that connected before
+    /// (the HTTP listener is up before `start_listen` reads the store) gets the
+    /// new state as a `snapshot` message, sent under the lock like every other.
     pub(crate) fn seed(&self, stored: Vec<TranscriptSentence>, next_id: u64) {
         let mut state = self.shared.lock();
         let kept = std::mem::take(&mut state.sentences);
@@ -133,6 +134,8 @@ impl TranscriptHub {
             let _oldest = state.sentences.pop_front();
         }
         state.next_id = state.next_id.max(next_id);
+        let snapshot = snapshot_of(&state);
+        self.shared.send(ListenWsMessage::Snapshot { snapshot });
     }
 
     /// Offer every sentence closed from now on to the store's writer.

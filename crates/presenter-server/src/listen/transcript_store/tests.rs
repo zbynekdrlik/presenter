@@ -7,6 +7,7 @@ use crate::listen::transcript_hub::TranscriptHub;
 use crate::tracing_capture::{quoted, Capture};
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use presenter_core::listen::transcript::ClosedSentence;
+use presenter_core::listen::ws::ListenWsMessage;
 use std::sync::Mutex;
 
 fn closed(text: &str) -> ClosedSentence {
@@ -58,6 +59,10 @@ struct FakeRows {
     cutoffs: Mutex<Vec<NaiveDate>>,
     inserted: Mutex<Vec<NewTranscriptSentence>>,
     fail: Mutex<bool>,
+    /// What `newest_on` answers.
+    today: Vec<TranscriptSentence>,
+    /// `max_sentence_id` fails.
+    max_fails: bool,
 }
 
 #[async_trait]
@@ -74,10 +79,13 @@ impl TranscriptRows for FakeRows {
     }
 
     async fn newest_on(&self, _: NaiveDate, _: u64) -> anyhow::Result<Vec<TranscriptSentence>> {
-        Ok(Vec::new())
+        Ok(self.today.clone())
     }
 
     async fn max_sentence_id(&self) -> anyhow::Result<Option<u64>> {
+        if self.max_fails {
+            anyhow::bail!("database is locked");
+        }
         Ok(None)
     }
 
@@ -148,7 +156,7 @@ async fn a_closed_writer_counts_every_offered_row() {
 }
 
 #[tokio::test]
-async fn the_writer_stores_batches_under_the_local_date_and_ends_with_the_hub() {
+async fn the_writer_stores_batches_under_the_write_time_local_date_and_ends_with_its_senders() {
     let (listen, clock) = service_at("2026-11-22T10:00:00");
     let repo = Repository::connect_in_memory().await.expect("repo");
     let (tx, rx) = mpsc::channel(STORE_CAPACITY);
@@ -323,4 +331,35 @@ async fn a_seed_keeps_the_newest_kept_sentences_and_never_lowers_the_next_id() {
     );
     assert_eq!(sentences.last().map(|s| s.text.as_str()), Some("live"));
     assert_eq!(hub.push_sentence("guest", closed("next")), 2);
+}
+
+#[tokio::test]
+async fn a_failed_max_read_still_continues_after_the_seeded_ids() {
+    let (listen, _clock) = service_at("2026-11-22T10:00:00");
+    let rows = FakeRows {
+        today: vec![sentence(7, "one"), sentence(9, "two")],
+        max_fails: true,
+        ..FakeRows::default()
+    };
+    start(&listen, Arc::new(rows)).await;
+    let hub = listen.transcripts();
+    assert_eq!(hub.snapshot().sentences.len(), 2);
+    assert_eq!(
+        hub.push_sentence("guest", closed("three")),
+        10,
+        "above every sentence a reader already has"
+    );
+}
+
+#[tokio::test]
+async fn a_reader_connected_before_the_seed_gets_the_seeded_snapshot() {
+    let hub = TranscriptHub::new();
+    let (before, mut rx) = hub.subscribe();
+    assert!(before.sentences.is_empty());
+    hub.seed(vec![sentence(4, "stored")], 5);
+    let message = rx.try_recv().expect("a message after the seed");
+    let ListenWsMessage::Snapshot { snapshot } = message else {
+        panic!("expected a snapshot, got {message:?}");
+    };
+    assert_eq!(snapshot.sentences, vec![sentence(4, "stored")]);
 }
