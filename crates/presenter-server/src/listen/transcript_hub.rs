@@ -10,7 +10,9 @@
 //! window ends. `session` messages go out only when state / reason / error
 //! change. Owned by `ListenService`; no `LiveEvent` (the stage and operator
 //! sockets never see transcript traffic). The lock is a std mutex, never held
-//! across an `.await`.
+//! across an `.await`. #852 C3-persist: every closed sentence is also offered
+//! to the store's writer (`transcript_store`, a `try_send` that never waits),
+//! and the hub is seeded at startup with today's stored sentences.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -24,6 +26,8 @@ use presenter_core::listen::ws::{
 };
 use tokio::sync::broadcast;
 use tokio::time::Instant;
+
+use super::transcript_store::StoreFeed;
 
 /// Closed sentences a snapshot carries (the newest; older ones are dropped).
 pub(crate) const SENTENCES_KEPT: usize = 500;
@@ -52,6 +56,8 @@ struct HubState {
     tails: BTreeMap<String, TranscriptTail>,
     gates: BTreeMap<String, TailGate>,
     sessions: BTreeMap<String, MicTranscription>,
+    /// The store writer's channel (#852 C3-persist); `None` until attached.
+    store: Option<StoreFeed>,
 }
 
 /// One mic's tail coalescing.
@@ -98,6 +104,9 @@ impl TranscriptHub {
             let _oldest = state.sentences.pop_front();
         }
         state.sentences.push_back(sentence.clone());
+        if let Some(store) = state.store.as_mut() {
+            store.offer(&sentence);
+        }
         // The stored tail held the words just closed: clear it, so neither a
         // snapshot nor a pending flush shows them twice. The publisher's next
         // `set_tail` goes out at once.
@@ -110,6 +119,35 @@ impl TranscriptHub {
         gate.after_sentence = true;
         self.shared.send(ListenWsMessage::Sentence { sentence });
         id
+    }
+
+    /// Startup (#852 C3-persist): put the stored sentences (oldest first)
+    /// before any already kept, keep the newest [`SENTENCES_KEPT`], and let
+    /// new ids start at `next_id` or later. No message: readers get them in
+    /// their snapshot.
+    pub(crate) fn seed(&self, stored: Vec<TranscriptSentence>, next_id: u64) {
+        let mut state = self.shared.lock();
+        let kept = std::mem::take(&mut state.sentences);
+        state.sentences = stored.into_iter().chain(kept).collect();
+        while state.sentences.len() > SENTENCES_KEPT {
+            let _oldest = state.sentences.pop_front();
+        }
+        state.next_id = state.next_id.max(next_id);
+    }
+
+    /// Offer every sentence closed from now on to the store's writer.
+    pub(crate) fn attach_store(&self, feed: StoreFeed) {
+        self.shared.lock().store = Some(feed);
+    }
+
+    /// Rows the store dropped (tests).
+    #[cfg(test)]
+    pub(crate) fn store_dropped(&self) -> u64 {
+        self.shared
+            .lock()
+            .store
+            .as_ref()
+            .map_or(0, StoreFeed::dropped)
     }
 
     /// Set a mic's open tail (`None` or no text = nothing open: readers get an

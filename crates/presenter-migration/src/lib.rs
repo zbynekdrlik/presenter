@@ -35,6 +35,7 @@ mod m20261104_000001_bible_presentation_order_archive;
 mod m20261107_000001_create_ui_usage;
 mod m20261108_000001_create_study_bookmarks;
 mod m20261120_000001_study_bookmark_folders;
+mod m20261121_000001_create_listen_transcript;
 
 pub struct Migrator;
 
@@ -74,6 +75,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261107_000001_create_ui_usage::Migration),
             Box::new(m20261108_000001_create_study_bookmarks::Migration),
             Box::new(m20261120_000001_study_bookmark_folders::Migration),
+            Box::new(m20261121_000001_create_listen_transcript::Migration),
         ]
     }
 }

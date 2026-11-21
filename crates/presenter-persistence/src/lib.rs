@@ -28,11 +28,12 @@ mod repository;
 
 pub use audit::{ResolumePushAuditEntry, SettingsAuditEntry, SettingsAuditSource};
 pub use repository::{
-    sync_should_apply, BookmarkPlace, DatabaseSettings, DeletedStudyBookmark, NewInterpreterTip,
-    NewSermon, NewStreamAsset, NewStreamFont, Repository, RepositoryError, SermonItemRecord,
-    SermonRecord, SermonSnapshot, SermonSummary, SermonWrite, StrongsVerse,
-    StudyBookmarkFolderRecord, StudyBookmarkRecord, SyncApplyOutcome, SyncLibraryManifestRow,
-    SyncManifestRow, SyncPresentation, TrashedLibrary, TrashedPresentation, UiUsageCount,
-    BOOKMARK_NOT_FOUND, FOLDER_NAME_TAKEN, FOLDER_NOT_FOUND, FOLDER_ORDER_STALE, PRUNE_HORIZON,
-    SERMON_CONFLICT, SERMON_NOT_FOUND,
+    sync_should_apply, BookmarkPlace, DatabaseSettings, DeletedStudyBookmark,
+    ListenTranscriptError, NewInterpreterTip, NewSermon, NewStreamAsset, NewStreamFont,
+    NewTranscriptSentence, Repository, RepositoryError, SermonItemRecord, SermonRecord,
+    SermonSnapshot, SermonSummary, SermonWrite, StrongsVerse, StudyBookmarkFolderRecord,
+    StudyBookmarkRecord, SyncApplyOutcome, SyncLibraryManifestRow, SyncManifestRow,
+    SyncPresentation, TrashedLibrary, TrashedPresentation, UiUsageCount, BOOKMARK_NOT_FOUND,
+    FOLDER_NAME_TAKEN, FOLDER_NOT_FOUND, FOLDER_ORDER_STALE, PRUNE_HORIZON, SERMON_CONFLICT,
+    SERMON_NOT_FOUND,
 };

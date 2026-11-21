@@ -5,6 +5,9 @@ paths:
   - "crates/presenter-server/src/listen/transcription/**"
   - "crates/presenter-server/src/listen/transcript_hub.rs"
   - "crates/presenter-server/src/listen/transcript_hub/**"
+  - "crates/presenter-server/src/listen/transcript_store.rs"
+  - "crates/presenter-server/src/listen/transcript_store/**"
+  - "crates/presenter-persistence/src/repository/listen_transcript.rs"
   - "crates/presenter-server/src/state/listen_transcription.rs"
   - "crates/presenter-server/src/state/listen_transcription/**"
   - "crates/presenter-server/src/router/listen_ws.rs"
@@ -179,6 +182,19 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   terms only + WARN). Tests: `listen/transcription/tests.rs` (real `ListenService`, fake `StreamingAsr`
   answering a Stop / closed input with `Finished(None)`, fake store, `start_paused`, settable day clock via
   `set_recorder_env`); endpoints + the real sermon/tip context read in `state/listen_transcription/tests.rs`.
+- **Transcript store (#852 C3-persist, migration `m20261121_000001_create_listen_transcript`, persistence
+  `repository/listen_transcript.rs`, server `listen/transcript_store.rs`):** table `listen_transcript` (the
+  sentence fields + TEXT `service_date`, index service_date + id), never an edit of the applied migration. The
+  hub offers every closed sentence to ONE writer through a bounded channel (`STORE_CAPACITY` 256, `try_send`
+  UNDER the hub lock — never an `.await`, never a DB call in `push_sentence`): full / closed = the row is
+  dropped + counted, WARN on power-of-two drops of the streak, INFO when it stores again. The writer batches
+  ≤ 64 rows per insert under `ListenService::today()` (the recorder's clock; a failed batch is lost, gated
+  WARN, no retry loop) and deletes dates more than 7 days back once per local date (at start, then the first
+  60 s tick of a new date; one attempt, failed or not). `transcript_store::start` (from `start_listen`, before
+  the supervisor, never in validate mode) seeds the hub with today's newest 500 and sets the next id after the
+  highest stored id of ANY date (never reused). Values cross the column ↔ wire boundary through the typed
+  `ListenTranscriptError` (u64 > i64 refused on write, a negative stored value refused on read). No read API:
+  the seeded `/listen/ws` snapshot is the reader. The `TranscriptRows` trait is the seam (tests: `FakeRows`).
 - **UI + E2E (#852 C3-9, presenter-ui `pages/settings/listen_transcription.rs`, `components/interpreter/transcript.rs`,
   `ws/listen.rs`):** the "Prepis hosťa" section reads the Počúvanie card's ONE `/listen/status` poll (never a
   second poll) and calls the card's `refresh` after every PUT (a poll answered after the write must not show
