@@ -9,6 +9,7 @@ mod library_sync;
 mod library_sync_tests;
 #[cfg(test)]
 mod library_trash_tests;
+mod listen_transcript;
 mod playlist;
 mod presentation;
 #[cfg(test)]
@@ -70,6 +71,7 @@ pub use bible::{
 pub use interpreter_tips::NewInterpreterTip;
 pub use library::TrashedLibrary;
 pub use library_sync::SyncLibraryManifestRow;
+pub use listen_transcript::{ListenTranscriptError, NewTranscriptSentence};
 pub use stream_assets::NewStreamAsset;
 pub use stream_fonts::NewStreamFont;
 pub use sync::{SyncManifestRow, SyncPresentation, TrashedPresentation};

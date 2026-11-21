@@ -4,7 +4,8 @@
 //! per-day toggle `listen.recorder` the same way — read at startup, written by
 //! `set_listen_recorder`, cleared when the clock steps back before its day.
 //! C3-7: the transcription rows (`listen_transcription.rs`) are read in the
-//! same startup block; the supervisor starts after them.
+//! same startup block; the supervisor starts after them. C3-persist: the
+//! transcript store seeds the hub and starts its writer before the supervisor.
 
 use super::AppState;
 use crate::listen::recorder::RECORDER_TARGET;
@@ -271,6 +272,12 @@ impl AppState {
         let started = self.listen.start(bind);
         if started {
             self.spawn_recorder_row_cleaner(cleared);
+            // #852 C3-persist: seeded before the supervisor can close a sentence.
+            crate::listen::transcript_store::start(
+                &self.listen,
+                std::sync::Arc::new(self.repository.clone()),
+            )
+            .await;
             // #852 C3-7: after the rows above, so it decides on the stored ones.
             let _first = self.listen.start_transcription(
                 std::sync::Arc::clone(&self.stage_layout),
@@ -393,6 +400,54 @@ mod tests {
         let status = next_day.listen_status().recorder;
         assert!(!status.enabled, "yesterday's switch never records today");
         assert_eq!(status.enabled_for, Some("2026-10-18".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn the_startup_seeds_the_transcript_from_the_store_and_stores_new_sentences() {
+        let state = AppState::in_memory().await.unwrap();
+        state.listen.set_recorder_env(fixed("2026-11-22T10:00:00"));
+        let stored = presenter_persistence::NewTranscriptSentence {
+            service_date: "2026-11-22".parse().unwrap(),
+            sentence: presenter_core::listen::ws::TranscriptSentence {
+                id: 12,
+                mic_id: "guest".into(),
+                text: "Grace and peace.".into(),
+                start_ms: 0,
+                end_ms: 900,
+                closed_at: chrono::Utc::now(),
+                language: Some("en".into()),
+            },
+        };
+        state
+            .repository()
+            .insert_listen_transcript(std::slice::from_ref(&stored))
+            .await
+            .unwrap();
+        assert!(state.start_listen("127.0.0.1:0".parse().unwrap()).await);
+        let hub = state.listen_transcripts();
+        assert_eq!(hub.snapshot().sentences, vec![stored.sentence.clone()]);
+        let closed = presenter_core::listen::transcript::ClosedSentence {
+            text: "Amen.".into(),
+            start_ms: 1_000,
+            end_ms: 1_500,
+            closed_at: chrono::Utc::now(),
+            language: None,
+        };
+        assert_eq!(hub.push_sentence("guest", closed), 13);
+        let day = "2026-11-22".parse().unwrap();
+        let mut rows = Vec::new();
+        for _ in 0..200 {
+            rows = state
+                .repository()
+                .newest_listen_transcript_on(day, 10)
+                .await
+                .unwrap();
+            if rows.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(rows.iter().map(|s| s.id).collect::<Vec<_>>(), vec![12, 13]);
     }
 
     #[tokio::test]

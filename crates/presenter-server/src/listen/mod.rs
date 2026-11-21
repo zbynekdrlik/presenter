@@ -18,6 +18,8 @@
 //! service owns; `GET /listen/ws` serves it. The guest's transcription
 //! (#852 C3-7, [`transcription`]): one supervisor decides whether the guest
 //! mic's Soniox session runs; its rows, meter and state live in the service.
+//! The transcript's 7-day store (#852 C3-persist, [`transcript_store`]): one
+//! writer fed by the hub, seeded into the hub at startup.
 
 mod asr;
 mod dante;
@@ -30,6 +32,7 @@ mod soniox;
 #[cfg(test)]
 mod tests;
 pub(crate) mod transcript_hub;
+pub(crate) mod transcript_store;
 pub(crate) mod transcription;
 mod vban_rx;
 
