@@ -2325,8 +2325,8 @@ mod tests {
     // ── #990: page-level keep-alive ─────────────────────────────────────────
     // "Our app is foreground" is not proof of life: SD2 showed a dark page for
     // 11 h with StageActivity in front. A display with no live stage
-    // connection from its address for 3 min gets the VIEW intent re-fired, at
-    // most once per 5 min.
+    // connection from its address for 3 min gets the VIEW intent re-fired;
+    // fruitless relaunches back off 5 → 60 min.
 
     const DISPLAY_IP: &str = "10.0.0.42"; // test_display()'s host
 
@@ -2377,7 +2377,7 @@ mod tests {
             "3 min without a connection"
         );
 
-        page.note_relaunch_attempt(t0 + secs(180));
+        page.note_relaunch(t0 + secs(180));
         page.note_launch(t0 + secs(180));
         page.observe(Some(false), t0 + secs(360));
         assert!(
@@ -2599,7 +2599,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_relaunch_logs_no_info_and_still_counts_for_the_rate_limit() {
+    async fn a_relaunch_that_never_reached_the_tv_logs_nothing_and_does_not_back_off() {
+        // Second review of 70254497: counting failed attempts let a TV that
+        // was off all night reach the 60 min gap, so its first dead page of
+        // the morning waited an hour. Only a fired relaunch counts now; a
+        // forced cycle costs nothing the plain 20 s tick does not run anyway.
         let capture = crate::tracing_capture::Capture::install();
         let runner = FakeAdbRunner::with_connect_failure(Foreground::StagePage);
         let connections = StageConnections::new();
@@ -2617,7 +2621,58 @@ mod tests {
                 .is_empty(),
             "a TV that is off logs no relaunch line"
         );
-        assert!(!page.relaunch_due(t0 + secs(220)), "the attempt counts");
-        assert!(page.relaunch_due(t0 + secs(500)), "5 min after the attempt");
+        assert!(
+            page.relaunch_due(t0 + secs(240)),
+            "nothing fired, so nothing to back off from: the next reachable tick relaunches"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_launch_by_the_419_gate_ends_the_back_off() {
+        let stage_runner = FakeAdbRunner::new(Foreground::StagePage);
+        let other_app = FakeAdbRunner::new(Foreground::OtherApp);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        // A dead page through three relaunches: the next gap is 20 min.
+        for tick in [180, 480, 1080] {
+            let result = page_tick(
+                &stage_runner,
+                &mut page,
+                Some(&connections),
+                t0 + secs(tick),
+            )
+            .await;
+            assert!(matches!(result, Ok(true)), "{tick}: {result:?}");
+        }
+        assert!(
+            !page.relaunch_due(t0 + secs(1080 + 600)),
+            "deep in the back-off"
+        );
+
+        // The TV is power-cycled: our app is not in front, the #419 gate
+        // launches it (not a page relaunch — the back-off is not due).
+        let booted = page_tick(&other_app, &mut page, Some(&connections), t0 + secs(1300)).await;
+        assert!(matches!(booted, Ok(true)), "{booted:?}");
+
+        // Its fresh page fails again: relaunched 3 min later, not 20.
+        let early = page_tick(
+            &stage_runner,
+            &mut page,
+            Some(&connections),
+            t0 + secs(1400),
+        )
+        .await;
+        assert!(matches!(early, Ok(false)), "{early:?}");
+        let dead = page_tick(
+            &stage_runner,
+            &mut page,
+            Some(&connections),
+            t0 + secs(1481),
+        )
+        .await;
+        assert!(matches!(dead, Ok(true)), "{dead:?}");
+        assert_eq!(stage_runner.am_start_calls(), 4);
     }
 }

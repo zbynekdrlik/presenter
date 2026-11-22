@@ -15,6 +15,7 @@ paths:
   - "tests/e2e/stage-boot-recovery.spec.ts"
   - "crates/presenter-ui/index.html"
   - "scripts/build-ui.sh"
+  - "android/presenter-stage/app/src/main/java/sk/newlevel/presenterstage/StageActivity.kt"
 ---
 
 # Stage displays: lossless live events, adb hygiene, WS diagnostics (#793)
@@ -158,8 +159,8 @@ dark 11 h with our app foreground. Three layers, each sees a failure the others 
   tick resolves the display's `host` (`lookup_host`, like adb) and asks
   `has_live_connection_from` (any non-`Disconnected` connection). No live connection for 3 min →
   the tick runs the FORCED launch (VIEW intent → `onNewIntent` → `loadUrl`). Fruitless relaunches
-  back off 5, 10, 20, 40, 60 min per display (`relaunch_gap`; attempts count, so a TV that is off
-  is not retried every tick) — a page that connects from an address the `host` does not resolve to
+  back off 5, 10, 20, 40, 60 min per display (`relaunch_gap`; only a FIRED relaunch counts — a TV that is off all night must
+  not start the morning at a 60 min gap; a #419-gate launch or `forced_launch` ends the streak) — a page that connects from an address the `host` does not resolve to
   (two NICs) must not blink every 5 min forever. The relaunch line goes through
   `should_log_adb_streak` (INFO on the 1st, 2nd, 4th …, only when the intent fired), plus ONE
   `connected again` INFO when a live connection ends a streak. Unknown liveness (no registry, host

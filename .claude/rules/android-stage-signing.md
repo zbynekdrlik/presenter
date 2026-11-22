@@ -48,3 +48,13 @@ The watchdog ships an APK only over a higher `versionCode`; `build.gradle.kts` a
 `EXPECTED_STAGE_APK_VERSION_CODE` stay equal (a test in `android_stage.rs` reads the gradle file).
 The Wi-Fi lock is held only on screen (`onResume`..`onPause`); check it live with
 `adb -s <tv> shell dumpsys wifi | grep presenter-stage`.
+
+## Building the APK locally on dev2 (#990)
+
+There is no `gradlew` in the repo; CI uses `setup-gradle`. Locally: the cached Gradle 8.14.3
+(`~/.gradle/wrapper/dists/gradle-8.14.3-bin/*/gradle-8.14.3/bin/gradle`) + JDK 17
+(`JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`, the default java 21 is a JRE without javac) +
+`ANDROID_HOME=$HOME/android-sdk`, `assembleDebug --no-daemon`. Build a COPY of
+`android/presenter-stage` in the scratchpad: `app/build`, `.gradle` and `local.properties` are not
+gitignored. Then `bash scripts/dev/stage_apk_signing_test.sh <apk>` (with JDK 17's `keytool` on
+PATH) and `aapt dump badging <apk>` for the versionCode.

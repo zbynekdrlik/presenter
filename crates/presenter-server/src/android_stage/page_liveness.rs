@@ -104,12 +104,24 @@ impl PageLiveness {
         self.last_live = now;
     }
 
-    /// A page relaunch was attempted (the rate limit counts attempts, so an
-    /// unreachable TV is not retried every tick either). Returns the streak.
-    pub(super) fn note_relaunch_attempt(&mut self, now: Instant) -> u32 {
+    /// A page relaunch FIRED (the VIEW intent reached the TV). Only fired ones
+    /// count: a TV that is off fails the cycle before any intent, and a
+    /// forced cycle costs nothing more than the plain tick that runs anyway.
+    /// Returns the streak.
+    pub(super) fn note_relaunch(&mut self, now: Instant) -> u32 {
         self.last_relaunch = Some(now);
         self.fruitless_relaunches = self.fruitless_relaunches.saturating_add(1);
         self.fruitless_relaunches
+    }
+
+    /// The #419 gate itself launched the stage (the app was not in front — a
+    /// TV that just booted, someone left the stage): a fresh start, so the
+    /// back-off of an earlier streak no longer applies. A page that then
+    /// fails is relaunched after [`PAGE_SILENCE_LIMIT`], not after an hour.
+    pub(super) fn note_device_launch(&mut self, now: Instant) {
+        self.last_relaunch = None;
+        self.fruitless_relaunches = 0;
+        self.note_launch(now);
     }
 
     fn silent_for(&self, now: Instant) -> Duration {
@@ -180,7 +192,6 @@ pub(super) async fn keep_alive_tick(
     }
     let relaunch_page = live == Some(false) && page.relaunch_due(now);
     let silent_for = page.silent_for(now);
-    let streak = relaunch_page.then(|| page.note_relaunch_attempt(now));
     let result = super::connect_and_launch(
         runner,
         stage_url,
@@ -192,9 +203,12 @@ pub(super) async fn keep_alive_tick(
     )
     .await;
     if matches!(result, Ok(true)) {
-        page.note_launch(now);
-        if let Some(relaunches) = streak {
+        if relaunch_page {
+            page.note_launch(now);
+            let relaunches = page.note_relaunch(now);
             log_page_relaunch(config, silent_for, relaunches);
+        } else {
+            page.note_device_launch(now);
         }
     }
     result
@@ -217,7 +231,7 @@ pub(super) async fn forced_launch(
     let result =
         super::connect_and_launch(runner, stage_url, apk_path, config, status, true, link).await;
     if matches!(result, Ok(true)) {
-        page.note_launch(now);
+        page.note_device_launch(now);
     }
     result
 }

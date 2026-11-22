@@ -133,6 +133,8 @@ class StageActivity : android.app.Activity() {
         // singleTask: a relaunch (watchdog re-firing the VIEW intent, possibly
         // with a new URL) reuses this instance — load the new URL.
         setIntent(intent)
+        // This load supersedes a pending delayed reload (#990), never twice.
+        handler.removeCallbacksAndMessages(null)
         loadFromIntent(intent)
     }
 
