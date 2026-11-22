@@ -42,7 +42,14 @@ fi
 # - Remove modulepreload/preload hints (unsupported or buggy in Safari 12)
 echo "==> Patching index.html for Safari 12..."
 sed -i "/^import init/a (async () => {" dist/index.html
-sed -i "s|</script>|})();</script>|" dist/index.html
+# Only Trunk's module loader: the inline #990 boot guard has its own </script>.
+sed -i '/<script type="module">/,/<\/script>/ s|</script>|})();</script>|' dist/index.html
+# Both halves of the wrap must have landed exactly once, or every page has a
+# syntax error (and the #990 guard would turn that into endless reloads).
+if [ "$(grep -c '^(async () => {$' dist/index.html)" != 1 ] || [ "$(grep -c '})();</script>' dist/index.html)" != 1 ]; then
+  echo "ERROR: Safari-12 loader wrap did not apply exactly once — did Trunk change its <script type=\"module\"> output?" >&2
+  exit 1
+fi
 sed -i 's| integrity="sha384-[A-Za-z0-9+/=]*"||g' dist/index.html
 sed -i 's| crossorigin="anonymous"||g' dist/index.html
 sed -i '/<link rel="modulepreload"/d' dist/index.html

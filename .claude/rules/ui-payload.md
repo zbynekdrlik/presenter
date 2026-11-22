@@ -26,6 +26,9 @@ paths:
   separate and a new file is only a new `<link>`. An unclosed rule or comment in a source fails the
   build (it would swallow the next file). The wasm is fetched after the JS (no preload: Safari 12),
   so every stylesheet round delays it on LAN http.
+- **`index.html` carries one inline script, the #990 boot guard** (ES5, ~1.5 kB, reload on a failed or
+  stuck start; `stage-live-sync.md` section 6). Keep it tiny and dependency-free; `build-ui.sh`'s `})();`
+  patch is scoped to the `<script type="module">` block so it never touches the guard's `</script>`.
 - **The size profile is in `crates/presenter-ui/.cargo/config.toml`, not the crate's `Cargo.toml`.**
   A config `[profile]` beats a manifest `[profile]`, and the root `.cargo/config.toml` merges into
   this build by directory ancestry, so `opt-level = "z"` in the manifest is silently ignored

@@ -8,9 +8,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -36,19 +39,29 @@ class StageActivity : android.app.Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var currentUrl: String? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var resumed = false
+    private var rendererDeaths = 0
+    private var lastRendererDeathAt = 0L
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        webView = WebView(this)
+        webView = createWebView()
         setContentView(webView)
 
         // Allow `chrome://inspect` debugging of the stage from a dev machine.
         WebView.setWebContentsDebuggingEnabled(true)
 
-        webView.settings.apply {
+        wifiLock = createWifiLock()
+        loadFromIntent(intent)
+    }
+
+    /** A configured stage WebView (also used to replace one whose renderer died). */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView(): WebView {
+        val stage = WebView(this)
+        stage.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             // Stage video (NDI WHEP / HTML5) must autoplay without a user gesture.
@@ -60,7 +73,7 @@ class StageActivity : android.app.Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
+        stage.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 // The stage uses WebRTC (WHEP) to receive NDI video; grant the
                 // web resources it asks for so playback is never blocked.
@@ -68,7 +81,7 @@ class StageActivity : android.app.Activity() {
             }
         }
 
-        webView.webViewClient = object : WebViewClient() {
+        stage.webViewClient = object : WebViewClient() {
             override fun onReceivedError(
                 view: WebView,
                 request: WebResourceRequest,
@@ -78,10 +91,26 @@ class StageActivity : android.app.Activity() {
                 // so a transient server/network blip self-heals.
                 if (request.isForMainFrame) scheduleReload()
             }
-        }
 
-        wifiLock = createWifiLock()
-        loadFromIntent(intent)
+            // #990: a killed or crashed renderer (a 935 MB TV under memory
+            // pressure) leaves this WebView dead for good — without this the
+            // app stays foreground on a dark page. Replace it and reload.
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: RenderProcessGoneDetail,
+            ): Boolean {
+                val crashed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && detail.didCrash()
+                val delay = rendererRestartDelay()
+                Log.w(
+                    TAG,
+                    "stage WebView renderer gone (crashed=$crashed, death $rendererDeaths) — " +
+                        "recreating it, reload in $delay ms (#990)",
+                )
+                recreateWebView(delay)
+                return true
+            }
+        }
+        return stage
     }
 
     /**
@@ -104,6 +133,8 @@ class StageActivity : android.app.Activity() {
         // singleTask: a relaunch (watchdog re-firing the VIEW intent, possibly
         // with a new URL) reuses this instance — load the new URL.
         setIntent(intent)
+        // This load supersedes a pending delayed reload (#990), never twice.
+        handler.removeCallbacksAndMessages(null)
         loadFromIntent(intent)
     }
 
@@ -127,6 +158,38 @@ class StageActivity : android.app.Activity() {
         }
     }
 
+    /**
+     * #990: the wait before reloading after a renderer death — 3 s, doubling
+     * per death up to ~96 s, so a page that itself exhausts memory is not a
+     * tight crash → recreate → crash loop. A renderer that lived 5 min resets
+     * the count.
+     */
+    private fun rendererRestartDelay(): Long {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRendererDeathAt > RENDERER_STABLE_MS) rendererDeaths = 0
+        lastRendererDeathAt = now
+        rendererDeaths += 1
+        return RELOAD_DELAY_MS shl (rendererDeaths - 1).coerceAtMost(5)
+    }
+
+    /**
+     * #990: drop the dead WebView, put a fresh one in its place, and load the
+     * stage URL again after [delayMs] (the placeholder if the server never
+     * launched us). A paused activity leaves the new WebView paused too.
+     */
+    private fun recreateWebView(delayMs: Long) {
+        handler.removeCallbacksAndMessages(null)
+        val dead = webView
+        webView = createWebView()
+        setContentView(webView)
+        dead.destroy()
+        if (!resumed) webView.onPause()
+        handler.postDelayed({
+            val url = currentUrl
+            if (url != null) webView.loadUrl(url) else loadFromIntent(intent)
+        }, delayMs)
+    }
+
     private fun scheduleReload() {
         handler.removeCallbacksAndMessages(null)
         handler.postDelayed({ currentUrl?.let { webView.loadUrl(it) } }, RELOAD_DELAY_MS)
@@ -134,12 +197,14 @@ class StageActivity : android.app.Activity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         enterImmersive()
         webView.onResume()
         wifiLock?.acquire()
     }
 
     override fun onPause() {
+        resumed = false
         wifiLock?.takeIf { it.isHeld }?.release()
         webView.onPause()
         super.onPause()
@@ -173,5 +238,7 @@ class StageActivity : android.app.Activity() {
 
     private companion object {
         const val RELOAD_DELAY_MS = 3000L
+        const val TAG = "PresenterStage"
+        const val RENDERER_STABLE_MS = 5 * 60 * 1000L
     }
 }

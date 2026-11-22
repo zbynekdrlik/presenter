@@ -2,7 +2,13 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId, DEFAULT_LAUNCH_PACKAGE};
 use serde::Serialize;
-use std::{collections::HashMap, env, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    env,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
@@ -10,8 +16,12 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
+use crate::stage_connections::StageConnections;
+
 mod adb;
 use adb::*;
+mod page_liveness;
+use page_liveness::*;
 
 const COMMAND_CHANNEL_CAPACITY: usize = 8;
 const RETRY_INTERVAL: Duration = Duration::from_secs(20);
@@ -45,7 +55,7 @@ const KIOSK_PACKAGES_TO_SUPPRESS: &[&str] = &["com.tcl.browser", "com.fullykiosk
 /// TV's copy is older — so bumping the app's versionCode (and this constant)
 /// actually ships the new APK to TVs that already have an older one. Without this
 /// comparison, an already-installed (but stale) app would never be upgraded.
-const EXPECTED_STAGE_APK_VERSION_CODE: i64 = 2;
+const EXPECTED_STAGE_APK_VERSION_CODE: i64 = 3;
 
 /// Validate that a configured stage URL is a well-formed `http(s)://` URL before
 /// it is spliced into the `am start -a VIEW -d <url>` adb args (which reach the
@@ -140,6 +150,9 @@ pub struct AndroidStageRegistry {
     /// app but don't have it yet. `None` when the configured/default APK file is
     /// absent (then install is skipped — see [`STAGE_APK_ENV`]).
     apk_path: Arc<Option<PathBuf>>,
+    /// #990: the live stage connections (real client IPs), attached once by
+    /// `AppState`. Unset (a registry built without state) = no page check.
+    stage_connections: Arc<OnceLock<StageConnections>>,
     displays: Arc<RwLock<HashMap<AndroidStageDisplayId, DeviceEntry>>>,
 }
 
@@ -197,7 +210,17 @@ impl AndroidStageRegistry {
             runner,
             stage_url: Arc::new(stage_url),
             apk_path: Arc::new(apk_path),
+            stage_connections: Arc::new(OnceLock::new()),
             displays: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// #990: hand the keep-alive the registry of live stage connections, so
+    /// a display whose app is foreground but whose page never connects gets
+    /// a fresh page. Set once; workers read it on every tick.
+    pub fn attach_stage_connections(&self, connections: StageConnections) {
+        if self.stage_connections.set(connections).is_err() {
+            debug!("android stage registry: stage connections already attached");
         }
     }
 
@@ -298,6 +321,7 @@ impl AndroidStageRegistry {
         let runner = Arc::clone(&self.runner);
         let stage_url = Arc::clone(&self.stage_url);
         let apk_path = Arc::clone(&self.apk_path);
+        let connections = Arc::clone(&self.stage_connections);
         let status_clone = Arc::clone(&status);
         let config_clone = display.clone();
         let handle = tokio::spawn(async move {
@@ -305,6 +329,7 @@ impl AndroidStageRegistry {
                 runner,
                 stage_url,
                 apk_path,
+                connections,
                 config_clone,
                 status_clone,
                 command_rx,
@@ -330,6 +355,7 @@ async fn run_device_worker(
     runner: Arc<dyn AdbRunner>,
     stage_url: Arc<Option<String>>,
     apk_path: Arc<Option<PathBuf>>,
+    connections: Arc<OnceLock<StageConnections>>,
     mut config: AndroidStageDisplay,
     status: Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     mut command_rx: mpsc::Receiver<DeviceCommand>,
@@ -338,14 +364,17 @@ async fn run_device_worker(
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     // #793: this display's adb link memory (stuck-cycle streak) across ticks.
     let mut link = AdbLinkState::default();
+    // #990: whether this display's page actually connects.
+    let mut page = PageLiveness::new(Instant::now());
 
     loop {
         tokio::select! {
             _ = ticker.tick() => {
                 if config.is_enabled {
                     // Periodic keep-alive: foreground-aware (#419) — only
-                    // relaunches when the browser is not already up.
-                    if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, false, &mut link).await {
+                    // relaunches when the browser is not already up, or (#990)
+                    // when its page has not connected for 3 min.
+                    if let Err(err) = keep_alive_tick(runner.as_ref(), &stage_url, &apk_path, &config, &status, &mut link, &mut page, connections.get(), Instant::now()).await {
                         debug!(display = %config.label, ?err, "android stage display launch attempt failed");
                     }
                 } else {
@@ -358,6 +387,7 @@ async fn run_device_worker(
                         config = new_config;
                         // The host/port may have changed — start a fresh streak.
                         link = AdbLinkState::default();
+                        page = PageLiveness::new(Instant::now());
                         if !config.is_enabled {
                             mark_disabled(&status).await;
                         }
@@ -365,8 +395,9 @@ async fn run_device_worker(
                     DeviceCommand::LaunchNow => {
                         if config.is_enabled {
                             // Explicit/forced launch (startup, config change,
-                            // launch-now endpoint): always (re)launch (#419).
-                            if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, true, &mut link).await {
+                            // launch-now endpoint): always (re)launch (#419);
+                            // the fresh page gets the full 3 min to connect (#990).
+                            if let Err(err) = forced_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, &mut link, &mut page, Instant::now()).await {
                                 debug!(display = %config.label, ?err, "android stage display manual launch failed");
                             }
                         }
@@ -383,6 +414,10 @@ async fn run_device_worker(
     Ok(())
 }
 
+/// One adb cycle: connect, keep awake, install/suppress, then launch the
+/// stage — on a tick only when the #419 foreground gate says so, always when
+/// `force_launch`. `Ok(true)` = the VIEW intent fired, `Ok(false)` = skipped
+/// (the stage page is already in front).
 async fn connect_and_launch(
     runner: &dyn AdbRunner,
     stage_url: &Arc<Option<String>>,
@@ -391,7 +426,7 @@ async fn connect_and_launch(
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     force_launch: bool,
     link: &mut AdbLinkState,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let serial = format!("{}:{}", config.host, config.port);
 
     // Build the launch args BEFORE touching the device. If no stage URL is
@@ -441,33 +476,11 @@ async fn connect_and_launch(
     // #419: foreground-aware keep-alive. On the periodic tick (force_launch =
     // false) skip the am-start when the browser is ALREADY the resumed app —
     // re-firing the VIEW intent reloads com.tcl.browser (black blink + spinner)
-    // every cycle. An inconclusive probe (None) falls through to launching so a
-    // genuinely-down display still recovers. Explicit/forced launches (config
-    // change, launch-now endpoint) bypass the gate and always relaunch.
-    if !force_launch {
-        let foreground = adb_foreground_component(runner, &serial).await;
-        if !should_launch_stage(foreground.as_deref(), launch_pkg) {
-            debug!(
-                display = %config.label,
-                package = launch_pkg,
-                foreground = foreground.as_deref().unwrap_or("<unknown>"),
-                "android stage keep-alive: stage page already foreground — skipping relaunch (#419)"
-            );
-            // A confirmed-foreground probe IS a liveness success: refresh
-            // last_success so a healthy display that skips relaunch every cycle
-            // does not show an ever-aging "last success" on the operator
-            // dashboard (#419 review).
-            let mut guard = status.write().await;
-            guard.state = AndroidStageDisplayState::Running;
-            guard.last_success = Some(Utc::now());
-            guard.last_error = None;
-            return Ok(());
-        }
-        info!(
-            display = %config.label,
-            foreground = foreground.as_deref().unwrap_or("<unknown>"),
-            "android stage keep-alive: browser not foreground — relaunching (#419)"
-        );
+    // every cycle. Explicit/forced launches (config change, launch-now
+    // endpoint, a dead page #990) bypass the gate and always relaunch.
+    if !force_launch && stage_already_foreground(runner, &serial, launch_pkg, config, status).await
+    {
+        return Ok(false);
     }
 
     {
@@ -485,7 +498,42 @@ async fn connect_and_launch(
     guard.state = AndroidStageDisplayState::Running;
     guard.last_success = Some(success);
     guard.last_error = None;
-    Ok(())
+    Ok(true)
+}
+
+/// The #419 gate: is the stage page already the resumed app? An inconclusive
+/// probe (None) answers "no" so a genuinely-down display still recovers. A
+/// confirmed-foreground probe IS a liveness success: it refreshes
+/// `last_success` so a healthy display that skips relaunch every cycle does
+/// not show an ever-aging "last success" on the operator dashboard (#419
+/// review).
+async fn stage_already_foreground(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    launch_pkg: &str,
+    config: &AndroidStageDisplay,
+    status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
+) -> bool {
+    let foreground = adb_foreground_component(runner, serial).await;
+    if should_launch_stage(foreground.as_deref(), launch_pkg) {
+        info!(
+            display = %config.label,
+            foreground = foreground.as_deref().unwrap_or("<unknown>"),
+            "android stage keep-alive: browser not foreground — relaunching (#419)"
+        );
+        return false;
+    }
+    debug!(
+        display = %config.label,
+        package = launch_pkg,
+        foreground = foreground.as_deref().unwrap_or("<unknown>"),
+        "android stage keep-alive: stage page already foreground — skipping relaunch (#419)"
+    );
+    let mut guard = status.write().await;
+    guard.state = AndroidStageDisplayState::Running;
+    guard.last_success = Some(Utc::now());
+    guard.last_error = None;
+    true
 }
 
 /// Ensure our own Presenter Stage app is installed before we launch it, so the
@@ -927,6 +975,7 @@ mod tests {
     //   (c) LaunchNow (force_launch=true) always fires `am start`, regardless
     //       of foreground state and WITHOUT probing it.
 
+    use crate::stage_connections::StageConnections;
     use async_trait::async_trait;
     use std::ffi::OsString;
     use std::os::unix::process::ExitStatusExt;
@@ -1889,9 +1938,17 @@ mod tests {
         tx.try_send(DeviceCommand::LaunchNow).unwrap();
         tx.try_send(DeviceCommand::Shutdown).unwrap();
 
-        run_device_worker(runner, stage_url, no_apk(), config, status, rx)
-            .await
-            .expect("worker should exit cleanly on Shutdown");
+        run_device_worker(
+            runner,
+            stage_url,
+            no_apk(),
+            Arc::new(OnceLock::new()),
+            config,
+            status,
+            rx,
+        )
+        .await
+        .expect("worker should exit cleanly on Shutdown");
 
         assert_eq!(
             fake.dumpsys_calls(),
@@ -2263,5 +2320,359 @@ mod tests {
             ConnectAction::Reconnect,
             "3 consecutive offline cycles after the prompt → drop the stale entry",
         );
+    }
+
+    // ── #990: page-level keep-alive ─────────────────────────────────────────
+    // "Our app is foreground" is not proof of life: SD2 showed a dark page for
+    // 11 h with StageActivity in front. A display with no live stage
+    // connection from its address for 3 min gets the VIEW intent re-fired;
+    // fruitless relaunches back off 5 → 60 min.
+
+    const DISPLAY_IP: &str = "10.0.0.42"; // test_display()'s host
+
+    fn secs(s: u64) -> Duration {
+        Duration::from_secs(s)
+    }
+
+    /// One keep-alive tick against `connections` at `now`, our stage page
+    /// foreground (the #419 gate alone would skip the relaunch).
+    async fn page_tick(
+        runner: &FakeAdbRunner,
+        page: &mut PageLiveness,
+        connections: Option<&StageConnections>,
+        now: std::time::Instant,
+    ) -> anyhow::Result<bool> {
+        keep_alive_tick(
+            runner,
+            &Arc::new(Some(TEST_STAGE_URL.to_string())),
+            &no_apk(),
+            &test_display(),
+            &test_status(),
+            &mut AdbLinkState::default(),
+            page,
+            connections,
+            now,
+        )
+        .await
+    }
+
+    async fn live_connection_from(connections: &StageConnections, ip: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        connections.register(id, "worship-snv", Utc::now()).await;
+        connections
+            .set_client_ip(id, Some(ip.parse().expect("test ip")))
+            .await;
+        id
+    }
+
+    #[test]
+    fn page_liveness_schedule_waits_3_min_then_5_min_between_relaunches() {
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+        page.observe(Some(false), t0 + secs(179));
+        assert!(!page.relaunch_due(t0 + secs(179)), "3 min not over yet");
+        page.observe(Some(false), t0 + secs(180));
+        assert!(
+            page.relaunch_due(t0 + secs(180)),
+            "3 min without a connection"
+        );
+
+        page.note_relaunch(t0 + secs(180));
+        page.note_launch(t0 + secs(180));
+        page.observe(Some(false), t0 + secs(360));
+        assert!(
+            !page.relaunch_due(t0 + secs(360)),
+            "silent 3 min again, but the last relaunch was < 5 min ago"
+        );
+        assert!(
+            page.relaunch_due(t0 + secs(480)),
+            "5 min after the relaunch"
+        );
+
+        page.observe(Some(true), t0 + secs(500));
+        assert!(
+            !page.relaunch_due(t0 + secs(600)),
+            "a live page resets the silence"
+        );
+        page.observe(None, t0 + secs(900));
+        assert!(
+            page.relaunch_due(t0 + secs(900)),
+            "an unknown reading neither proves nor disproves life"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_page_without_a_connection_for_3_min_is_relaunched() {
+        let capture = crate::tracing_capture::Capture::install();
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let early = page_tick(&runner, &mut page, Some(&connections), t0 + secs(60)).await;
+        assert!(matches!(early, Ok(false)), "{early:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "1 min of silence is not dead yet"
+        );
+
+        let late = page_tick(&runner, &mut page, Some(&connections), t0 + secs(200)).await;
+        assert!(matches!(late, Ok(true)), "{late:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "app foreground but no live stage connection for 3 min → re-fire the VIEW intent (#990)"
+        );
+        let lines = capture.events_with_message("re-fired the stage page (#990)");
+        assert_eq!(lines.len(), 1, "one INFO per relaunch");
+        assert_eq!(lines[0].level, tracing::Level::INFO);
+        assert_eq!(lines[0].field("display"), Some("Stage TV"));
+    }
+
+    #[tokio::test]
+    async fn foreground_page_with_a_live_connection_is_left_alone() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        live_connection_from(&connections, DISPLAY_IP).await;
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        for minute in 1..=20 {
+            let result = page_tick(
+                &runner,
+                &mut page,
+                Some(&connections),
+                t0 + secs(60 * minute),
+            )
+            .await;
+            assert!(matches!(result, Ok(false)), "{result:?}");
+        }
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "a page with a live stage connection is never reloaded (#419 no-blink)"
+        );
+    }
+
+    #[tokio::test]
+    async fn another_displays_connection_does_not_keep_this_page_alive() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        live_connection_from(&connections, "10.0.0.99").await;
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let result = page_tick(&runner, &mut page, Some(&connections), t0 + secs(181)).await;
+        assert!(matches!(result, Ok(true)), "{result:?}");
+        assert_eq!(runner.am_start_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_disconnected_page_is_relaunched_after_3_min() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let id = live_connection_from(&connections, DISPLAY_IP).await;
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let alive = page_tick(&runner, &mut page, Some(&connections), t0 + secs(600)).await;
+        assert!(matches!(alive, Ok(false)), "{alive:?}");
+        connections.mark_disconnected(id).await;
+        let soon = page_tick(&runner, &mut page, Some(&connections), t0 + secs(700)).await;
+        assert!(matches!(soon, Ok(false)), "{soon:?}");
+        assert_eq!(runner.am_start_calls(), 0, "dead for 100 s only");
+        let dead = page_tick(&runner, &mut page, Some(&connections), t0 + secs(781)).await;
+        assert!(matches!(dead, Ok(true)), "{dead:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "3 min after the last live reading"
+        );
+    }
+
+    #[tokio::test]
+    async fn fruitless_page_relaunches_back_off_and_log_on_powers_of_two() {
+        // Review of 0ef6783c: a flat 5 min gap reloaded a display whose page
+        // connects from an address its host does not resolve to every 5 min
+        // forever (a blink + an INFO line each, ~288/day). Fruitless
+        // relaunches now back off 5, 10, 20, 40, 60 min (the #484 pattern).
+        let capture = crate::tracing_capture::Capture::install();
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        // A page that never connects: every tick for 3 h is silent.
+        let mut relaunched_at = Vec::new();
+        let mut tick = 0;
+        while tick <= 3 * 3600 {
+            let result = page_tick(&runner, &mut page, Some(&connections), t0 + secs(tick)).await;
+            assert!(result.is_ok(), "{result:?}");
+            if matches!(result, Ok(true)) {
+                relaunched_at.push(tick);
+            }
+            tick += 20;
+        }
+        assert_eq!(
+            relaunched_at,
+            vec![180, 480, 1080, 2280, 4680, 8280],
+            "3 min of silence, then gaps of 5, 10, 20, 40, 60 min — never one per 20 s tick"
+        );
+        let info: Vec<String> = capture
+            .events_with_message("re-fired the stage page (#990)")
+            .iter()
+            .filter(|line| line.level == tracing::Level::INFO)
+            .filter_map(|line| line.field("relaunches").map(str::to_string))
+            .collect();
+        assert_eq!(
+            info,
+            ["1", "2", "4"],
+            "INFO on the 1st, 2nd, 4th relaunch only"
+        );
+
+        // The page finally connects: one recovery line, the streak ends.
+        live_connection_from(&connections, DISPLAY_IP).await;
+        let healed = page_tick(&runner, &mut page, Some(&connections), t0 + secs(tick)).await;
+        assert!(matches!(healed, Ok(false)), "{healed:?}");
+        let recovered = capture.events_with_message("the stage page is connected again (#990)");
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].field("relaunches"), Some("6"));
+    }
+
+    #[test]
+    fn relaunch_gap_doubles_up_to_an_hour() {
+        let gaps: Vec<u64> = (0..=8).map(|n| relaunch_gap(n).as_secs() / 60).collect();
+        assert_eq!(gaps, [5, 5, 10, 20, 40, 60, 60, 60, 60]);
+        assert_eq!(relaunch_gap(u32::MAX), PAGE_RELAUNCH_MAX_GAP, "no overflow");
+    }
+
+    #[tokio::test]
+    async fn an_explicit_launch_gives_the_fresh_page_the_full_3_min() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let launched = forced_launch(
+            &runner,
+            &Arc::new(Some(TEST_STAGE_URL.to_string())),
+            &no_apk(),
+            &test_display(),
+            &test_status(),
+            &mut AdbLinkState::default(),
+            &mut page,
+            t0 + secs(170),
+        )
+        .await;
+        assert!(matches!(launched, Ok(true)), "{launched:?}");
+        assert_eq!(runner.am_start_calls(), 1);
+
+        let soon = page_tick(&runner, &mut page, Some(&connections), t0 + secs(200)).await;
+        assert!(matches!(soon, Ok(false)), "{soon:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "30 s after a launch is not dead yet"
+        );
+        let dead = page_tick(&runner, &mut page, Some(&connections), t0 + secs(351)).await;
+        assert!(matches!(dead, Ok(true)), "{dead:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            2,
+            "3 min after the explicit launch"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_registry_means_no_page_relaunch() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+        let result = page_tick(&runner, &mut page, None, t0 + secs(3600)).await;
+        assert!(matches!(result, Ok(false)), "{result:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "unknown liveness keeps the #419 behaviour"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_relaunch_that_never_reached_the_tv_logs_nothing_and_does_not_back_off() {
+        // Second review of 70254497: counting failed attempts let a TV that
+        // was off all night reach the 60 min gap, so its first dead page of
+        // the morning waited an hour. Only a fired relaunch counts now; a
+        // forced cycle costs nothing the plain 20 s tick does not run anyway.
+        let capture = crate::tracing_capture::Capture::install();
+        let runner = FakeAdbRunner::with_connect_failure(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let first = page_tick(&runner, &mut page, Some(&connections), t0 + secs(200)).await;
+        assert!(first.is_err(), "an unreachable TV fails the cycle");
+        let again = page_tick(&runner, &mut page, Some(&connections), t0 + secs(220)).await;
+        assert!(again.is_err());
+        assert_eq!(runner.am_start_calls(), 0);
+        assert!(
+            capture
+                .events_with_message("re-fired the stage page (#990)")
+                .is_empty(),
+            "a TV that is off logs no relaunch line"
+        );
+        assert!(
+            page.relaunch_due(t0 + secs(240)),
+            "nothing fired, so nothing to back off from: the next reachable tick relaunches"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_launch_by_the_419_gate_ends_the_back_off() {
+        let stage_runner = FakeAdbRunner::new(Foreground::StagePage);
+        let other_app = FakeAdbRunner::new(Foreground::OtherApp);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        // A dead page through three relaunches: the next gap is 20 min.
+        for tick in [180, 480, 1080] {
+            let result = page_tick(
+                &stage_runner,
+                &mut page,
+                Some(&connections),
+                t0 + secs(tick),
+            )
+            .await;
+            assert!(matches!(result, Ok(true)), "{tick}: {result:?}");
+        }
+        assert!(
+            !page.relaunch_due(t0 + secs(1080 + 600)),
+            "deep in the back-off"
+        );
+
+        // The TV is power-cycled: our app is not in front, the #419 gate
+        // launches it (not a page relaunch — the back-off is not due).
+        let booted = page_tick(&other_app, &mut page, Some(&connections), t0 + secs(1300)).await;
+        assert!(matches!(booted, Ok(true)), "{booted:?}");
+
+        // Its fresh page fails again: relaunched 3 min later, not 20.
+        let early = page_tick(
+            &stage_runner,
+            &mut page,
+            Some(&connections),
+            t0 + secs(1400),
+        )
+        .await;
+        assert!(matches!(early, Ok(false)), "{early:?}");
+        let dead = page_tick(
+            &stage_runner,
+            &mut page,
+            Some(&connections),
+            t0 + secs(1481),
+        )
+        .await;
+        assert!(matches!(dead, Ok(true)), "{dead:?}");
+        assert_eq!(stage_runner.am_start_calls(), 4);
     }
 }
