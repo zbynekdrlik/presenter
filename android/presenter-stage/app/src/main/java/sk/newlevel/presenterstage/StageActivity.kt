@@ -8,9 +8,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -37,18 +39,25 @@ class StageActivity : android.app.Activity() {
     private var currentUrl: String? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        webView = WebView(this)
+        webView = createWebView()
         setContentView(webView)
 
         // Allow `chrome://inspect` debugging of the stage from a dev machine.
         WebView.setWebContentsDebuggingEnabled(true)
 
-        webView.settings.apply {
+        wifiLock = createWifiLock()
+        loadFromIntent(intent)
+    }
+
+    /** A configured stage WebView (also used to replace one whose renderer died). */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView(): WebView {
+        val stage = WebView(this)
+        stage.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             // Stage video (NDI WHEP / HTML5) must autoplay without a user gesture.
@@ -60,7 +69,7 @@ class StageActivity : android.app.Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
+        stage.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 // The stage uses WebRTC (WHEP) to receive NDI video; grant the
                 // web resources it asks for so playback is never blocked.
@@ -68,7 +77,7 @@ class StageActivity : android.app.Activity() {
             }
         }
 
-        webView.webViewClient = object : WebViewClient() {
+        stage.webViewClient = object : WebViewClient() {
             override fun onReceivedError(
                 view: WebView,
                 request: WebResourceRequest,
@@ -78,10 +87,21 @@ class StageActivity : android.app.Activity() {
                 // so a transient server/network blip self-heals.
                 if (request.isForMainFrame) scheduleReload()
             }
-        }
 
-        wifiLock = createWifiLock()
-        loadFromIntent(intent)
+            // #990: a killed or crashed renderer (a 935 MB TV under memory
+            // pressure) leaves this WebView dead for good — without this the
+            // app stays foreground on a dark page. Replace it and reload.
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: RenderProcessGoneDetail,
+            ): Boolean {
+                val crashed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && detail.didCrash()
+                Log.w(TAG, "stage WebView renderer gone (crashed=$crashed) — recreating it (#990)")
+                recreateWebView()
+                return true
+            }
+        }
+        return stage
     }
 
     /**
@@ -125,6 +145,21 @@ class StageActivity : android.app.Activity() {
                 "utf-8",
             )
         }
+    }
+
+    /**
+     * #990: drop the dead WebView and put a fresh one in its place, then load
+     * the stage URL again (the placeholder if the server never launched us).
+     */
+    private fun recreateWebView() {
+        handler.removeCallbacksAndMessages(null)
+        val dead = webView
+        webView = createWebView()
+        setContentView(webView)
+        dead.destroy()
+        val url = currentUrl
+        if (url != null) webView.loadUrl(url) else loadFromIntent(intent)
+        webView.onResume()
     }
 
     private fun scheduleReload() {
@@ -173,5 +208,6 @@ class StageActivity : android.app.Activity() {
 
     private companion object {
         const val RELOAD_DELAY_MS = 3000L
+        const val TAG = "PresenterStage"
     }
 }

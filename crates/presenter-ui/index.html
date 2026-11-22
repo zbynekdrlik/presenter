@@ -28,6 +28,52 @@
     <!-- Bundled OFL fonts for the stream output page (#717): copied to
          /ui-pkg/fonts/, referenced by @font-face in stream_output.css. -->
     <link data-trunk rel="copy-dir" href="fonts" />
+    <!-- #990 boot guard: a start that fails (the wasm download reset, an
+         error before the app is up) or never gets ready in 20 s reloads the
+         page after 5 s, 10 s, 20 s … 60 s. Inline and before Trunk's loader,
+         so it runs even when the loader itself never does. -->
+    <script>
+    (function () {
+      var KEY = "presenter.bootAttempts", done = false, timer;
+      function attempts(next) {
+        try {
+          var s = window.sessionStorage;
+          if (next === undefined) return Number(s.getItem(KEY)) || 0;
+          if (next) s.setItem(KEY, String(next)); else s.removeItem(KEY);
+        } catch (e) {}
+        return 0;
+      }
+      function ready() {
+        return !!document.body && document.body.getAttribute("data-wasm-ready") === "true";
+      }
+      function stop() {
+        done = true;
+        clearTimeout(timer);
+        watch.disconnect();
+        removeEventListener("unhandledrejection", onFail);
+        removeEventListener("error", onFail);
+      }
+      function fail(reason) {
+        if (done || ready()) return;
+        stop();
+        var n = attempts() + 1, delay = Math.min(5000 * Math.pow(2, n - 1), 60000);
+        attempts(n);
+        console.warn("presenter boot failed (" + reason + "), reload " + n + " in " + delay / 1000 + " s (#990)");
+        setTimeout(function () { location.reload(); }, delay);
+      }
+      function onFail(e) {
+        var r = e.reason || e.error || e.message;
+        fail((e.type === "error" ? "error: " : "unhandled rejection: ") + ((r && r.message) || r));
+      }
+      var watch = new MutationObserver(function () {
+        if (ready()) { stop(); attempts(0); }
+      });
+      watch.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["data-wasm-ready"] });
+      addEventListener("unhandledrejection", onFail);
+      addEventListener("error", onFail);
+      timer = setTimeout(function () { fail("not ready in 20 s"); }, 20000);
+    })();
+    </script>
     <link data-trunk rel="rust" data-wasm-opt="0" />
 </head>
 <body data-wasm-ready="false">

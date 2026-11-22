@@ -341,6 +341,8 @@ impl AppState {
         startup_mode: StartupMode,
     ) -> Self {
         let stage_connections = StageConnections::new();
+        // #990: the Android keep-alive reads which displays' pages connect.
+        android_stage_registry.attach_stage_connections(stage_connections.clone());
         let default_layout = StageDisplayLayout::built_in()
             .into_iter()
             .map(|layout| layout.code)

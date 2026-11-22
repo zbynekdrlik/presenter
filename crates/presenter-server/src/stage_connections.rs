@@ -96,6 +96,9 @@ struct StageConnection {
     status: StageClientStatus,
     /// #732 diagnostics (see `StageClientSnapshot` / `NdiVideoDiag`).
     user_agent: Option<String>,
+    /// #990: the client's real IP (canonical: `::ffff:a.b.c.d` → `a.b.c.d`),
+    /// so the Android keep-alive can tell which display a page runs on.
+    client_ip: Option<IpAddr>,
     ndi_video: Option<NdiVideoDiag>,
     last_diag_at: Option<DateTime<Utc>>,
     last_logged_key: Option<DiagLogKey>,
@@ -111,6 +114,7 @@ impl StageConnection {
             last_round_trip: None,
             status: StageClientStatus::Connecting,
             user_agent: None,
+            client_ip: None,
             ndi_video: None,
             last_diag_at: None,
             last_logged_key: None,
@@ -199,13 +203,23 @@ impl StageConnectionTracker {
 
     /// #990: store the connecting client's real IP (the #793
     /// `extract_client_ip` value, parsed; `anonymous` → `None`).
-    pub fn set_client_ip(&mut self, _id: Uuid, _ip: Option<IpAddr>) {}
+    /// A `None` never overwrites a previously-recorded IP.
+    pub fn set_client_ip(&mut self, id: Uuid, ip: Option<IpAddr>) {
+        if let (Some(connection), Some(ip)) = (self.connections.get_mut(&id), ip) {
+            connection.client_ip = Some(ip.to_canonical());
+        }
+    }
 
     /// #990: whether any stage connection from one of `addrs` is still live
     /// (not `Disconnected`) — the Android keep-alive's proof that a display's
     /// page actually runs.
-    pub fn has_live_connection_from(&self, _addrs: &[IpAddr]) -> bool {
-        false
+    pub fn has_live_connection_from(&self, addrs: &[IpAddr]) -> bool {
+        self.connections.values().any(|connection| {
+            connection.status != StageClientStatus::Disconnected
+                && connection
+                    .client_ip
+                    .is_some_and(|ip| addrs.iter().any(|addr| addr.to_canonical() == ip))
+        })
     }
 
     /// #732: store the connecting client's userAgent (set once on presence).
@@ -847,7 +861,10 @@ mod tests {
             "a connection with no recorded IP proves nothing for a display"
         );
         tracker.set_client_ip(id, Some(sd2));
-        assert!(tracker.has_live_connection_from(&[sd2]), "connecting counts");
+        assert!(
+            tracker.has_live_connection_from(&[sd2]),
+            "connecting counts"
+        );
         assert!(tracker.has_live_connection_from(&[sd4, sd2]), "any address");
         assert!(!tracker.has_live_connection_from(&[sd4]), "another display");
         assert!(!tracker.has_live_connection_from(&[]), "no addresses");

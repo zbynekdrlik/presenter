@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use presenter_core::NdiVideoDiag;
 pub use presenter_core::{InboundMessage, LiveEvent};
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
@@ -249,6 +249,11 @@ async fn handle_stage_presence(
             let now = Utc::now();
             let snapshot = connections.register(id, &layout_code, now).await;
             connections.set_user_agent(id, user_agent.clone()).await;
+            // #990: the Android keep-alive matches a display to its page by
+            // this IP (`anonymous` → None: such a page proves nothing).
+            connections
+                .set_client_ip(id, client_ip.parse::<IpAddr>().ok())
+                .await;
             hub.publish(LiveEvent::StageConnection { snapshot });
             *registered_client = Some(id);
             info!(

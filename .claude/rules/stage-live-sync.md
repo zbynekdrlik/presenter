@@ -12,6 +12,9 @@ paths:
   - "crates/presenter-server/src/android_stage.rs"
   - "crates/presenter-server/src/android_stage/**"
   - "tests/e2e/stage-layout-sync.spec.ts"
+  - "tests/e2e/stage-boot-recovery.spec.ts"
+  - "crates/presenter-ui/index.html"
+  - "scripts/build-ui.sh"
 ---
 
 # Stage displays: lossless live events, adb hygiene, WS diagnostics (#793)
@@ -133,3 +136,26 @@ within ~6 s).
 ## The last-resort reload backs off (#850 spec §14)
 
 A page that can never decode (a tunnel, 2026-10-12) reloaded every 61 s, a new NDI video session each time, because a reload starts a new page. `ReloadEscalation` keeps `fruitless_reloads` in `sessionStorage`: 60 s, 2, 4, 8, then 15 min; the first decoded frame clears it. The reconnect loop runs meanwhile, so a TV still recovers without a reload.
+
+## 6. A dead page heals itself (#990)
+
+SNV SD2, 2026-11-21: the wasm download was reset at boot, Trunk's loader rejected, and the TV stayed
+dark 11 h with our app foreground. Three layers, each sees a failure the others cannot:
+
+- **Boot guard** (`crates/presenter-ui/index.html`, inline, before Trunk's loader, every page): an
+  `unhandledrejection` / `error` before `body[data-wasm-ready="true"]`, or no ready in 20 s → reload
+  after 5, 10, 20, 40, 60 s (`presenter.bootAttempts` in sessionStorage, try/catch, cleared once
+  ready); ONE `console.warn` per failed attempt, nothing on the happy path. `build-ui.sh`'s
+  Safari-12 `})();` patch is scoped to the `<script type="module">` block — an unscoped
+  `s|</script>|…|` would break the guard's own `</script>`. E2E `stage-boot-recovery.spec.ts`
+  (`route.abort("connectionreset")` once, a held route once; console asserted per page load).
+- **Server keep-alive** (`android_stage/page_liveness.rs`): "our app is foreground" is not proof of
+  life. `live.rs` records each stage connection's real client IP (`set_client_ip`, canonical), the
+  tick resolves the display's `host` (`lookup_host`, like adb) and asks
+  `has_live_connection_from` (any non-`Disconnected` connection). No live connection for 3 min →
+  the tick runs the FORCED launch (VIEW intent → `onNewIntent` → `loadUrl`), ≥ 5 min apart per
+  display (attempts count, so a TV that is off is not retried every tick), one INFO only when the
+  intent actually fired. Unknown liveness (no registry, host does not resolve) changes nothing. Any
+  launch gives the fresh page the full 3 min. `connect_and_launch` returns whether it launched.
+- **APK** `StageActivity.onRenderProcessGone` → destroy + recreate the WebView, reload `currentUrl`
+  (versionCode 3).

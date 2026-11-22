@@ -42,7 +42,8 @@ fi
 # - Remove modulepreload/preload hints (unsupported or buggy in Safari 12)
 echo "==> Patching index.html for Safari 12..."
 sed -i "/^import init/a (async () => {" dist/index.html
-sed -i "s|</script>|})();</script>|" dist/index.html
+# Only Trunk's module loader: the inline #990 boot guard has its own </script>.
+sed -i '/<script type="module">/,/<\/script>/ s|</script>|})();</script>|' dist/index.html
 sed -i 's| integrity="sha384-[A-Za-z0-9+/=]*"||g' dist/index.html
 sed -i 's| crossorigin="anonymous"||g' dist/index.html
 sed -i '/<link rel="modulepreload"/d' dist/index.html
