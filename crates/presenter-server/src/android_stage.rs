@@ -12,6 +12,8 @@ use tracing::{debug, error, info, warn};
 
 mod adb;
 use adb::*;
+mod page_liveness;
+use page_liveness::*;
 
 const COMMAND_CHANNEL_CAPACITY: usize = 8;
 const RETRY_INTERVAL: Duration = Duration::from_secs(20);
@@ -391,7 +393,7 @@ async fn connect_and_launch(
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     force_launch: bool,
     link: &mut AdbLinkState,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let serial = format!("{}:{}", config.host, config.port);
 
     // Build the launch args BEFORE touching the device. If no stage URL is
@@ -461,7 +463,7 @@ async fn connect_and_launch(
             guard.state = AndroidStageDisplayState::Running;
             guard.last_success = Some(Utc::now());
             guard.last_error = None;
-            return Ok(());
+            return Ok(false);
         }
         info!(
             display = %config.label,
@@ -485,7 +487,7 @@ async fn connect_and_launch(
     guard.state = AndroidStageDisplayState::Running;
     guard.last_success = Some(success);
     guard.last_error = None;
-    Ok(())
+    Ok(true)
 }
 
 /// Ensure our own Presenter Stage app is installed before we launch it, so the
@@ -932,6 +934,7 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
     use std::process::{ExitStatus, Output};
     use std::sync::Mutex;
+    use crate::stage_connections::StageConnections;
     use tokio::sync::mpsc;
 
     const TEST_STAGE_URL: &str = "http://10.77.9.205/stage";
@@ -2263,5 +2266,212 @@ mod tests {
             ConnectAction::Reconnect,
             "3 consecutive offline cycles after the prompt → drop the stale entry",
         );
+    }
+
+    // ── #990: page-level keep-alive ─────────────────────────────────────────
+    // "Our app is foreground" is not proof of life: SD2 showed a dark page for
+    // 11 h with StageActivity in front. A display with no live stage
+    // connection from its address for 3 min gets the VIEW intent re-fired, at
+    // most once per 5 min.
+
+    const DISPLAY_IP: &str = "10.0.0.42"; // test_display()'s host
+
+    fn secs(s: u64) -> Duration {
+        Duration::from_secs(s)
+    }
+
+    /// One keep-alive tick against `connections` at `now`, our stage page
+    /// foreground (the #419 gate alone would skip the relaunch).
+    async fn page_tick(
+        runner: &FakeAdbRunner,
+        page: &mut PageLiveness,
+        connections: Option<&StageConnections>,
+        now: std::time::Instant,
+    ) -> anyhow::Result<bool> {
+        keep_alive_tick(
+            runner,
+            &Arc::new(Some(TEST_STAGE_URL.to_string())),
+            &no_apk(),
+            &test_display(),
+            &test_status(),
+            &mut AdbLinkState::default(),
+            page,
+            connections,
+            now,
+        )
+        .await
+    }
+
+    async fn live_connection_from(connections: &StageConnections, ip: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        connections.register(id, "worship-snv", Utc::now()).await;
+        connections
+            .set_client_ip(id, Some(ip.parse().expect("test ip")))
+            .await;
+        id
+    }
+
+    #[test]
+    fn page_liveness_schedule_waits_3_min_then_5_min_between_relaunches() {
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+        page.observe(Some(false), t0 + secs(179));
+        assert!(!page.relaunch_due(t0 + secs(179)), "3 min not over yet");
+        page.observe(Some(false), t0 + secs(180));
+        assert!(page.relaunch_due(t0 + secs(180)), "3 min without a connection");
+
+        page.note_relaunch_attempt(t0 + secs(180));
+        page.note_launch(t0 + secs(180));
+        page.observe(Some(false), t0 + secs(360));
+        assert!(
+            !page.relaunch_due(t0 + secs(360)),
+            "silent 3 min again, but the last relaunch was < 5 min ago"
+        );
+        assert!(page.relaunch_due(t0 + secs(480)), "5 min after the relaunch");
+
+        page.observe(Some(true), t0 + secs(500));
+        assert!(!page.relaunch_due(t0 + secs(600)), "a live page resets the silence");
+        page.observe(None, t0 + secs(900));
+        assert!(
+            page.relaunch_due(t0 + secs(900)),
+            "an unknown reading neither proves nor disproves life"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_page_without_a_connection_for_3_min_is_relaunched() {
+        let capture = crate::tracing_capture::Capture::install();
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let early = page_tick(&runner, &mut page, Some(&connections), t0 + secs(60)).await;
+        assert!(matches!(early, Ok(false)), "{early:?}");
+        assert_eq!(runner.am_start_calls(), 0, "1 min of silence is not dead yet");
+
+        let late = page_tick(&runner, &mut page, Some(&connections), t0 + secs(200)).await;
+        assert!(matches!(late, Ok(true)), "{late:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "app foreground but no live stage connection for 3 min → re-fire the VIEW intent (#990)"
+        );
+        let lines = capture.events_with_message("re-fired the stage page (#990)");
+        assert_eq!(lines.len(), 1, "one INFO per relaunch");
+        assert_eq!(lines[0].level, tracing::Level::INFO);
+        assert_eq!(lines[0].field("display"), Some("Stage TV"));
+    }
+
+    #[tokio::test]
+    async fn foreground_page_with_a_live_connection_is_left_alone() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        live_connection_from(&connections, DISPLAY_IP).await;
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        for minute in 1..=20 {
+            let result =
+                page_tick(&runner, &mut page, Some(&connections), t0 + secs(60 * minute)).await;
+            assert!(matches!(result, Ok(false)), "{result:?}");
+        }
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "a page with a live stage connection is never reloaded (#419 no-blink)"
+        );
+    }
+
+    #[tokio::test]
+    async fn another_displays_connection_does_not_keep_this_page_alive() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        live_connection_from(&connections, "10.0.0.99").await;
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let result = page_tick(&runner, &mut page, Some(&connections), t0 + secs(181)).await;
+        assert!(matches!(result, Ok(true)), "{result:?}");
+        assert_eq!(runner.am_start_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_disconnected_page_is_relaunched_after_3_min() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let id = live_connection_from(&connections, DISPLAY_IP).await;
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let alive = page_tick(&runner, &mut page, Some(&connections), t0 + secs(600)).await;
+        assert!(matches!(alive, Ok(false)), "{alive:?}");
+        connections.mark_disconnected(id).await;
+        let soon = page_tick(&runner, &mut page, Some(&connections), t0 + secs(700)).await;
+        assert!(matches!(soon, Ok(false)), "{soon:?}");
+        assert_eq!(runner.am_start_calls(), 0, "dead for 100 s only");
+        let dead = page_tick(&runner, &mut page, Some(&connections), t0 + secs(781)).await;
+        assert!(matches!(dead, Ok(true)), "{dead:?}");
+        assert_eq!(runner.am_start_calls(), 1, "3 min after the last live reading");
+    }
+
+    #[tokio::test]
+    async fn page_relaunches_are_rate_limited_to_one_per_5_min() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        // A server that no page can reach: every tick is silent.
+        let mut tick = 0;
+        while tick <= 900 {
+            let result =
+                page_tick(&runner, &mut page, Some(&connections), t0 + secs(tick)).await;
+            assert!(result.is_ok(), "{result:?}");
+            tick += 20;
+        }
+        // First relaunch at 180 s, then 480 s, then 780 s.
+        assert_eq!(
+            runner.am_start_calls(),
+            3,
+            "15 min of silence = 3 relaunches, never one per 20 s tick"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_registry_means_no_page_relaunch() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+        let result = page_tick(&runner, &mut page, None, t0 + secs(3600)).await;
+        assert!(matches!(result, Ok(false)), "{result:?}");
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "unknown liveness keeps the #419 behaviour"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_relaunch_logs_no_info_and_still_counts_for_the_rate_limit() {
+        let capture = crate::tracing_capture::Capture::install();
+        let runner = FakeAdbRunner::with_connect_failure(Foreground::StagePage);
+        let connections = StageConnections::new();
+        let t0 = std::time::Instant::now();
+        let mut page = PageLiveness::new(t0);
+
+        let first = page_tick(&runner, &mut page, Some(&connections), t0 + secs(200)).await;
+        assert!(first.is_err(), "an unreachable TV fails the cycle");
+        let again = page_tick(&runner, &mut page, Some(&connections), t0 + secs(220)).await;
+        assert!(again.is_err());
+        assert_eq!(runner.am_start_calls(), 0);
+        assert!(
+            capture
+                .events_with_message("re-fired the stage page (#990)")
+                .is_empty(),
+            "a TV that is off logs no relaunch line"
+        );
+        assert!(!page.relaunch_due(t0 + secs(220)), "the attempt counts");
+        assert!(page.relaunch_due(t0 + secs(500)), "5 min after the attempt");
     }
 }

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use presenter_core::{NdiVideoDiag, StageClientSnapshot, StageClientStatus};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::IpAddr, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -197,6 +197,17 @@ impl StageConnectionTracker {
         Some(connection.snapshot(id))
     }
 
+    /// #990: store the connecting client's real IP (the #793
+    /// `extract_client_ip` value, parsed; `anonymous` → `None`).
+    pub fn set_client_ip(&mut self, _id: Uuid, _ip: Option<IpAddr>) {}
+
+    /// #990: whether any stage connection from one of `addrs` is still live
+    /// (not `Disconnected`) — the Android keep-alive's proof that a display's
+    /// page actually runs.
+    pub fn has_live_connection_from(&self, _addrs: &[IpAddr]) -> bool {
+        false
+    }
+
     /// #732: store the connecting client's userAgent (set once on presence).
     /// A `None` never overwrites a previously-recorded UA.
     pub fn set_user_agent(&mut self, id: Uuid, user_agent: Option<String>) {
@@ -353,6 +364,17 @@ impl StageConnections {
     pub async fn mark_disconnected(&self, id: Uuid) -> Option<StageClientSnapshot> {
         let mut guard = self.inner.write().await;
         guard.mark_disconnected(id)
+    }
+
+    /// #990: store the connecting client's real IP (once, on presence).
+    pub async fn set_client_ip(&self, id: Uuid, ip: Option<IpAddr>) {
+        let mut guard = self.inner.write().await;
+        guard.set_client_ip(id, ip);
+    }
+
+    /// #990: whether a live stage connection from one of `addrs` exists.
+    pub async fn has_live_connection_from(&self, addrs: &[IpAddr]) -> bool {
+        self.inner.read().await.has_live_connection_from(addrs)
     }
 
     /// #732: store the connecting client's userAgent (once, on presence).
@@ -805,5 +827,69 @@ mod tests {
         let none = connections.record_heartbeat_ack(id, None, None, now).await;
         assert_eq!(none.snapshot.expect("snapshot").layout_code, "preach");
         assert_eq!(none.layout_changed_from, None);
+    }
+
+    /// #990: a live stage connection is matched by the display's address —
+    /// connecting, connected and reconnecting all count; a disconnected one,
+    /// another address, or a connection with no known IP never does.
+    #[test]
+    fn live_connection_is_matched_by_client_ip() {
+        let mut tracker = StageConnectionTracker::new();
+        let now = Utc::now();
+        let sd2: IpAddr = "10.77.9.32".parse().expect("ip");
+        let sd4: IpAddr = "10.77.9.34".parse().expect("ip");
+        assert!(!tracker.has_live_connection_from(&[sd2]), "empty registry");
+
+        let id = Uuid::new_v4();
+        tracker.register(id, "worship-snv", now);
+        assert!(
+            !tracker.has_live_connection_from(&[sd2]),
+            "a connection with no recorded IP proves nothing for a display"
+        );
+        tracker.set_client_ip(id, Some(sd2));
+        assert!(tracker.has_live_connection_from(&[sd2]), "connecting counts");
+        assert!(tracker.has_live_connection_from(&[sd4, sd2]), "any address");
+        assert!(!tracker.has_live_connection_from(&[sd4]), "another display");
+        assert!(!tracker.has_live_connection_from(&[]), "no addresses");
+
+        tracker.record_heartbeat_ack(id, None, now);
+        assert!(tracker.has_live_connection_from(&[sd2]), "connected counts");
+
+        tracker.mark_disconnected(id);
+        assert!(
+            !tracker.has_live_connection_from(&[sd2]),
+            "a disconnected page is not alive"
+        );
+    }
+
+    /// #990: the WS peer of an IPv4 client can arrive IPv4-mapped
+    /// (`::ffff:a.b.c.d`) on a dual-stack listener; the display's resolved
+    /// address is plain IPv4.
+    #[test]
+    fn live_connection_matches_an_ipv4_mapped_peer() {
+        let mut tracker = StageConnectionTracker::new();
+        let id = Uuid::new_v4();
+        let display: IpAddr = "10.77.9.32".parse().expect("ip");
+        tracker.register(id, "worship-snv", Utc::now());
+        tracker.set_client_ip(id, Some("::ffff:10.77.9.32".parse().expect("ip")));
+        assert!(tracker.has_live_connection_from(&[display]));
+        tracker.set_client_ip(id, None);
+        assert!(
+            tracker.has_live_connection_from(&[display]),
+            "a later None never erases a recorded IP"
+        );
+    }
+
+    /// #990: the async wrappers the WS handler and the keep-alive use.
+    #[tokio::test]
+    async fn async_wrappers_record_and_query_the_client_ip() {
+        let connections = StageConnections::new();
+        let id = Uuid::new_v4();
+        let ip: IpAddr = "192.0.2.7".parse().expect("ip");
+        connections.register(id, "worship-snv", Utc::now()).await;
+        connections.set_client_ip(id, Some(ip)).await;
+        assert!(connections.has_live_connection_from(&[ip]).await);
+        connections.mark_disconnected(id).await;
+        assert!(!connections.has_live_connection_from(&[ip]).await);
     }
 }
