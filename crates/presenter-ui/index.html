@@ -29,8 +29,9 @@
          /ui-pkg/fonts/, referenced by @font-face in stream_output.css. -->
     <link data-trunk rel="copy-dir" href="fonts" />
     <!-- #990 boot guard: a start that fails (the wasm download reset, an
-         error before the app is up) or never gets ready in 20 s reloads the
-         page after 5 s, 10 s, 20 s … 60 s. Inline and before Trunk's loader,
+         error before the app is up) or is not ready in time (20 s, doubled
+         after each failed try up to 160 s, so a slow but healthy device still
+         gets there) reloads the page after 5 s, 10 s, 20 s … 60 s. Inline and before Trunk's loader,
          so it runs even when the loader itself never does. -->
     <script>
     (function () {
@@ -71,7 +72,8 @@
       watch.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["data-wasm-ready"] });
       addEventListener("unhandledrejection", onFail);
       addEventListener("error", onFail);
-      timer = setTimeout(function () { fail("not ready in 20 s"); }, 20000);
+      var limit = Math.min(20000 * Math.pow(2, attempts()), 160000);
+      timer = setTimeout(function () { fail("not ready in " + limit / 1000 + " s"); }, limit);
     })();
     </script>
     <link data-trunk rel="rust" data-wasm-opt="0" />

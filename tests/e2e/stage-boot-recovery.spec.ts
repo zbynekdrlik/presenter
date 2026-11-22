@@ -32,7 +32,6 @@ let baseURL: string;
 
 const WASM_ROUTE = /\/ui-pkg\/presenter-ui-[^/]*_bg\.wasm/;
 const ATTEMPTS_KEY = "presenter.bootAttempts";
-const GUARD_WARNING = /presenter boot failed .*#990/;
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -84,9 +83,14 @@ test.describe("Boot guard: a failed UI start recovers by itself (#990)", () => {
       await route.continue();
     });
 
+    const started = Date.now();
     await page.goto(`${baseURL}/stage`);
-    // 5 s back-off + a normal start; well inside 30 s.
-    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    // The rejected loader is caught at once: 5 s back-off + a normal start,
+    // well before the 20 s ready timeout could have done it.
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 15_000 });
+    expect(Date.now() - started, "recovered through the failure, not the 20 s timeout").toBeLessThan(
+      15_000,
+    );
 
     expect(wasmRequests, "the wasm is requested again after the reload").toBe(2);
     expect(loads.length, "exactly one reload: the failed load + the recovered one").toBe(2);
@@ -94,19 +98,17 @@ test.describe("Boot guard: a failed UI start recovers by itself (#990)", () => {
     await expect(page.locator(".stage__connection")).toContainText("CONNECTED");
     expect(await readAttempts(page), "the attempt count is cleared once ready").toBeNull();
 
-    // The failed attempt: exactly ONE guard warning, plus only the failure it
-    // reacted to (the reset request and the rejected loader promise).
-    const failed = loads[0].messages;
-    const guardWarnings = failed.filter((m) => m.startsWith("[warning]") && GUARD_WARNING.test(m));
-    expect(guardWarnings, `failed load console: ${JSON.stringify(failed)}`).toHaveLength(1);
-    const unexpected = failed.filter(
-      (m) =>
-        !GUARD_WARNING.test(m) &&
-        !/ERR_CONNECTION_RESET|WebAssembly|Failed to load resource|Failed to fetch|NetworkError|network error/i.test(
-          m,
-        ),
+    // The failed attempt logs EXACTLY the failure the guard reacted to — the
+    // reset request and the rejected loader promise — plus the guard's ONE
+    // warning (order between the page error and the warning is not fixed).
+    const failed = [...loads[0].messages].sort();
+    expect(failed).toEqual(
+      [
+        "[error] Failed to load resource: net::ERR_CONNECTION_RESET",
+        "[pageerror] Failed to fetch",
+        "[warning] presenter boot failed (unhandled rejection: Failed to fetch), reload 1 in 5 s (#990)",
+      ].sort(),
     );
-    expect(unexpected, "only the wasm failure + the guard's warning on the failed load").toEqual([]);
 
     // The recovered load: a clean console.
     await page.waitForTimeout(1_000);
@@ -143,6 +145,31 @@ test.describe("Boot guard: a failed UI start recovers by itself (#990)", () => {
     expect(failed, `failed load console: ${JSON.stringify(failed)}`).toHaveLength(1);
     expect(failed[0]).toMatch(/^\[warning\] presenter boot failed \(not ready in 20 s\).*#990/);
 
+    await page.waitForTimeout(1_000);
+    expect(loads[1].messages).toEqual([]);
+  });
+
+  test("a device slower than 20 s still comes up: the deadline grows", async ({ page }) => {
+    const loads = recordConsolePerLoad(page);
+    let wasmRequests = 0;
+    await page.route(WASM_ROUTE, async (route: Route) => {
+      wasmRequests += 1;
+      // EVERY download takes 25 s — a slow but healthy device. A flat 20 s
+      // deadline would reload it forever.
+      await new Promise((resolve) => setTimeout(resolve, 25_000));
+      await route.continue().catch(() => undefined);
+    });
+
+    await page.goto(`${baseURL}/stage`, { waitUntil: "commit" });
+    // 20 s deadline + 5 s back-off + a 25 s download under the 40 s deadline.
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 90_000 });
+
+    expect(wasmRequests).toBe(2);
+    expect(loads.length).toBe(2);
+    expect(await readAttempts(page)).toBeNull();
+    const failed = loads[0].messages;
+    expect(failed, `failed load console: ${JSON.stringify(failed)}`).toHaveLength(1);
+    expect(failed[0]).toMatch(/^\[warning\] presenter boot failed \(not ready in 20 s\).*#990/);
     await page.waitForTimeout(1_000);
     expect(loads[1].messages).toEqual([]);
   });

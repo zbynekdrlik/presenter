@@ -143,19 +143,29 @@ SNV SD2, 2026-11-21: the wasm download was reset at boot, Trunk's loader rejecte
 dark 11 h with our app foreground. Three layers, each sees a failure the others cannot:
 
 - **Boot guard** (`crates/presenter-ui/index.html`, inline, before Trunk's loader, every page): an
-  `unhandledrejection` / `error` before `body[data-wasm-ready="true"]`, or no ready in 20 s → reload
+  `unhandledrejection` / `error` before `body[data-wasm-ready="true"]`, or not ready in time → reload
   after 5, 10, 20, 40, 60 s (`presenter.bootAttempts` in sessionStorage, try/catch, cleared once
-  ready); ONE `console.warn` per failed attempt, nothing on the happy path. `build-ui.sh`'s
-  Safari-12 `})();` patch is scoped to the `<script type="module">` block — an unscoped
-  `s|</script>|…|` would break the guard's own `</script>`. E2E `stage-boot-recovery.spec.ts`
-  (`route.abort("connectionreset")` once, a held route once; console asserted per page load).
+  ready). The ready deadline is 20 s and DOUBLES per failed attempt (cap 160 s): a flat deadline
+  reloads a slow but healthy device forever (a cut-off download is not cached). ONE
+  `console.warn` per failed attempt, nothing on the happy path. `build-ui.sh`'s Safari-12 `})();`
+  patch is scoped to the `<script type="module">` block (an unscoped `s|</script>|…|` breaks the
+  guard's own `</script>`) and asserts both halves landed exactly once. E2E
+  `stage-boot-recovery.spec.ts`: `route.abort("connectionreset")` once (must recover via the
+  rejection, < 15 s), a held route once, every download 25 s (the growing deadline); console
+  asserted per page load.
 - **Server keep-alive** (`android_stage/page_liveness.rs`): "our app is foreground" is not proof of
   life. `live.rs` records each stage connection's real client IP (`set_client_ip`, canonical), the
   tick resolves the display's `host` (`lookup_host`, like adb) and asks
   `has_live_connection_from` (any non-`Disconnected` connection). No live connection for 3 min →
-  the tick runs the FORCED launch (VIEW intent → `onNewIntent` → `loadUrl`), ≥ 5 min apart per
-  display (attempts count, so a TV that is off is not retried every tick), one INFO only when the
-  intent actually fired. Unknown liveness (no registry, host does not resolve) changes nothing. Any
-  launch gives the fresh page the full 3 min. `connect_and_launch` returns whether it launched.
+  the tick runs the FORCED launch (VIEW intent → `onNewIntent` → `loadUrl`). Fruitless relaunches
+  back off 5, 10, 20, 40, 60 min per display (`relaunch_gap`; attempts count, so a TV that is off
+  is not retried every tick) — a page that connects from an address the `host` does not resolve to
+  (two NICs) must not blink every 5 min forever. The relaunch line goes through
+  `should_log_adb_streak` (INFO on the 1st, 2nd, 4th …, only when the intent fired), plus ONE
+  `connected again` INFO when a live connection ends a streak. Unknown liveness (no registry, host
+  does not resolve within 2 s) changes nothing. Any launch (`forced_launch` too) gives the fresh
+  page the full 3 min. `connect_and_launch` returns whether it launched; the #419 gate lives in
+  `stage_already_foreground`.
 - **APK** `StageActivity.onRenderProcessGone` → destroy + recreate the WebView, reload `currentUrl`
-  (versionCode 3).
+  after 3 s doubling per death to ~96 s (a renderer alive 5 min resets it), the new WebView paused
+  when the activity is (versionCode 3).

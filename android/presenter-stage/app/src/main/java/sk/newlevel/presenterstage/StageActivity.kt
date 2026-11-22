@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
@@ -38,6 +39,9 @@ class StageActivity : android.app.Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var currentUrl: String? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var resumed = false
+    private var rendererDeaths = 0
+    private var lastRendererDeathAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,8 +100,13 @@ class StageActivity : android.app.Activity() {
                 detail: RenderProcessGoneDetail,
             ): Boolean {
                 val crashed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && detail.didCrash()
-                Log.w(TAG, "stage WebView renderer gone (crashed=$crashed) — recreating it (#990)")
-                recreateWebView()
+                val delay = rendererRestartDelay()
+                Log.w(
+                    TAG,
+                    "stage WebView renderer gone (crashed=$crashed, death $rendererDeaths) — " +
+                        "recreating it, reload in $delay ms (#990)",
+                )
+                recreateWebView(delay)
                 return true
             }
         }
@@ -148,18 +157,35 @@ class StageActivity : android.app.Activity() {
     }
 
     /**
-     * #990: drop the dead WebView and put a fresh one in its place, then load
-     * the stage URL again (the placeholder if the server never launched us).
+     * #990: the wait before reloading after a renderer death — 3 s, doubling
+     * per death up to ~96 s, so a page that itself exhausts memory is not a
+     * tight crash → recreate → crash loop. A renderer that lived 5 min resets
+     * the count.
      */
-    private fun recreateWebView() {
+    private fun rendererRestartDelay(): Long {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRendererDeathAt > RENDERER_STABLE_MS) rendererDeaths = 0
+        lastRendererDeathAt = now
+        rendererDeaths += 1
+        return RELOAD_DELAY_MS shl (rendererDeaths - 1).coerceAtMost(5)
+    }
+
+    /**
+     * #990: drop the dead WebView, put a fresh one in its place, and load the
+     * stage URL again after [delayMs] (the placeholder if the server never
+     * launched us). A paused activity leaves the new WebView paused too.
+     */
+    private fun recreateWebView(delayMs: Long) {
         handler.removeCallbacksAndMessages(null)
         val dead = webView
         webView = createWebView()
         setContentView(webView)
         dead.destroy()
-        val url = currentUrl
-        if (url != null) webView.loadUrl(url) else loadFromIntent(intent)
-        webView.onResume()
+        if (!resumed) webView.onPause()
+        handler.postDelayed({
+            val url = currentUrl
+            if (url != null) webView.loadUrl(url) else loadFromIntent(intent)
+        }, delayMs)
     }
 
     private fun scheduleReload() {
@@ -169,12 +195,14 @@ class StageActivity : android.app.Activity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         enterImmersive()
         webView.onResume()
         wifiLock?.acquire()
     }
 
     override fun onPause() {
+        resumed = false
         wifiLock?.takeIf { it.isHeld }?.release()
         webView.onPause()
         super.onPause()
@@ -209,5 +237,6 @@ class StageActivity : android.app.Activity() {
     private companion object {
         const val RELOAD_DELAY_MS = 3000L
         const val TAG = "PresenterStage"
+        const val RENDERER_STABLE_MS = 5 * 60 * 1000L
     }
 }
