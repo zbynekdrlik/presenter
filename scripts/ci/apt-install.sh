@@ -55,13 +55,27 @@ if [ -n "${APT_ARCHIVES:-}" ]; then
   APT+=(-o "Dir::Cache::Archives=$APT_ARCHIVES/")
 fi
 
+count_debs() {
+  find "$APT_ARCHIVES" -maxdepth 1 -name '*.deb' | wc -l
+}
+
 # apt runs as root; the cache is saved by the runner user, who must read it.
+# Also after a failed install: the .debs it did fetch are saved for the next
+# run (the action saves whenever this run added any, APT_NEW_DEBS_OUTPUT).
+# shellcheck disable=SC2317 # invoked through the EXIT trap
 own_archives() {
   if [ -n "${APT_ARCHIVES:-}" ]; then
     sudo rm -rf "$APT_ARCHIVES/partial" "$APT_ARCHIVES/lock"
     sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
+    if [ -n "${APT_NEW_DEBS_OUTPUT:-}" ]; then
+      echo "new_debs=$(( $(count_debs) - DEBS_BEFORE ))" >> "$APT_NEW_DEBS_OUTPUT"
+    fi
   fi
 }
+if [ -n "${APT_ARCHIVES:-}" ]; then
+  DEBS_BEFORE=$(count_debs)
+  trap own_archives EXIT
+fi
 
 attempt() {
   timeout 90 "${APT[@]}" update || return 1
@@ -76,7 +90,6 @@ for n in 1 2; do
   fi
   if attempt "$@"; then
     echo "apt-install: attempt $n done in $(( $(date +%s) - started )) s"
-    own_archives
     exit 0
   fi
   echo "::warning::apt-install: attempt $n failed after $(( $(date +%s) - started )) s"
