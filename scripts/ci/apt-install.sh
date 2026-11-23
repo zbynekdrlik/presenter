@@ -47,6 +47,22 @@ use_main_archive() {
 
 APT=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30)
 
+# The composite action .github/actions/apt-install restores the job's earlier
+# .deb downloads into APT_ARCHIVES (actions/cache) and saves them after the job;
+# apt then fetches only what changed. Unset (a direct call): apt's own cache.
+if [ -n "${APT_ARCHIVES:-}" ]; then
+  mkdir -p "$APT_ARCHIVES/partial"
+  APT+=(-o "Dir::Cache::Archives=$APT_ARCHIVES/")
+fi
+
+# apt runs as root; the cache is saved by the runner user, who must read it.
+own_archives() {
+  if [ -n "${APT_ARCHIVES:-}" ]; then
+    sudo rm -rf "$APT_ARCHIVES/partial" "$APT_ARCHIVES/lock"
+    sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
+  fi
+}
+
 attempt() {
   timeout 90 "${APT[@]}" update || return 1
   timeout 170 "${APT[@]}" install -y -q --no-install-recommends "$@" || return 1
@@ -60,6 +76,7 @@ for n in 1 2; do
   fi
   if attempt "$@"; then
     echo "apt-install: attempt $n done in $(( $(date +%s) - started )) s"
+    own_archives
     exit 0
   fi
   echo "::warning::apt-install: attempt $n failed after $(( $(date +%s) - started )) s"

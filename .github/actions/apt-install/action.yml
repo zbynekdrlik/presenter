@@ -1,0 +1,42 @@
+name: apt-install
+description: >-
+  Install apt packages on a GitHub-hosted runner through scripts/ci/apt-install.sh,
+  with the downloaded .deb files cached per package list and ISO week.
+  On 2026-11-23 the Ubuntu mirrors sent < 1.6 MB/s and the 274 MB gstreamer
+  set ran out of both bounded attempts; with the cache a job downloads only
+  the packages that changed since the cache was saved.
+inputs:
+  packages:
+    description: Space-separated apt package names.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: apt cache key
+      id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC2086 # word splitting of the package list is intended
+        list=$(printf '%s\n' $PACKAGES | sort -u | tr '\n' ' ')
+        echo "hash=$(printf '%s' "$list" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+        echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+        echo "dir=$HOME/.cache/apt-archives" >> "$GITHUB_OUTPUT"
+    - name: Restore apt archives
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: apt-v1-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.key.outputs.hash }}-${{ steps.key.outputs.week }}
+        restore-keys: |
+          apt-v1-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.key.outputs.hash }}-
+    - name: apt-get install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        APT_ARCHIVES: ${{ steps.key.outputs.dir }}
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC2086 # word splitting of the package list is intended
+        bash "$GITHUB_WORKSPACE/scripts/ci/apt-install.sh" $PACKAGES
