@@ -281,5 +281,11 @@ paths:
 - **Dante latency (dstack#381, owner 21.11.2026):** `dlink_config` sets `receive_buffer_ns(RECEIVE_BUFFER_NS)` = 4 ms, so
   with dlink's default 1 ms network latency the device advertises P = 5 ms (was dlink's default buffer, 12.35 ms).
   dstack watches dcontroller's history 24 h after it goes live; one late packet means back to 12.35 ms.
+- **Per-minute mic summary (#933, dstack#261):** `listen/minute_summary.rs` — a tokio `interval_at` task
+  (spawned by `ListenService::start`) logs ONE INFO `mic minute summary` per mic on `presenter::listen::mic`:
+  `mic`, `state`, `packets` / `lost` / `late` (minute deltas), `level_dbfs_max`, `level_dbfs_avg` (POWER mean of the
+  chain batches, -120 without a batch), `voiced_pct`. Accumulators (`MinuteMeter`) live in `MicCounters`, fed by
+  `record_chain` (so a closed generation never writes them). A mic silent the whole minute after having packets
+  gets one `packets=0` line, then none until packets return. `/listen/status` is unchanged. Tests pause tokio time.
 - **Guest transcription (#852 C3, Soniox):** its rules (assembly, wire, session machine, driver, hub,
   supervisor, deploy `listen.env`) live in `.claude/rules/listen-asr.md`.
