@@ -282,5 +282,11 @@ paths:
   read showed 463 late packets (0 at the default), most likely dlink 0.6.178's false late counts (dstack v0.6.210 #477).
   `dlink_config` sets no receive buffer (dlink's default, P 12.35 ms at 96 kHz); retry 5 ms only after presenter
   carries dstack >= v0.6.213, and dstack watches 24 h again — any late packet means back.
+- **Per-minute mic summary (#933, dstack#261):** `listen/minute_summary.rs` — a tokio `interval_at` task
+  (spawned by `ListenService::start`) logs ONE INFO `mic minute summary` per mic on `presenter::listen::mic`:
+  `mic`, `state`, `packets` / `lost` / `late` (minute deltas), `level_dbfs_max`, `level_dbfs_avg` (POWER mean of the
+  chain batches, -120 without a batch), `voiced_pct`. Accumulators (`MinuteMeter`) live in `MicCounters`, fed by
+  `record_chain` (so a closed generation never writes them). A mic silent the whole minute after having packets
+  gets one `packets=0` line, then none until packets return. `/listen/status` is unchanged. Tests pause tokio time.
 - **Guest transcription (#852 C3, Soniox):** its rules (assembly, wire, session machine, driver, hub,
   supervisor, deploy `listen.env`) live in `.claude/rules/listen-asr.md`.

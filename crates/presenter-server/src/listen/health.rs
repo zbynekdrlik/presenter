@@ -22,6 +22,7 @@ use presenter_core::listen::status::{
 use presenter_core::listen::transcription::TranscriptionStatus;
 use tokio::time::Instant;
 
+use super::minute_summary::{MinuteMeter, MinuteSummary};
 use super::NO_AUDIO_AFTER;
 
 /// Streams seen but not used (and their names) and the refused senders are
@@ -98,6 +99,8 @@ struct MicCounters {
     /// Formats the chain switched to (its first one included): the #484 gate
     /// of the converter lines.
     formats: u64,
+    /// The current minute's accumulators (#933 per-minute summary line).
+    minute: MinuteMeter,
 }
 
 #[derive(Debug, Default)]
@@ -572,11 +575,31 @@ impl ListenHealth {
             return false;
         };
         mic.frames_out += frames;
-        if level_dbfs.is_some() {
-            mic.level_dbfs = level_dbfs;
+        if let Some(level) = level_dbfs {
+            mic.level_dbfs = Some(level);
+            mic.minute.batch(level);
         }
         mic.error = error.map(str::to_string);
         true
+    }
+
+    /// Close the minute of every mic (#933): `(mic id, state, summary)` for
+    /// each one with a line to log, by id. Resets the accumulators.
+    pub(crate) fn take_minute_summaries(
+        &mut self,
+        now: Instant,
+    ) -> Vec<(String, MicState, MinuteSummary)> {
+        let mut lines: Vec<_> = self
+            .mics
+            .iter_mut()
+            .filter_map(|(id, mic)| {
+                let (packets, lost, late) = (mic.packets, mic.lost_packets, mic.late_packets);
+                let summary = mic.minute.take(packets, lost, late)?;
+                Some((id.clone(), mic_state(mic, now), summary))
+            })
+            .collect();
+        lines.sort_by(|a, b| a.0.cmp(&b.0));
+        lines
     }
 
     /// A format the mic's chain switched to; the mic's formats this session
