@@ -1010,21 +1010,33 @@ test("#871 every save is a keepalive request, so a reload right after typing kee
   // follow (its socket may connect after the save's change event).
   const bName = row(page, b).locator(NAME);
   await bName.fill("Kľúč B pred obnovením");
-  let serverHasIt = () => {};
-  const saved = new Promise<void>((resolve) => (serverHasIt = resolve));
-  const listRoute = `**/stream/api/outputs/${SLUG}/nameplates`;
-  await page.route(listRoute, async (route) => {
-    if (route.request().method() === "GET") await saved;
-    // A read of the page being unloaded is gone by now; nothing to answer.
-    await route.continue().catch(() => {});
-  });
+  // The hold is a `fetch` wrapper in the NEW page, never `page.route`: with
+  // a route installed Playwright intercepts every request of the page, and
+  // Chromium aborts an intercepted keepalive request when its page goes
+  // away (`net::ERR_ABORTED`, run 45199056283), so the save never reached
+  // the server. Without interception the keepalive PATCH outlives the page.
+  const listPath = `/stream/api/outputs/${SLUG}/nameplates`;
+  await page.addInitScript((path) => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    Object.assign(window, { __releasePlateList: release });
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const req = input instanceof Request ? input : null;
+      const url = new URL(req ? req.url : String(input), location.href);
+      const method = (req ? req.method : init?.method) ?? "GET";
+      if (method.toUpperCase() === "GET" && url.pathname === path) await gate;
+      return original(input, init);
+    };
+  }, listPath);
   await page.reload();
   await expect.poll(() => savedText(request, b)).toBe("Kľúč B pred obnovením");
-  serverHasIt();
+  await page.evaluate(() =>
+    (window as unknown as { __releasePlateList: () => void }).__releasePlateList(),
+  );
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await expect(row(page, b).locator(NAME)).toHaveValue("Kľúč B pred obnovením");
   await expect(row(page, a).locator(NAME)).toHaveValue("Kľúč A uložená");
-  await page.unroute(listRoute);
 
   expect(consoleErrors).toEqual([]);
 });
