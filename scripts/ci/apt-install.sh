@@ -11,7 +11,12 @@
 # A slow mirror is not cured by retrying it: on 2026-11-05 the runners' Azure
 # mirror sent ~40 kB/s on both attempts. The retry therefore drops the Azure
 # mirror from the runner's mirror list (/etc/apt/apt-mirrors.txt, read by the
-# `mirror+file:` sources) and fetches from archive.ubuntu.com.
+# `mirror+file:` sources) and fetches from a list of independent mirrors.
+#
+# Recommends are not installed (2026-11-23): the gstreamer/-dev set pulled
+# 316 MB with recommends (gdal, ROCm libamdhip64, …) and two Clippy runs that
+# day ran out of both attempts on a slow mirror. Every package a job needs is
+# named explicitly in its call, so a missing recommend is a missing name there.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -25,9 +30,16 @@ use_main_archive() {
   if [ -f "$MIRRORS" ]; then
     echo "apt-install: mirror list was:"
     cat "$MIRRORS"
-    printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://security.ubuntu.com/ubuntu/\tpriority:2\n' \
+    # Several mirrors, tried in priority order by apt's `mirror+file:` method:
+    # on 2026-11-23 archive.ubuntu.com answered InRelease in 15 s and the EC2
+    # runner mirror with 503, while kernel.org / Azure / MIT answered < 1 s.
+    printf '%s\tpriority:%s\n' \
+      http://mirrors.edge.kernel.org/ubuntu/ 1 \
+      http://azure.archive.ubuntu.com/ubuntu/ 2 \
+      http://mirrors.mit.edu/ubuntu/ 3 \
+      http://archive.ubuntu.com/ubuntu/ 4 \
       | sudo tee "$MIRRORS" >/dev/null
-    echo "apt-install: retrying from archive.ubuntu.com"
+    echo "apt-install: retrying from kernel.org / Azure / MIT / archive.ubuntu.com"
   else
     echo "apt-install: no $MIRRORS, retrying the configured sources"
   fi
@@ -37,7 +49,7 @@ APT=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30)
 
 attempt() {
   timeout 90 "${APT[@]}" update || return 1
-  timeout 170 "${APT[@]}" install -y -q "$@" || return 1
+  timeout 170 "${APT[@]}" install -y -q --no-install-recommends "$@" || return 1
 }
 
 for n in 1 2; do

@@ -278,8 +278,9 @@ paths:
   boundary); `dlink_config(plan).device()` is dlink's own check of the config, no network. E2E
   `settings-listen-dante.spec.ts` runs its own server with a Dante interface that does not exist on
   the runner: the real start is refused (`retrying`) and the card shows both fixed mics read-only.
-- **Dante latency (dstack#381, owner 21.11.2026):** `dlink_config` sets `receive_buffer_ns(RECEIVE_BUFFER_NS)` = 4 ms, so
-  with dlink's default 1 ms network latency the device advertises P = 5 ms (was dlink's default buffer, 12.35 ms).
-  dstack watches dcontroller's history 24 h after it goes live; one late packet means back to 12.35 ms.
+- **Dante latency (dstack#381):** 5 ms (a 4 ms `receive_buffer_ns`) ran 21.–23.11.2026 and was ROLLED BACK: dstack's 24 h
+  read showed 463 late packets (0 at the default), most likely dlink 0.6.178's false late counts (dstack v0.6.210 #477).
+  `dlink_config` sets no receive buffer (dlink's default, P 12.35 ms at 96 kHz); retry 5 ms only after presenter
+  carries dstack >= v0.6.213, and dstack watches 24 h again — any late packet means back.
 - **Guest transcription (#852 C3, Soniox):** its rules (assembly, wire, session machine, driver, hub,
   supervisor, deploy `listen.env`) live in `.claude/rules/listen-asr.md`.
