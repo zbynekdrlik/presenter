@@ -12,6 +12,11 @@
 # mirror sent ~40 kB/s on both attempts. The retry therefore drops the Azure
 # mirror from the runner's mirror list (/etc/apt/apt-mirrors.txt, read by the
 # `mirror+file:` sources) and fetches from archive.ubuntu.com.
+#
+# Recommends are not installed (2026-11-23): the gstreamer/-dev set pulled
+# 316 MB with recommends (gdal, ROCm libamdhip64, …) and two Clippy runs that
+# day ran out of both attempts on a slow mirror. Every package a job needs is
+# named explicitly in its call, so a missing recommend is a missing name there.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -37,7 +42,7 @@ APT=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30)
 
 attempt() {
   timeout 90 "${APT[@]}" update || return 1
-  timeout 170 "${APT[@]}" install -y -q "$@" || return 1
+  timeout 170 "${APT[@]}" install -y -q --no-install-recommends "$@" || return 1
 }
 
 for n in 1 2; do
