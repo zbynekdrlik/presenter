@@ -330,9 +330,13 @@ paths:
   attribute or text ONCE (`getAttribute`, `textContent()`), never
   `toHaveAttribute("data-visible", "false")` / `not.toContainText(…)`, which retry until a
   wrong toast is replaced or hidden. The keepalive reload test holds the NEW page's list
-  GET (`page.route`) until REST has the saved text: that GET could otherwise reach the
+  GET until REST has the saved text: that GET could otherwise reach the
   server before the keepalive PATCH, and the new page's socket may connect after the
-  save's change event, so nothing would refresh it.
+  save's change event, so nothing would refresh it. The hold is a `fetch` wrapper from
+  `addInitScript` in the new page, NEVER `page.route` across a real unload: a route makes
+  Playwright intercept every request of the page, and Chromium aborts an intercepted
+  keepalive request when its page goes away (`net::ERR_ABORTED`, the save never reaches
+  the server; run 45199056283 + 44774048168 failed both tries this way).
 - The last-round tests (helpers `holdPatches` = every PATCH of a plate held in arrival
   order, `failFirstPatches(n)` = the first n `route.abort()`ed, `failFirstPatchOnCue` = the
   first held until `failFirst()` aborts it): a failed save marks its row (`data-unsaved` +

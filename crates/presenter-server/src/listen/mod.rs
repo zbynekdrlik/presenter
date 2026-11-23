@@ -25,6 +25,7 @@ mod asr;
 mod dante;
 pub(crate) mod health;
 mod mic_chain;
+mod minute_summary;
 pub(crate) mod recorder;
 mod recording_file;
 mod resample;
@@ -281,6 +282,7 @@ impl ListenService {
             dante::DanteEnv::from_env(),
         ));
         tokio::spawn(recorder::supervise(self.clone()));
+        tokio::spawn(minute_summary::supervise(self.clone()));
         true
     }
 

@@ -4,9 +4,9 @@
 # A mirror sometimes stalls: apt normally takes about a minute, but three runs
 # on 2026-11-05 hung until the step's 10-minute limit. Each attempt is bounded,
 # and a stalled attempt is retried once. Without -qq the log shows which
-# mirror stalled. Two attempts plus dpkg recovery (2 x (90 + 170) + 30 s) fit in the calling
-# steps' 10-minute limit. An install killed in the middle of dpkg would make the
-# retry fail at once ("dpkg was interrupted"), so dpkg is finished first.
+# mirror stalled. Two download attempts plus one install (2 x (90 + 170) + 300 s)
+# fit in the calling steps' 15-minute limit (2026-11-23: was 10 minutes with the
+# install inside each bounded attempt, see download() below).
 #
 # A slow mirror is not cured by retrying it: on 2026-11-05 the runners' Azure
 # mirror sent ~40 kB/s on both attempts. The retry therefore drops the Azure
@@ -47,22 +47,67 @@ use_main_archive() {
 
 APT=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30)
 
-attempt() {
-  timeout 90 "${APT[@]}" update || return 1
-  timeout 170 "${APT[@]}" install -y -q --no-install-recommends "$@" || return 1
+# The composite action .github/actions/apt-install restores the job's earlier
+# .deb downloads into APT_ARCHIVES (actions/cache) and saves them after the job;
+# apt then fetches only what changed. Unset (a direct call): apt's own cache.
+if [ -n "${APT_ARCHIVES:-}" ]; then
+  mkdir -p "$APT_ARCHIVES/partial"
+  APT+=(-o "Dir::Cache::Archives=$APT_ARCHIVES/")
+fi
+
+count_debs() {
+  find "$APT_ARCHIVES" -maxdepth 1 -name '*.deb' | wc -l
 }
 
+# apt runs as root; the cache is saved by the runner user, who must read it.
+# Also after a failed install: the .debs it did fetch are saved for the next
+# run (the action saves whenever this run added any, APT_NEW_DEBS_OUTPUT).
+# shellcheck disable=SC2317 # invoked through the EXIT trap
+own_archives() {
+  if [ -n "${APT_ARCHIVES:-}" ]; then
+    sudo rm -rf "$APT_ARCHIVES/partial" "$APT_ARCHIVES/lock"
+    sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
+    if [ -n "${APT_NEW_DEBS_OUTPUT:-}" ]; then
+      echo "new_debs=$(( $(count_debs) - DEBS_BEFORE ))" >> "$APT_NEW_DEBS_OUTPUT"
+    fi
+  fi
+}
+if [ -n "${APT_ARCHIVES:-}" ]; then
+  DEBS_BEFORE=$(count_debs)
+  trap own_archives EXIT
+fi
+
+# Only the download talks to a mirror, so only the download is bounded and
+# retried. On 2026-11-23 (run 45190029022) the 170 s bound killed apt-get
+# while dpkg was unpacking; the orphaned dpkg kept its lock and the retry
+# failed at once ("dpkg was interrupted"). The install runs from the
+# downloaded .debs, once, with its own bound.
+download() {
+  timeout 90 "${APT[@]}" update || return 1
+  timeout 170 "${APT[@]}" install -y -q --no-install-recommends --download-only "$@" || return 1
+}
+
+fetched=0
 for n in 1 2; do
   started=$(date +%s)
   if [ "$n" -gt 1 ]; then
-    timeout 30 sudo dpkg --configure -a || echo "::warning::apt-install: dpkg --configure -a failed"
     use_main_archive
   fi
-  if attempt "$@"; then
-    echo "apt-install: attempt $n done in $(( $(date +%s) - started )) s"
-    exit 0
+  if download "$@"; then
+    echo "apt-install: download attempt $n done in $(( $(date +%s) - started )) s"
+    fetched=1
+    break
   fi
-  echo "::warning::apt-install: attempt $n failed after $(( $(date +%s) - started )) s"
+  echo "::warning::apt-install: download attempt $n failed after $(( $(date +%s) - started )) s"
 done
-echo "::error::apt-install: both attempts failed" >&2
-exit 1
+if [ "$fetched" -ne 1 ]; then
+  echo "::error::apt-install: both download attempts failed" >&2
+  exit 1
+fi
+
+started=$(date +%s)
+if ! timeout 300 "${APT[@]}" -o DPkg::Lock::Timeout=60 install -y -q --no-install-recommends "$@"; then
+  echo "::error::apt-install: install from the downloaded packages failed after $(( $(date +%s) - started )) s" >&2
+  exit 1
+fi
+echo "apt-install: install done in $(( $(date +%s) - started )) s"

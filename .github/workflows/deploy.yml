@@ -21,7 +21,7 @@ jobs:
 
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
-        timeout-minutes: 10
+        timeout-minutes: 15
         # libglib2.0-dev + libgstreamer1.0-dev are required to compile the
         # `glib-sys`/`gstreamer-sys` crates that the NDI WebRTC pipeline
         # pulled in via gst-plugins-rs. Pre-WebRTC the build only needed
@@ -30,11 +30,12 @@ jobs:
         #   "Package 'glib-2.0', required by 'virtual:world', not found"
         # unless the GStreamer dev headers are installed. Same dependency
         # set as the dev pipeline's Build job in pipeline.yml.
-        run: |
-          bash scripts/ci/apt-install.sh \
-            protobuf-compiler cmake nasm binaryen brotli pigz \
-            libglib2.0-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            protobuf-compiler cmake nasm binaryen brotli pigz
+            libglib2.0-dev
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
             libgstreamer-plugins-bad1.0-dev
 
       - name: Install Rust toolchain
