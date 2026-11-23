@@ -74,7 +74,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         # apt-install bounds each attempt, retries a stall once, caches the .debs.
-        timeout-minutes: 10
+        timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
           packages: protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
@@ -325,7 +325,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         # apt-install bounds each attempt, retries a stall once, caches the .debs.
-        timeout-minutes: 10
+        timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
           packages: protobuf-compiler cmake nasm ripgrep gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
@@ -427,7 +427,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         # apt-install bounds each attempt, retries a stall once, caches the .debs.
-        timeout-minutes: 10
+        timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
           packages: protobuf-compiler cmake nasm ripgrep jq python3 python3-yaml gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
@@ -600,7 +600,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         # apt-install bounds each attempt, retries a stall once, caches the .debs.
-        timeout-minutes: 10
+        timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
           packages: protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
@@ -647,7 +647,7 @@ jobs:
       - name: Install system dependencies
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         # apt-install bounds each attempt, retries a stall once, caches the .debs.
-        timeout-minutes: 10
+        timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
           packages: protobuf-compiler cmake nasm binaryen brotli pigz gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
@@ -810,7 +810,7 @@ jobs:
       - name: Install GStreamer runtime libraries
         # apt is ~1 min; a stalled mirror hung release v0.4.310 for 60 min.
         # apt-install bounds each attempt, retries a stall once, caches the .debs.
-        timeout-minutes: 10
+        timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
           packages: >-

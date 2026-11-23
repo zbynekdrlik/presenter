@@ -4,9 +4,9 @@
 # A mirror sometimes stalls: apt normally takes about a minute, but three runs
 # on 2026-11-05 hung until the step's 10-minute limit. Each attempt is bounded,
 # and a stalled attempt is retried once. Without -qq the log shows which
-# mirror stalled. Two attempts plus dpkg recovery (2 x (90 + 170) + 30 s) fit in the calling
-# steps' 10-minute limit. An install killed in the middle of dpkg would make the
-# retry fail at once ("dpkg was interrupted"), so dpkg is finished first.
+# mirror stalled. Two download attempts plus one install (2 x (90 + 170) + 300 s)
+# fit in the calling steps' 15-minute limit (2026-11-23: was 10 minutes with the
+# install inside each bounded attempt, see download() below).
 #
 # A slow mirror is not cured by retrying it: on 2026-11-05 the runners' Azure
 # mirror sent ~40 kB/s on both attempts. The retry therefore drops the Azure
@@ -77,22 +77,37 @@ if [ -n "${APT_ARCHIVES:-}" ]; then
   trap own_archives EXIT
 fi
 
-attempt() {
+# Only the download talks to a mirror, so only the download is bounded and
+# retried. On 2026-11-23 (run 45190029022) the 170 s bound killed apt-get
+# while dpkg was unpacking; the orphaned dpkg kept its lock and the retry
+# failed at once ("dpkg was interrupted"). The install runs from the
+# downloaded .debs, once, with its own bound.
+download() {
   timeout 90 "${APT[@]}" update || return 1
-  timeout 170 "${APT[@]}" install -y -q --no-install-recommends "$@" || return 1
+  timeout 170 "${APT[@]}" install -y -q --no-install-recommends --download-only "$@" || return 1
 }
 
+fetched=0
 for n in 1 2; do
   started=$(date +%s)
   if [ "$n" -gt 1 ]; then
-    timeout 30 sudo dpkg --configure -a || echo "::warning::apt-install: dpkg --configure -a failed"
     use_main_archive
   fi
-  if attempt "$@"; then
-    echo "apt-install: attempt $n done in $(( $(date +%s) - started )) s"
-    exit 0
+  if download "$@"; then
+    echo "apt-install: download attempt $n done in $(( $(date +%s) - started )) s"
+    fetched=1
+    break
   fi
-  echo "::warning::apt-install: attempt $n failed after $(( $(date +%s) - started )) s"
+  echo "::warning::apt-install: download attempt $n failed after $(( $(date +%s) - started )) s"
 done
-echo "::error::apt-install: both attempts failed" >&2
-exit 1
+if [ "$fetched" -ne 1 ]; then
+  echo "::error::apt-install: both download attempts failed" >&2
+  exit 1
+fi
+
+started=$(date +%s)
+if ! timeout 300 "${APT[@]}" -o DPkg::Lock::Timeout=60 install -y -q --no-install-recommends "$@"; then
+  echo "::error::apt-install: install from the downloaded packages failed after $(( $(date +%s) - started )) s" >&2
+  exit 1
+fi
+echo "apt-install: install done in $(( $(date +%s) - started )) s"
