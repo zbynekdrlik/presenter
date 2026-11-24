@@ -109,62 +109,82 @@ fn here(s: Study) -> Option<(ReadingPlace, String)> {
     Some((place, name))
 }
 
-/// The add button: the place goes on TOP of the folder shown (`None` = the
-/// default one). The sheet stays open and its list is read again, so the new
-/// row shows at once; the notice names the place (and an own folder).
-fn add_here(s: Study, folder: Option<i64>, adding: RwSignal<bool>) {
+/// Off a chapter (a search, a sermon), the add has nothing to add.
+fn reading_a_chapter(s: Study) -> bool {
+    s.route
+        .with(|route| matches!(route.view, StudyView::Reader { .. }))
+}
+
+/// The add button: the place the button NAMES goes on TOP of the folder shown
+/// (`None` = the default one), through the page's write queue (after an order
+/// still on its way, so that order is no stale 409). The sheet stays open and
+/// its list is read again, so the new row shows at once; the notice names the
+/// place (and an own folder).
+fn add_here(ui: ListUi, shown: Option<(ReadingPlace, String)>, adding: RwSignal<bool>) {
+    let s = ui.s;
     if adding.get_untracked() {
         return;
     }
-    let Some((place, name)) = untrack(|| here(s)) else {
-        let reading = s
-            .route
-            .with_untracked(|route| matches!(route.view, StudyView::Reader { .. }));
-        s.tell(add_disabled_reason(reading).to_string());
+    let Some((place, name)) = shown else {
+        s.tell(add_disabled_reason(untrack(|| reading_a_chapter(s))).to_string());
         return;
     };
-    let folder_name = folder
+    let folder_name = ui
+        .folder
         .and_then(|id| untrack(|| folder_by_id(s, id)))
         .map(|found| found.name);
     adding.set(true);
-    leptos::task::spawn_local(async move {
-        let answer = api::create(folder, &name, &to_api(place), None).await;
-        // The sheet may be closed by now.
-        adding.try_set(false);
-        match answer {
-            Ok(made) => {
-                s.tell(added_notice(&made.name, folder_name.as_deref()));
-                load(s, folder);
-            }
-            Err(err) => s.tell(sermon_error(&err)),
-        }
+    s.bookmark_writes.update_value(|writes| {
+        writes.create = Some(Create {
+            folder: ui.folder,
+            name,
+            place: to_api(place),
+            folder_name,
+            adding,
+        });
     });
+    pump(s);
 }
 
 /// "Pridať Hebrejom 11:4" at the top of the sheet, under the folder chips;
-/// off, with the reason under it, while there is no place to add.
+/// off, with the reason under it, while there is no place to add, and while
+/// rows are being chosen or deleted (an add would move the indexes Späť uses).
 #[component]
-fn AddHere(s: Study, folder: Option<i64>) -> impl IntoView {
+fn AddHere(ui: ListUi) -> impl IntoView {
+    let s = ui.s;
     let adding = RwSignal::new(false);
-    let place = Memo::new(move |_| here(s).map(|(_, name)| name));
-    let reading = move || {
-        s.route
-            .with(|route| matches!(route.view, StudyView::Reader { .. }))
-    };
+    // The verse at the top is read from the page, untracked: read it again
+    // two frames after the mount, once a landing scroll and the side pane's
+    // reflow are on screen.
+    let frames = RwSignal::new(0u8);
+    request_animation_frame(move || {
+        frames.try_set(1);
+        request_animation_frame(move || {
+            frames.try_set(2);
+        });
+    });
+    let shown = Memo::new(move |_| {
+        frames.track();
+        here(s)
+    });
+    let name = move || shown.with(|place| place.as_ref().map(|(_, name)| name.clone()));
     view! {
         <div class="study-bookmarks__add">
             <button
                 type="button"
                 class="study-button study-button--primary"
                 data-role="bookmarks-add"
-                disabled=move || place.with(Option::is_none) || adding.get()
-                on:click=move |_| add_here(s, folder, adding)
+                disabled=move || {
+                    shown.with(Option::is_none) || adding.get() || ui.choosing.get()
+                        || ui.busy.get()
+                }
+                on:click=move |_| add_here(ui, shown.get_untracked(), adding)
             >
-                {move || add_label(place.get().as_deref())}
+                {move || add_label(name().as_deref())}
             </button>
-            <Show when=move || place.with(Option::is_none)>
+            <Show when=move || shown.with(Option::is_none)>
                 <p class="study-sheet__hint" data-role="bookmarks-add-why">
-                    {move || add_disabled_reason(reading())}
+                    {move || add_disabled_reason(reading_a_chapter(s))}
                 </p>
             </Show>
         </div>
@@ -244,6 +264,18 @@ pub(super) struct BookmarkWrites {
     /// The chosen ids of "Zmazať (N)", with the sheet that asked (and so its
     /// folder).
     delete: Option<(Vec<i64>, ListUi)>,
+    /// The add button's bookmark (#996), sent after a waiting order.
+    create: Option<Create>,
+}
+
+/// An add waiting in the queue: the folder, the place and its name, the
+/// folder's name for the notice, and the button's busy flag.
+pub(super) struct Create {
+    folder: Option<i64>,
+    name: String,
+    place: BookmarkPlace,
+    folder_name: Option<String>,
+    adding: RwSignal<bool>,
 }
 
 /// Send the next waiting write, if none is on its way.
@@ -254,7 +286,10 @@ fn pump(s: Study) {
         }
         let next = match writes.order.take() {
             Some((folder, ids)) => Some(Write::Order(folder, ids)),
-            None => writes.delete.take().map(|(ids, ui)| Write::Delete(ids, ui)),
+            None => match writes.delete.take() {
+                Some((ids, ui)) => Some(Write::Delete(ids, ui)),
+                None => writes.create.take().map(Write::Create),
+            },
         };
         writes.sending = next.is_some();
         next
@@ -275,6 +310,7 @@ fn pump(s: Study) {
                 let answer = api::delete_many(ui.folder, &ids).await;
                 deleted(s, ui, &ids, answer);
             }
+            Write::Create(add) => created(s, add).await,
         }
         s.bookmark_writes
             .update_value(|writes| writes.sending = false);
@@ -285,6 +321,21 @@ fn pump(s: Study) {
 enum Write {
     Order(Option<i64>, Vec<i64>),
     Delete(Vec<i64>, ListUi),
+    Create(Create),
+}
+
+/// The add button's bookmark sent. The sheet may be gone by now: its busy flag
+/// is written with `try_set`, and `load` lands only for the folder shown.
+async fn created(s: Study, add: Create) {
+    let answer = api::create(add.folder, &add.name, &add.place, None).await;
+    match answer {
+        Ok(made) => {
+            s.tell(added_notice(&made.name, add.folder_name.as_deref()));
+            load(s, add.folder);
+        }
+        Err(err) => s.tell(sermon_error(&err)),
+    }
+    add.adding.try_set(false);
 }
 
 /// A delete answered. The sheet may be gone by now: its signals are written
@@ -665,7 +716,7 @@ pub(super) fn BookmarksSheet(s: Study, folder: Option<i64>) -> impl IntoView {
             footer=ViewFn::from(move || delete_bar(ui))
         >
             <FolderRow s=s folder=folder read=read />
-            <AddHere s=s folder=folder />
+            <AddHere ui=ui />
             <FolderMenu s=s folder=folder />
             <ListState s=s folder=folder />
             <div

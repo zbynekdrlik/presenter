@@ -8,8 +8,8 @@
 //! takes the folder's bookmarks with it. The sheet's add button saves into the
 //! folder shown (#996: the verse sheet's ▾ folder picker is gone).
 //!
-//! The folders are `Study::bookmark_folders`, read again whenever the sheet or
-//! the picker opens; the server keeps them per reader, like the bookmarks. The
+//! The folders are `Study::bookmark_folders`, read again whenever the sheet
+//! opens; the server keeps them per reader, like the bookmarks. The
 //! list on screen stays while a new read is on its way (no jumping chips on a
 //! switch); only the NEWEST read may land (`Study::folder_reads`), and a sheet
 //! judges its URL folder only on an answer asked after it opened ([`fresh`]).

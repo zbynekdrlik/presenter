@@ -336,6 +336,8 @@ for (const [label, profile, touch] of PROFILES) {
     await expect(choose).toHaveText("Hotovo");
     await expect(remove).toHaveText("Zmazať (0)");
     await expect(remove).toBeDisabled();
+    // #996: no add while choosing — a new row would move the indexes Späť restores.
+    await expect(sheet(page).locator('[data-role="bookmarks-add"]')).toBeDisabled();
     // Choosing hides the handles and a tap chooses instead of opening.
     await expect(sheet(page).locator('[data-role="bookmark-drag"]')).toHaveCount(0);
     for (const id of [five, three, one]) await press(row(page, id).locator('[data-role="bookmark-pick"]'), touch);

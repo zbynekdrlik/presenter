@@ -312,7 +312,7 @@ mod tests {
             StudyRoute::parse("?t=slk-seb&p=HEB.11&s=zalozky"),
             Some(list)
         );
-        // #932: "Pridať záložku" adds at once; an old `s=zalozka` link opens the
+        // #996: the Záložky sheet adds the place; an old `s=zalozka` link opens the
         // verse with no sheet.
         let old_save = StudyRoute::parse("?t=slk-seb&p=HEB.11&v=4&s=zalozka").expect("route");
         assert_eq!(old_save.sheet, None);

@@ -1183,8 +1183,8 @@ body[data-shell="phone"] .study-verse__number {
   background: var(--study-blue);
 }
 
-/* Bookmark folders (#952): the folder chips over the list, an own folder's
-   menu row, and "Pridať záložku" split with its ▾ folder picker. */
+/* Bookmark folders (#952): the folder chips over the list and an own folder's
+   menu row. */
 .study-folders {
   margin-bottom: 10px;
 }
