@@ -212,12 +212,19 @@ preparation (the sermon views are in `sermon-prep.md`).
 - **Rules live in `state/study_bookmarks.rs`** (`BookmarkRefusal` → 422, Slovak): trimmed name 1–80 chars, ≤ 100 per
   list (per FOLDER since #952), a place the translation really has (`bible_book_chapter_summaries`, so the NLT is checked against its
   structure with no request); the refusal names the book as the translation does. The row stores `book_name`.
-- **"Pridať záložku" adds in ONE tap** (#932): `bookmarks::add_here` posts the place name, closes the verse sheet,
-  notice "Záložka pridaná: …". It is the verse sheet's FIRST action. No `s=zalozka` (an old link opens the verse).
+- **The bookmark is added in the Záložky sheet, in ONE tap** (#996, owner 2026-11-24, as in MySword; was the verse
+  sheet's "Pridať záložku" #932): `AddHere` (`bookmarks-add`) under the folder chips reads "Pridať Hebrejom 11:4" and
+  adds into the folder SHOWN. The place (`bookmarks::here`, through `reading_place`) = the highlighted verse (`v=`, a
+  text tap or a number) → `scroll::verse_in_view` → verse 1, only once `reader::chapter_settled` (else disabled +
+  `bookmarks-add-why`, `add_disabled_reason`). The sheet stays open, `load` re-reads the list (new row on top), notice
+  `added_notice`; a busy flag makes a double tap one add. The verse sheet has NO bookmark button (and no ▾ picker): its
+  actions are Kopírovať (first, "Kopírovať (3 verše)" via `counted_label` like "Pridať do kázne"), Porovnať, Pridať do
+  kázne, Odkazy. No `s=zalozka` (an old link opens the verse).
 - **The list sheet starts every visit in `Loading`** and carries `data-state=loading|ready|error` (the spec's settle
   marker); its keyed `<For>` sits OUTSIDE the state match. A row's position is a `Memo` over the list, never captured.
 - **E2E (`study-bookmarks.spec.ts`):** phone 390 (touch, `touchDrag`) and desktop 1280 (mouse); each test empties the
-  list first (the server lives through the file); a drop on the row's own place sends no PUT.
+  list first (the server lives through the file); a drop on the row's own place sends no PUT. The add: text tap →
+  Záložky → Pridať; no highlight = the verse at the top (`scrollToVerse`); off while the next chapter's read is gated.
 - **Folders (#952, owner 2026-11-20: folders, not tags):** the default folder "Kde som skončil" is NO row — it is
   `study_bookmarks.folder_id IS NULL` (every bookmark from before #952); own folders are `study_bookmark_folders`
   (m20261120, incremental; never edit m20261108). Every bookmark call names its folder (`?folder=` on the list, a
@@ -232,9 +239,9 @@ preparation (the sermon views are in `sermon-prep.md`).
   the newest read lands, the chips stay on screen meanwhile) and still holds it, else the default shows
   (`folder_gone`) — no 404 for a gone folder. Writes (order, delete, Späť)
   carry their folder (`ListUi::folder`, `Undo::Bookmarks { folder }`). New / rename = `window.prompt`, delete =
-  `window.confirm` naming the count. "Pridať záložku" stays one tap into the default; ▾ (`verse-save-bookmark-folder`)
-  opens `FolderPicker` (`bookmark_folders.rs`) under it. E2E: `study-bookmark-folders.spec.ts` (empties folders AND
-  the default list first).
+  `window.confirm` naming the count. Saving into a folder = its chip, then the sheet's add button (#996; the verse
+  sheet's ▾ `FolderPicker` is gone). E2E: `study-bookmark-folders.spec.ts` (empties folders AND the default list
+  first).
 
 ## Compare and cross-references (#851 S4, `pages/study/{compare,crossrefs}.rs`)
 

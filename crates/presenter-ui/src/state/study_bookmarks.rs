@@ -1,6 +1,6 @@
 //! The pure half of the study page's bookmarks (#915, #951): what a row says,
-//! the name a new bookmark is given, which verse "Pridať záložku" keeps, and the
-//! words of the bulk delete. No `web_sys` here, host-tested with
+//! the name a new bookmark is given, which verse the Záložky sheet's add button
+//! keeps (#996), and the words of the bulk delete. No `web_sys` here, host-tested with
 //! `cargo test --lib`.
 
 use presenter_core::bible::sermon::translation_short_code;
@@ -8,8 +8,28 @@ use presenter_core::bible::sermon::translation_short_code;
 use crate::state::study::{StudyRoute, StudyView};
 
 /// The default folder (#952): the bookmarks with no folder, the list #915/#951
-/// always had. "Pridať záložku" saves here in one tap.
+/// always had. The Záložky sheet opens on it (#996: its add button saves into
+/// the folder shown).
 pub const DEFAULT_FOLDER_NAME: &str = "Kde som skončil";
+
+/// The Záložky sheet's add button (#996): `Pridať Hebrejom 11:4`, or a plain
+/// "Pridať miesto" while there is no place to add.
+pub fn add_label(place: Option<&str>) -> String {
+    match place {
+        Some(place) => format!("Pridať {place}"),
+        None => "Pridať miesto".to_string(),
+    }
+}
+
+/// Why the add button is off (#996): no chapter is read (a search, a sermon),
+/// or the one on screen is not the route's yet.
+pub fn add_disabled_reason(reading_a_chapter: bool) -> &'static str {
+    if reading_a_chapter {
+        "Kapitola sa ešte načítava…"
+    } else {
+        "Záložku pridáš pri čítaní kapitoly."
+    }
+}
 
 /// The notice after an add: the place, and the folder when it is not the
 /// default one.
@@ -141,6 +161,17 @@ pub fn open_route(translation: &str, book: &str, chapter: u16, verse: u16) -> St
 mod tests {
     use super::*;
     use crate::state::study::StudySheet;
+
+    #[test]
+    fn the_add_button_names_the_place_or_waits() {
+        assert_eq!(add_label(Some("Hebrejom 11:4")), "Pridať Hebrejom 11:4");
+        assert_eq!(add_label(None), "Pridať miesto");
+        assert_eq!(add_disabled_reason(true), "Kapitola sa ešte načítava…");
+        assert_eq!(
+            add_disabled_reason(false),
+            "Záložku pridáš pri čítaní kapitoly."
+        );
+    }
 
     #[test]
     fn the_folder_words_name_the_folder_and_its_bookmarks() {
@@ -281,7 +312,7 @@ mod tests {
             StudyRoute::parse("?t=slk-seb&p=HEB.11&s=zalozky"),
             Some(list)
         );
-        // #932: "Pridať záložku" adds at once; an old `s=zalozka` link opens the
+        // #996: the Záložky sheet adds the place; an old `s=zalozka` link opens the
         // verse with no sheet.
         let old_save = StudyRoute::parse("?t=slk-seb&p=HEB.11&v=4&s=zalozka").expect("route");
         assert_eq!(old_save.sheet, None);

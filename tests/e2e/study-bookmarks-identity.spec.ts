@@ -18,7 +18,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { deriveTestConfig, PHONE_390, refreshDevData, startTestServer, stopServer, type ServerHandle } from "./support";
-import { finish, openStudy, verseNumber, type OpenedStudy } from "./study-support";
+import { finish, openStudy, verse, type OpenedStudy } from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -112,7 +112,7 @@ async function identity(page: Page): Promise<unknown> {
 }
 
 test("a bookmark saved at home is on the same phone at church, and nobody else's list", async ({ browser }) => {
-  // #932: one tap adds it under the verse's place.
+  // One tap in Záložky adds it under the verse's place (#932, #996).
   const name = "Hebrejom 11:3";
 
   // At home: Cloudflare Access logged the preacher in and sends its token.
@@ -121,8 +121,12 @@ test("a bookmark saved at home is on the same phone at church, and nobody else's
     extraHTTPHeaders: { "cf-access-jwt-assertion": accessToken("Preacher@Example.org") },
   } as BrowserContextOptions);
   expect(await identity(home.page)).toEqual({ email: "preacher@example.org" });
-  await verseNumber(home.page, 3).tap();
-  await home.page.locator('[data-role="verse-save-bookmark"]').tap();
+  // #996: a tap on the text, Záložky, then "Pridať Hebrejom 11:3".
+  await verse(home.page, 3).locator(".study-verse__text").tap();
+  await home.page.locator('[data-role="study-bookmarks"]').tap();
+  const add = home.page.locator('[data-role="bookmarks"] [data-role="bookmarks-add"]');
+  await expect(add).toHaveText(`Pridať ${name}`);
+  await add.tap();
   await expect(home.page.locator('[data-role="study-notice"]')).toContainText(`Záložka pridaná: ${name}`);
 
   // The server remembered this phone: an httpOnly cookie, not readable by the page.

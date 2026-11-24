@@ -6,36 +6,30 @@
 
 use leptos::prelude::*;
 
-use super::bookmark_folders::FolderPicker;
 use super::sheet::Sheet;
-use super::{add_to_sermon, bookmarks, compare, crossrefs, nav, reader, Chapter, Study};
+use super::{add_to_sermon, compare, crossrefs, nav, reader, Chapter, Study};
 use crate::api::sermons::SermonPassage;
 use crate::components::timer_panel::copy_to_clipboard;
 use crate::state::study::{copy_text, verse_reference};
-use crate::state::study_range::{range_len, range_limit, step_range_end, verse_count_text};
+use crate::state::study_range::{
+    counted_label, range_len, range_limit, step_range_end, verse_count_text,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerseAction {
     AddToSermon,
     Compare,
     CrossRefs,
-    SaveBookmark,
     Copy,
 }
 
 impl VerseAction {
     fn label(self, s: Study) -> String {
         match self {
-            Self::AddToSermon => match selected_len(s) {
-                Some(count) if count > 1 => {
-                    format!("Pridať do kázne ({})", verse_count_text(count))
-                }
-                _ => "Pridať do kázne".to_string(),
-            },
+            Self::AddToSermon => counted_label("Pridať do kázne", selected_len(s)),
             Self::Compare => "Porovnať".to_string(),
             Self::CrossRefs => crossrefs::button_label(s),
-            Self::SaveBookmark => "Pridať záložku".to_string(),
-            Self::Copy => "Kopírovať".to_string(),
+            Self::Copy => counted_label("Kopírovať", selected_len(s)),
         }
     }
 
@@ -44,21 +38,20 @@ impl VerseAction {
             Self::AddToSermon => "verse-add-to-sermon",
             Self::Compare => "verse-compare",
             Self::CrossRefs => "verse-crossrefs",
-            Self::SaveBookmark => "verse-save-bookmark",
             Self::Copy => "verse-copy",
         }
     }
 }
 
-/// The order of use (#932): the owner's most used one first, then the SNV
-/// counters of the phone (`GET /ui/usage`, 90 days: compare 5, add to sermon 2,
-/// cross-references 1, copy 0).
-const VERSE_ACTIONS: [VerseAction; 5] = [
-    VerseAction::SaveBookmark,
+/// Kopírovať first (#996, owner 2026-11-24: "tlacitko kopirovat by malo byt
+/// vyssie"), then the SNV counters of the phone (`GET /ui/usage`, 90 days:
+/// compare 5, add to sermon 2, cross-references 1). The bookmark is added in
+/// the Záložky sheet since #996 (as in MySword), no longer here.
+const VERSE_ACTIONS: [VerseAction; 4] = [
+    VerseAction::Copy,
     VerseAction::Compare,
     VerseAction::AddToSermon,
     VerseAction::CrossRefs,
-    VerseAction::Copy,
 ];
 
 /// The selection's reference, and its text for the clipboard.
@@ -187,7 +180,6 @@ fn run(s: Study, action: VerseAction) -> bool {
             crossrefs::open(s);
             false
         }
-        VerseAction::SaveBookmark => bookmarks::add_here(s),
         VerseAction::Copy => {
             let Some((_, text)) = selection(s) else {
                 return false;
@@ -209,10 +201,8 @@ fn run(s: Study, action: VerseAction) -> bool {
 #[component]
 pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
     // An action that closes the sheet runs once: the close is a history step,
-    // so a quick second tap would add a second bookmark and step back twice.
+    // so a quick second tap would copy again and step back twice.
     let closing = StoredValue::new(false);
-    // ▾ beside "Pridať záložku" (#952): the folder picker under the actions.
-    let picking = RwSignal::new(false);
     let title = Signal::derive(move || selection(s).map(|(label, _)| label).unwrap_or_default());
     view! {
         <Sheet s=s role="verse-actions" title=title>
@@ -224,7 +214,7 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
                 {VERSE_ACTIONS
                     .into_iter()
                     .map(|action| {
-                        let button = view! {
+                        view! {
                             <button
                                 type="button"
                                 class="study-button study-button--primary"
@@ -237,29 +227,7 @@ pub(super) fn VerseActionsSheet(s: Study) -> impl IntoView {
                             >
                                 {move || action.label(s)}
                             </button>
-                        };
-                        if action != VerseAction::SaveBookmark {
-                            return button.into_any();
                         }
-                        view! {
-                            <div class="study-split">
-                                {button}
-                                <button
-                                    type="button"
-                                    class="study-button study-button--primary study-split__more"
-                                    data-role="verse-save-bookmark-folder"
-                                    aria-label="Uložiť do priečinka"
-                                    aria-expanded=move || picking.get().to_string()
-                                    on:click=move |_| picking.update(|open| *open = !*open)
-                                >
-                                    "\u{25BE}"
-                                </button>
-                            </div>
-                            <Show when=move || picking.get()>
-                                <FolderPicker s=s closing=closing />
-                            </Show>
-                        }
-                            .into_any()
                     })
                     .collect_view()}
             </div>

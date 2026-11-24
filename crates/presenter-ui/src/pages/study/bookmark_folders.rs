@@ -5,18 +5,18 @@
 //! folders, "＋ Nový priečinok". A chip shows that folder (`s=zalozky<id>`, a
 //! `nav::replace`, so Back still closes the sheet in one step). An own folder
 //! gets a menu row: "Premenovať" and "Zmazať priečinok", which asks first and
-//! takes the folder's bookmarks with it. In the verse sheet, ▾ beside "Pridať
-//! záložku" opens [`FolderPicker`]: one tap saves into the chosen folder.
+//! takes the folder's bookmarks with it. The sheet's add button saves into the
+//! folder shown (#996: the verse sheet's ▾ folder picker is gone).
 //!
-//! The folders are `Study::bookmark_folders`, read again whenever the sheet or
-//! the picker opens; the server keeps them per reader, like the bookmarks. The
+//! The folders are `Study::bookmark_folders`, read again whenever the sheet
+//! opens; the server keeps them per reader, like the bookmarks. The
 //! list on screen stays while a new read is on its way (no jumping chips on a
 //! switch); only the NEWEST read may land (`Study::folder_reads`), and a sheet
 //! judges its URL folder only on an answer asked after it opened ([`fresh`]).
 
 use leptos::prelude::*;
 
-use super::bookmarks::{self, BookmarkList};
+use super::bookmarks::BookmarkList;
 use super::{nav, sermon_error, Study};
 use crate::api::bookmarks::{self as api, Folder};
 use crate::state::study::StudySheet;
@@ -76,7 +76,7 @@ pub(super) fn show(s: Study, folder: Option<i64>) {
     }
 }
 
-fn folder_by_id(s: Study, id: i64) -> Option<Folder> {
+pub(super) fn folder_by_id(s: Study, id: i64) -> Option<Folder> {
     s.bookmark_folders.with(|folders| {
         folders
             .as_ref()?
@@ -239,64 +239,4 @@ pub(super) fn FolderMenu(s: Study, folder: Option<i64>) -> impl IntoView {
             </div>
         }
     })
-}
-
-/// ▾ beside "Pridať záložku": the folders, one tap saves the verse into one.
-/// `closing` is the verse sheet's: a save closes it, so a second tap is no
-/// second bookmark.
-#[component]
-pub(super) fn FolderPicker(s: Study, closing: StoredValue<bool>) -> impl IntoView {
-    let read = load_folders(s);
-    let pick = move |folder: Option<(i64, String)>| {
-        if !closing.get_value() && bookmarks::add_to(s, folder) {
-            closing.set_value(true);
-        }
-    };
-    let none_of_own = move || {
-        s.bookmark_folders
-            .with(|folders| folders.as_ref().is_some_and(Vec::is_empty))
-    };
-    view! {
-        <div
-            class="study-folder-picker"
-            data-role="verse-bookmark-folders"
-            data-loaded=move || fresh(s, read).then_some("true")
-        >
-            <p class="study-sheet__hint">"Uložiť do priečinka:"</p>
-            <div class="study-chips">
-                <button
-                    type="button"
-                    class="study-chip"
-                    data-role="verse-bookmark-folder"
-                    data-folder=""
-                    on:click=move |_| pick(None)
-                >
-                    {DEFAULT_FOLDER_NAME}
-                </button>
-                <For
-                    each=move || s.bookmark_folders.get().unwrap_or_default()
-                    key=|folder| (folder.id, folder.name.clone())
-                    children=move |folder| {
-                        let target = (folder.id, folder.name.clone());
-                        view! {
-                            <button
-                                type="button"
-                                class="study-chip"
-                                data-role="verse-bookmark-folder"
-                                data-folder=folder.id.to_string()
-                                on:click=move |_| pick(Some(target.clone()))
-                            >
-                                {folder.name}
-                            </button>
-                        }
-                    }
-                />
-            </div>
-            <Show when=none_of_own>
-                <p class="study-sheet__hint" data-role="verse-bookmark-folders-none">
-                    "Vlastný priečinok vytvoríš v Záložkách („＋ Nový priečinok“)."
-                </p>
-            </Show>
-        </div>
-    }
 }

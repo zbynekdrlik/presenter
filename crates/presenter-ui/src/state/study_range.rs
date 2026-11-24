@@ -14,6 +14,15 @@ pub fn verse_count_text(count: u16) -> String {
     format!("{count} {word}")
 }
 
+/// A verse-sheet action on the whole selection: `Kopírovať (3 verše)` once more
+/// than one verse is selected, the bare label for one (#996, as "Pridať do kázne").
+pub fn counted_label(label: &str, count: Option<u16>) -> String {
+    match count {
+        Some(count) if count > 1 => format!("{label} ({})", verse_count_text(count)),
+        _ => label.to_string(),
+    }
+}
+
 /// The verses of `(start, end)`.
 pub fn range_len((start, end): (u16, u16)) -> u16 {
     end.saturating_sub(start).saturating_add(1)
@@ -43,6 +52,18 @@ pub fn step_range_end((start, end): (u16, u16), delta: i32, last: u16) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_action_names_the_count_only_for_more_than_one_verse() {
+        assert_eq!(counted_label("Kopírovať", None), "Kopírovať");
+        assert_eq!(counted_label("Kopírovať", Some(1)), "Kopírovať");
+        assert_eq!(counted_label("Kopírovať", Some(3)), "Kopírovať (3 verše)");
+        assert_eq!(counted_label("Kopírovať", Some(5)), "Kopírovať (5 veršov)");
+        assert_eq!(
+            counted_label("Pridať do kázne", Some(2)),
+            "Pridať do kázne (2 verše)"
+        );
+    }
 
     #[test]
     fn counts_follow_slovak_plurals() {
