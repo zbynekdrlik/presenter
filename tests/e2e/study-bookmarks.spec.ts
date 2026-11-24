@@ -3,8 +3,11 @@
  * #951 (owner, 2026-11-14: "ja len potrebujem vediet kde som skoncil citanie"):
  * newest on top, a compact row = the place + the start of the verse's text, the
  * whole row opens it, a drag on the small handle reorders, "Vybrať" → ONE
- * "Zmazať (N)" with Späť. No rename, no "Presunúť sem". On a 390 px phone (touch)
- * and on a desktop (mouse). Nothing here reaches a wall (T11).
+ * "Zmazať (N)" with Späť. No rename, no "Presunúť sem". #996 (owner 2026-11-24, as
+ * in MySword): the sheet's top button "Pridať Hebrejom 11:4" adds the place being
+ * read — the highlighted verse, else the one at the top of the reader — and the
+ * sheet stays open. On a 390 px phone (touch) and on a desktop (mouse). Nothing
+ * here reaches a wall (T11).
  */
 import { test, expect, type BrowserContextOptions, type Locator, type Page } from "@playwright/test";
 import {
@@ -18,7 +21,17 @@ import {
   touchDrag,
   type ServerHandle,
 } from "./support";
-import { expectChapter, finish, openStudy, verse, verseNumber, type OpenedStudy } from "./study-support";
+import {
+  chapter as chapterView,
+  expectChapter,
+  finish,
+  gateRoute,
+  landed,
+  openStudy,
+  scrollToVerse,
+  verse,
+  type OpenedStudy,
+} from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -151,12 +164,23 @@ for (const [label, profile, touch] of PROFILES) {
     const opened = await open(browser, profile);
     const { page } = opened;
 
-    // Two bookmarks the way the preacher adds them: verse 2, then verse 5.
+    // Two bookmarks the way the preacher adds them (#996): a tap on the verse's
+    // text, Záložky, then "Pridať Hebrejom 11:N" — verse 2, then verse 5. The
+    // sheet stays open and shows the new row on top.
     for (const at of [2, 5]) {
-      await press(verseNumber(page, at), touch);
-      await press(page.locator('[data-role="verse-save-bookmark"]'), touch);
+      await press(verse(page, at).locator(".study-verse__text"), touch);
+      await expect(verse(page, at)).toHaveAttribute("data-selected", "true");
+      await openList(page, touch);
+      const add = sheet(page).locator('[data-role="bookmarks-add"]');
+      await expect(add).toHaveText(`Pridať Hebrejom 11:${at}`);
+      if (touch) await assertMinTapTarget(add, 44);
+      await press(add, touch);
       await expect(notice(page)).toContainText(`Záložka pridaná: Hebrejom 11:${at}`);
-      await expect(page.locator('[data-role="verse-actions"]')).toHaveCount(0);
+      await expect(sheet(page)).toBeVisible();
+      await expect(page).toHaveURL(/s=zalozky/);
+      await expect(rows(page).first().locator(".study-bookmark__label")).toHaveText(`Hebrejom 11:${at}`);
+      await press(sheet(page).locator('[data-role="study-sheet-close"]'), touch);
+      await expect(sheet(page)).toHaveCount(0);
     }
     const [newest, older] = await stored(page);
     expect([newest.verse, older.verse], "the server answers newest first").toEqual([5, 2]);
@@ -203,6 +227,45 @@ for (const [label, profile, touch] of PROFILES) {
     await expect(page).toHaveURL(/p=HEB\.11&v=5$/);
     await expect(verse(page, 5)).toHaveAttribute("data-selected", "true");
     await expect(verse(page, 5)).toBeInViewport();
+    await finish(opened);
+  });
+
+  test(`${label}: with no verse highlighted Pridať adds the verse at the top of the reader`, async ({ browser }) => {
+    const opened = await open(browser, profile);
+    const { page } = opened;
+    await scrollToVerse(page, 7);
+    await expect(page.locator('[data-role="study-verse"][data-selected="true"]')).toHaveCount(0);
+    await openList(page, touch);
+    const add = sheet(page).locator('[data-role="bookmarks-add"]');
+    await expect(add).toHaveText("Pridať Hebrejom 11:7");
+    await press(add, touch);
+    await expect(notice(page)).toContainText("Záložka pridaná: Hebrejom 11:7");
+    await expect.poll(async () => (await stored(page)).map((item) => item.verse)).toEqual([7]);
+    await expect.poll(() => rows(page).count()).toBe(1);
+    await finish(opened);
+  });
+
+  test(`${label}: Pridať is off with its reason while the next chapter is on its way`, async ({ browser }) => {
+    const opened = await open(browser, profile);
+    const { page } = opened;
+    const read = /\/bible\/study\/chapter\?/;
+    const answer = page.waitForResponse(read);
+    const release = await gateRoute(page, read);
+    await press(page.locator('[data-role="study-next-chapter"]'), touch);
+    await expect(chapterView(page)).toHaveAttribute("data-state", "loading");
+    await openList(page, touch);
+    // Verse 1 on screen is Hebrews 11; an add now would name Hebrews 12.
+    const add = sheet(page).locator('[data-role="bookmarks-add"]');
+    await expect(add).toBeDisabled();
+    await expect(add).toHaveText("Pridať miesto");
+    await expect(sheet(page).locator('[data-role="bookmarks-add-why"]')).toHaveText("Kapitola sa ešte načítava…");
+    release();
+    await landed(answer);
+    await expectChapter(page, "slk-seb:HEB.12");
+    await expect(add).toBeEnabled();
+    await expect(add).toHaveText("Pridať Hebrejom 12:1");
+    await expect(sheet(page).locator('[data-role="bookmarks-add-why"]')).toHaveCount(0);
+    expect(await stored(page)).toEqual([]);
     await finish(opened);
   });
 

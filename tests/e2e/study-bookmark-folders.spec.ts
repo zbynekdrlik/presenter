@@ -3,9 +3,10 @@
  * The Záložky sheet opens on the default folder "Kde som skončil"; a row of chips
  * picks another folder (in the URL: `s=zalozky<id>`); "＋ Nový priečinok" makes
  * one; an own folder can be renamed and deleted (asks, takes its bookmarks).
- * "Pridať záložku" still saves into the default folder in one tap; ▾ beside it
- * saves into a chosen folder. On a 390 px phone (touch) and on a desktop
- * (mouse). Nothing here reaches a wall (T11).
+ * #996: the sheet's add button ("Pridať Hebrejom 11:3") saves the place being
+ * read into the folder SHOWN, so a chip and then the add button saves into an
+ * own folder (the verse sheet's ▾ picker is gone). On a 390 px phone (touch)
+ * and on a desktop (mouse). Nothing here reaches a wall (T11).
  */
 import { test, expect, type BrowserContextOptions, type Locator, type Page } from "@playwright/test";
 import {
@@ -18,7 +19,7 @@ import {
   stopServer,
   type ServerHandle,
 } from "./support";
-import { expectChapter, finish, openStudy, verseNumber, type OpenedStudy } from "./study-support";
+import { expectChapter, finish, openStudy, verse, verseNumber, type OpenedStudy } from "./study-support";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -113,7 +114,7 @@ async function shownVerses(page: Page): Promise<string[]> {
 }
 
 for (const [label, profile, touch] of PROFILES) {
-  test(`${label}: a new folder, ▾ saves a verse into it, one tap still saves into "Kde som skončil"`, async ({
+  test(`${label}: a new folder, its chip then Pridať saves the verse into it, the default chip into "Kde som skončil"`, async ({
     browser,
   }) => {
     const opened = await open(browser, profile);
@@ -148,23 +149,41 @@ for (const [label, profile, touch] of PROFILES) {
     await expect(page).not.toHaveURL(/s=zalozky/);
     await expect(sheet(page)).toHaveCount(0);
 
-    // ▾ beside "Pridať záložku": the folders, one tap saves into "Viera".
+    // The verse sheet has no bookmark button any more (#996).
     await press(verseNumber(page, 3), touch);
-    const more = page.locator('[data-role="verse-save-bookmark-folder"]');
-    if (touch) await assertMinTapTarget(more, 44);
-    await press(more, touch);
-    const picker = page.locator('[data-role="verse-bookmark-folders"]');
-    await expect(picker).toHaveAttribute("data-loaded", "true");
-    await expect(picker.locator('[data-role="verse-bookmark-folder"]')).toHaveText(["Kde som skončil", "Viera"]);
-    if (touch) await assertNoHorizontalOverflow(page);
-    await press(picker.locator(`[data-folder="${viera.id}"]`), touch);
-    await expect(notice(page)).toContainText("Záložka pridaná do „Viera“: Hebrejom 11:3");
+    await expect(page.locator('[data-role="verse-actions"]')).toBeVisible();
+    await expect(page.locator('[data-role="verse-save-bookmark"], [data-role="verse-save-bookmark-folder"]')).toHaveCount(0);
+    await page.goBack();
     await expect(page.locator('[data-role="verse-actions"]')).toHaveCount(0);
 
-    // The one tap is unchanged: verse 4 goes into the default folder.
-    await press(verseNumber(page, 4), touch);
-    await press(page.locator('[data-role="verse-save-bookmark"]'), touch);
+    // #996: the highlighted verse, the "Viera" chip, then Pridať saves into "Viera"; the sheet stays open.
+    await press(verse(page, 3).locator(".study-verse__text"), touch);
+    await expect(verse(page, 3)).toHaveAttribute("data-selected", "true");
+    await press(page.locator('[data-role="study-bookmarks"]'), touch);
+    await settled(page, null);
+    await press(chip(page, viera.id), touch);
+    await settled(page, viera.id);
+    const add = sheet(page).locator('[data-role="bookmarks-add"]');
+    await expect(add).toHaveText("Pridať Hebrejom 11:3");
+    if (touch) await assertMinTapTarget(add, 44);
+    await press(add, touch);
+    await expect(notice(page)).toContainText("Záložka pridaná do „Viera“: Hebrejom 11:3");
+    await expect(sheet(page)).toBeVisible();
+    await expect.poll(() => shownVerses(page)).toEqual(["Hebrejom 11:3"]);
+    if (touch) await assertNoHorizontalOverflow(page);
+    await page.goBack();
+    await expect(sheet(page)).toHaveCount(0);
+
+    // Verse 4 and the default folder (the sheet opens on it): "Kde som skončil".
+    await press(verse(page, 4).locator(".study-verse__text"), touch);
+    await expect(verse(page, 4)).toHaveAttribute("data-selected", "true");
+    await press(page.locator('[data-role="study-bookmarks"]'), touch);
+    await settled(page, null);
+    await press(sheet(page).locator('[data-role="bookmarks-add"]'), touch);
     await expect(notice(page)).toContainText("Záložka pridaná: Hebrejom 11:4");
+    await expect.poll(() => shownVerses(page)).toEqual(["Hebrejom 11:4"]);
+    await page.goBack();
+    await expect(sheet(page)).toHaveCount(0);
     expect(await verses(page, null)).toEqual([4]);
     expect(await verses(page, viera.id)).toEqual([3]);
 

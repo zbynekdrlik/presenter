@@ -1205,30 +1205,13 @@ body[data-shell="phone"] .study-verse__number {
   min-width: 0;
 }
 
-.study-split {
-  display: flex;
-  gap: 6px;
+/* The Záložky sheet's add button (#996): the place being read, under the chips. */
+.study-bookmarks__add {
+  padding: 0 0 10px;
 }
 
-.study-split > .study-button--primary {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-}
-
-.study-split > .study-split__more {
-  flex: none;
-  width: 52px;
-  padding: 0;
-  font-size: 20px;
-}
-
-.study-folder-picker {
-  padding: 2px 0 6px;
-}
-
-.study-folder-picker .study-sheet__hint {
-  margin: 0 0 6px;
+.study-bookmarks__add .study-sheet__hint {
+  margin: 6px 0 0;
 }
 
 /* A control in a sheet's head beside the close button ("Vybrať"). */

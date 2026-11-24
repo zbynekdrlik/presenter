@@ -141,14 +141,12 @@ test("the sheet offers only what works today", async ({ browser }) => {
   const { page } = opened;
   await verseNumber(page, 1).tap();
   // #936: the range row's − / + sit above the actions; the actions are the list.
+  // #996: Kopírovať first; the bookmark is added in the Záložky sheet.
   await expect(actions(page).locator(".study-sheet__actions button")).toHaveText([
-    "Pridať záložku",
-    // #952: the ▾ next to it picks another bookmark folder.
-    "▾",
+    "Kopírovať",
     "Porovnať",
     "Pridať do kázne",
     /^Odkazy \(\d+\)$/,
-    "Kopírovať",
   ]);
   await expect(actions(page).locator('[data-role="verse-range"] button')).toHaveText(["− verš", "+ verš"]);
   await finish(opened);
@@ -167,12 +165,18 @@ test("Kopírovať copies the text with its reference over plain http", async ({ 
       return command === "copy" ? true : original(command);
     };
   });
+  // #996: the button names the count once more than one verse is selected, like "Pridať do kázne".
+  const copy = page.locator('[data-role="verse-copy"]');
   await verseNumber(page, 1).tap();
-  await verseNumber(page, 2).tap();
-  await page.locator('[data-role="verse-copy"]').tap();
+  await expect(copy).toHaveText("Kopírovať");
+  await verseNumber(page, 3).tap();
+  await expect(actions(page)).toContainText("Hebrejom 11:1-3 (SEB)");
+  await expect(copy).toHaveText("Kopírovať (3 verše)");
+  await expect(page.locator('[data-role="verse-add-to-sermon"]')).toHaveText("Pridať do kázne (3 verše)");
+  await copy.tap();
   const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
   expect(copied).toHaveLength(1);
-  expect(copied[0]).toMatch(/^1 Viera .*\n2 .*\nHebrejom 11:1-2 \(SEB\)$/s);
+  expect(copied[0]).toMatch(/^1 Viera .*\n2 .*\n3 .*\nHebrejom 11:1-3 \(SEB\)$/s);
   await expect(page.locator('[data-role="study-notice"]')).toHaveAttribute("data-visible", "true");
   await expect(page.locator('[data-role="study-notice"]')).toHaveText("Skopírované");
   await expect(actions(page)).toHaveCount(0);

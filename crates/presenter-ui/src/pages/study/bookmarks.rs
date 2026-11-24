@@ -1,7 +1,8 @@
 //! Bookmarks (#915, reshaped by #951 — owner, 2026-11-14: "ja len potrebujem
-//! vediet kde som skoncil citanie"). "Pridať záložku" in the verse sheet adds the
-//! first selected verse at once (#932); the header's Záložky sheet (`s=zalozky`)
-//! lists them NEWEST FIRST, each row the place ("Hebrejom 11:4", its
+//! vediet kde som skoncil citanie"). The header's Záložky sheet (`s=zalozky`)
+//! adds the place being read with ONE button at its top (#996, as in MySword:
+//! "Pridať Hebrejom 11:4", the highlighted verse, else the one at the top of
+//! the reader) and lists them NEWEST FIRST, each row the place ("Hebrejom 11:4", its
 //! translation as a small tag) and the start of the verse's text, the whole row
 //! opening the reader there. Nothing else per row: a drag on the handle reorders
 //! (pointer events on a `touch-action: none` handle, as `sermon_reorder.rs`; the
@@ -11,26 +12,29 @@
 //! phone and the PC share it); lookups and `study.last` never touch it.
 //!
 //! #952 (owner 2026-11-20): the list is one FOLDER's. The default one, "Kde som
-//! skončil", is what "Pridať záložku" fills in one tap; ▾ beside it picks one
-//! of the reader's own folders. The sheet's folder row and its menu are
+//! skončil", is where the sheet opens; a folder chip, then the add button, saves
+//! into one of the reader's own folders. The sheet's folder row and its menu are
 //! `bookmark_folders.rs`; the folder is in the URL (`s=zalozky<id>`), so a
 //! switch remounts this sheet and every list call names its folder.
 
 use leptos::prelude::*;
 use web_sys::PointerEvent;
 
-use super::bookmark_folders::{folder_ids, fresh, load_folders, show, FolderMenu, FolderRow};
-use super::scroll::ScrollPlan;
+use super::bookmark_folders::{
+    folder_by_id, folder_ids, fresh, load_folders, show, FolderMenu, FolderRow,
+};
+use super::scroll::{self, ScrollPlan};
 use super::sheet::Sheet;
-use super::{nav, sermon_error, Chapter, Study, Undo};
+use super::{nav, reader, sermon_error, Chapter, Study, Undo};
 use crate::api::bookmarks::{self as api, Bookmark, BookmarkPlace};
 use crate::api::ApiError;
 use crate::components::drag_rows;
 use crate::components::nameplates::order::{apply_order, drop_marker, reorder_to_slot};
-use crate::state::study::StudySheet;
+use crate::state::study::{StudySheet, StudyView};
 use crate::state::study_bookmarks::{
-    added_notice, chosen_in_order, delete_label, deleted_notice, folder_gone, offered_name,
-    open_route, reading_place, restore_order, toggle_chosen, translation_tag, ReadingPlace,
+    add_disabled_reason, add_label, added_notice, chosen_in_order, delete_label, deleted_notice,
+    folder_gone, offered_name, open_route, reading_place, restore_order, toggle_chosen,
+    translation_tag, ReadingPlace,
 };
 
 /// What the Záložky sheet shows.
@@ -79,36 +83,92 @@ pub(super) fn load(s: Study, folder: Option<i64>) {
     });
 }
 
-/// "Pridať záložku" in the verse sheet (#932, owner 2026-11-11: "miesto aby sa
-/// rovno pridala tak vyskočí ďalšie okno … Načo je to dobré?!"): one tap adds
-/// the first selected verse under its place ("Hebrejom 11:4"), on TOP of the
-/// list (#951). The verse sheet closes now, the answer is a notice. `true` = the
-/// sheet was closed.
-pub(super) fn add_here(s: Study) -> bool {
-    add_to(s, None)
+/// The place the add button adds (#996, owner 2026-11-24: "kliknem na vers …
+/// potom na zalozku a potom zistim ze tam neviem pridat aktualny vers"): the
+/// highlighted verse (`v=`, a tap on the text or on the number), else the verse
+/// at the top of the reader, else the chapter's first — with its name
+/// ("Hebrejom 11:4"). `None` off a chapter, or while the chapter on screen is
+/// not the route's yet (its verses would name the wrong place). Tracks the
+/// route and the chapter; the verse at the top is read from the page then.
+fn here(s: Study) -> Option<(ReadingPlace, String)> {
+    if !reader::chapter_settled(s) {
+        return None;
+    }
+    let route = s.route.get();
+    let in_view = if route.verses.is_none() {
+        scroll::verse_in_view(s)
+    } else {
+        None
+    };
+    let place = reading_place(&route, s.translation().as_deref(), in_view)?;
+    let book = s.chapter.with(|chapter| match chapter {
+        Chapter::Ready(_, text) => Some(text.book.clone()),
+        _ => None,
+    })?;
+    let name = offered_name(&book, place.chapter, place.verse);
+    Some((place, name))
 }
 
-/// "Pridať záložku" into a folder (#952: ▾ beside the button): `None` = the
-/// default one, else the reader's folder (id, name for the notice).
-pub(super) fn add_to(s: Study, folder: Option<(i64, String)>) -> bool {
-    let route = s.route.get_untracked();
-    let (Some(place), Some(name)) = (
-        reading_place(&route, s.translation().as_deref(), None),
-        untrack(|| offered(s)),
-    ) else {
-        // The chapter on screen is not the route's yet: say so, no dead button.
-        s.tell("Verš sa ešte načítava, skús znova".to_string());
-        return false;
+/// The add button: the place goes on TOP of the folder shown (`None` = the
+/// default one). The sheet stays open and its list is read again, so the new
+/// row shows at once; the notice names the place (and an own folder).
+fn add_here(s: Study, folder: Option<i64>, adding: RwSignal<bool>) {
+    if adding.get_untracked() {
+        return;
+    }
+    let Some((place, name)) = untrack(|| here(s)) else {
+        let reading = s
+            .route
+            .with_untracked(|route| matches!(route.view, StudyView::Reader { .. }));
+        s.tell(add_disabled_reason(reading).to_string());
+        return;
     };
-    nav::close_sheet(s);
+    let folder_name = folder
+        .and_then(|id| untrack(|| folder_by_id(s, id)))
+        .map(|found| found.name);
+    adding.set(true);
     leptos::task::spawn_local(async move {
-        let (id, folder_name) = folder.unzip();
-        match api::create(id, &name, &to_api(place), None).await {
-            Ok(made) => s.tell(added_notice(&made.name, folder_name.as_deref())),
+        let answer = api::create(folder, &name, &to_api(place), None).await;
+        // The sheet may be closed by now.
+        adding.try_set(false);
+        match answer {
+            Ok(made) => {
+                s.tell(added_notice(&made.name, folder_name.as_deref()));
+                load(s, folder);
+            }
             Err(err) => s.tell(sermon_error(&err)),
         }
     });
-    true
+}
+
+/// "Pridať Hebrejom 11:4" at the top of the sheet, under the folder chips;
+/// off, with the reason under it, while there is no place to add.
+#[component]
+fn AddHere(s: Study, folder: Option<i64>) -> impl IntoView {
+    let adding = RwSignal::new(false);
+    let place = Memo::new(move |_| here(s).map(|(_, name)| name));
+    let reading = move || {
+        s.route
+            .with(|route| matches!(route.view, StudyView::Reader { .. }))
+    };
+    view! {
+        <div class="study-bookmarks__add">
+            <button
+                type="button"
+                class="study-button study-button--primary"
+                data-role="bookmarks-add"
+                disabled=move || place.with(Option::is_none) || adding.get()
+                on:click=move |_| add_here(s, folder, adding)
+            >
+                {move || add_label(place.get().as_deref())}
+            </button>
+            <Show when=move || place.with(Option::is_none)>
+                <p class="study-sheet__hint" data-role="bookmarks-add-why">
+                    {move || add_disabled_reason(reading())}
+                </p>
+            </Show>
+        </div>
+    }
 }
 
 /// Späť on "Zmazané …": each comes back where it stood, the lowest index first
@@ -473,9 +533,10 @@ fn BookmarkRow(ui: ListUi, bookmark: Bookmark) -> impl IntoView {
     }
 }
 
-const EMPTY_DEFAULT: &str = "Zatiaľ žiadne záložky. Ťukni na verš a zvoľ „Pridať záložku“.";
+const EMPTY_DEFAULT: &str =
+    "Zatiaľ žiadne záložky. Miesto, kde čítaš, pridáš tlačidlom „Pridať …“ hore.";
 const EMPTY_FOLDER: &str =
-    "Priečinok je prázdny. Ťukni na verš, pri „Pridať záložku“ zvoľ ▾ a tento priečinok.";
+    "Priečinok je prázdny. Miesto, kde čítaš, sem pridáš tlačidlom „Pridať …“ hore.";
 
 #[component]
 fn ListState(s: Study, folder: Option<i64>) -> impl IntoView {
@@ -604,6 +665,7 @@ pub(super) fn BookmarksSheet(s: Study, folder: Option<i64>) -> impl IntoView {
             footer=ViewFn::from(move || delete_bar(ui))
         >
             <FolderRow s=s folder=folder read=read />
+            <AddHere s=s folder=folder />
             <FolderMenu s=s folder=folder />
             <ListState s=s folder=folder />
             <div
@@ -619,16 +681,4 @@ pub(super) fn BookmarksSheet(s: Study, folder: Option<i64>) -> impl IntoView {
             </div>
         </Sheet>
     }
-}
-
-/// The name of the first selected verse, once its chapter is here.
-fn offered(s: Study) -> Option<String> {
-    let verse = s.route.with(|route| route.verses.map(|(first, _)| first))?;
-    let wanted = s.place()?;
-    s.chapter.with(|chapter| match chapter {
-        Chapter::Ready(place, text) if *place == wanted => {
-            Some(offered_name(&text.book, place.chapter, verse))
-        }
-        _ => None,
-    })
 }

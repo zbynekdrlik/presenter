@@ -151,40 +151,48 @@ test("the header names the chapter, the text repeats no chapter heading", async 
   await finish(opened);
 });
 
-test("Pridať záložku is the verse sheet's first action and adds in one tap", async ({ browser }) => {
+test("Záložky adds the highlighted verse in one tap, once on a double tap; the verse sheet has no bookmark button", async ({
+  browser,
+}) => {
   const opened = await openStudy(browser, baseURL, PHONE_390);
   const { page } = opened;
   const before = (await bookmarks(page)).map((item) => item.id);
-  // One chapter on: a second history step back would land on Hebrews 11.
   await page.locator('[data-role="study-next-chapter"]').tap();
   await expectChapter(page, "slk-seb:HEB.12");
+  // #996: the verse sheet starts with Kopírovať, no bookmark button.
   await verseNumber(page, 6).tap();
   const actions = page.locator('[data-role="verse-actions"] .study-sheet__actions button');
-  await expect(actions.first()).toHaveText("Pridať záložku");
-  await expect(actions.first()).toHaveAttribute("data-role", "verse-save-bookmark");
+  await expect(actions.first()).toHaveAttribute("data-role", "verse-copy");
+  await expect(page.locator('[data-role="verse-save-bookmark"]')).toHaveCount(0);
+  await page.goBack();
+  await expect(page.locator('[data-role="verse-actions"]')).toHaveCount(0);
 
-  // A quick double tap adds it once: the sheet closes through a history step.
-  await actions.first().evaluate((button: HTMLElement) => {
+  // A tap on the text highlights verse 6; Záložky offers it at the top.
+  await verse(page, 6).locator(".study-verse__text").tap();
+  await expect(verse(page, 6)).toHaveAttribute("data-selected", "true");
+  await page.locator('[data-role="study-bookmarks"]').tap();
+  const sheet = page.locator('[data-role="bookmarks"]');
+  await expect(sheet).toHaveAttribute("data-state", "ready");
+  const add = sheet.locator('[data-role="bookmarks-add"]');
+  await expect(add).toHaveText("Pridať Hebrejom 12:6");
+
+  // A quick double tap adds it once.
+  await add.evaluate((button: HTMLElement) => {
     button.click();
     button.click();
   });
   await expect(page.locator('[data-role="study-notice"]')).toContainText("Záložka pridaná: Hebrejom 12:6");
-  // No naming sheet, no verse sheet: back to reading.
-  await expect(page.locator('[data-role="save-bookmark"]')).toHaveCount(0);
-  await expect(page.locator('[data-role="verse-actions"]')).toHaveCount(0);
-  await expect(page).not.toHaveURL(/[?&]s=/);
-  await expectChapter(page, "slk-seb:HEB.12");
-  await expect(page).toHaveURL(/p=HEB\.12$/);
+  // The sheet stays open on the same reading place.
+  await expect(sheet).toBeVisible();
+  await expect(page).toHaveURL(/p=HEB\.12&v=6&s=zalozky$/);
+  await expect(add).toBeEnabled();
 
   // Read back from the server: exactly one new bookmark at Hebrews 12:6.
   const added = (await bookmarks(page)).filter((item) => !before.includes(item.id));
   expect(added).toHaveLength(1);
   expect(added[0]).toMatchObject({ name: "Hebrejom 12:6", bookCode: "HEB", chapter: 12, verse: 6 });
 
-  // It is in Záložky, on top (#951: newest first, labelled by its place).
-  await page.locator('[data-role="study-bookmarks"]').tap();
-  const sheet = page.locator('[data-role="bookmarks"]');
-  await expect(sheet).toHaveAttribute("data-state", "ready");
+  // It is in the list, on top (#951: newest first, labelled by its place).
   const row = sheet.locator(`[data-bookmark-id="${added[0].id}"]`);
   await expect(sheet.locator('[data-role="bookmark-row"]').first()).toHaveAttribute(
     "data-bookmark-id",
