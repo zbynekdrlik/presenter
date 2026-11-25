@@ -89,7 +89,15 @@ pub(crate) fn dlink_config(plan: &LinkPlan) -> Config {
         .network_rate(plan.network_rate)
         .product("Presenter", "presenter-listen")
         .flow_slots(plan.channels.len().max(1))
+        .receive_buffer_ns(RECEIVE_BUFFER_NS)
 }
+
+/// The receive buffer, ns: with dlink's default 1 ms network latency the
+/// device advertises a 5 ms Dante latency (dstack#381, owner decision
+/// 21.11.2026; dlink's default is 12.35 ms). Rolled back 23.11 after dlink
+/// 0.6.178's false late counts, retried 25.11 on v0.6.215 (#993). dstack
+/// watches dcontroller for late packets 24 h; one means back to 12.35 ms.
+pub(crate) const RECEIVE_BUFFER_NS: u64 = 4_000_000;
 
 /// A channel's flow as the device reports it.
 fn channel_flow(channel: &RxChannel) -> ChannelFlow {
