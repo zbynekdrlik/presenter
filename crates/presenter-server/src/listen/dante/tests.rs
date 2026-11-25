@@ -683,16 +683,18 @@ fn the_real_device_refuses_an_interface_the_box_does_not_have() {
     let _removed = std::fs::remove_dir_all(&dir);
 }
 
-/// dstack#381 rollback, 23.11.2026: the 24 h read at 5 ms showed 463 late
-/// packets (0 the day before at the default), most likely dlink 0.6.178's false
-/// late counts fixed in dstack v0.6.210 (#477); the rule "any late means back"
-/// holds, so presenter-listen runs dlink's default receive buffer again
-/// (12.35 ms at the site's 96 kHz) until it carries dstack >= v0.6.213.
+/// dstack#381, owner decision 21.11.2026, retried 25.11.2026 on dlink
+/// v0.6.215 (the 0.6.178 false late counts that forced the 23.11 rollback are
+/// fixed in v0.6.210): presenter-listen advertises a 5 ms Dante latency (1 ms
+/// network latency + 4 ms receive buffer), down from 12.35 ms, at both
+/// network rates.
 #[test]
-fn the_device_advertises_dlinks_default_dante_latency() {
-    let split = dlink_config(&plan(96_000, DEFAULT_DEVICE_NAME))
-        .split()
-        .unwrap();
-    assert_eq!(split.latency_ns, 12_354_166, "{split:?}");
-    assert_eq!(split.network_latency_ns, 1_000_000, "{split:?}");
+fn the_device_advertises_a_5_ms_dante_latency() {
+    for rate in [96_000, 48_000] {
+        let split = dlink_config(&plan(rate, DEFAULT_DEVICE_NAME))
+            .split()
+            .unwrap();
+        assert_eq!(split.latency_ns, 5_000_000, "{rate}: {split:?}");
+        assert_eq!(split.network_latency_ns, 1_000_000, "{rate}: {split:?}");
+    }
 }
