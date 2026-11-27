@@ -19,11 +19,13 @@ pub const OUTPUT_RATE: u32 = 24_000;
 /// The input rate we send (the mic frames are 16 kHz).
 pub const INPUT_MIME: &str = "audio/pcm;rate=16000";
 
-/// The setup: audio out, both transcriptions, the target language, a
-/// sliding context window (the connection never hits the context limit) and
+/// The setup: audio out, both transcriptions, the target language, the
+/// translation context as `systemInstruction` (#999 L6c — setup-only; the doc
+/// ignores instructions that fight the target language or the output format),
+/// a sliding context window (the connection never hits the context limit) and
 /// session resumption (`handle` = continue an earlier session after a
 /// reconnect / `goAway`).
-pub fn setup_message(model: &str, language: &str, handle: Option<&str>) -> String {
+pub fn setup_message(model: &str, language: &str, context: &str, handle: Option<&str>) -> String {
     let resumption = match handle {
         Some(handle) => serde_json::json!({ "handle": handle }),
         None => serde_json::json!({}),
@@ -35,6 +37,7 @@ pub fn setup_message(model: &str, language: &str, handle: Option<&str>) -> Strin
                 "responseModalities": ["AUDIO"],
                 "translationConfig": { "targetLanguageCode": language }
             },
+            "systemInstruction": { "parts": [{ "text": context }] },
             "inputAudioTranscription": {},
             "outputAudioTranscription": {},
             "contextWindowCompression": { "slidingWindow": {} },
@@ -211,8 +214,13 @@ mod tests {
 
     #[test]
     fn setup_names_the_model_language_compression_and_resumption() {
-        let fresh: serde_json::Value =
-            serde_json::from_str(&setup_message("gemini-x", "de", None)).expect("json");
+        let fresh: serde_json::Value = serde_json::from_str(&setup_message(
+            "gemini-x",
+            "de",
+            "A sermon at Example Chapel.",
+            None,
+        ))
+        .expect("json");
         let setup = &fresh["setup"];
         assert_eq!(setup["model"], "models/gemini-x");
         assert_eq!(setup["generationConfig"]["responseModalities"][0], "AUDIO");
@@ -224,9 +232,15 @@ mod tests {
         assert!(setup["outputAudioTranscription"].is_object());
         assert!(setup["contextWindowCompression"]["slidingWindow"].is_object());
         assert_eq!(setup["sessionResumption"], serde_json::json!({}));
+        assert_eq!(
+            setup["systemInstruction"],
+            serde_json::json!({"parts": [{"text": "A sermon at Example Chapel."}]}),
+            "the translation context rides the setup"
+        );
 
         let resumed: serde_json::Value =
-            serde_json::from_str(&setup_message("gemini-x", "de", Some("h-1"))).expect("json");
+            serde_json::from_str(&setup_message("gemini-x", "de", "ctx", Some("h-1")))
+                .expect("json");
         assert_eq!(resumed["setup"]["sessionResumption"]["handle"], "h-1");
     }
 
