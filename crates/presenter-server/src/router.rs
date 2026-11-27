@@ -5,7 +5,6 @@ mod ai_health;
 mod api_stage;
 mod bible;
 mod features;
-mod guest_host;
 mod integrations;
 mod interpreter_tips;
 mod libraries;
@@ -487,10 +486,15 @@ pub fn build_router(state: AppState) -> Router {
     // inside the request log so its lines carry the request span.
     let router = access_identity::with_access_identity(router, &state);
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
-    let app = request_log::with_request_log(router).with_state(state.clone());
-    // #999: the guests' own hostname gets only the guest surface (chosen
-    // before any routing).
-    guest_host::with_guest_host(app, &state)
+    request_log::with_request_log(router).with_state(state)
+}
+
+/// #999: the guest-only listener (`PRESENTER_GUEST_PORT`): the guest page and
+/// its stream, nothing else — every other path is a 404. The public no-login
+/// tunnel points at this port, so a missing setting means no listener (the
+/// tunnel answers 502), never the operator app (arch review, fail closed).
+pub fn build_guest_router(state: AppState) -> Router {
+    request_log::with_request_log(listen_guest::guest_routes()).with_state(state)
 }
 
 /// Application version from Cargo.toml

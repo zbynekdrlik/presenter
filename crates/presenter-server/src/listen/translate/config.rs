@@ -5,9 +5,11 @@
 //! `PRESENTER_LISTEN_GEMINI_URL` (default [`DEFAULT_URL`]; tests and E2E point
 //! it at a fake, `ws://` allowed) and `PRESENTER_LISTEN_GUEST_MIC` (the mic id
 //! whose frames are translated, default [`DEFAULT_SOURCE_MIC`] = the preacher's
-//! handheld on Dante) and `PRESENTER_GUEST_HOST` (the guests' own hostname, a
-//! per-site drop-in; unset = no guest page on this box: a request whose `Host`
-//! is it gets ONLY the guest surface, ROZHODNUTÉ 27.11). An empty or
+//! handheld on Dante), `PRESENTER_GUEST_PORT` (the guest listener: a second
+//! TCP port that serves ONLY the guest surface — the public no-login tunnel
+//! points there, so a missing setting means no listener, never the app; unset =
+//! no guest page on this box, #999 arch review) and `PRESENTER_GUEST_HOST`
+//! (only the public address the operator's QR page prints). An empty or
 //! whitespace-only value counts as unset. `Debug` never prints the key.
 
 pub const KEY_VAR: &str = "PRESENTER_LISTEN_GEMINI_API_KEY";
@@ -15,6 +17,7 @@ pub const MODEL_VAR: &str = "PRESENTER_LISTEN_GEMINI_MODEL";
 pub const URL_VAR: &str = "PRESENTER_LISTEN_GEMINI_URL";
 pub const SOURCE_MIC_VAR: &str = "PRESENTER_LISTEN_GUEST_MIC";
 pub const GUEST_HOST_VAR: &str = "PRESENTER_GUEST_HOST";
+pub const GUEST_PORT_VAR: &str = "PRESENTER_GUEST_PORT";
 
 /// Gemini Live's WebSocket (`BidiGenerateContent`, API v1beta).
 pub const DEFAULT_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
@@ -29,8 +32,10 @@ pub struct GeminiEnv {
     pub key: Option<String>,
     pub model: String,
     pub source_mic: String,
-    /// The guests' hostname, lowercase, without a port.
+    /// The guests' public hostname (for the QR page), lowercase, without a port.
     pub guest_host: Option<String>,
+    /// The port of the guest-only listener.
+    pub guest_port: Option<u16>,
 }
 
 impl GeminiEnv {
@@ -53,6 +58,13 @@ impl GeminiEnv {
             model: read(MODEL_VAR).unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             source_mic: read(SOURCE_MIC_VAR).unwrap_or_else(|| DEFAULT_SOURCE_MIC.to_string()),
             guest_host: read(GUEST_HOST_VAR).map(|host| bare_host(&host)),
+            guest_port: read(GUEST_PORT_VAR).and_then(|port| {
+                let parsed = port.parse::<u16>().ok().filter(|p| *p != 0);
+                if parsed.is_none() {
+                    tracing::warn!(target: super::TARGET, variable = GUEST_PORT_VAR, value = port.as_str(), "not a port number: no guest listener");
+                }
+                parsed
+            }),
         }
     }
 }
@@ -86,6 +98,7 @@ impl std::fmt::Debug for GeminiEnv {
             .field("model", &self.model)
             .field("source_mic", &self.source_mic)
             .field("guest_host", &self.guest_host)
+            .field("guest_port", &self.guest_port)
             .finish()
     }
 }
@@ -127,6 +140,11 @@ mod tests {
         assert_eq!(set.source_mic, "replay");
         assert_eq!(set.guest_host.as_deref(), Some("listen.example.org"));
         assert_eq!(defaults.guest_host, None);
+        assert_eq!(defaults.guest_port, None);
+        assert_eq!(env(&[(GUEST_PORT_VAR, " 8099 ")]).guest_port, Some(8099));
+        for bad in ["0", "99999", "http", "-1"] {
+            assert_eq!(env(&[(GUEST_PORT_VAR, bad)]).guest_port, None, "{bad}");
+        }
 
         let blank = env(&[(KEY_VAR, "  "), (MODEL_VAR, ""), (SOURCE_MIC_VAR, " ")]);
         assert_eq!(blank.key, None);

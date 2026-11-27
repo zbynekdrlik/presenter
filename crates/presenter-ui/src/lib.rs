@@ -29,8 +29,8 @@ fn App() -> impl IntoView {
         let _ = body.set_attribute("data-wasm-ready", "true");
     }
 
-    // #999: the guest page (the root of the guests' own hostname, served
-    // there only) is public — it counts nothing, and that host has no
+    // #999: the guest page (the root of the guest-only listener, served
+    // there only) is public — it counts nothing, and that listener has no
     // `/ui/usage` at all.
     if pathname != "/" {
         state::ui_usage::install();
@@ -70,8 +70,8 @@ fn App() -> impl IntoView {
         } else if p == "/ui/study" {
             view! { <pages::study::StudyPage /> }.into_any()
         } else if p == "/" {
-            // #999: the server serves the WASM shell at `/` only on the guests'
-            // hostname (`PRESENTER_GUEST_HOST`); a normal host's `/` is the SSR home.
+            // #999: the server serves the WASM shell at `/` only on the guest-only
+            // listener (`PRESENTER_GUEST_PORT`); the main port's `/` is the SSR home.
             view! { <pages::guest::GuestPage /> }.into_any()
         } else if p == "/ui/guest-qr" {
             view! { <pages::guest::GuestQrPage /> }.into_any()

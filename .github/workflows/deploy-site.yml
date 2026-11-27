@@ -51,8 +51,13 @@ on:
         description: "#915: the AUD tag of the site's Cloudflare Access app (not a secret: every token carries it)"
         type: string
         required: true
+      guest_port:
+        description: "#999: the guest-only listener's port (PRESENTER_GUEST_PORT; the public guest tunnel points there); empty = no guest listener"
+        type: string
+        required: false
+        default: ""
       guest_host:
-        description: "#999: the site's guest translation hostname (PRESENTER_GUEST_HOST); empty = no guest page"
+        description: "#999: the guests' public hostname, only printed by the operator's QR page (PRESENTER_GUEST_HOST)"
         type: string
         required: false
         default: ""
@@ -409,6 +414,7 @@ jobs:
           ACCESS_AUD: ${{ inputs.access_aud }}
           # #999: the guests' own hostname (a public tunnel, no Access app); empty = none.
           GUEST_HOST: ${{ inputs.guest_host }}
+          GUEST_PORT: ${{ inputs.guest_port }}
         run: |
           scp -i ~/.ssh/id_deploy ${{ env.UNIT_FILE }} deploy-target:/tmp/${{ env.SERVICE_NAME }}.service
           # #544: the service's GStreamer registry must not survive this deploy — a driver
@@ -427,11 +433,14 @@ jobs:
           case "$ACCESS_AUD" in *[!a-f0-9]* | '') echo "::error::access_aud must be the hex AUD tag"; exit 1 ;; esac
           printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' "$ACCESS_TEAM_DOMAIN" "$ACCESS_AUD" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
-          # #999: the guest hostname gets ONLY the guest surface (router/guest_host.rs). A root-written
-          # drop-in again, so only host-name characters pass; empty removes the drop-in.
+          # #999: the guest-only listener (PRESENTER_GUEST_PORT — the public no-login tunnel points
+          # there, so a missing setting means no listener, never the app) and the public hostname the
+          # QR page prints. A root-written drop-in again: digits / host-name characters only; both
+          # empty removes it.
+          case "$GUEST_PORT" in *[!0-9]*) echo "::error::guest_port must be a port number"; exit 1 ;; esac
           case "$GUEST_HOST" in *[!a-z0-9.-]*) echo "::error::guest_host must be a lowercase host name"; exit 1 ;; esac
-          if [ -n "$GUEST_HOST" ]; then
-            printf '[Service]\nEnvironment=PRESENTER_GUEST_HOST=%s\n' "$GUEST_HOST" |
+          if [ -n "$GUEST_PORT" ] || [ -n "$GUEST_HOST" ]; then
+            printf '[Service]\nEnvironment=PRESENTER_GUEST_PORT=%s\nEnvironment=PRESENTER_GUEST_HOST=%s\n' "$GUEST_PORT" "$GUEST_HOST" |
               ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/guest-host.conf >/dev/null && sudo systemctl daemon-reload"
           else
             ssh deploy-target "sudo rm -f /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/guest-host.conf && sudo systemctl daemon-reload"
@@ -685,23 +694,27 @@ jobs:
           fi
           echo "Operator UI: OK (HTTP 200)"
 
-          # #999: the guest hostname is a public tunnel with no login — it must get ONLY the
-          # guest surface (router/guest_host.rs). Checked from the box with that Host header.
-          GUEST_HOST="${{ inputs.guest_host }}"
-          if [ -n "$GUEST_HOST" ]; then
-            for path in ui/operator ui/settings listen/status listen/mics libraries/summary; do
-              code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $GUEST_HOST" "http://localhost:${{ env.HTTP_PORT }}/$path")
+          # #999: the guest listener is what the public no-login tunnel reaches — it must serve
+          # ONLY the guest surface; the main port's root stays the normal home (never the page).
+          GUEST_PORT="${{ inputs.guest_port }}"
+          if [ -n "$GUEST_PORT" ]; then
+            for path in ui/operator ui/settings settings listen/status listen/mics libraries/summary; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$GUEST_PORT/$path")
               if [ "$code" != "404" ]; then
-                echo "::error::the guest hostname serves /$path (HTTP $code) — it must be 404"
+                echo "::error::the guest listener :$GUEST_PORT serves /$path (HTTP $code) — it must be 404"
                 exit 1
               fi
             done
-            code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $GUEST_HOST" "http://localhost:${{ env.HTTP_PORT }}/")
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$GUEST_PORT/")
             if [ "$code" != "200" ]; then
-              echo "::error::the guest page on $GUEST_HOST returned HTTP $code"
+              echo "::error::the guest page on :$GUEST_PORT returned HTTP $code"
               exit 1
             fi
-            echo "Guest hostname $GUEST_HOST: only the guest surface (OK)"
+            if curl -sf "http://localhost:${{ env.HTTP_PORT }}/" | grep -q 'presenter-ui-'; then
+              echo "::error::the main port's / serves the WASM guest page — it must stay the home page"
+              exit 1
+            fi
+            echo "Guest listener :$GUEST_PORT: only the guest surface; main / is the home page (OK)"
           fi
           REMOTE_SCRIPT
 

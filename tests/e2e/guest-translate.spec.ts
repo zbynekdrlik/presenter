@@ -2,6 +2,7 @@ import { test, expect, firefox, type Browser, type BrowserContextOptions, type P
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -17,14 +18,15 @@ import {
 } from "./support";
 import { startFakeGemini, type FakeGemini } from "./fake-gemini";
 
-// #999 L3 — a guest on a phone opens the guest hostname's root (`localhost`
-// here: PRESENTER_GUEST_HOST; the normal tests use 127.0.0.1), picks English and taps Play: the
+// #999 L3 — a guest on a phone opens the root of the guest-only listener
+// (PRESENTER_GUEST_PORT, a second port of the test server), picks English and taps Play: the
 // translated speech plays (the AudioWorklet reports played samples) and the
 // text appears, against a scripted fake Gemini Live (tests/e2e/fake-gemini.ts;
 // Google is never reached). The preacher is a VBAN mic (`guest`) the real
 // sender (scripts/dev/listen/vban_send.py) plays a voiced tone into; the
 // server translates it because PRESENTER_LISTEN_GUEST_MIC names it. The guest
-// hostname serves nothing else; the operator's QR page is on the normal host.
+// listener serves nothing else; the operator's QR page is on the main port and
+// prints https://<PRESENTER_GUEST_HOST>/.
 
 const KEY = "e2e-test-key-not-real";
 const STREAM = "E2E_PREACHER";
@@ -38,7 +40,7 @@ const PREACHER = {
   role: "guest",
 };
 
-const GUEST_HOST = "localhost";
+const GUEST_HOST = "listen.example.org";
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
@@ -50,13 +52,14 @@ test.describe.configure({ timeout: 180_000 });
 test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
-  guestURL = `http://${GUEST_HOST}:${new URL(baseURL).port}/`;
+  guestURL = `http://127.0.0.1:${await freePort()}/`;
   await refreshDevData(config.dbUrl);
   fake = await startFakeGemini();
   process.env.PRESENTER_LISTEN_GEMINI_URL = fake.url;
   process.env.PRESENTER_LISTEN_GEMINI_API_KEY = KEY;
   process.env.PRESENTER_LISTEN_GUEST_MIC = PREACHER.id;
   process.env.PRESENTER_GUEST_HOST = GUEST_HOST;
+  process.env.PRESENTER_GUEST_PORT = new URL(guestURL).port;
   try {
     serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
   } finally {
@@ -64,6 +67,7 @@ test.beforeAll(async ({}, testInfo) => {
     delete process.env.PRESENTER_LISTEN_GEMINI_API_KEY;
     delete process.env.PRESENTER_LISTEN_GUEST_MIC;
     delete process.env.PRESENTER_GUEST_HOST;
+    delete process.env.PRESENTER_GUEST_PORT;
   }
 });
 
@@ -76,6 +80,15 @@ test.afterAll(async () => {
 test.beforeEach(async ({ request }) => {
   expect((await request.put(url("/listen/mics"), { data: [PREACHER] })).ok()).toBe(true);
 });
+
+/** A port nothing listens on right now (the guest listener's). */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
 
 function url(p: string): string {
   return new URL(p, baseURL).toString();
@@ -253,9 +266,9 @@ test("the speech really plays through the AudioWorklet (Firefox)", async () => {
   expect(errors).toEqual([]);
 });
 
-test("the guest hostname serves only the guest page; the operator's QR page names it", async ({ browser, request }) => {
+test("the guest listener serves only the guest page; the operator's QR page names it", async ({ browser, request }) => {
   const errors: string[] = [];
-  for (const path of ["ui/operator", "ui/settings", "listen/status", "listen/mics", "ui/guest-qr"]) {
+  for (const path of ["ui/operator", "ui/settings", "settings", "listen/status", "listen/mics", "ui/guest-qr"]) {
     expect((await request.get(guestURL + path)).status(), path).toBe(404);
   }
   expect((await request.get(guestURL + "manifest.json")).ok()).toBe(true);

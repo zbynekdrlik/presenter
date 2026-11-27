@@ -1,12 +1,13 @@
-//! The guests' live translation (#999 L2/L3). On the guests' OWN hostname
-//! (`PRESENTER_GUEST_HOST`, ROZHODNUTÉ 27.11) [`guest_routes`] is the whole
-//! surface (`guest_host.rs` dispatches by `Host`): `/` = the WASM shell (the
-//! page is `presenter-ui`'s `pages::guest`), its manifest, service worker,
-//! icons and `/ui-pkg` assets, `/healthz` (the version), the language list
-//! `GET /listen/guest/languages` and the stream `GET /listen/guest/ws?lang=xx`.
-//! The normal hosts ([`routes`]) carry the same two guest endpoints and the
-//! operator's QR page `/ui/guest-qr` (its code from `GET /listen/guest/qr`,
-//! encoding `https://<guest host>/`).
+//! The guests' live translation (#999 L2/L3). The guest-only listener
+//! (`PRESENTER_GUEST_PORT`, `router::build_guest_router`; the public tunnel of
+//! the guests' hostname points there) serves [`guest_routes`] and nothing
+//! else: `/` = the WASM shell (the page is `presenter-ui`'s `pages::guest`),
+//! its manifest, service worker, icons and `/ui-pkg` assets, a version-only
+//! `/healthz`, the language list `GET /listen/guest/languages` and the stream
+//! `GET /listen/guest/ws?lang=xx`; every other path is [`GUEST_NOT_FOUND`].
+//! The main port ([`routes`]) never serves the guest page; it carries the two
+//! guest endpoints and the operator's QR page `/ui/guest-qr` (its code from
+//! `GET /listen/guest/qr`, encoding `https://<PRESENTER_GUEST_HOST>/`).
 //!
 //! The stream (core `listen::guest::GuestWsMessage`): ONE `hello`, the
 //! session's `state` (again on every change), then the translated speech as
@@ -57,8 +58,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/listen/guest/ws", get(guest_websocket))
 }
 
-/// Everything the guest hostname serves; any other path is a 404 (that host
-/// has no login in front of it).
+/// Everything the guest listener serves; any other path is a 404 (the public
+/// tunnel in front of it has no login).
 pub(super) fn guest_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(super::wasm_ui::wasm_ui_shell))
@@ -73,8 +74,7 @@ pub(super) fn guest_routes() -> Router<AppState> {
         .fallback(guest_not_found)
 }
 
-/// The body of every other path on the guest hostname (a test tells it from
-/// the normal router's 404 by it).
+/// The body of every other path on the guest listener.
 pub(super) const GUEST_NOT_FOUND: &str = "Not found";
 
 async fn guest_not_found() -> Response {
@@ -86,7 +86,7 @@ async fn guest_not_found() -> Response {
         .into_response()
 }
 
-/// `/healthz` on the public guest hostname: only what the page shows (the
+/// `/healthz` on the public guest listener: only what the page shows (the
 /// version) — the full one names NDI addresses and the AI backend's errors.
 async fn guest_health() -> impl IntoResponse {
     (

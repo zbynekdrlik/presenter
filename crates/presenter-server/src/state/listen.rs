@@ -230,9 +230,15 @@ impl AppState {
         self.listen.guest().join(&self.listen, code)
     }
 
-    /// The guests' own hostname (#999, `PRESENTER_GUEST_HOST`).
+    /// The guests' public hostname (#999, `PRESENTER_GUEST_HOST`): only what
+    /// the operator's QR page prints.
     pub(crate) fn guest_host(&self) -> Option<String> {
         self.listen.guest().guest_host().map(str::to_string)
+    }
+
+    /// The guest-only listener's port (#999, `PRESENTER_GUEST_PORT`).
+    pub fn guest_port(&self) -> Option<u16> {
+        self.listen.guest().guest_port()
     }
 
     /// Whether guests can listen now and which languages run (#999).

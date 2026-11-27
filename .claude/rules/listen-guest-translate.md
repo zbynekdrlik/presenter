@@ -4,8 +4,7 @@ paths:
   - "crates/presenter-server/src/router/listen_guest.rs"
   - "crates/presenter-server/src/router/listen_guest/**"
   - "crates/presenter-server/src/ui/guest/**"
-  - "crates/presenter-server/src/router/guest_host.rs"
-  - "crates/presenter-server/src/router/guest_host/**"
+  - "crates/presenter-server/src/main.rs"
   - "crates/presenter-core/src/listen/guest.rs"
   - "crates/presenter-ui/src/pages/guest/**"
   - "crates/presenter-ui/src/state/guest.rs"
@@ -17,7 +16,7 @@ paths:
   - "tests/e2e/fake-gemini.ts"
 ---
 
-# Guests' live translation — the guest hostname (#999)
+# Guests' live translation — the guest listener (#999)
 
 A guest who does not understand Slovak opens the guests' own hostname (SNV: `listen.newlevel.media`,
 ROZHODNUTÉ 27.11 — never a path like `/poslech`) on their own phone, picks a language and hears the
@@ -73,31 +72,33 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   first_voiced_ms median/max — onset after ≥ 1.5 s quiet → first translated audio, stalls = 6 s
   without output while the preacher spoke, reconnects, dropped frames). A silent minute logs nothing.
 
-## The hostname (`router/guest_host.rs`, ROZHODNUTÉ 27.11)
+## The guest listener (`PRESENTER_GUEST_PORT`, arch review 27.11 — fail CLOSED)
 
-- `PRESENTER_GUEST_HOST` (per-site drop-in, never the literal host in code): a request whose `Host`
-  header (lowercase, port and trailing dot dropped — `config::bare_host`) is it goes to
-  `listen_guest::guest_routes()` ONLY: `/` (WASM shell), `/manifest.json`, `/sw.js`,
-  `/icon-192.png`, `/icon-512.png`, `/ui-pkg/*`, `/healthz`, `/listen/guest/languages`,
-  `/listen/guest/ws`; every other path 404 (`GUEST_NOT_FOUND`, the guest router's own fallback). The
-  guest `/healthz` is `{status, version, channel}` only — the full one names NDI addresses and AI
-  errors. That hostname is a public tunnel with NO Access app,
-  so this dispatch IS the security boundary: a new guest route goes into `guest_routes()` on
-  purpose, nothing else. `X-Forwarded-Host` is never read (a client could aim it at the normal
-  router through the guest tunnel); the URI authority counts too (HTTP/2, absolute-form). The layer
-  sits outside the routes (inside the request log), so it also covers every fallback.
-- It cannot see a tunnel that REWRITES Host (`originRequest.httpHostHeader` — never set it for the
-  guest hostname) or a box whose drop-in went missing while the tunnel still points at it: the
-  deploy's "Verify deployment" curls `/ui/operator`, `/listen/status` … with the guest Host and fails
-  unless they are 404.
-- Normal hosts never serve the guest page: their `/` stays the SSR home. They carry the guest
-  endpoints (an operator can try them) and the operator's QR page `/ui/guest-qr`
-  (`GET /listen/guest/qr` → `https://<guest host>/` + SVG from the `qrcode` crate; `url: null` on a
-  box without a guest host).
-- Deploy: `deploy-site.yml` input `guest_host` → the drop-in `guest-host.conf`
-  (`PRESENTER_GUEST_HOST`, host-name characters only; empty removes it). SNV passes the repository
-  variable `SNV_GUEST_HOST` (`listen.newlevel.media`, set 27.11); PRBA / PP / dev have none.
-- The hostname itself (DNS + tunnel ingress) is set up by airuleset's publish-app lane, not here.
+- The public no-login hostname (SNV `listen.newlevel.media`, ROZHODNUTÉ 27.11) is a Cloudflare
+  tunnel that points at a SECOND TCP port, never at 80: `PRESENTER_GUEST_PORT` (SNV 8099, checked
+  free on presenter.lan 27.11). `main.rs::spawn_guest_listener` binds it on the main port's
+  interface and serves `router::build_guest_router` = `listen_guest::guest_routes()` (+ the request
+  log) ONLY: `/` (WASM shell), `/manifest.json`, `/sw.js`, `/icon-192.png`, `/icon-512.png`,
+  `/ui-pkg/*`, `/healthz`, `/listen/guest/languages`, `/listen/guest/ws`; every other path 404
+  (`GUEST_NOT_FOUND`). The guest `/healthz` is `{status, version, channel}` only — the full one names
+  NDI addresses and AI errors. A new guest route goes into `guest_routes()` on purpose, nothing else.
+- Why a port and not Host routing on 80 (the first cut, reverted): Host routing fails OPEN — a lost
+  `PRESENTER_GUEST_HOST` (or a tunnel that rewrites Host) handed the public hostname the WHOLE app.
+  With a port, a missing setting = no listener = the tunnel answers 502, never the app. Unset → INFO
+  "no guest listener"; a bind / serve failure → ERROR, the main server goes on; never in validate
+  mode.
+- The main port never serves the guest page: its `/` stays the SSR home, whatever the Host. It carries
+  the two guest endpoints (an operator can try them) and the operator's QR page `/ui/guest-qr`
+  (`GET /listen/guest/qr` → `https://<PRESENTER_GUEST_HOST>/` + SVG from the `qrcode` crate; `url:
+  null` without one). `PRESENTER_GUEST_HOST` is ONLY that printed address now.
+- Deploy: `deploy-site.yml` inputs `guest_port` + `guest_host` → the drop-in `guest-host.conf`
+  (`PRESENTER_GUEST_PORT` digits only, `PRESENTER_GUEST_HOST` host-name characters only; both empty
+  removes it). SNV: `guest_port: "8099"` in deploy.yml + the repository variable `SNV_GUEST_HOST`
+  (`listen.newlevel.media`); PRBA / PP / dev have none. "Verify deployment" curls the guest port:
+  `/` = 200, `/ui/operator`, `/ui/settings`, `/settings`, `/listen/status`, `/listen/mics`,
+  `/libraries/summary` = 404, and fails if the main port's `/` is the WASM shell.
+- The hostname itself (DNS + tunnel ingress to the guest port) is airuleset's publish-app lane
+  (airuleset#1403), not here.
 
 ## The page (`presenter-ui` `pages/guest`, WASM route `/`)
 
@@ -106,8 +107,8 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   `guest-player.test.js` under `node --test` (`npm run test:guest-player`, the Companion Tests job).
   It has no content hash, so `wasm_ui::asset_cache_control` serves an unhashed `.js` `no-cache`
   (every fingerprinted asset stays `immutable`). The WASM route `/` is the
-  guest page — the server serves the shell at `/` ONLY on the guest host. The shell does NOT install
-  `ui_usage` there (that host has no `/ui/usage`).
+  guest page — the server serves the shell at `/` ONLY on the guest listener. The shell does NOT install
+  `ui_usage` there (that listener has no `/ui/usage`).
 - Phone first, ENGLISH copy (owner 27.11: the page is for foreigners), language names in their own
   language (core `GUEST_LANGUAGES`); `?lang=` keeps the pick. Play = the gesture that creates +
   resumes the `AudioContext` synchronously in the tap (iOS unlock), asked for 24 kHz (a refusing phone gets a linear
@@ -127,16 +128,18 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   late speech after a goAway). Session tests on the paused clock; the session's 1 s tick starts with
   the session, so a time rule (`NO_ANSWER`, stalls) fires on the first WHOLE second past its bound —
   feed past it (the deaf test feeds 12.5 s for a 10 s rule + 1 s retry), never shorten the rule;
-  router tests (`router/listen_guest/tests.rs`) on a real loopback server. Keys `test-key-not-real`.
-- E2E `guest-translate.spec.ts` + `fake-gemini.ts`: `PRESENTER_GUEST_HOST=localhost` (the other
-  specs use 127.0.0.1, so `http://localhost:<port>/` IS the guest host); phone, pick → Play →
+  router tests (`router/listen_guest/tests.rs`) on a real loopback server, incl. the guest
+  listener's 404 boundary (`build_guest_router`) and the main port's `/` staying the home. Keys `test-key-not-real`.
+- E2E `guest-translate.spec.ts` + `fake-gemini.ts`: the test server gets `PRESENTER_GUEST_PORT`
+  (a free port) and the page is `http://127.0.0.1:<guest port>/` (a secure context, so the
+  AudioWorklet exists); phone, pick → Play →
   `waiting` (nothing sent) → the real VBAN sender → `live`, chunks + played samples, transcript,
-  original toggle; the guest host 404s everything else; zero console errors. The PLAYED-samples
+  original toggle; the guest listener 404s everything else; zero console errors. The PLAYED-samples
   proof runs in Firefox through a private null-sink PulseAudio (`startNullSink`): the runner has no
   sound server (a browser never resumes its AudioContext without one), and dev2's Chromium never
   loads an AudioWorklet module at all — `addModule` stays pending without even fetching the file,
   headless or headed, with or without a sound server (probed 27.11.2026). Never assert
   `data-guest-played` in a Chromium test. `support.ts` gives
-  every other server a dead Gemini URL, NO key and no guest host.
+  every other server a dead Gemini URL, NO key, no guest port and no guest host.
 - Deploy: the Gemini key rides the SAME "Configure listening transcription" step as Soniox
   (invariant 7's canonical text in `scripts/ci/check_deploy_workflows.py`; both secrets, one file).

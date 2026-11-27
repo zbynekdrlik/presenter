@@ -1,5 +1,5 @@
-//! The guest page (#999 L3) at the ROOT of the guests' own hostname
-//! (`PRESENTER_GUEST_HOST`, ROZHODNUTÉ 27.11): a guest who does not understand Slovak hears the
+//! The guest page (#999 L3) at the ROOT of the guest-only listener
+//! (`PRESENTER_GUEST_PORT`; the guests' public hostname points there, ROZHODNUTÉ 27.11): a guest who does not understand Slovak hears the
 //! sermon live in their own language, with the text on screen. Phone first,
 //! no login. Screen 1 lists the languages in their own names (`?lang=xx` keeps
 //! the pick over a reload); screen 2 has ONE big Play — the tap that unlocks
@@ -442,7 +442,7 @@ fn TranscriptView(transcript: RwSignal<Transcript>) -> impl IntoView {
 }
 
 /// Install-as-an-app tags, as the study page does. No credentials: the page
-/// is public (the guest hostname has no login in front of it).
+/// is public (the guest listener has no login in front of it).
 fn install_pwa() {
     let document = crate::utils::window::document();
     document.set_title("Sermon translation");

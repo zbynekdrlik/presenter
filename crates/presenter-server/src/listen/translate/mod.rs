@@ -142,9 +142,14 @@ impl GuestTranslate {
         })
     }
 
-    /// The guests' own hostname (`PRESENTER_GUEST_HOST`), when this box has one.
+    /// The guests' public hostname (`PRESENTER_GUEST_HOST`, the QR page only).
     pub(crate) fn guest_host(&self) -> Option<&str> {
         self.inner.deps.env.guest_host.as_deref()
+    }
+
+    /// The guest-only listener's port (`PRESENTER_GUEST_PORT`).
+    pub(crate) fn guest_port(&self) -> Option<u16> {
+        self.inner.deps.env.guest_port
     }
 
     pub(crate) fn with_deps(deps: SessionDeps) -> Self {
