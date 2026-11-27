@@ -63,8 +63,9 @@ pub fn request(env: &GeminiEnv) -> Result<Request, ConnectError> {
 }
 
 /// Spawns connection `conn`; `setup` is its first frame. The message channel is
-/// unbounded: a stuck socket must not stall the session (the session drops a
-/// connection whose output stalls). Dropping the sender ends the task.
+/// unbounded: a stuck socket must not stall the session (its `NO_ANSWER`
+/// rule drops a connection that answers nothing for 10 s while audio goes
+/// out, which bounds the queue). Dropping the sender ends the task.
 pub fn spawn(
     conn: u32,
     connector: Arc<dyn Connector>,

@@ -39,6 +39,17 @@ struct Listening {
     wake_lock: Option<JsValue>,
     rate: u32,
     chunks: u64,
+    /// Bumped by every Play and Stop: an audio / wake-lock start that
+    /// finishes after a newer Play or a Stop drops what it made.
+    start: u64,
+}
+
+impl Listening {
+    fn release_wake_lock(&mut self) {
+        if let Some(lock) = self.wake_lock.take() {
+            audio::release_wake_lock(&lock);
+        }
+    }
 }
 
 /// The page's reactive state.
@@ -255,15 +266,19 @@ fn start(page: Page, listening: &Rc<RefCell<Listening>>) {
             return;
         }
     };
+    // iOS unlocks audio only inside the tap: resume here, synchronously.
+    let _ = context.resume();
     page.audio_failed.set(false);
     page.refused.set(None);
     page.session.set(None);
     page.playing.set(true);
-    {
+    let start = {
         let mut state = listening.borrow_mut();
         state.rate = DEFAULT_RATE;
         state.chunks = 0;
-    }
+        state.start += 1;
+        state.start
+    };
     set_body("data-guest-chunks", "0");
     set_body("data-guest-played", "0");
     let for_audio = Rc::clone(listening);
@@ -272,8 +287,9 @@ fn start(page: Page, listening: &Rc<RefCell<Listening>>) {
             set_body("data-guest-played", &format!("{}", report.played));
             set_body("data-guest-underruns", &format!("{}", report.underruns));
         };
+        let current = |state: &Listening| state.start == start;
         match AudioOut::start(context, report).await {
-            Ok(out) if page.playing.get_untracked() => {
+            Ok(out) if current(&for_audio.borrow()) => {
                 leptos::logging::log!("guest: audio running at {} Hz", out.rate());
                 for_audio.borrow_mut().audio = Some(out);
             }
@@ -284,8 +300,10 @@ fn start(page: Page, listening: &Rc<RefCell<Listening>>) {
             }
         }
         let lock = audio::request_wake_lock().await;
-        if page.playing.get_untracked() {
-            for_audio.borrow_mut().wake_lock = lock;
+        let mut state = for_audio.borrow_mut();
+        if current(&state) {
+            state.release_wake_lock();
+            state.wake_lock = lock;
         } else if let Some(lock) = lock {
             audio::release_wake_lock(&lock);
         }
@@ -302,11 +320,10 @@ fn stop(page: Page, listening: &Rc<RefCell<Listening>>) {
     page.playing.set(false);
     page.session.set(None);
     let mut state = listening.borrow_mut();
+    state.start += 1;
     state.stream = None;
     state.audio = None;
-    if let Some(lock) = state.wake_lock.take() {
-        audio::release_wake_lock(&lock);
-    }
+    state.release_wake_lock();
 }
 
 fn on_frame(page: Page, listening: &Rc<RefCell<Listening>>, frame: GuestFrame) {
@@ -335,18 +352,23 @@ fn on_frame(page: Page, listening: &Rc<RefCell<Listening>>, frame: GuestFrame) {
 fn on_message(page: Page, listening: &Rc<RefCell<Listening>>, message: GuestWsMessage) {
     match message {
         GuestWsMessage::Hello { sample_rate, .. } => listening.borrow_mut().rate = sample_rate,
-        GuestWsMessage::State { session } => page.session.set(Some(session)),
+        GuestWsMessage::State { session } => {
+            // A language stopped for good: the screen may sleep again.
+            if matches!(session, GuestSessionState::Stopped { .. }) {
+                listening.borrow_mut().release_wake_lock();
+            }
+            page.session.set(Some(session));
+        }
         GuestWsMessage::Text { text } => page.transcript.update(|t| t.push_text(&text, now_ms())),
         GuestWsMessage::Original { text } => page.transcript.update(|t| t.push_original(&text)),
         GuestWsMessage::Turn => page.transcript.update(Transcript::end_turn),
         GuestWsMessage::Refused { reason } => {
             page.refused.set(Some(reason));
             let mut state = listening.borrow_mut();
+            state.start += 1;
             state.stream = None;
             state.audio = None;
-            if let Some(lock) = state.wake_lock.take() {
-                audio::release_wake_lock(&lock);
-            }
+            state.release_wake_lock();
             drop(state);
             page.playing.set(false);
         }
@@ -368,8 +390,12 @@ fn watch_visibility(page: Page, listening: Rc<RefCell<Listening>>) {
         let listening = Rc::clone(&listening);
         leptos::task::spawn_local(async move {
             if let Some(lock) = audio::request_wake_lock().await {
+                let mut state = listening.borrow_mut();
                 if page.playing.get_untracked() {
-                    listening.borrow_mut().wake_lock = Some(lock);
+                    state.release_wake_lock();
+                    state.wake_lock = Some(lock);
+                } else {
+                    audio::release_wake_lock(&lock);
                 }
             }
         });

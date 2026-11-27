@@ -7,9 +7,10 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "npm run test:companion && npm run test:playwright",
+    "test": "npm run test:companion && npm run test:guest-player && npm run test:playwright",
     "test:playwright": "playwright test",
     "test:playwright:headed": "playwright test --headed",
+    "test:guest-player": "node --test crates/presenter-ui/guest-player.test.js",
     "test:companion": "node --test ops/companion/presenter/lib/module-base-version.test.js ops/companion/presenter/lib/time.test.js ops/companion/presenter/lib/commands.test.js ops/companion/presenter/lib/variable-batch.test.js ops/companion/presenter/lib/stream.test.js ops/companion/presenter/lib/upgrade-scripts.test.js ops/companion/presenter/lib/catalog.test.js ops/companion/presenter/lib/nameplate-grid.test.js",
     "typecheck": "tsc --noEmit"
   },

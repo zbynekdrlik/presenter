@@ -121,6 +121,10 @@ jobs:
       - name: Run companion tests
         run: npm run test:companion
 
+      # #999: the guest page's AudioWorklet player (plain JS the platform requires).
+      - name: Run guest player worklet tests
+        run: npm run test:guest-player
+
       # Deploy-tool logic (#733): re-pin transform is Python (the box has python3 +
       # stdlib sqlite3, no sqlite3 CLI). Run by file path — the file stem has hyphens,
       # so `-m unittest` cannot import it as a module.

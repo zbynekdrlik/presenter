@@ -104,12 +104,34 @@ async fn the_guest_host_serves_only_the_guest_surface() {
         "/stage",
         "/nothing",
     ] {
+        // the GUEST router's 404 (its own body), not a normal route that happens to 404
         assert_eq!(
-            get(&app, GUEST, path, None).await.0,
-            StatusCode::NOT_FOUND,
+            get(&app, GUEST, path, None).await,
+            (
+                StatusCode::NOT_FOUND,
+                super::super::listen_guest::GUEST_NOT_FOUND.to_string()
+            ),
             "{path}"
         );
     }
+    // an absolute-form request naming the guest host is a guest request too
+    let absolute = HttpRequest::get(format!("http://{GUEST}/ui/operator"))
+        .header("host", "10.77.9.205")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(absolute).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    // the public health shows the version, never NDI or the AI backend
+    let (_, health) = get(&app, GUEST, "/healthz", None).await;
+    let health: serde_json::Value = serde_json::from_str(&health).unwrap();
+    assert_eq!(health["status"], "ok");
+    assert!(health["version"].is_string());
+    assert!(
+        health.get("ndi_pipelines").is_none() && health.get("ai").is_none(),
+        "{health}"
+    );
 
     // the normal hosts: the home page at `/`, never the guest page or its manifest
     let (status, home) = get(&app, "10.77.9.205", "/", None).await;

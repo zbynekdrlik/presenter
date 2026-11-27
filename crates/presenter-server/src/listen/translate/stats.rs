@@ -68,6 +68,8 @@ pub struct MinuteStats {
     pub stalls: u64,
     pub reconnects: u64,
     pub dropped_frames: u64,
+    /// A replaced connection's speech dropped because the new one already spoke.
+    pub overlap_dropped_ms: u64,
 }
 
 /// No translated audio this long while the preacher speaks = a stall (the
@@ -78,7 +80,12 @@ impl MinuteStats {
     /// The minute's INFO line, then the counters start again. A minute with
     /// nothing sent and nothing played logs nothing (a silent mic all day).
     pub fn log_and_reset(&mut self, language: &str, listeners: usize, connected: bool) {
-        if self.sent_ms > 0 || self.output_ms > 0 || self.stalls > 0 || self.reconnects > 0 {
+        if self.sent_ms > 0
+            || self.output_ms > 0
+            || self.stalls > 0
+            || self.reconnects > 0
+            || self.dropped_frames > 0
+        {
             let mut latencies = self.first_voiced_ms.clone();
             latencies.sort_unstable();
             let median = latencies.get(latencies.len() / 2).copied();
@@ -96,6 +103,7 @@ impl MinuteStats {
                 stalls = self.stalls,
                 reconnects = self.reconnects,
                 dropped_frames = self.dropped_frames,
+                overlap_dropped_ms = self.overlap_dropped_ms,
                 "guest translation minute summary"
             );
         }

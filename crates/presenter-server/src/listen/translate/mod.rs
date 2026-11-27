@@ -22,7 +22,7 @@ mod tests;
 pub(crate) mod wire;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -43,6 +43,10 @@ pub(crate) const MAX_LANGUAGES: usize = 4;
 pub(crate) const LINGER: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(crate) const LINGER: Duration = Duration::from_secs(2);
+/// Listeners over every language at once: a public page must not let anyone
+/// hold thousands of sockets on the live presentation server. Per client IP
+/// is no cap — every guest on the church Wi-Fi shares one public address.
+pub(crate) const MAX_LISTENERS: usize = 300;
 /// Packets a listener may fall behind before it skips (≈ 30 s of audio).
 const PACKET_CAPACITY: usize = 256;
 
@@ -102,6 +106,9 @@ struct Entry {
     state: watch::Receiver<SessionState>,
     stop: watch::Sender<bool>,
     listeners: Arc<AtomicUsize>,
+    /// Bumped by every join, so a linger timer armed before a rejoin never
+    /// ends the session the rejoined guest keeps alive.
+    epoch: Arc<AtomicU64>,
 }
 
 /// The registry of language sessions (a cheap clone of one `Arc`).
@@ -193,7 +200,16 @@ impl GuestTranslate {
     pub(crate) fn join(&self, listen: &ListenService, code: &str) -> Result<Listener, Refusal> {
         let language = Language::find(code).ok_or(Refusal::UnknownLanguage)?;
         let mut sessions = self.sessions();
+        let total: usize = sessions
+            .values()
+            .map(|entry| entry.listeners.load(Ordering::SeqCst))
+            .sum();
+        if total >= MAX_LISTENERS {
+            tracing::warn!(target: TARGET, language = language.code, listeners = total, "guest refused — the listener cap is reached");
+            return Err(Refusal::Busy);
+        }
         if let Some(entry) = sessions.get(language.code) {
+            entry.epoch.fetch_add(1, Ordering::SeqCst);
             let count = entry.listeners.fetch_add(1, Ordering::SeqCst) + 1;
             tracing::info!(target: TARGET, language = language.code, listeners = count, "guest joined a running translation");
             return Ok(self.listener(language, entry));
@@ -225,6 +241,7 @@ impl GuestTranslate {
             state,
             stop,
             listeners,
+            epoch: Arc::new(AtomicU64::new(0)),
         };
         let listener = self.listener(language, &entry);
         sessions.insert(language.code, entry);
@@ -258,18 +275,21 @@ impl GuestTranslate {
         tracing::info!(target: TARGET, language = code, listeners = left, "guest left");
         if left == 0 {
             let service = self.clone();
+            let epoch = entry.epoch.load(Ordering::SeqCst);
             tokio::spawn(async move {
                 tokio::time::sleep(LINGER).await;
-                service.end_if_empty(code, generation);
+                service.end_if_empty(code, generation, epoch);
             });
         }
     }
 
-    fn end_if_empty(&self, code: &'static str, generation: u64) {
+    fn end_if_empty(&self, code: &'static str, generation: u64, epoch: u64) {
         let mut sessions = self.sessions();
-        let empty = sessions
-            .get(code)
-            .is_some_and(|e| e.generation == generation && e.listeners.load(Ordering::SeqCst) == 0);
+        let empty = sessions.get(code).is_some_and(|e| {
+            e.generation == generation
+                && e.epoch.load(Ordering::SeqCst) == epoch
+                && e.listeners.load(Ordering::SeqCst) == 0
+        });
         if empty {
             if let Some(entry) = sessions.remove(code) {
                 let _ = entry.stop.send(true);

@@ -53,9 +53,19 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   messages = no cost. Frames before a connection is ready wait in `pending` (≤ 5 s, oldest dropped);
   a send NEVER opens a connection while a retry is scheduled (the back-off would be bypassed).
 - `goAway` opens the next connection with the newest handle; at its `setupComplete` the audio moves
-  there and the old one drains `DRAIN` 4 s. Any other close / connect failure backs off 1, 2, 4 … 30 s.
+  there and the old one drains `DRAIN` 4 s — but its speech is DROPPED once the new connection spoke
+  (`Conn::spoke`; two voices never overlap; counted `overlap_dropped_ms`). Any other close / connect
+  failure backs off 1, 2, 4 … 30 s. An idle cut of a connection younger than `IDLE_CUT_MIN_AGE`
+  (60 s) or never ready backs off too (no connect loop). `NO_ANSWER`: a ready connection that answers
+  nothing for 10 s while audio goes out (counted from the gate opening, never across a quiet stretch)
+  is dropped and reopened — a half-open TCP never errors, and this bounds its unbounded queue. A
+  promoted, not-yet-ready successor shows `reconnecting`.
 - Daily cap: `DAILY_CAP_MINUTES` = 480 audio minutes SENT per local day over every language
-  (`DayMeter`, in memory — a restart starts the count again). Reached → the language stops
+  (`DayMeter`, in memory — a restart starts the count again), charged only when a frame really goes
+  out (`deliver`), never for one dropped from `pending`.
+- `MAX_LISTENERS` = 300 over every language (`busy`); no per-IP cap — every guest on the church Wi-Fi
+  shares one public address. A linger timer carries the entry's `epoch` (bumped by every join), so a
+  leave → rejoin → leave ends the session 60 s after the LAST leave. Reached → the language stops
   (`stopped/dailyCap`), new joins are refused.
 - Logs on `presenter::listen::guest`: session start/stop, every state change, connection open /
   ready / close (code + reason + class), goAway, back-off WARN (power-of-two), stall WARN, and ONE
@@ -69,11 +79,17 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   header (lowercase, port and trailing dot dropped — `config::bare_host`) is it goes to
   `listen_guest::guest_routes()` ONLY: `/` (WASM shell), `/manifest.json`, `/sw.js`,
   `/icon-192.png`, `/icon-512.png`, `/ui-pkg/*`, `/healthz`, `/listen/guest/languages`,
-  `/listen/guest/ws`; every other path 404. That hostname is a public tunnel with NO Access app,
+  `/listen/guest/ws`; every other path 404 (`GUEST_NOT_FOUND`, the guest router's own fallback). The
+  guest `/healthz` is `{status, version, channel}` only — the full one names NDI addresses and AI
+  errors. That hostname is a public tunnel with NO Access app,
   so this dispatch IS the security boundary: a new guest route goes into `guest_routes()` on
   purpose, nothing else. `X-Forwarded-Host` is never read (a client could aim it at the normal
-  router through the guest tunnel). The layer sits outside the routes (inside the request log), so
-  it also covers every fallback.
+  router through the guest tunnel); the URI authority counts too (HTTP/2, absolute-form). The layer
+  sits outside the routes (inside the request log), so it also covers every fallback.
+- It cannot see a tunnel that REWRITES Host (`originRequest.httpHostHeader` — never set it for the
+  guest hostname) or a box whose drop-in went missing while the tunnel still points at it: the
+  deploy's "Verify deployment" curls `/ui/operator`, `/listen/status` … with the guest Host and fails
+  unless they are 404.
 - Normal hosts never serve the guest page: their `/` stays the SSR home. They carry the guest
   endpoints (an operator can try them) and the operator's QR page `/ui/guest-qr`
   (`GET /listen/guest/qr` → `https://<guest host>/` + SVG from the `qrcode` crate; `url: null` on a
@@ -86,15 +102,19 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 ## The page (`presenter-ui` `pages/guest`, WASM route `/`)
 
 - WASM like every UI here (house stack; the AudioWorklet module `guest-player.js` is the one JS file
-  the platform requires, copied by Trunk to `/ui-pkg/guest-player.js`). The WASM route `/` is the
+  the platform requires, copied by Trunk to `/ui-pkg/guest-player.js`, unit-tested by
+  `guest-player.test.js` under `node --test` (`npm run test:guest-player`, the Companion Tests job).
+  It has no content hash, so `wasm_ui::asset_cache_control` serves an unhashed `.js` `no-cache`
+  (every fingerprinted asset stays `immutable`). The WASM route `/` is the
   guest page — the server serves the shell at `/` ONLY on the guest host. The shell does NOT install
   `ui_usage` there (that host has no `/ui/usage`).
 - Phone first, ENGLISH copy (owner 27.11: the page is for foreigners), language names in their own
   language (core `GUEST_LANGUAGES`); `?lang=` keeps the pick. Play = the gesture that creates +
-  resumes the `AudioContext` (iOS unlock), asked for 24 kHz (a refusing phone gets a linear
+  resumes the `AudioContext` synchronously in the tap (iOS unlock), asked for 24 kHz (a refusing phone gets a linear
   resample, `state::guest::resample`). The worklet starts at 150 ms queued and drops back to 150 ms
   when > 1 s queued (latency first). Screen Wake Lock via `navigator.wakeLock` (Reflect; not in
-  stable web-sys), re-taken on `visibilitychange`.
+  stable web-sys), re-taken on `visibilitychange`, released on Stop / refusal / `stopped`; every
+  Play and Stop bumps `Listening::start`, so a slow start of an earlier Play drops what it made.
 - E2E hooks: `body[data-guest-chunks]` (speech frames received), `body[data-guest-played]` (samples
   the worklet played), `[data-role=guest-state][data-state]` (`idle` / `connecting` / `waiting` /
   `live` / `reconnecting` / `stopped` / `refused`).

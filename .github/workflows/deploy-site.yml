@@ -684,6 +684,25 @@ jobs:
             exit 1
           fi
           echo "Operator UI: OK (HTTP 200)"
+
+          # #999: the guest hostname is a public tunnel with no login — it must get ONLY the
+          # guest surface (router/guest_host.rs). Checked from the box with that Host header.
+          GUEST_HOST="${{ inputs.guest_host }}"
+          if [ -n "$GUEST_HOST" ]; then
+            for path in ui/operator ui/settings listen/status listen/mics libraries/summary; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $GUEST_HOST" "http://localhost:${{ env.HTTP_PORT }}/$path")
+              if [ "$code" != "404" ]; then
+                echo "::error::the guest hostname serves /$path (HTTP $code) — it must be 404"
+                exit 1
+              fi
+            done
+            code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $GUEST_HOST" "http://localhost:${{ env.HTTP_PORT }}/")
+            if [ "$code" != "200" ]; then
+              echo "::error::the guest page on $GUEST_HOST returned HTTP $code"
+              exit 1
+            fi
+            echo "Guest hostname $GUEST_HOST: only the guest surface (OK)"
+          fi
           REMOTE_SCRIPT
 
       # #661 added this AI-path check; #675 review finding 2 fixed two bugs

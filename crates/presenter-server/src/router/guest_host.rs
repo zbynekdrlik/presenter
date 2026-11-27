@@ -6,8 +6,18 @@
 //! serves the guest page at `/`. Without a guest hostname nothing changes.
 //!
 //! The match reads the `Host` header (cloudflared passes the tunnel
-//! hostname), lowercase without its port; `X-Forwarded-Host` is never read —
-//! a client could set it to reach the normal router through the guest tunnel.
+//! hostname) AND the URI authority (HTTP/2 `:authority`, an absolute-form
+//! request): either one naming the guest host makes it a guest request — the
+//! safe direction. Lowercase, without the port. `X-Forwarded-Host` is never
+//! read — a client could set it to reach the normal router through the guest
+//! tunnel.
+//!
+//! What this cannot see: a tunnel ingress that REWRITES the Host header
+//! (`originRequest.httpHostHeader`), or a box whose `PRESENTER_GUEST_HOST`
+//! went missing while the tunnel still points at it — both would hand the
+//! public hostname the whole app. The deploy checks the boundary after every
+//! start (`deploy-site.yml` "Verify deployment": `/ui/operator`, `/listen/status` …
+//! through that Host must be 404).
 
 use axum::extract::Request;
 use axum::http::header::HOST;
@@ -22,13 +32,16 @@ use crate::state::AppState;
 
 /// Whether `request` came through the guest hostname.
 pub(super) fn is_guest_request(request: &Request, guest_host: &str) -> bool {
-    let host = request
+    let header = request
         .headers()
         .get(HOST)
         .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
-        .or_else(|| request.uri().host().map(str::to_string));
-    host.is_some_and(|host| bare_host(&host) == guest_host)
+        .is_some_and(|host| bare_host(host) == guest_host);
+    let authority = request
+        .uri()
+        .host()
+        .is_some_and(|host| bare_host(host) == guest_host);
+    header || authority
 }
 
 /// Puts the guest dispatch in front of `router` (no-op without a guest host).

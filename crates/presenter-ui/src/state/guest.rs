@@ -160,6 +160,7 @@ pub fn refusal_text(reason: GuestRefusal) -> &'static str {
             "At most 4 languages run at once — pick one that is already running (●)"
         }
         GuestRefusal::DailyCap => "Today's translation time is used up",
+        GuestRefusal::Busy => "Too many listeners right now — please try again in a minute",
     }
 }
 

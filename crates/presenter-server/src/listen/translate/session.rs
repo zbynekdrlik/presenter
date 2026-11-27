@@ -45,6 +45,15 @@ pub const PENDING_FRAMES: usize = 50;
 /// How long a replaced connection may still deliver its last output.
 pub const DRAIN: Duration = Duration::from_secs(4);
 const RETRY_CAP: Duration = Duration::from_secs(30);
+/// A connection that answers nothing this long while audio goes out is dead
+/// (Gemini sends a resumption update about every second while it hears
+/// audio): dropped and reopened after the back-off. This also bounds what its
+/// unbounded message queue can hold.
+pub const NO_ANSWER: Duration = Duration::from_secs(10);
+/// An idle cut of a connection younger than this (or never ready) is not
+/// trusted as idle: it backs off like any other end, so a server that cuts at
+/// once can never make the session loop on connects.
+pub const IDLE_CUT_MIN_AGE: Duration = Duration::from_secs(60);
 const FRAME_MS: u64 = 100;
 
 /// Everything a session needs besides its language.
@@ -71,6 +80,12 @@ struct Conn {
     tx: mpsc::UnboundedSender<String>,
     abort: AbortHandle,
     ready: bool,
+    opened_at: Instant,
+    /// The last message from Gemini on this connection.
+    last_heard: Instant,
+    /// It delivered translated speech (a draining connection's speech is
+    /// dropped from then on, so two voices never overlap).
+    spoke: bool,
 }
 
 impl Drop for Conn {
@@ -99,6 +114,9 @@ struct Session {
     pending: VecDeque<MicFrame>,
     last_voiced: Option<Instant>,
     gate_open: bool,
+    /// When the gate last opened (the "no answer" rule counts from here, so a
+    /// long quiet stretch never reads as a dead connection).
+    gate_opened_at: Option<Instant>,
     onset_pending: Option<Instant>,
     last_output: Option<Instant>,
     in_stall: bool,
@@ -201,6 +219,7 @@ impl Session {
             pending: VecDeque::new(),
             last_voiced: None,
             gate_open: false,
+            gate_opened_at: None,
             onset_pending: None,
             last_output: None,
             in_stall: false,
@@ -243,11 +262,15 @@ impl Session {
             self.events_tx.clone(),
         );
         tracing::info!(target: TARGET, language = self.language.code, conn = id, resumed = self.handle.is_some(), "Gemini connection opening");
+        let now = Instant::now();
         Some(Conn {
             id,
             tx,
             abort,
             ready: false,
+            opened_at: now,
+            last_heard: now,
+            spoke: false,
         })
     }
 
@@ -303,6 +326,7 @@ impl Session {
         }
         let open = self.last_voiced.is_some_and(|at| now - at <= HANGOVER);
         if open && !self.gate_open {
+            self.gate_opened_at = Some(now);
             for held in std::mem::take(&mut self.pre_roll) {
                 self.send(held);
             }
@@ -319,15 +343,27 @@ impl Session {
         }
     }
 
-    fn send(&mut self, frame: MicFrame) {
+    /// One frame to the ready connection, counted against the day's cap
+    /// (charged only when it really goes out). `false` = the cap is reached.
+    fn deliver(&mut self, frame: &MicFrame) -> bool {
+        let Some(conn) = self.current.as_ref().filter(|conn| conn.ready) else {
+            return true;
+        };
         if !self.deps.meter.spend((self.deps.today)(), FRAME_MS) {
-            self.stop(StopReason::DailyCap);
-            return;
+            return false;
         }
+        if conn.tx.send(audio_message(frame)).is_ok() {
+            self.stats.sent_ms += FRAME_MS;
+        }
+        true
+    }
+
+    fn send(&mut self, frame: MicFrame) {
         match self.current.as_ref().filter(|conn| conn.ready) {
-            Some(conn) => {
-                if conn.tx.send(audio_message(&frame)).is_ok() {
-                    self.stats.sent_ms += FRAME_MS;
+            Some(_) => {
+                if !self.deliver(&frame) {
+                    self.stop(StopReason::DailyCap);
+                    return;
                 }
             }
             None => {
@@ -346,14 +382,15 @@ impl Session {
     }
 
     fn flush_pending(&mut self) {
-        let Some(conn) = self.current.as_ref().filter(|conn| conn.ready) else {
+        if !self.current.as_ref().is_some_and(|conn| conn.ready) {
             return;
-        };
+        }
         let held = std::mem::take(&mut self.pending);
         let count = held.len();
         for frame in held {
-            if conn.tx.send(audio_message(&frame)).is_ok() {
-                self.stats.sent_ms += FRAME_MS;
+            if !self.deliver(&frame) {
+                self.stop(StopReason::DailyCap);
+                return;
             }
         }
         if count > 0 {
@@ -402,6 +439,15 @@ impl Session {
         if !(from_current || from_next || from_draining) {
             return;
         }
+        let now = Instant::now();
+        for conn in [self.current.as_mut(), self.next.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            if conn.id == id {
+                conn.last_heard = now;
+            }
+        }
         if message.setup_complete {
             if from_next {
                 self.switch_to_next();
@@ -415,7 +461,7 @@ impl Session {
         if let Some(rate) = &message.unexpected_rate {
             tracing::warn!(target: TARGET, language = self.language.code, mime = rate.as_str(), "Gemini audio at an unexpected rate");
         }
-        self.forward(&message);
+        self.forward(&message, from_draining);
         if from_current || from_next {
             if let Some(handle) = message.handle {
                 self.handle = Some(handle);
@@ -442,9 +488,29 @@ impl Session {
         self.refresh_live_state();
     }
 
-    fn forward(&mut self, message: &ServerMessage) {
+    /// Hands a message's speech and text to the listeners. A draining
+    /// connection's speech is dropped once the new one speaks (no two voices).
+    fn forward(&mut self, message: &ServerMessage, from_draining: bool) {
         let now = Instant::now();
-        for chunk in &message.audio {
+        let new_spoke = self.current.as_ref().is_some_and(|conn| conn.spoke);
+        if from_draining && new_spoke && !message.audio.is_empty() {
+            self.stats.overlap_dropped_ms += message
+                .audio
+                .iter()
+                .map(|c| c.len() as u64 / 48)
+                .sum::<u64>();
+        }
+        let audio: &[Vec<u8>] = if from_draining && new_spoke {
+            &[]
+        } else {
+            &message.audio
+        };
+        if !from_draining && !audio.is_empty() {
+            if let Some(conn) = self.current.as_mut() {
+                conn.spoke = true;
+            }
+        }
+        for chunk in audio {
             if let Some(onset) = self.onset_pending.take() {
                 let ms = u64::try_from((now - onset).as_millis()).unwrap_or(u64::MAX);
                 self.stats.first_voiced_ms.push(ms);
@@ -487,26 +553,42 @@ impl Session {
         if !self.is(self.current.as_ref(), id) {
             return;
         }
-        self.current = None;
-        let class = classify_close(code, reason);
+        let young = self
+            .current
+            .take()
+            .is_some_and(|conn| !conn.ready || conn.opened_at.elapsed() < IDLE_CUT_MIN_AGE);
+        let class = match classify_close(code, reason) {
+            CloseClass::Idle if young => CloseClass::Retry,
+            class => class,
+        };
         tracing::info!(target: TARGET, language = self.language.code, conn = id, code, reason, class = ?class, "Gemini connection closed");
         match class {
             CloseClass::Fatal if code == Some(1007) => self.stop(StopReason::Key),
             CloseClass::Fatal => self.stop(StopReason::Model),
             CloseClass::Idle => {
                 if let Some(next) = self.next.take() {
-                    self.current = Some(next);
+                    self.promote(next);
                 } else {
                     self.connect();
                 }
             }
             CloseClass::Retry => {
                 if let Some(next) = self.next.take() {
-                    self.current = Some(next);
+                    self.promote(next);
                 } else {
                     self.schedule_retry();
                 }
             }
+        }
+    }
+
+    /// The `goAway` successor takes over before it is ready: nothing is
+    /// connected until its setup completes.
+    fn promote(&mut self, next: Conn) {
+        let ready = next.ready;
+        self.current = Some(next);
+        if !ready {
+            self.set_state(SessionState::Reconnecting);
         }
     }
 
@@ -545,6 +627,21 @@ impl Session {
     /// audio of this stretch came, and nothing played for [`STALL_AFTER`].
     fn on_tick(&mut self) {
         let now = Instant::now();
+        let sending = self
+            .last_voiced
+            .is_some_and(|at| now - at <= HANGOVER + Duration::from_secs(1));
+        let deaf = match (self.current.as_ref(), self.gate_opened_at) {
+            (Some(conn), Some(opened)) if conn.ready && sending => {
+                now - conn.last_heard.max(opened) >= NO_ANSWER
+            }
+            _ => false,
+        };
+        if deaf {
+            if let Some(conn) = self.current.take() {
+                tracing::warn!(target: TARGET, language = self.language.code, conn = conn.id, silent_s = (now - conn.last_heard).as_secs(), "Gemini connection answers nothing while audio goes out — dropped");
+            }
+            self.schedule_retry();
+        }
         let speaking = self
             .last_voiced
             .is_some_and(|at| now - at <= Duration::from_secs(1));

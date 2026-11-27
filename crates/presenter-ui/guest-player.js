@@ -30,12 +30,15 @@ class GuestPlayer extends AudioWorkletProcessor {
       }
       this.chunks.push(data);
       this.queued += data.length;
-      const max = MAX * sampleRate;
-      while (this.queued - (this.chunks[0].length - this.offset) >= TARGET * sampleRate && this.queued > max) {
-        const first = this.chunks.shift();
-        this.queued -= first.length - this.offset;
-        this.dropped += first.length - this.offset;
-        this.offset = 0;
+      if (this.queued > MAX * sampleRate) {
+        // Behind by more than MAX: drop whole chunks from the front until
+        // about TARGET is left (never the newest chunk).
+        while (this.chunks.length > 1 && this.queued - (this.chunks[0].length - this.offset) >= TARGET * sampleRate) {
+          const first = this.chunks.shift();
+          this.queued -= first.length - this.offset;
+          this.dropped += first.length - this.offset;
+          this.offset = 0;
+        }
       }
     };
   }

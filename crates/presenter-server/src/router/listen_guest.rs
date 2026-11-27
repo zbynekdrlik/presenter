@@ -67,9 +67,36 @@ pub(super) fn guest_routes() -> Router<AppState> {
         .route("/icon-192.png", get(|| async { png(ICON_192) }))
         .route("/icon-512.png", get(|| async { png(ICON_512) }))
         .route("/ui-pkg/{*path}", get(super::wasm_ui::wasm_ui_asset))
-        .route("/healthz", get(super::health))
+        .route("/healthz", get(guest_health))
         .route("/listen/guest/languages", get(languages))
         .route("/listen/guest/ws", get(guest_websocket))
+        .fallback(guest_not_found)
+}
+
+/// The body of every other path on the guest hostname (a test tells it from
+/// the normal router's 404 by it).
+pub(super) const GUEST_NOT_FOUND: &str = "Not found";
+
+async fn guest_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CACHE_CONTROL, NO_CACHE)],
+        GUEST_NOT_FOUND,
+    )
+        .into_response()
+}
+
+/// `/healthz` on the public guest hostname: only what the page shows (the
+/// version) — the full one names NDI addresses and the AI backend's errors.
+async fn guest_health() -> impl IntoResponse {
+    (
+        no_cache(),
+        Json(serde_json::json!({
+            "status": "ok",
+            "version": super::VERSION,
+            "channel": super::BUILD_CHANNEL,
+        })),
+    )
 }
 
 fn no_cache() -> [(header::HeaderName, &'static str); 1] {

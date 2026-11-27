@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -36,7 +37,18 @@ pub(crate) struct Script {
     pub(crate) go_away_after: Option<usize>,
     /// After this many audio messages, close with code + reason.
     pub(crate) close_after: Option<(usize, u16, &'static str)>,
+    /// Gemini's idle cut: `1008 "Session closed due to client inactivity."`
+    /// this long after the setup when no audio came since (or ever).
+    pub(crate) idle_cut_after: Option<Duration>,
+    /// After this many audio messages, read on but never answer again.
+    pub(crate) deaf_after: Option<usize>,
+    /// After a `goAway`, this long later send 5 more speech chunks (first
+    /// sample 30 000) — a replaced connection still speaking its backlog.
+    pub(crate) late_speech_after_go_away: Option<Duration>,
 }
+
+/// The first sample of a replaced connection's late speech.
+pub(crate) const LATE_MARK: i16 = 30_000;
 
 #[derive(Default)]
 pub(crate) struct FakeGemini {
@@ -127,13 +139,40 @@ async fn serve(fake: Arc<FakeGemini>, conn: usize, io: DuplexStream, script: Scr
         .send(Message::binary(b"{\"setupComplete\":{}}".to_vec()))
         .await;
     let mut n = 0;
-    while let Some(Ok(frame)) = ws.next().await {
+    let mut late_at: Option<tokio::time::Instant> = None;
+    let mut idle_at = script
+        .idle_cut_after
+        .map(|after| tokio::time::Instant::now() + after);
+    loop {
+        let frame = tokio::select! {
+            frame = ws.next() => frame,
+            () = sleep_until(idle_at) => {
+                let _ = ws.send(close(1008, "Session closed due to client inactivity.")).await;
+                return;
+            }
+            () = sleep_until(late_at) => {
+                late_at = None;
+                for _ in 0..5 {
+                    if ws.send(speech(LATE_MARK)).await.is_err() {
+                        return;
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(Ok(frame)) = frame else { return };
         let Message::Text(text) = frame else { continue };
         if !text.as_str().contains("realtimeInput") {
             continue;
         }
         n += 1;
         fake.audio.lock().unwrap()[conn] += 1;
+        idle_at = script
+            .idle_cut_after
+            .map(|after| tokio::time::Instant::now() + after);
+        if script.deaf_after.is_some_and(|after| n > after) {
+            continue;
+        }
         for message in answer(conn, n) {
             if ws.send(message).await.is_err() {
                 return;
@@ -144,6 +183,9 @@ async fn serve(fake: Arc<FakeGemini>, conn: usize, io: DuplexStream, script: Scr
             let _ = ws
                 .send(Message::binary(away.to_string().into_bytes()))
                 .await;
+            late_at = script
+                .late_speech_after_go_away
+                .map(|after| tokio::time::Instant::now() + after);
         }
         if let Some((after, code, reason)) = script.close_after {
             if after == n {
@@ -152,6 +194,22 @@ async fn serve(fake: Arc<FakeGemini>, conn: usize, io: DuplexStream, script: Scr
             }
         }
     }
+}
+
+async fn sleep_until(at: Option<tokio::time::Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// 100 ms of 24 kHz speech whose first sample is `mark`.
+fn speech(mark: i16) -> Message {
+    let mut pcm = vec![0_u8; 4_800];
+    pcm[..2].copy_from_slice(&mark.to_le_bytes());
+    let audio = serde_json::json!({"serverContent": {"modelTurn": {"parts": [
+        {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode(&pcm)}}]}}});
+    Message::binary(audio.to_string().into_bytes())
 }
 
 fn close(code: u16, reason: &'static str) -> Message {

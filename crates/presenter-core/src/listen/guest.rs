@@ -76,6 +76,8 @@ pub enum GuestRefusal {
     /// The most languages run at once already.
     Full,
     DailyCap,
+    /// The most listeners at once are connected already.
+    Busy,
 }
 
 /// A TEXT message of `GET /listen/guest/ws`.
