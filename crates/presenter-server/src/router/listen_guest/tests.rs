@@ -346,3 +346,23 @@ async fn the_guest_listener_streams_over_a_real_socket() {
         .status();
     assert_eq!(status, 404);
 }
+
+#[tokio::test]
+async fn the_guest_listener_serves_a_favicon() {
+    // SNV 27.11.2026: every browser asks for /favicon.ico; a 404 there is a
+    // console error on the guest page.
+    use tower::ServiceExt;
+    let app = crate::router::build_guest_router(guest_state().await);
+    let request = axum::http::Request::get("/favicon.ico")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/png")
+    );
+}
