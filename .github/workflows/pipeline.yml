@@ -861,6 +861,11 @@ jobs:
         # Chromium never loads a worklet module.
         run: npx playwright install --with-deps chromium chrome firefox
 
+      - name: Install PulseAudio
+        # #999: the Firefox playback proof starts a private null-sink PulseAudio
+        # (the hosted image has no sound server; a missing binary fails the test).
+        run: sudo apt-get install -y --no-install-recommends pulseaudio
+
       - name: Run Playwright tests
         # Exclude @synthetic-ndi — those need a live NDI source + GPU encoder
         # and run on the self-hosted `e2e-ndi` lane instead (this runner has
