@@ -1,11 +1,13 @@
-//! `/poslech` (#999 L3): a guest who does not understand Slovak hears the
+//! The guest page (#999 L3) at the ROOT of the guests' own hostname
+//! (`PRESENTER_GUEST_HOST`, ROZHODNUTÉ 27.11): a guest who does not understand Slovak hears the
 //! sermon live in their own language, with the text on screen. Phone first,
 //! no login. Screen 1 lists the languages in their own names (`?lang=xx` keeps
 //! the pick over a reload); screen 2 has ONE big Play — the tap that unlocks
 //! audio on iOS — the session's state, the transcript and the optional Slovak
 //! original. While playing, a screen wake lock keeps the phone awake.
-//! The UI copy is Slovak (owner, 27.11.2026), the language names are their own.
-//! `/poslech/qr` is the operator's QR code of this page (`qr.rs`).
+//! The UI copy is English (owner, 27.11: the page is for foreigners), the
+//! language names are their own.
+//! `/ui/guest-qr` (a normal host) is the operator's QR code of it (`qr.rs`).
 
 mod audio;
 mod qr;
@@ -140,17 +142,17 @@ pub fn GuestPage() -> impl IntoView {
     view! {
         <div class="guest" data-role="guest-page" data-screen=screen>
             <header class="guest__head">
-                <img src="/poslech/icon-192.png" alt="" class="guest__logo" />
-                <h1>"Preklad kázne"</h1>
+                <img src="/icon-192.png" alt="" class="guest__logo" />
+                <h1>"Sermon translation"</h1>
                 <span class="guest__lang" data-role="guest-current-language">
                     {move || page.chosen.get().and_then(|c| guest_language(&c)).map(|(_, name)| name).unwrap_or("")}
                 </span>
             </header>
             <Show when=move || page.chosen.get().is_none() fallback=|| ()>
                 <section class="guest__picker">
-                    <p class="guest__hint">"Nasaďte si slúchadlá a vyberte jazyk. Kázeň budete počuť preloženú do vášho jazyka, s textom na obrazovke."</p>
+                    <p class="guest__hint">"Put on your headphones and pick your language. You will hear the Slovak sermon translated live, with the text on screen."</p>
                     <Show when=move || load_failed.get() fallback=|| ()>
-                        <p class="guest__error" data-role="guest-load-error">"Zoznam jazykov sa nenačítal — skúste stránku obnoviť."</p>
+                        <p class="guest__error" data-role="guest-load-error">"The languages did not load — please reload the page."</p>
                     </Show>
                     <div class="guest__languages" data-role="guest-languages">
                         {move || languages.get().map(|list| language_buttons(&list, move |code| pick.with_value(|f| f(Some(code)))))}
@@ -168,30 +170,30 @@ pub fn GuestPage() -> impl IntoView {
                             class="guest__play"
                             data-role="guest-play"
                             data-playing=move || if page.playing.get() { "true" } else { "false" }
-                            aria-label=move || if page.playing.get() { "Zastaviť" } else { "Prehrať" }
+                            aria-label=move || if page.playing.get() { "Stop" } else { "Play" }
                             on:click=toggle_play
                         >{move || if page.playing.get() { "■" } else { "▶" }}</button>
                         <div class="guest__status">
                             <span class="guest__state" data-role="guest-state" data-state=move || status_line(page).0>
                                 {move || status_line(page).1}
                             </span>
-                            <span class="guest__sub">"Preklad počujete asi 3 sekundy po kazateľovi."</span>
+                            <span class="guest__sub">"You hear the translation about 3 seconds after the preacher."</span>
                         </div>
                     </div>
                     <div class="guest__row">
                         <button type="button" class="guest__small" data-role="guest-change-language" on:click=move |_| pick.with_value(|f| f(None))>
-                            "Zmeniť jazyk"
+                            "Change language"
                         </button>
                         <label class="guest__small">
                             <input type="checkbox" data-role="guest-original-toggle" on:change=move |ev| show_original.set(event_target_checked(&ev)) />
-                            "Slovenský originál"
+                            "Slovak original"
                         </label>
                     </div>
                     <TranscriptView transcript=page.transcript />
                 </section>
             </Show>
             <footer class="guest__foot" data-role="guest-version">
-                "Živý strojový preklad · " {move || version.get()}
+                "Live machine translation · " {move || version.get()}
             </footer>
         </div>
     }
@@ -223,20 +225,20 @@ fn language_buttons(
         .collect_view()
 }
 
-/// `data-state` + the Slovak line under Play.
+/// `data-state` + the line under Play.
 fn status_line(page: Page) -> (&'static str, &'static str) {
     if let Some(reason) = page.refused.get() {
         return ("refused", refusal_text(reason));
     }
     if page.audio_failed.get() {
-        return ("refused", "Zvuk sa nedá spustiť — skúste ťuknúť na ▶ znova");
+        return ("refused", "Audio could not start — tap ▶ again");
     }
     if !page.playing.get() {
-        return ("idle", "Ťuknite na ▶");
+        return ("idle", "Tap ▶ to listen");
     }
     match page.session.get() {
         Some(state) => state_text(&state),
-        None => ("connecting", "Pripájam…"),
+        None => ("connecting", "Connecting…"),
     }
 }
 
@@ -397,7 +399,7 @@ fn TranscriptView(transcript: RwSignal<Transcript>) -> impl IntoView {
     view! {
         <div class="guest__transcript" data-role="guest-transcript" node_ref=node on:scroll=on_scroll aria-live="polite">
             <Show when=move || transcript.with(|t| t.paragraphs.is_empty()) fallback=|| ()>
-                <p class="guest__empty">"Tu sa zobrazí text prekladu."</p>
+                <p class="guest__empty">"The translated text appears here."</p>
             </Show>
             <For
                 each=move || transcript.with(|t| t.paragraphs.clone())
@@ -414,24 +416,18 @@ fn TranscriptView(transcript: RwSignal<Transcript>) -> impl IntoView {
 }
 
 /// Install-as-an-app tags, as the study page does. No credentials: the page
-/// is public (the Access bypass covers `/poslech*`).
+/// is public (the guest hostname has no login in front of it).
 fn install_pwa() {
     let document = crate::utils::window::document();
-    document.set_title("Preklad kázne");
+    document.set_title("Sermon translation");
     let Some(head) = document.head() else {
         return;
     };
     let tags: [(&str, &[(&str, &str)]); 5] = [
+        ("link", &[("rel", "manifest"), ("href", "/manifest.json")]),
         (
             "link",
-            &[("rel", "manifest"), ("href", "/poslech/manifest.json")],
-        ),
-        (
-            "link",
-            &[
-                ("rel", "apple-touch-icon"),
-                ("href", "/poslech/icon-192.png"),
-            ],
+            &[("rel", "apple-touch-icon"), ("href", "/icon-192.png")],
         ),
         (
             "meta",
@@ -441,7 +437,7 @@ fn install_pwa() {
             "meta",
             &[
                 ("name", "apple-mobile-web-app-title"),
-                ("content", "Preklad"),
+                ("content", "Translation"),
             ],
         ),
         ("meta", &[("name", "theme-color"), ("content", "#0f172a")]),
@@ -455,6 +451,6 @@ fn install_pwa() {
         }
     }
     let _ = js_sys::eval(
-        "if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/poslech/sw.js').catch(function () {}); }",
+        "if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(function () {}); }",
     );
 }

@@ -10,13 +10,12 @@ pub async fn languages() -> Result<GuestLanguages, ApiError> {
     get_json("/listen/guest/languages").await
 }
 
-/// `GET /listen/guest/qr`.
+/// `GET /listen/guest/qr`: `https://<guest host>/` and its QR code; both
+/// `None` on a box without a guest hostname.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct GuestQr {
-    pub url: String,
-    /// The address is a LAN one: it does not work on mobile data.
-    pub local: bool,
-    pub svg: String,
+    pub url: Option<String>,
+    pub svg: Option<String>,
 }
 
 pub async fn qr() -> Result<GuestQr, ApiError> {

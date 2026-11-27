@@ -3,7 +3,9 @@ paths:
   - "crates/presenter-server/src/listen/translate/**"
   - "crates/presenter-server/src/router/listen_guest.rs"
   - "crates/presenter-server/src/router/listen_guest/**"
-  - "crates/presenter-server/src/ui/poslech/**"
+  - "crates/presenter-server/src/ui/guest/**"
+  - "crates/presenter-server/src/router/guest_host.rs"
+  - "crates/presenter-server/src/router/guest_host/**"
   - "crates/presenter-core/src/listen/guest.rs"
   - "crates/presenter-ui/src/pages/guest/**"
   - "crates/presenter-ui/src/state/guest.rs"
@@ -15,10 +17,11 @@ paths:
   - "tests/e2e/fake-gemini.ts"
 ---
 
-# Guests' live translation — `/poslech` (#999)
+# Guests' live translation — the guest hostname (#999)
 
-A guest who does not understand Slovak opens `/poslech` on their own phone, picks a language and
-hears the sermon translated live, with the text on screen. Design: #999 comment "DESIGN D1";
+A guest who does not understand Slovak opens the guests' own hostname (SNV: `listen.newlevel.media`,
+ROZHODNUTÉ 27.11 — never a path like `/poslech`) on their own phone, picks a language and hears the
+sermon translated live, with the text on screen. Design: #999 comment "DESIGN D1";
 engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-end lag EN/DE).
 
 ## The wire (raw probes 2026-11-27, no SDK — `listen/translate/wire.rs`)
@@ -60,29 +63,38 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   first_voiced_ms median/max — onset after ≥ 1.5 s quiet → first translated audio, stalls = 6 s
   without output while the preacher spoke, reconnects, dropped frames). A silent minute logs nothing.
 
-## The page (`presenter-ui` `pages/guest`, route `/poslech`, `/poslech/qr`)
+## The hostname (`router/guest_host.rs`, ROZHODNUTÉ 27.11)
+
+- `PRESENTER_GUEST_HOST` (per-site drop-in, never the literal host in code): a request whose `Host`
+  header (lowercase, port and trailing dot dropped — `config::bare_host`) is it goes to
+  `listen_guest::guest_routes()` ONLY: `/` (WASM shell), `/manifest.json`, `/sw.js`,
+  `/icon-192.png`, `/icon-512.png`, `/ui-pkg/*`, `/healthz`, `/listen/guest/languages`,
+  `/listen/guest/ws`; every other path 404. That hostname is a public tunnel with NO Access app,
+  so this dispatch IS the security boundary: a new guest route goes into `guest_routes()` on
+  purpose, nothing else. `X-Forwarded-Host` is never read (a client could aim it at the normal
+  router through the guest tunnel). The layer sits outside the routes (inside the request log), so
+  it also covers every fallback.
+- Normal hosts never serve the guest page: their `/` stays the SSR home. They carry the guest
+  endpoints (an operator can try them) and the operator's QR page `/ui/guest-qr`
+  (`GET /listen/guest/qr` → `https://<guest host>/` + SVG from the `qrcode` crate; `url: null` on a
+  box without a guest host).
+- The hostname itself (DNS + tunnel ingress) is set up by airuleset's publish-app lane, not here.
+
+## The page (`presenter-ui` `pages/guest`, WASM route `/`)
 
 - WASM like every UI here (house stack; the AudioWorklet module `guest-player.js` is the one JS file
-  the platform requires, copied by Trunk to `/ui-pkg/guest-player.js`). The shell does NOT install
-  `ui_usage` on `/poslech*` (public page; the beacon would meet the login wall).
-- Phone first, Slovak copy, language names in their own language (core `GUEST_LANGUAGES`); `?lang=`
-  keeps the pick. Play = the gesture that creates + resumes the `AudioContext` (iOS unlock), asked
-  for 24 kHz (a refusing phone gets a linear resample, `state::guest::resample`). The worklet starts
-  at 150 ms queued and drops back to 150 ms when > 1 s queued (latency first). Screen Wake Lock via
-  `navigator.wakeLock` (Reflect; not in stable web-sys), re-taken on `visibilitychange`.
+  the platform requires, copied by Trunk to `/ui-pkg/guest-player.js`). The WASM route `/` is the
+  guest page — the server serves the shell at `/` ONLY on the guest host. The shell does NOT install
+  `ui_usage` there (that host has no `/ui/usage`).
+- Phone first, ENGLISH copy (owner 27.11: the page is for foreigners), language names in their own
+  language (core `GUEST_LANGUAGES`); `?lang=` keeps the pick. Play = the gesture that creates +
+  resumes the `AudioContext` (iOS unlock), asked for 24 kHz (a refusing phone gets a linear
+  resample, `state::guest::resample`). The worklet starts at 150 ms queued and drops back to 150 ms
+  when > 1 s queued (latency first). Screen Wake Lock via `navigator.wakeLock` (Reflect; not in
+  stable web-sys), re-taken on `visibilitychange`.
 - E2E hooks: `body[data-guest-chunks]` (speech frames received), `body[data-guest-played]` (samples
   the worklet played), `[data-role=guest-state][data-state]` (`idle` / `connecting` / `waiting` /
   `live` / `reconnecting` / `stopped` / `refused`).
-- `/poslech/qr`: the server makes the QR (`qrcode` crate, SVG) of the address the request came
-  through (`X-Forwarded-Host` + `-Proto`); a LAN / loopback address gets a warning. Open it through
-  the public host (`https://prsnv.newlevel.media/poslech/qr`) to show it on a screen.
-
-## Reachability (#999 L4)
-
-Guests have no login: `ops/cloudflare/presenter_access.py` `public_paths` per site makes one
-everyone-bypass Access app per path — SNV: `/poslech`, `/listen/guest`, `/ui-pkg` (the WASM
-assets; the operator's bundle is public code, every API stays behind Access). `/healthz` (version)
-is already bypassed. Dry run first, always (`cloudflare-access.md`).
 
 ## Tests
 
@@ -90,8 +102,10 @@ is already bypassed. Dry run first, always (`cloudflare-access.md`).
   headers / setups / audio count, answers 100 ms of audio + `w<n> ` + a handle per audio message;
   `Script` = close on setup, goAway after n, close after n). Session tests on the paused clock;
   router tests (`router/listen_guest/tests.rs`) on a real loopback server. Keys `test-key-not-real`.
-- E2E `guest-translate.spec.ts` + `fake-gemini.ts`: phone, pick → Play → `waiting` (nothing sent) →
-  the real VBAN sender → `live`, chunks + played samples, transcript, original toggle, zero console
-  errors. `support.ts` gives every other server a dead Gemini URL and NO key.
+- E2E `guest-translate.spec.ts` + `fake-gemini.ts`: `PRESENTER_GUEST_HOST=localhost` (the other
+  specs use 127.0.0.1, so `http://localhost:<port>/` IS the guest host); phone, pick → Play →
+  `waiting` (nothing sent) → the real VBAN sender → `live`, chunks + played samples, transcript,
+  original toggle; the guest host 404s everything else; zero console errors. `support.ts` gives
+  every other server a dead Gemini URL, NO key and no guest host.
 - Deploy: the Gemini key rides the SAME "Configure listening transcription" step as Soniox
   (invariant 7's canonical text in `scripts/ci/check_deploy_workflows.py`; both secrets, one file).

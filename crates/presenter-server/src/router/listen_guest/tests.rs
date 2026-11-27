@@ -1,7 +1,7 @@
 //! The guest routes (#999 L2) through a real axum server on loopback and a
 //! real `tokio_tungstenite` client, the sessions talking to the scripted fake
 //! Gemini (`listen::translate::test_fake`): the stream's hello / state /
-//! speech / text, refusals, the language list, the QR code and the PWA files.
+//! speech / text, refusals, the language list and the operator's QR code.
 
 use super::*;
 use crate::listen::translate::stats::DayMeter;
@@ -174,63 +174,19 @@ async fn refusals_reach_the_guest_and_the_language_list() {
 }
 
 #[tokio::test]
-async fn the_pwa_files_and_the_qr_code_are_served() {
+async fn the_operator_gets_the_qr_code_of_the_guest_host() {
     let fake = FakeGemini::new(vec![]);
     let (addr, _state) = serve(&fake, None, false).await;
-    let manifest: serde_json::Value = reqwest::get(format!("http://{addr}/poslech/manifest.json"))
+    let qr: serde_json::Value = reqwest::get(format!("http://{addr}/listen/guest/qr"))
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(manifest["start_url"], "/poslech");
-    assert_eq!(manifest["scope"], "/poslech");
-    for (path, kind) in [
-        ("/poslech/icon-192.png", "image/png"),
-        ("/poslech/icon-512.png", "image/png"),
-        ("/poslech/sw.js", "application/javascript; charset=utf-8"),
-    ] {
-        let response = reqwest::get(format!("http://{addr}{path}")).await.unwrap();
-        assert_eq!(response.status(), 200, "{path}");
-        assert_eq!(response.headers()["content-type"], kind, "{path}");
-    }
-    assert!(!SERVICE_WORKER.contains("\"fetch\"") && !SERVICE_WORKER.contains("caches."));
-    let qr: serde_json::Value = reqwest::Client::new()
-        .get(format!("http://{addr}/listen/guest/qr"))
-        .header("x-forwarded-proto", "https")
-        .header("x-forwarded-host", "prsnv.example.org")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(qr["url"], "https://prsnv.example.org/poslech");
-    assert_eq!(qr["local"], false);
+    assert_eq!(qr["url"], "https://listen.example.org/");
     assert!(qr["svg"].as_str().unwrap().contains("<svg"));
-}
-
-#[test]
-fn the_guest_url_comes_from_the_forwarded_host_and_a_lan_one_is_flagged() {
-    let mut headers = HeaderMap::new();
-    headers.insert("host", "10.77.9.205".parse().unwrap());
-    assert_eq!(
-        guest_url(&headers),
-        ("http://10.77.9.205/poslech".to_string(), true)
-    );
-    headers.insert("x-forwarded-proto", "https".parse().unwrap());
-    headers.insert("x-forwarded-host", "prsnv.example.org".parse().unwrap());
-    assert_eq!(
-        guest_url(&headers),
-        ("https://prsnv.example.org/poslech".to_string(), false)
-    );
-    headers.insert("x-forwarded-host", "evil\"<x>.org".parse().unwrap());
-    assert_eq!(
-        guest_url(&headers).0,
-        "https://evilx.org/poslech",
-        "only host characters pass"
-    );
-    assert!(qr_svg("https://prsnv.example.org/poslech")
+    assert!(qr_svg("https://listen.example.org/")
         .unwrap()
         .starts_with("<?xml"));
+    assert!(!SERVICE_WORKER.contains("\"fetch\"") && !SERVICE_WORKER.contains("caches."));
 }

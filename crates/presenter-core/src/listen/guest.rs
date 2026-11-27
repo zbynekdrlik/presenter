@@ -1,7 +1,7 @@
 //! The guests' live translation wire (#999): what `GET /listen/guest/languages`
 //! answers and what `GET /listen/guest/ws?lang=xx` sends as TEXT (the speech
 //! itself goes as BINARY s16le frames at [`GuestWsMessage::Hello`]'s rate).
-//! Shared by the server and the guest page `/poslech`, camelCase with a
+//! Shared by the server and the guest page (the root of the guest hostname), camelCase with a
 //! `type` tag like `/listen/ws`.
 
 use serde::{Deserialize, Serialize};

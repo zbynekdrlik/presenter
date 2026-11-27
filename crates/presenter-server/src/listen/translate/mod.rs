@@ -1,6 +1,6 @@
 //! The guests' live translation (#999, DESIGN D1): the preacher's Slovak,
 //! spoken into each guest's own language by Gemini Live Translate and played
-//! on the guest's phone (`/poslech`, `GET /listen/guest/ws`).
+//! on the guest's phone (the root of the guest hostname, `GET /listen/guest/ws`).
 //!
 //! [`GuestTranslate`] keeps ONE [`session`] per ACTIVE language, shared by
 //! every listener of it: the first listener starts it, it stops [`LINGER`]
@@ -133,6 +133,11 @@ impl GuestTranslate {
             meter: DayMeter::default(),
             today: local_today,
         })
+    }
+
+    /// The guests' own hostname (`PRESENTER_GUEST_HOST`), when this box has one.
+    pub(crate) fn guest_host(&self) -> Option<&str> {
+        self.inner.deps.env.guest_host.as_deref()
     }
 
     pub(crate) fn with_deps(deps: SessionDeps) -> Self {

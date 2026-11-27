@@ -15,12 +15,14 @@ import {
 } from "./support";
 import { startFakeGemini, type FakeGemini } from "./fake-gemini";
 
-// #999 L3 — a guest on a phone opens /poslech, picks English and taps Play: the
+// #999 L3 — a guest on a phone opens the guest hostname's root (`localhost`
+// here: PRESENTER_GUEST_HOST; the normal tests use 127.0.0.1), picks English and taps Play: the
 // translated speech plays (the AudioWorklet reports played samples) and the
 // text appears, against a scripted fake Gemini Live (tests/e2e/fake-gemini.ts;
 // Google is never reached). The preacher is a VBAN mic (`guest`) the real
 // sender (scripts/dev/listen/vban_send.py) plays a voiced tone into; the
-// server translates it because PRESENTER_LISTEN_GUEST_MIC names it.
+// server translates it because PRESENTER_LISTEN_GUEST_MIC names it. The guest
+// hostname serves nothing else; the operator's QR page is on the normal host.
 
 const KEY = "e2e-test-key-not-real";
 const STREAM = "E2E_PREACHER";
@@ -34,8 +36,11 @@ const PREACHER = {
   role: "guest",
 };
 
+const GUEST_HOST = "localhost";
+
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
+let guestURL: string;
 let fake: FakeGemini;
 
 test.describe.configure({ timeout: 180_000 });
@@ -43,17 +48,20 @@ test.describe.configure({ timeout: 180_000 });
 test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
+  guestURL = `http://${GUEST_HOST}:${new URL(baseURL).port}/`;
   await refreshDevData(config.dbUrl);
   fake = await startFakeGemini();
   process.env.PRESENTER_LISTEN_GEMINI_URL = fake.url;
   process.env.PRESENTER_LISTEN_GEMINI_API_KEY = KEY;
   process.env.PRESENTER_LISTEN_GUEST_MIC = PREACHER.id;
+  process.env.PRESENTER_GUEST_HOST = GUEST_HOST;
   try {
     serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
   } finally {
     delete process.env.PRESENTER_LISTEN_GEMINI_URL;
     delete process.env.PRESENTER_LISTEN_GEMINI_API_KEY;
     delete process.env.PRESENTER_LISTEN_GUEST_MIC;
+    delete process.env.PRESENTER_GUEST_HOST;
   }
 });
 
@@ -123,7 +131,7 @@ async function bodyNumber(page: Page, name: string): Promise<number> {
 
 test("a guest picks a language on a phone and hears the translation with its text", async ({ browser }) => {
   const errors: string[] = [];
-  const page = await openPage(browser, PHONE_390, "/poslech", errors);
+  const page = await openPage(browser, PHONE_390, guestURL, errors);
   const languages = page.locator('[data-role="guest-language"]');
   await expect(languages.filter({ hasText: "Deutsch" })).toBeVisible();
   await expect(languages.filter({ hasText: "Українська" })).toBeVisible();
@@ -177,13 +185,22 @@ test("a guest picks a language on a phone and hears the translation with its tex
   expect(errors).toEqual([]);
 });
 
-test("the operator's QR page shows the guest page's address", async ({ browser }) => {
+test("the guest hostname serves only the guest page; the operator's QR page names it", async ({ browser, request }) => {
   const errors: string[] = [];
-  const page = await openPage(browser, { viewport: { width: 1280, height: 800 } }, "/poslech/qr", errors);
+  for (const path of ["ui/operator", "ui/settings", "listen/status", "listen/mics", "ui/guest-qr"]) {
+    expect((await request.get(guestURL + path)).status(), path).toBe(404);
+  }
+  expect((await request.get(guestURL + "manifest.json")).ok()).toBe(true);
+  // the normal host's root is still the home page, never the guest page
+  const guestRoot = await (await request.get(guestURL)).text();
+  const normalRoot = await (await request.get(url("/"))).text();
+  expect(guestRoot).toContain("data-wasm-ready");
+  expect(normalRoot).not.toEqual(guestRoot);
+  expect((await request.get(url("/manifest.json"))).status()).toBe(404);
+
+  const page = await openPage(browser, { viewport: { width: 1280, height: 800 } }, "/ui/guest-qr", errors);
   await expect(page.locator('[data-role="guest-qr-code"] svg')).toBeVisible();
-  await expect(page.locator('[data-role="guest-qr-url"]')).toHaveText(/^http:\/\/127\.0\.0\.1:\d+\/poslech$/);
-  // a LAN / loopback address does not work on mobile data: the page says so
-  await expect(page.locator('[data-role="guest-qr-local"]')).toBeVisible();
+  await expect(page.locator('[data-role="guest-qr-url"]')).toHaveText(`https://${GUEST_HOST}/`);
   await page.context().close();
   expect(errors).toEqual([]);
 });

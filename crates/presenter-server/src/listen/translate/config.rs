@@ -5,13 +5,16 @@
 //! `PRESENTER_LISTEN_GEMINI_URL` (default [`DEFAULT_URL`]; tests and E2E point
 //! it at a fake, `ws://` allowed) and `PRESENTER_LISTEN_GUEST_MIC` (the mic id
 //! whose frames are translated, default [`DEFAULT_SOURCE_MIC`] = the preacher's
-//! handheld on Dante). An empty or whitespace-only value counts as unset.
-//! `Debug` never prints the key.
+//! handheld on Dante) and `PRESENTER_GUEST_HOST` (the guests' own hostname, a
+//! per-site drop-in; unset = no guest page on this box: a request whose `Host`
+//! is it gets ONLY the guest surface, ROZHODNUTÉ 27.11). An empty or
+//! whitespace-only value counts as unset. `Debug` never prints the key.
 
 pub const KEY_VAR: &str = "PRESENTER_LISTEN_GEMINI_API_KEY";
 pub const MODEL_VAR: &str = "PRESENTER_LISTEN_GEMINI_MODEL";
 pub const URL_VAR: &str = "PRESENTER_LISTEN_GEMINI_URL";
 pub const SOURCE_MIC_VAR: &str = "PRESENTER_LISTEN_GUEST_MIC";
+pub const GUEST_HOST_VAR: &str = "PRESENTER_GUEST_HOST";
 
 /// Gemini Live's WebSocket (`BidiGenerateContent`, API v1beta).
 pub const DEFAULT_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
@@ -26,6 +29,8 @@ pub struct GeminiEnv {
     pub key: Option<String>,
     pub model: String,
     pub source_mic: String,
+    /// The guests' hostname, lowercase, without a port.
+    pub guest_host: Option<String>,
 }
 
 impl GeminiEnv {
@@ -47,8 +52,25 @@ impl GeminiEnv {
             key: read(KEY_VAR),
             model: read(MODEL_VAR).unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             source_mic: read(SOURCE_MIC_VAR).unwrap_or_else(|| DEFAULT_SOURCE_MIC.to_string()),
+            guest_host: read(GUEST_HOST_VAR).map(|host| bare_host(&host)),
         }
     }
+}
+
+/// A `Host` value as the guest host is compared: lowercase, no port, no
+/// trailing dot.
+pub fn bare_host(host: &str) -> String {
+    let host = host.trim().to_ascii_lowercase();
+    let without_port = match host.rsplit_once(':') {
+        Some((name, port))
+            if (!name.contains(':') || name.ends_with(']'))
+                && port.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            name
+        }
+        _ => host.as_str(),
+    };
+    without_port.trim_end_matches('.').to_string()
 }
 
 impl std::fmt::Debug for GeminiEnv {
@@ -63,6 +85,7 @@ impl std::fmt::Debug for GeminiEnv {
             .field("key", &key)
             .field("model", &self.model)
             .field("source_mic", &self.source_mic)
+            .field("guest_host", &self.guest_host)
             .finish()
     }
 }
@@ -96,16 +119,28 @@ mod tests {
             (KEY_VAR, " test-key-not-real\n"),
             (MODEL_VAR, "gemini-9-live-translate"),
             (SOURCE_MIC_VAR, "replay"),
+            (GUEST_HOST_VAR, " Listen.Example.org:443 "),
         ]);
         assert_eq!(set.url, "ws://127.0.0.1:9/fake");
         assert_eq!(set.key.as_deref(), Some("test-key-not-real"));
         assert_eq!(set.model, "gemini-9-live-translate");
         assert_eq!(set.source_mic, "replay");
+        assert_eq!(set.guest_host.as_deref(), Some("listen.example.org"));
+        assert_eq!(defaults.guest_host, None);
 
         let blank = env(&[(KEY_VAR, "  "), (MODEL_VAR, ""), (SOURCE_MIC_VAR, " ")]);
         assert_eq!(blank.key, None);
         assert_eq!(blank.model, DEFAULT_MODEL);
         assert_eq!(blank.source_mic, DEFAULT_SOURCE_MIC);
+    }
+
+    #[test]
+    fn a_host_is_compared_lowercase_without_its_port() {
+        assert_eq!(bare_host("Listen.Example.org"), "listen.example.org");
+        assert_eq!(bare_host("listen.example.org:8080"), "listen.example.org");
+        assert_eq!(bare_host("listen.example.org."), "listen.example.org");
+        assert_eq!(bare_host("localhost:18999"), "localhost");
+        assert_eq!(bare_host("[::1]:80"), "[::1]");
     }
 
     #[test]

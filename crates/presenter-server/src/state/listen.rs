@@ -230,6 +230,11 @@ impl AppState {
         self.listen.guest().join(&self.listen, code)
     }
 
+    /// The guests' own hostname (#999, `PRESENTER_GUEST_HOST`).
+    pub(crate) fn guest_host(&self) -> Option<String> {
+        self.listen.guest().guest_host().map(str::to_string)
+    }
+
     /// Whether guests can listen now and which languages run (#999).
     pub(crate) fn guest_status(&self) -> crate::listen::translate::GuestStatus {
         self.listen.guest().status(&self.listen)

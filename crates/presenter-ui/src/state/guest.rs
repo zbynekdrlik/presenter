@@ -1,7 +1,7 @@
 //! The guest translation page's pure half (#999 L3), host-tested: the speech
 //! frames (s16le → f32, a linear rate change when the phone's audio runs at
-//! another rate), the transcript's paragraphs and the Slovak texts of every
-//! state and refusal. The page (`pages::guest`) only wires these to the DOM.
+//! another rate), the transcript's paragraphs and the texts of every state and
+//! refusal — English: the page is for foreigners (owner, 27.11). The page (`pages::guest`) only wires these to the DOM.
 
 use presenter_core::listen::guest::{GuestRefusal, GuestSessionState, GuestStopReason};
 
@@ -132,36 +132,34 @@ impl Transcript {
     }
 }
 
-/// `data-state` + the Slovak line of a session state.
+/// `data-state` + the line shown for a session state.
 pub fn state_text(state: &GuestSessionState) -> (&'static str, &'static str) {
     match state {
-        GuestSessionState::Connecting => ("connecting", "Pripájam…"),
-        GuestSessionState::Waiting => ("waiting", "Čakám, kým kazateľ prehovorí"),
-        GuestSessionState::Live => ("live", "Naživo"),
-        GuestSessionState::Reconnecting => ("reconnecting", "Obnovujem spojenie…"),
+        GuestSessionState::Connecting => ("connecting", "Connecting…"),
+        GuestSessionState::Waiting => ("waiting", "Waiting for the preacher to speak"),
+        GuestSessionState::Live => ("live", "Live"),
+        GuestSessionState::Reconnecting => ("reconnecting", "Reconnecting…"),
         GuestSessionState::Stopped { reason } => ("stopped", stop_text(*reason)),
     }
 }
 
 fn stop_text(reason: GuestStopReason) -> &'static str {
     match reason {
-        GuestStopReason::Key | GuestStopReason::Model => {
-            "Preklad je teraz nedostupný (chyba služby)"
-        }
-        GuestStopReason::DailyCap => "Dnešný čas prekladu je vyčerpaný",
+        GuestStopReason::Key | GuestStopReason::Model => "Translation is not available right now",
+        GuestStopReason::DailyCap => "Today's translation time is used up",
     }
 }
 
-/// The Slovak line of a refusal.
+/// The line shown for a refusal.
 pub fn refusal_text(reason: GuestRefusal) -> &'static str {
     match reason {
-        GuestRefusal::UnknownLanguage => "Tento jazyk sa neponúka",
-        GuestRefusal::NoKey => "Preklad tu nie je nastavený",
-        GuestRefusal::NoSource => "Mikrofón kazateľa tu nie je pripojený",
+        GuestRefusal::UnknownLanguage => "This language is not offered",
+        GuestRefusal::NoKey => "Translation is not set up here",
+        GuestRefusal::NoSource => "The preacher's microphone is not connected",
         GuestRefusal::Full => {
-            "Naraz sa prekladajú najviac 4 jazyky — vyberte jeden z tých, ktoré už bežia (●)"
+            "At most 4 languages run at once — pick one that is already running (●)"
         }
-        GuestRefusal::DailyCap => "Dnešný čas prekladu je vyčerpaný",
+        GuestRefusal::DailyCap => "Today's translation time is used up",
     }
 }
 
@@ -234,20 +232,20 @@ mod tests {
     }
 
     #[test]
-    fn every_state_and_refusal_has_slovak_text() {
-        assert_eq!(state_text(&GuestSessionState::Live), ("live", "Naživo"));
+    fn every_state_and_refusal_has_its_text() {
+        assert_eq!(state_text(&GuestSessionState::Live), ("live", "Live"));
         assert_eq!(state_text(&GuestSessionState::Waiting).0, "waiting");
         let stopped = GuestSessionState::Stopped {
             reason: GuestStopReason::DailyCap,
         };
         assert_eq!(
             state_text(&stopped),
-            ("stopped", "Dnešný čas prekladu je vyčerpaný")
+            ("stopped", "Today's translation time is used up")
         );
-        assert!(refusal_text(GuestRefusal::Full).contains("4 jazyky"));
+        assert!(refusal_text(GuestRefusal::Full).contains("4 languages"));
         assert_eq!(
             refusal_text(GuestRefusal::NoSource),
-            "Mikrofón kazateľa tu nie je pripojený"
+            "The preacher's microphone is not connected"
         );
         let delays: Vec<u32> = (1..=6).map(reconnect_delay_ms).collect();
         assert_eq!(delays, vec![1_000, 2_000, 4_000, 8_000, 10_000, 10_000]);

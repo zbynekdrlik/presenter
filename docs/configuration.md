@@ -194,15 +194,16 @@ env vars; the transcription ships OFF.
 
 ### Guests' live translation, Gemini Live Translate (#999)
 
-`/poslech` plays the sermon translated into the guest's language. Read once at
-startup; an empty value counts as unset.
+The root of the guests' own hostname plays the sermon translated into the
+guest's language. Read once at startup; an empty value counts as unset.
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
-| `PRESENTER_LISTEN_GEMINI_API_KEY` | unset | The Gemini API key, sent only as the `x-goog-api-key` header of the WebSocket upgrade. Unset → guests are refused ("Preklad tu nie je nastavený"). Deployed from `listen.env`. |
+| `PRESENTER_LISTEN_GEMINI_API_KEY` | unset | The Gemini API key, sent only as the `x-goog-api-key` header of the WebSocket upgrade. Unset → guests are refused ("Translation is not set up here"). Deployed from `listen.env`. |
 | `PRESENTER_LISTEN_GEMINI_MODEL` | `gemini-3.5-live-translate-preview` | The Live Translate model id. |
 | `PRESENTER_LISTEN_GEMINI_URL` | Gemini Live `BidiGenerateContent` (v1beta) | Tests point it at a fake; the E2E harness defaults it to `ws://127.0.0.1:9` with no key. |
 | `PRESENTER_LISTEN_GUEST_MIC` | `dante-mic-1` | The mic whose frames are translated. |
+| `PRESENTER_GUEST_HOST` | unset | The guests' own hostname (per-site drop-in). A request whose `Host` header is it gets ONLY the guest surface — `/` (the guest page), `/manifest.json`, `/sw.js`, `/icon-*.png`, `/ui-pkg/*`, `/healthz`, `/listen/guest/languages`, `/listen/guest/ws` — and a 404 for every other path, because that hostname is a public tunnel with no Access app. `X-Forwarded-Host` is never read. Unset → no guest page. The operator's QR code of `https://<guest host>/` is `/ui/guest-qr` on a normal host. |
 
 Caps (constants, logged): at most 4 languages at once, 480 audio minutes sent
 per local day over all languages; nothing is sent while the mic is silent.

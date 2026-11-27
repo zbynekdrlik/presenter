@@ -1,8 +1,12 @@
-//! The guests' live translation (#999 L2/L3): the guest page `/poslech` (the
-//! WASM shell, the page is `presenter-ui`'s `pages::guest`; its manifest,
-//! service worker and icons are served here like the study page's), the
-//! operator's QR page `/poslech/qr` (its code from `GET /listen/guest/qr`), the language list
+//! The guests' live translation (#999 L2/L3). On the guests' OWN hostname
+//! (`PRESENTER_GUEST_HOST`, ROZHODNUTÉ 27.11) [`guest_routes`] is the whole
+//! surface (`guest_host.rs` dispatches by `Host`): `/` = the WASM shell (the
+//! page is `presenter-ui`'s `pages::guest`), its manifest, service worker,
+//! icons and `/ui-pkg` assets, `/healthz` (the version), the language list
 //! `GET /listen/guest/languages` and the stream `GET /listen/guest/ws?lang=xx`.
+//! The normal hosts ([`routes`]) carry the same two guest endpoints and the
+//! operator's QR page `/ui/guest-qr` (its code from `GET /listen/guest/qr`,
+//! encoding `https://<guest host>/`).
 //!
 //! The stream (core `listen::guest::GuestWsMessage`): ONE `hello`, the
 //! session's `state` (again on every change), then the translated speech as
@@ -30,9 +34,9 @@ use crate::live::{close_frame_reason, WsEndReason};
 use crate::state::AppState;
 use presenter_core::listen::guest::{GuestLanguages, GuestWsMessage};
 
-const SERVICE_WORKER: &str = include_str!("../ui/poslech/sw.js");
-const ICON_192: &[u8] = include_bytes!("../ui/poslech/icon-192.png");
-const ICON_512: &[u8] = include_bytes!("../ui/poslech/icon-512.png");
+const SERVICE_WORKER: &str = include_str!("../ui/guest/sw.js");
+const ICON_192: &[u8] = include_bytes!("../ui/guest/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../ui/guest/icon-512.png");
 
 const KEEPALIVE_PRODUCTION: Duration = Duration::from_secs(30);
 const _: () = assert!(KEEPALIVE_PRODUCTION.as_secs() * 2 < 100);
@@ -43,15 +47,27 @@ const KEEPALIVE: Duration = Duration::from_secs(1);
 /// Revalidated on every load, so a deploy reaches every guest at once.
 const NO_CACHE: &str = "no-cache";
 
+/// The normal hosts: the guest endpoints (an operator can try them) and the
+/// operator's QR page. The guest PAGE is never served here.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/poslech", get(super::wasm_ui::wasm_ui_shell))
-        .route("/poslech/sw.js", get(|| async { js(SERVICE_WORKER) }))
-        .route("/poslech/manifest.json", get(manifest))
-        .route("/poslech/icon-192.png", get(|| async { png(ICON_192) }))
-        .route("/poslech/icon-512.png", get(|| async { png(ICON_512) }))
-        .route("/poslech/qr", get(super::wasm_ui::wasm_ui_shell))
+        .route("/ui/guest-qr", get(super::wasm_ui::wasm_ui_shell))
         .route("/listen/guest/qr", get(qr))
+        .route("/listen/guest/languages", get(languages))
+        .route("/listen/guest/ws", get(guest_websocket))
+}
+
+/// Everything the guest hostname serves; any other path is a 404 (that host
+/// has no login in front of it).
+pub(super) fn guest_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(super::wasm_ui::wasm_ui_shell))
+        .route("/sw.js", get(|| async { js(SERVICE_WORKER) }))
+        .route("/manifest.json", get(manifest))
+        .route("/icon-192.png", get(|| async { png(ICON_192) }))
+        .route("/icon-512.png", get(|| async { png(ICON_512) }))
+        .route("/ui-pkg/{*path}", get(super::wasm_ui::wasm_ui_asset))
+        .route("/healthz", get(super::health))
         .route("/listen/guest/languages", get(languages))
         .route("/listen/guest/ws", get(guest_websocket))
 }
@@ -80,20 +96,20 @@ fn png(bytes: &'static [u8]) -> Response {
 
 async fn manifest() -> impl IntoResponse {
     let manifest = serde_json::json!({
-        "id": "/poslech",
-        "name": "Preklad kázne",
-        "short_name": "Preklad",
-        "description": "Živý preklad slovenskej kázne do vášho jazyka",
-        "start_url": "/poslech",
-        "scope": "/poslech",
+        "id": "/",
+        "name": "Sermon translation",
+        "short_name": "Translation",
+        "description": "The Slovak sermon, live in your language",
+        "start_url": "/",
+        "scope": "/",
         "display": "standalone",
         "orientation": "portrait",
         "background_color": "#0f172a",
         "theme_color": "#0f172a",
         "icons": [
-            { "src": "/poslech/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-            { "src": "/poslech/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-            { "src": "/poslech/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+            { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+            { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+            { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
         ]
     });
     (
@@ -120,40 +136,23 @@ async fn languages(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-/// The public address of the guest page: the host the request came through
-/// (Cloudflare's `X-Forwarded-Proto` / `X-Forwarded-Host`, else `Host`).
-/// `local` = the address is not a public https one (a LAN QR code would not
-/// work on mobile data — the page says so).
-pub(super) fn guest_url(headers: &HeaderMap) -> (String, bool) {
-    let read = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.split(',').next().unwrap_or("").trim().to_string())
-            .filter(|v| !v.is_empty())
+/// `GET /listen/guest/qr` (operator): the guest page's address
+/// `https://<guest host>/` and its QR code (an SVG the `/ui/guest-qr` page
+/// shows big, for the operator to put on a screen); `url: null` when this
+/// box has no guest hostname.
+async fn qr(State(state): State<AppState>) -> Response {
+    let Some(host) = state.guest_host() else {
+        return (
+            no_cache(),
+            Json(serde_json::json!({ "url": null, "svg": null })),
+        )
+            .into_response();
     };
-    let host = read("x-forwarded-host")
-        .or_else(|| read("host"))
-        .unwrap_or_else(|| "localhost".to_string());
-    let host: String = host
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'))
-        .collect();
-    let https = read("x-forwarded-proto").is_some_and(|p| p.eq_ignore_ascii_case("https"));
-    let scheme = if https { "https" } else { "http" };
-    let bare = host.split(':').next().unwrap_or("");
-    let local = !https || bare.parse::<std::net::IpAddr>().is_ok() || !bare.contains('.');
-    (format!("{scheme}://{host}/poslech"), local)
-}
-
-/// `GET /listen/guest/qr`: the guest page's address and its QR code (an SVG
-/// the `/poslech/qr` page shows big, for the operator to put on a screen).
-async fn qr(headers: HeaderMap) -> Response {
-    let (url, local) = guest_url(&headers);
+    let url = format!("https://{host}/");
     match qr_svg(&url) {
         Ok(svg) => (
             no_cache(),
-            Json(serde_json::json!({ "url": url, "local": local, "svg": svg })),
+            Json(serde_json::json!({ "url": url, "svg": svg })),
         )
             .into_response(),
         Err(error) => {

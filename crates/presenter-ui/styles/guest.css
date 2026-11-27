@@ -1,4 +1,4 @@
-/* #999 L3: the guest translation page /poslech and its QR page /poslech/qr.
+/* #999 L3: the guest translation page (the root of the guest hostname) and the operator QR page /ui/guest-qr.
    Phone first: one column, big targets, the transcript fills the rest. */
 .guest {
   --guest-bg: #0f172a;

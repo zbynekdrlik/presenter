@@ -168,6 +168,7 @@ pub(crate) fn env(key: Option<&str>) -> GeminiEnv {
         key: key.map(str::to_string),
         model: "gemini-test-translate".to_string(),
         source_mic: "dante-mic-1".to_string(),
+        guest_host: Some("listen.example.org".to_string()),
     }
 }
 

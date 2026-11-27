@@ -5,6 +5,7 @@ mod ai_health;
 mod api_stage;
 mod bible;
 mod features;
+mod guest_host;
 mod integrations;
 mod interpreter_tips;
 mod libraries;
@@ -450,7 +451,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // #851: the Bible study page, its manifest and service worker.
         .merge(study_pwa::routes())
-        // #999: the guests' live translation page `/poslech` + `/listen/guest/*`.
+        // #999: the guest endpoints `/listen/guest/*` + the operator's QR page.
         .merge(listen_guest::routes())
         // #852: šepkár tips for the interpreter (/interpreter/tips*).
         .merge(interpreter_tips::router())
@@ -485,6 +486,8 @@ pub fn build_router(state: AppState) -> Router {
     // #915: the reader of every request (Access token / remembered device),
     // inside the request log so its lines carry the request span.
     let router = access_identity::with_access_identity(router, &state);
+    // #999: the guests' own hostname gets only the guest surface.
+    let router = guest_host::with_guest_host(router, &state);
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
     request_log::with_request_log(router).with_state(state)
 }
