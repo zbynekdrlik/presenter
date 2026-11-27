@@ -9,6 +9,7 @@ mod integrations;
 mod interpreter_tips;
 mod libraries;
 mod listen;
+mod listen_guest;
 mod listen_ws;
 pub mod network_mode;
 mod playlists;
@@ -449,6 +450,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // #851: the Bible study page, its manifest and service worker.
         .merge(study_pwa::routes())
+        // #999: the guests' live translation page `/poslech` + `/listen/guest/*`.
+        .merge(listen_guest::routes())
         // #852: šepkár tips for the interpreter (/interpreter/tips*).
         .merge(interpreter_tips::router())
         .merge(ui_usage::router())
