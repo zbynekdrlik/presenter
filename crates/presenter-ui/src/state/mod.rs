@@ -7,6 +7,7 @@ pub mod bible_console_step;
 pub mod bible_grid;
 pub mod bible_translations;
 pub mod global_keys;
+pub mod guest;
 pub mod interpreter;
 pub mod keyboard_inset;
 pub mod operator;

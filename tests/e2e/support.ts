@@ -415,6 +415,14 @@ export async function startTestServer(
       process.env.PRESENTER_LISTEN_SONIOX_URL ?? "ws://127.0.0.1:9",
     PRESENTER_LISTEN_SONIOX_API_KEY:
       process.env.PRESENTER_LISTEN_SONIOX_API_KEY ?? "",
+    // #999: the guests' live translation (Gemini Live) the same way: a dead
+    // loopback and NO key unless a spec sets its own fake + key, and the
+    // translated mic defaults to the Dante preacher (absent on a test server).
+    PRESENTER_LISTEN_GEMINI_URL:
+      process.env.PRESENTER_LISTEN_GEMINI_URL ?? "ws://127.0.0.1:9",
+    PRESENTER_LISTEN_GEMINI_API_KEY:
+      process.env.PRESENTER_LISTEN_GEMINI_API_KEY ?? "",
+    PRESENTER_LISTEN_GUEST_MIC: process.env.PRESENTER_LISTEN_GUEST_MIC ?? "",
     RUST_LOG:
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };

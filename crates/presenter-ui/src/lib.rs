@@ -29,7 +29,11 @@ fn App() -> impl IntoView {
         let _ = body.set_attribute("data-wasm-ready", "true");
     }
 
-    state::ui_usage::install();
+    // #999: the guest page is public (no login) — it counts nothing, its
+    // `/ui/usage` beacon would only meet the login wall.
+    if !pathname.starts_with("/poslech") {
+        state::ui_usage::install();
+    }
 
     // Client-side routing based on pathname
     let page_view = move || {
@@ -64,6 +68,10 @@ fn App() -> impl IntoView {
             view! { <pages::interpreter::InterpreterPage /> }.into_any()
         } else if p == "/ui/study" {
             view! { <pages::study::StudyPage /> }.into_any()
+        } else if p == "/poslech" {
+            view! { <pages::guest::GuestPage /> }.into_any()
+        } else if p == "/poslech/qr" {
+            view! { <pages::guest::GuestQrPage /> }.into_any()
         } else if p == "/ui/sepkar" {
             view! { <pages::sepkar::SepkarPage /> }.into_any()
         } else {

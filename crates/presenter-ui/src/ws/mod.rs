@@ -1,3 +1,4 @@
+pub mod guest;
 pub mod listen;
 pub mod passive;
 pub mod stage;
