@@ -123,7 +123,10 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 
 - Rust: `listen/translate/test_fake.rs` = the scripted fake Gemini (duplex `Connector`, records
   headers / setups / audio count, answers 100 ms of audio + `w<n> ` + a handle per audio message;
-  `Script` = close on setup, goAway after n, close after n). Session tests on the paused clock;
+  `Script` = close on setup, goAway after n, close after n, idle cut after a time, deaf after n,
+  late speech after a goAway). Session tests on the paused clock; the session's 1 s tick starts with
+  the session, so a time rule (`NO_ANSWER`, stalls) fires on the first WHOLE second past its bound —
+  feed past it (the deaf test feeds 12.5 s for a 10 s rule + 1 s retry), never shorten the rule;
   router tests (`router/listen_guest/tests.rs`) on a real loopback server. Keys `test-key-not-real`.
 - E2E `guest-translate.spec.ts` + `fake-gemini.ts`: `PRESENTER_GUEST_HOST=localhost` (the other
   specs use 127.0.0.1, so `http://localhost:<port>/` IS the guest host); phone, pick → Play →

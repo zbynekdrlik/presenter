@@ -114,6 +114,12 @@ async fn the_guest_host_serves_only_the_guest_surface() {
             "{path}"
         );
     }
+    // a path parameter of the guest router is its own, never the normal
+    // router's (a `Router::layer` dispatch answered 500 here)
+    assert_eq!(
+        get(&app, GUEST, "/ui-pkg/no-such-asset.js", None).await,
+        (StatusCode::NOT_FOUND, "Asset not found".to_string())
+    );
     // an absolute-form request naming the guest host is a guest request too
     let absolute = HttpRequest::get(format!("http://{GUEST}/ui/operator"))
         .header("host", "10.77.9.205")

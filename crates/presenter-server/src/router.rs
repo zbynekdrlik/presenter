@@ -486,10 +486,11 @@ pub fn build_router(state: AppState) -> Router {
     // #915: the reader of every request (Access token / remembered device),
     // inside the request log so its lines carry the request span.
     let router = access_identity::with_access_identity(router, &state);
-    // #999: the guests' own hostname gets only the guest surface.
-    let router = guest_host::with_guest_host(router, &state);
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
-    request_log::with_request_log(router).with_state(state)
+    let app = request_log::with_request_log(router).with_state(state.clone());
+    // #999: the guests' own hostname gets only the guest surface (chosen
+    // before any routing).
+    guest_host::with_guest_host(app, &state)
 }
 
 /// Application version from Cargo.toml

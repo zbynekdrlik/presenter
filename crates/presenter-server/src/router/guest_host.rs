@@ -21,8 +21,6 @@
 
 use axum::extract::Request;
 use axum::http::header::HOST;
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
 use axum::Router;
 use tower::ServiceExt;
 
@@ -44,30 +42,27 @@ pub(super) fn is_guest_request(request: &Request, guest_host: &str) -> bool {
     header || authority
 }
 
-/// Puts the guest dispatch in front of `router` (no-op without a guest host).
-pub(super) fn with_guest_host(router: Router<AppState>, state: &AppState) -> Router<AppState> {
+/// Chooses the router BEFORE any routing: the guest router for the guest
+/// hostname, `app` for every other host (`app` unchanged without a guest
+/// host). Never a `Router::layer` — that runs after the outer router matched,
+/// and its path parameters would reach the guest router's extractors.
+pub(super) fn with_guest_host(app: Router, state: &AppState) -> Router {
     let Some(guest_host) = state.guest_host() else {
         tracing::info!(target: TARGET, "no guest hostname (PRESENTER_GUEST_HOST unset): the guest page is not served");
-        return router;
+        return app;
     };
     tracing::info!(target: TARGET, guest_host = guest_host.as_str(), "guest hostname: only the guest surface is served there");
-    let guest = super::listen_guest::guest_routes().with_state(state.clone());
-    router.layer(middleware::from_fn(move |request: Request, next: Next| {
-        let guest = guest.clone();
-        let guest_host = guest_host.clone();
-        async move { dispatch(request, next, guest, &guest_host).await }
-    }))
-}
-
-async fn dispatch(request: Request, next: Next, guest: Router, guest_host: &str) -> Response {
-    if !is_guest_request(&request, guest_host) {
-        return next.run(request).await;
-    }
-    match guest.oneshot(request).await {
-        Ok(response) => response,
-        Err(never) => match never {},
-    }
-    .into_response()
+    let guest = super::request_log::with_request_log(super::listen_guest::guest_routes())
+        .with_state(state.clone());
+    let dispatch = tower::service_fn(move |request: Request| {
+        let target = if is_guest_request(&request, &guest_host) {
+            guest.clone()
+        } else {
+            app.clone()
+        };
+        async move { target.oneshot(request).await }
+    });
+    Router::new().fallback_service(dispatch)
 }
 
 #[cfg(test)]
