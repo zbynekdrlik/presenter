@@ -78,6 +78,9 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   endpoints (an operator can try them) and the operator's QR page `/ui/guest-qr`
   (`GET /listen/guest/qr` → `https://<guest host>/` + SVG from the `qrcode` crate; `url: null` on a
   box without a guest host).
+- Deploy: `deploy-site.yml` input `guest_host` → the drop-in `guest-host.conf`
+  (`PRESENTER_GUEST_HOST`, host-name characters only; empty removes it). SNV passes the repository
+  variable `SNV_GUEST_HOST` (`listen.newlevel.media`, set 27.11); PRBA / PP / dev have none.
 - The hostname itself (DNS + tunnel ingress) is set up by airuleset's publish-app lane, not here.
 
 ## The page (`presenter-ui` `pages/guest`, WASM route `/`)

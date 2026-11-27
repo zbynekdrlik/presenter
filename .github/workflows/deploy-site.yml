@@ -51,6 +51,11 @@ on:
         description: "#915: the AUD tag of the site's Cloudflare Access app (not a secret: every token carries it)"
         type: string
         required: true
+      guest_host:
+        description: "#999: the site's guest translation hostname (PRESENTER_GUEST_HOST); empty = no guest page"
+        type: string
+        required: false
+        default: ""
 
 jobs:
   deploy:
@@ -402,6 +407,8 @@ jobs:
           # #915: the site's Cloudflare Access app, so the server verifies the login token.
           ACCESS_TEAM_DOMAIN: newlevelchurch.cloudflareaccess.com
           ACCESS_AUD: ${{ inputs.access_aud }}
+          # #999: the guests' own hostname (a public tunnel, no Access app); empty = none.
+          GUEST_HOST: ${{ inputs.guest_host }}
         run: |
           scp -i ~/.ssh/id_deploy ${{ env.UNIT_FILE }} deploy-target:/tmp/${{ env.SERVICE_NAME }}.service
           # #544: the service's GStreamer registry must not survive this deploy — a driver
@@ -420,6 +427,15 @@ jobs:
           case "$ACCESS_AUD" in *[!a-f0-9]* | '') echo "::error::access_aud must be the hex AUD tag"; exit 1 ;; esac
           printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' "$ACCESS_TEAM_DOMAIN" "$ACCESS_AUD" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
+          # #999: the guest hostname gets ONLY the guest surface (router/guest_host.rs). A root-written
+          # drop-in again, so only host-name characters pass; empty removes the drop-in.
+          case "$GUEST_HOST" in *[!a-z0-9.-]*) echo "::error::guest_host must be a lowercase host name"; exit 1 ;; esac
+          if [ -n "$GUEST_HOST" ]; then
+            printf '[Service]\nEnvironment=PRESENTER_GUEST_HOST=%s\n' "$GUEST_HOST" |
+              ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/guest-host.conf >/dev/null && sudo systemctl daemon-reload"
+          else
+            ssh deploy-target "sudo rm -f /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/guest-host.conf && sudo systemctl daemon-reload"
+          fi
           # #918: a site without devices (PRBA) has no encoder gate, no stage TVs and no
           # song-sync peer — the rest of this step is the hardware site's.
           if [ "${{ inputs.hardware }}" != "true" ]; then
