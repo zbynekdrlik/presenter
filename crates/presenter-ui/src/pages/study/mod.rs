@@ -480,7 +480,7 @@ fn install_pwa() {
     let Some(head) = document.head() else {
         return;
     };
-    let tags: [(&str, &[(&str, &str)]); 5] = [
+    let tags: [(&str, &[(&str, &str)]); 6] = [
         (
             "link",
             // With credentials: behind Cloudflare Access a cookie-less fetch of
@@ -497,6 +497,10 @@ fn install_pwa() {
                 ("rel", "apple-touch-icon"),
                 ("href", "/ui/study/apple-touch-icon.png"),
             ],
+        ),
+        (
+            "meta",
+            &[("name", "mobile-web-app-capable"), ("content", "yes")],
         ),
         (
             "meta",
