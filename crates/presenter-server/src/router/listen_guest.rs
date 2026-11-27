@@ -2,7 +2,7 @@
 //! (`PRESENTER_GUEST_PORT`, `router::build_guest_router`; the public tunnel of
 //! the guests' hostname points there) serves [`guest_routes`] and nothing
 //! else: `/` = the WASM shell (the page is `presenter-ui`'s `pages::guest`),
-//! its manifest, service worker, icons and `/ui-pkg` assets, a version-only
+//! its manifest, service worker, icons (+ `/favicon.ico`) and `/ui-pkg` assets, a version-only
 //! `/healthz`, the language list `GET /listen/guest/languages` and the stream
 //! `GET /listen/guest/ws?lang=xx`; every other path is [`GUEST_NOT_FOUND`].
 //! The main port ([`routes`]) never serves the guest page; it carries the two
@@ -65,6 +65,7 @@ pub(super) fn guest_routes() -> Router<AppState> {
         .route("/", get(super::wasm_ui::wasm_ui_shell))
         .route("/sw.js", get(|| async { js(SERVICE_WORKER) }))
         .route("/manifest.json", get(manifest))
+        .route("/favicon.ico", get(|| async { png(ICON_192) }))
         .route("/icon-192.png", get(|| async { png(ICON_192) }))
         .route("/icon-512.png", get(|| async { png(ICON_512) }))
         .route("/ui-pkg/{*path}", get(super::wasm_ui::wasm_ui_asset))
