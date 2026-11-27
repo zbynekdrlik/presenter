@@ -856,8 +856,10 @@ jobs:
         # tell "video plays" from "video silently fails to decode but
         # ontrack fires". `--with-deps` also pulls system libraries the
         # branded Chrome needs (libnss, libasound, etc.). Default Chromium
-        # is kept so non-video tests can still use the headless shell.
-        run: npx playwright install --with-deps chromium chrome
+        # is kept so non-video tests can still use the headless shell. Firefox
+        # (#999): the guest page's AudioWorklet playback proof — this runner's
+        # Chromium never loads a worklet module.
+        run: npx playwright install --with-deps chromium chrome firefox
 
       - name: Run Playwright tests
         # Exclude @synthetic-ndi — those need a live NDI source + GPU encoder
