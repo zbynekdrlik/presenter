@@ -261,7 +261,7 @@ fn text(message: &GuestWsMessage) -> Message {
 
 fn packet_message(packet: GuestPacket) -> Message {
     match packet {
-        GuestPacket::Audio(pcm) => Message::Binary(pcm.to_vec().into()),
+        GuestPacket::Audio(pcm, _) => Message::Binary(pcm.to_vec().into()),
         GuestPacket::Text(text) => self::text(&GuestWsMessage::Text { text }),
         GuestPacket::Original(text) => self::text(&GuestWsMessage::Original { text }),
         GuestPacket::TurnComplete => self::text(&GuestWsMessage::Turn),
@@ -295,11 +295,17 @@ async fn forward(
         tokio::select! {
             packet = listener.packets.recv() => match packet {
                 Ok(packet) => {
-                    if matches!(packet, GuestPacket::Audio(_)) {
-                        stats.audio_chunks += 1;
-                    }
+                    let received = match &packet {
+                        GuestPacket::Audio(_, received) => Some(*received),
+                        _ => None,
+                    };
                     if let Err(err) = socket.send(packet_message(packet)).await {
                         return WsEndReason::SendFailed(err.to_string());
+                    }
+                    // #999 L6a: Gemini's socket → this guest's socket.
+                    if let Some(received) = received {
+                        stats.audio_chunks += 1;
+                        listener.times.to_guest(received.elapsed());
                     }
                 }
                 Err(RecvError::Lagged(missed)) => {

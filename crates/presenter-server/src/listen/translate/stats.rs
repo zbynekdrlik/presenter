@@ -1,7 +1,8 @@
 //! What a guest translation costs and how it performs (#999 L1): the daily
-//! minute cap shared by every language ([`DayMeter`]) and one session's
+//! minute cap shared by every language ([`DayMeter`]), one session's
 //! per-minute summary ([`MinuteStats`], the R2 metrics: listeners, the
-//! first-voiced latency after the preacher starts again, stalls).
+//! first-voiced latency after the preacher starts again, stalls) and our own
+//! delay around the model ([`SegmentTimes`], #999 L6a).
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -54,6 +55,88 @@ impl DayMeter {
     }
 }
 
+/// Samples kept per segment and minute (the max and count see every one).
+const SAMPLE_CAP: usize = 4_096;
+
+/// One segment's delays in µs since the last summary.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Samples {
+    values: Vec<u64>,
+    count: u64,
+    max: u64,
+}
+
+impl Samples {
+    pub fn push(&mut self, delay: Duration) {
+        let us = u64::try_from(delay.as_micros()).unwrap_or(u64::MAX);
+        self.count += 1;
+        self.max = self.max.max(us);
+        if self.values.len() < SAMPLE_CAP {
+            self.values.push(us);
+        }
+    }
+
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn median(&self) -> Option<u64> {
+        let mut sorted = self.values.clone();
+        sorted.sort_unstable();
+        sorted.get(sorted.len() / 2).copied()
+    }
+
+    pub fn max(&self) -> Option<u64> {
+        (self.count > 0).then_some(self.max)
+    }
+}
+
+/// Our side of the model, per segment (#999 L6a, owner 27.11: only the
+/// model's latency may remain): `to_gemini` = a mic frame handed to the
+/// session → written to Gemini's socket (live frames; the pre-roll and the
+/// frames held for a connection are old on purpose), `to_guest` = a Gemini
+/// audio message read off the socket → written to a guest's WebSocket (every
+/// listener). Shared by the session, its connection tasks and its listeners;
+/// the minute summary drains it.
+#[derive(Clone, Default)]
+pub struct SegmentTimes {
+    inner: Arc<Mutex<Segments>>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Segments {
+    pub to_gemini: Samples,
+    pub to_guest: Samples,
+}
+
+impl SegmentTimes {
+    fn with(&self, record: impl FnOnce(&mut Segments)) {
+        record(&mut self.inner.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+
+    pub fn to_gemini(&self, delay: Duration) {
+        self.with(|s| s.to_gemini.push(delay));
+    }
+
+    pub fn to_guest(&self, delay: Duration) {
+        self.with(|s| s.to_guest.push(delay));
+    }
+
+    /// The samples so far, without draining them (tests).
+    #[cfg(test)]
+    pub fn peek(&self) -> Segments {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The minute's samples; the next minute starts empty.
+    pub fn take(&self) -> Segments {
+        std::mem::take(&mut *self.inner.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
 /// One session's counters since the last summary.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MinuteStats {
@@ -82,7 +165,13 @@ pub const STALL_AFTER: Duration = Duration::from_secs(6);
 impl MinuteStats {
     /// The minute's INFO line, then the counters start again. A minute with
     /// nothing sent and nothing played logs nothing (a silent mic all day).
-    pub fn log_and_reset(&mut self, language: &str, listeners: usize, connected: bool) {
+    pub fn log_and_reset(
+        &mut self,
+        language: &str,
+        listeners: usize,
+        connected: bool,
+        segments: &Segments,
+    ) {
         if self.sent_ms > 0
             || self.output_ms > 0
             || self.stalls > 0
@@ -108,6 +197,12 @@ impl MinuteStats {
                 reconnects = self.reconnects,
                 dropped_frames = self.dropped_frames,
                 overlap_dropped_ms = self.overlap_dropped_ms,
+                to_gemini_frames = segments.to_gemini.count(),
+                to_gemini_us_median = segments.to_gemini.median(),
+                to_gemini_us_max = segments.to_gemini.max(),
+                to_guest_chunks = segments.to_guest.count(),
+                to_guest_us_median = segments.to_guest.median(),
+                to_guest_us_max = segments.to_guest.max(),
                 "guest translation minute summary"
             );
         }
@@ -147,7 +242,35 @@ mod tests {
             stalls: 1,
             ..MinuteStats::default()
         };
-        stats.log_and_reset("en", 2, true);
+        stats.log_and_reset("en", 2, true, &Segments::default());
         assert_eq!(stats, MinuteStats::default());
+    }
+
+    #[test]
+    fn segment_samples_keep_median_max_and_count_and_drain_per_minute() {
+        let times = SegmentTimes::default();
+        for us in [300, 100, 200] {
+            times.to_gemini(Duration::from_micros(us));
+        }
+        times.to_guest(Duration::from_millis(2));
+        let minute = times.take();
+        assert_eq!(minute.to_gemini.count(), 3);
+        assert_eq!(minute.to_gemini.median(), Some(200));
+        assert_eq!(minute.to_gemini.max(), Some(300));
+        assert_eq!(minute.to_guest.max(), Some(2_000));
+        assert_eq!(times.take(), Segments::default(), "drained");
+        assert_eq!(Samples::default().median(), None);
+        assert_eq!(Samples::default().max(), None);
+
+        let mut many = Samples::default();
+        for us in 0..(SAMPLE_CAP as u64 + 10) {
+            many.push(Duration::from_micros(us));
+        }
+        assert_eq!(many.count(), SAMPLE_CAP as u64 + 10);
+        assert_eq!(
+            many.max(),
+            Some(SAMPLE_CAP as u64 + 9),
+            "the max sees every sample"
+        );
     }
 }

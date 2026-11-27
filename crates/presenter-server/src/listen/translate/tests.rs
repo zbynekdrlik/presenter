@@ -44,7 +44,7 @@ fn drain(listener: &mut Listener) -> Vec<GuestPacket> {
 fn audio_count(packets: &[GuestPacket]) -> usize {
     packets
         .iter()
-        .filter(|p| matches!(p, GuestPacket::Audio(_)))
+        .filter(|p| matches!(p, GuestPacket::Audio(..)))
         .count()
 }
 
@@ -89,7 +89,7 @@ async fn a_guest_hears_the_translation_and_silence_is_never_sent() {
     let packets = drain(&mut listener);
     assert_eq!(audio_count(&packets), 35);
     assert!(packets.contains(&GuestPacket::Text("w1 ".to_string())));
-    let GuestPacket::Audio(first) = &packets[0] else {
+    let GuestPacket::Audio(first, _) = &packets[0] else {
         panic!("audio first: {packets:?}");
     };
     assert_eq!(first.len(), 4_800, "24 kHz s16 100 ms");
@@ -302,7 +302,7 @@ async fn a_replaced_connection_never_speaks_over_the_new_one() {
     let late = drain(&mut listener)
         .iter()
         .filter(|p| match p {
-            GuestPacket::Audio(pcm) => i16::from_le_bytes([pcm[0], pcm[1]]) == LATE_MARK,
+            GuestPacket::Audio(pcm, _) => i16::from_le_bytes([pcm[0], pcm[1]]) == LATE_MARK,
             _ => false,
         })
         .count();
@@ -477,4 +477,37 @@ async fn an_onset_during_the_backlog_is_not_timed_on_it() {
         vec!["1000"],
         "only the first onset is timed"
     );
+}
+
+/// #999 L6a: our own delay to Gemini is timed per live frame (the pre-roll
+/// is old on purpose and left out) and reported, then drained, by the
+/// minute summary.
+#[tokio::test(start_paused = true)]
+async fn the_frames_to_gemini_are_timed_and_summarised() {
+    let capture = crate::tracing_capture::Capture::install();
+    let fake = FakeGemini::new(vec![]);
+    let listen = listen_with_source();
+    let service = guest(&fake, Some("test-key-not-real"), DayMeter::default());
+    let listener = service.join(&listen, "en").expect("joined");
+    feed(&listen, false, 30).await;
+    feed(&listen, true, 5).await;
+    feed(&listen, false, 40).await;
+    assert_eq!(
+        fake.audio(),
+        vec![35],
+        "10 pre-roll + 5 voiced + 20 hangover"
+    );
+    let segments = listener.times.peek();
+    assert_eq!(segments.to_gemini.count(), 25, "the live frames only");
+    assert_eq!(segments.to_gemini.max(), Some(0), "the paused clock");
+    assert_eq!(segments.to_guest.count(), 0, "no guest socket here");
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let summary = capture.events_with_message("guest translation minute summary");
+    assert_eq!(summary.len(), 1);
+    assert_eq!(summary[0].field("to_gemini_frames"), Some("25"));
+    assert_eq!(summary[0].field("to_gemini_us_median"), Some("0"));
+    assert_eq!(summary[0].field("to_guest_chunks"), Some("0"));
+    assert_eq!(summary[0].field("to_guest_us_max"), None, "no sample");
+    assert_eq!(listener.times.peek().to_gemini.count(), 0, "drained");
 }

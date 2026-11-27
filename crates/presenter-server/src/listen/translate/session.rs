@@ -25,8 +25,8 @@ use tokio::task::AbortHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::config::GeminiEnv;
-use super::conn::{self, ConnEvent};
-use super::stats::{DayMeter, MinuteStats, STALL_AFTER};
+use super::conn::{self, ConnEvent, Outgoing};
+use super::stats::{DayMeter, MinuteStats, SegmentTimes, STALL_AFTER};
 use super::wire::{audio_message, classify_close, setup_message, CloseClass, ServerMessage};
 use super::{GuestPacket, Language, SessionState, StopReason, TARGET};
 use crate::listen::soniox::conn::Connector;
@@ -89,11 +89,12 @@ pub struct SessionIo {
     pub state: watch::Sender<SessionState>,
     pub stop: watch::Receiver<bool>,
     pub listeners: Arc<AtomicUsize>,
+    pub times: SegmentTimes,
 }
 
 struct Conn {
     id: u32,
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<Outgoing>,
     abort: AbortHandle,
     ready: bool,
     opened_at: Instant,
@@ -117,6 +118,7 @@ struct Session {
     state: watch::Sender<SessionState>,
     listeners: Arc<AtomicUsize>,
     events_tx: mpsc::Sender<ConnEvent>,
+    times: SegmentTimes,
     next_id: u32,
     current: Option<Conn>,
     /// Opened on `goAway`, takes over when ready.
@@ -152,9 +154,10 @@ pub async fn run(language: Language, deps: SessionDeps, io: SessionIo) {
         state,
         mut stop,
         listeners,
+        times,
     } = io;
     let (events_tx, mut events) = mpsc::channel(256);
-    let mut session = Session::new(language, deps, out, state, listeners, events_tx);
+    let mut session = Session::new(language, deps, out, state, listeners, events_tx, times);
     tracing::info!(target: TARGET, language = language.code, model = session.deps.env.model.as_str(), source_mic = session.deps.env.source_mic.as_str(), "guest translation session started");
     session.connect();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -236,6 +239,7 @@ impl Session {
         state: watch::Sender<SessionState>,
         listeners: Arc<AtomicUsize>,
         events_tx: mpsc::Sender<ConnEvent>,
+        times: SegmentTimes,
     ) -> Self {
         Self {
             language,
@@ -244,6 +248,7 @@ impl Session {
             state,
             listeners,
             events_tx,
+            times,
             next_id: 0,
             current: None,
             next: None,
@@ -300,6 +305,7 @@ impl Session {
             req,
             setup,
             self.events_tx.clone(),
+            self.times.clone(),
         );
         tracing::info!(target: TARGET, language = self.language.code, conn = id, resumed = self.handle.is_some(), "Gemini connection opening");
         let now = Instant::now();
@@ -371,12 +377,12 @@ impl Session {
         if open && !self.gate_open {
             self.gate_opened_at = Some(now);
             for held in std::mem::take(&mut self.pre_roll) {
-                self.send(held);
+                self.send(held, None);
             }
         }
         self.gate_open = open;
         if open {
-            self.send(frame);
+            self.send(frame, Some(now));
         } else {
             if self.pre_roll.len() == PRE_ROLL_FRAMES {
                 self.pre_roll.pop_front();
@@ -388,23 +394,28 @@ impl Session {
 
     /// One frame to the ready connection, counted against the day's cap
     /// (charged only when it really goes out). `false` = the cap is reached.
-    fn deliver(&mut self, frame: &MicFrame) -> bool {
+    fn deliver(&mut self, frame: &MicFrame, heard: Option<Instant>) -> bool {
         let Some(conn) = self.current.as_ref().filter(|conn| conn.ready) else {
             return true;
         };
         if !self.deps.meter.spend((self.deps.today)(), FRAME_MS) {
             return false;
         }
-        if conn.tx.send(audio_message(frame)).is_ok() {
+        let message = Outgoing {
+            text: audio_message(frame),
+            heard,
+        };
+        if conn.tx.send(message).is_ok() {
             self.stats.sent_ms += FRAME_MS;
         }
         true
     }
 
-    fn send(&mut self, frame: MicFrame) {
+    /// `heard` = when a live frame reached the session (timed to the socket).
+    fn send(&mut self, frame: MicFrame, heard: Option<Instant>) {
         match self.current.as_ref().filter(|conn| conn.ready) {
             Some(_) => {
-                if !self.deliver(&frame) {
+                if !self.deliver(&frame, heard) {
                     self.stop(StopReason::DailyCap);
                     return;
                 }
@@ -431,7 +442,7 @@ impl Session {
         let held = std::mem::take(&mut self.pending);
         let count = held.len();
         for frame in held {
-            if !self.deliver(&frame) {
+            if !self.deliver(&frame, None) {
                 self.stop(StopReason::DailyCap);
                 return;
             }
@@ -458,7 +469,11 @@ impl Session {
 
     fn on_event(&mut self, event: ConnEvent) {
         match event {
-            ConnEvent::Message { conn, message } => self.on_message(conn, message),
+            ConnEvent::Message {
+                conn,
+                message,
+                received,
+            } => self.on_message(conn, message, received),
             ConnEvent::Closed { conn, code, reason } => self.on_closed(conn, code, &reason),
             ConnEvent::Failed {
                 conn,
@@ -472,7 +487,7 @@ impl Session {
         slot.is_some_and(|conn| conn.id == id)
     }
 
-    fn on_message(&mut self, id: u32, message: ServerMessage) {
+    fn on_message(&mut self, id: u32, message: ServerMessage, received: Instant) {
         let from_current = self.is(self.current.as_ref(), id);
         let from_next = self.is(self.next.as_ref(), id);
         let from_draining = self
@@ -504,7 +519,7 @@ impl Session {
         if let Some(rate) = &message.unexpected_rate {
             tracing::warn!(target: TARGET, language = self.language.code, mime = rate.as_str(), "Gemini audio at an unexpected rate");
         }
-        self.forward(&message, from_draining);
+        self.forward(&message, from_draining, received);
         if from_current || from_next {
             if let Some(handle) = message.handle {
                 self.handle = Some(handle);
@@ -533,7 +548,7 @@ impl Session {
 
     /// Hands a message's speech and text to the listeners. A draining
     /// connection's speech is dropped once the new one speaks (no two voices).
-    fn forward(&mut self, message: &ServerMessage, from_draining: bool) {
+    fn forward(&mut self, message: &ServerMessage, from_draining: bool, received: Instant) {
         let now = Instant::now();
         let new_spoke = self.current.as_ref().is_some_and(|conn| conn.spoke);
         if from_draining && new_spoke && !message.audio.is_empty() {
@@ -559,7 +574,7 @@ impl Session {
             self.stats.output_ms += chunk.len() as u64 / 48;
             let _ = self
                 .io_out
-                .send(GuestPacket::Audio(Arc::from(chunk.as_slice())));
+                .send(GuestPacket::Audio(Arc::from(chunk.as_slice()), received));
         }
         if let Some(text) = &message.output_text {
             self.stats.output_chars += text.chars().count() as u64;
@@ -722,7 +737,8 @@ impl Session {
     fn summary(&mut self) {
         let listeners = self.listeners.load(Ordering::SeqCst);
         let connected = self.current.as_ref().is_some_and(|conn| conn.ready);
+        let segments = self.times.take();
         self.stats
-            .log_and_reset(self.language.code, listeners, connected);
+            .log_and_reset(self.language.code, listeners, connected, &segments);
     }
 }

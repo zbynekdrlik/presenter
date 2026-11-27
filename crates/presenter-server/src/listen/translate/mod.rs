@@ -30,7 +30,7 @@ use tokio::sync::{broadcast, watch};
 
 use self::config::GeminiEnv;
 use self::session::{SessionDeps, SessionIo};
-use self::stats::DayMeter;
+use self::stats::{DayMeter, SegmentTimes};
 use super::soniox::conn::TlsConnector;
 use super::ListenService;
 
@@ -57,8 +57,9 @@ pub(crate) use presenter_core::listen::guest::{
 /// What a session sends its listeners.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GuestPacket {
-    /// Translated speech, s16le mono at 24 kHz.
-    Audio(Arc<[u8]>),
+    /// Translated speech, s16le mono at 24 kHz, and when its Gemini frame
+    /// was read off the socket (#999 L6a, timed to the guest's send).
+    Audio(Arc<[u8]>, tokio::time::Instant),
     /// The translated text as it is spoken (a fragment to append).
     Text(String),
     /// The Slovak original (a fragment to append).
@@ -85,6 +86,8 @@ pub(crate) struct Listener {
     pub(crate) language: Language,
     pub(crate) packets: broadcast::Receiver<GuestPacket>,
     pub(crate) state: watch::Receiver<SessionState>,
+    /// The session's segment timings (a guest's send is recorded here).
+    pub(crate) times: SegmentTimes,
     _guard: ListenerGuard,
 }
 
@@ -109,6 +112,7 @@ struct Entry {
     /// Bumped by every join, so a linger timer armed before a rejoin never
     /// ends the session the rejoined guest keeps alive.
     epoch: Arc<AtomicU64>,
+    times: SegmentTimes,
 }
 
 /// The registry of language sessions (a cheap clone of one `Arc`).
@@ -232,12 +236,14 @@ impl GuestTranslate {
         let (state_tx, state) = watch::channel(SessionState::Connecting);
         let (stop, stop_rx) = watch::channel(false);
         let listeners = Arc::new(AtomicUsize::new(1));
+        let times = SegmentTimes::default();
         let io = SessionIo {
             frames: listen.subscribe_frames(&self.inner.deps.env.source_mic),
             out: out.clone(),
             state: state_tx,
             stop: stop_rx,
             listeners: Arc::clone(&listeners),
+            times: times.clone(),
         };
         tokio::spawn(session::run(language, self.inner.deps.clone(), io));
         let entry = Entry {
@@ -247,6 +253,7 @@ impl GuestTranslate {
             stop,
             listeners,
             epoch: Arc::new(AtomicU64::new(0)),
+            times,
         };
         let listener = self.listener(language, &entry);
         sessions.insert(language.code, entry);
@@ -259,6 +266,7 @@ impl GuestTranslate {
             language,
             packets: entry.out.subscribe(),
             state: entry.state.clone(),
+            times: entry.times.clone(),
             _guard: ListenerGuard {
                 service: self.clone(),
                 code: language.code,
