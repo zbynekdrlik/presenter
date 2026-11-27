@@ -385,14 +385,22 @@ async fn the_listener_cap_refuses_the_next_guest() {
 }
 
 #[test]
-fn only_an_onset_after_the_translation_went_quiet_is_timed() {
-    use super::session::{onset_timed, OUTPUT_DRAINED};
+fn speech_follows_a_pause_of_750_ms_audio_or_wall_time() {
+    use super::session::{after_pause, output_voiced, OUTPUT_GAP};
+    use super::test_fake::pcm;
     let now = tokio::time::Instant::now();
-    assert!(onset_timed(None, now), "nothing played yet");
-    assert!(onset_timed(Some(now - OUTPUT_DRAINED), now));
+    assert!(output_voiced(&pcm(0, true)), "the fake's speech");
+    assert!(!output_voiced(&pcm(120, false)), "the model's near-silence");
+    assert!(after_pause(0, None, now), "nothing spoken yet");
+    assert!(after_pause(750, Some(now), now), "750 ms of quiet audio");
+    assert!(!after_pause(
+        500,
+        Some(now - Duration::from_millis(100)),
+        now
+    ));
     assert!(
-        !onset_timed(Some(now - Duration::from_millis(300)), now),
-        "still the previous phrase's backlog"
+        after_pause(0, Some(now - OUTPUT_GAP), now),
+        "no output at all for 750 ms"
     );
 }
 

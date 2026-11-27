@@ -62,9 +62,10 @@ pub struct MinuteStats {
     pub output_chars: u64,
     /// Speech starts after a pause (the moments the room reacts to).
     pub onsets: u64,
-    /// Speech start → the first translated audio, per onset heard after the
-    /// translation went quiet (`session::onset_timed`; else the first audio is
-    /// the previous phrase's backlog and would read as a false ~0.2 s).
+    /// Speech start → the first translated SPEECH (output above
+    /// `session::OUTPUT_VOICED_DBFS`) after the model's own pause, per onset
+    /// (#999 L6a; the model streams its silence too, and the speech before
+    /// its pause is the previous phrase's backlog).
     pub first_voiced_ms: Vec<u64>,
     /// Translated audio stopped for [`STALL_AFTER`] while the preacher spoke.
     pub stalls: u64,
@@ -100,6 +101,7 @@ impl MinuteStats {
                 output_ms = self.output_ms,
                 output_chars = self.output_chars,
                 onsets = self.onsets,
+                first_voiced_timed = latencies.len(),
                 first_voiced_ms_median = median,
                 first_voiced_ms_max = latencies.last().copied(),
                 stalls = self.stalls,
