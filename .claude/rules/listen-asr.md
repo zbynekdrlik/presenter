@@ -62,7 +62,8 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   `e2e-test-key-not-real` key in `process.env`. Keys in tests: `test-key-not-real` (Rust) /
   `e2e-test-key-not-real` (E2E), never a real one.
 - **Deploy (C3-8):** every service deploy job (`pipeline.yml`, `deploy-site.yml`, `release.yml`) runs
-  "Configure listening transcription" before the start: the `LISTEN_SONIOX_API_KEY` secret →
+  "Configure listening transcription" before the start (#999: the same step also writes the Gemini
+  key of the guest translation, `listen-guest-translate.md`): the `LISTEN_SONIOX_API_KEY` secret →
   0600 `<etc dir>/listen.env` (`printf` piped into ssh stdin, written under `umask 077`), an empty
   secret REMOVES the file and the deploy goes on; the units read it with `EnvironmentFile=-`.
   Invariant 7 of `scripts/ci/check_deploy_workflows.py` pins the step to ONE canonical text

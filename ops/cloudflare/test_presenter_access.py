@@ -41,6 +41,32 @@ def live_apps(config: dict) -> list[dict]:
 
 
 class DesiredAppsTests(unittest.TestCase):
+    def test_public_paths_get_an_everyone_bypass_app_each(self):
+        config = example_config()
+        config["sites"][0]["public_paths"] = ["/poslech", "/listen/guest", "/ui-pkg"]
+        apps = pa.desired_apps(config)
+        public = [a for a in apps if a["policies"][0]["name"] == pa.PUBLIC_NAME]
+        self.assertEqual([a["domain"] for a in public], [
+            "presenter-site-a.example.com/poslech",
+            "presenter-site-a.example.com/listen/guest",
+            "presenter-site-a.example.com/ui-pkg"])
+        for app in public:
+            self.assertEqual(app["policies"], [{"name": pa.PUBLIC_NAME, "decision": "bypass", "precedence": 1,
+                                                "include": [{"everyone": {}}]}])
+            self.assertEqual(app["session_duration"], "24h")
+        self.assertEqual(len(apps), 4 + 3, "site b gets no public path")
+        plan = pa.plan(live_apps(example_config()), apps)
+        self.assertEqual(sorted(a["domain"] for a in plan if a["op"] == "create"),
+                         sorted(a["domain"] for a in public))
+        self.assertEqual(sum(1 for a in plan if a["op"] == "ok"), 4)
+
+    def test_a_public_path_must_be_one_absolute_path(self):
+        for bad in ("poslech", "/", "/poslech/*", "/a b"):
+            config = example_config()
+            config["sites"][0]["public_paths"] = [bad]
+            with self.subTest(path=bad), self.assertRaises(pa.ConfigError):
+                pa.desired_apps(config)
+
     def test_two_apps_per_host_with_bypass_then_allow(self):
         apps = pa.desired_apps(example_config())
         self.assertEqual([a["domain"] for a in apps], [

@@ -40,6 +40,7 @@ APP_KEYS = ("name", "domain", "type", "session_duration", *APP_DEFAULTS)
 BYPASS_NAME = "presenter on-site network (no login)"
 ALLOW_NAME = "presenter allowed users"
 HEALTHZ_NAME = "presenter healthz probe bypass"
+PUBLIC_NAME = "presenter public path (no login)"
 PER_PAGE = 100
 MAX_PAGES = 50
 
@@ -64,10 +65,15 @@ def validate_config(config: dict[str, Any]) -> None:
         for cidr in site.get("bypass_ips", []):
             if "/" not in cidr:
                 raise ConfigError(f"bypass IP of {site['host']} needs a CIDR suffix such as /32")
+        for path in site.get("public_paths", []):
+            if not path.startswith("/") or path == "/" or any(c in path for c in " *?#"):
+                raise ConfigError(f"public path {path!r} of {site['host']} must be one absolute path, no wildcard")
 
 
 def desired_apps(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """The Access apps the config asks for: per host one app + one /healthz bypass app."""
+    """The Access apps the config asks for: per host one app + one /healthz bypass app,
+    plus one everyone-bypass app per ``public_paths`` entry (#999: the guest page
+    ``/poslech``, its stream ``/listen/guest`` and the WASM assets ``/ui-pkg``)."""
     validate_config(config)
     apps = []
     for site in config["sites"]:
@@ -87,6 +93,11 @@ def desired_apps(config: dict[str, Any]) -> list[dict[str, Any]]:
                      "session_duration": config.get("healthz_session_duration", "24h"),
                      "policies": [{"name": HEALTHZ_NAME, "decision": "bypass", "precedence": 1,
                                    "include": [{"everyone": {}}]}]})
+        for path in site.get("public_paths", []):
+            apps.append({**APP_DEFAULTS, "name": f"presenter public {path} — {host}", "domain": f"{host}{path}",
+                         "session_duration": config.get("healthz_session_duration", "24h"),
+                         "policies": [{"name": PUBLIC_NAME, "decision": "bypass", "precedence": 1,
+                                       "include": [{"everyone": {}}]}]})
     return apps
 
 

@@ -192,23 +192,42 @@ env vars; the transcription ships OFF.
 | `PRESENTER_LISTEN_SONIOX_URL` | `wss://stt-rt.soniox.com/transcribe-websocket` | The WebSocket endpoint; `ws://` allowed. Tests point it at a mock; the E2E harness defaults it to the dead loopback `ws://127.0.0.1:9` with no key. |
 | `PRESENTER_LISTEN_SONIOX_ENDPOINT_DELAY_MS` | unset | Unset → endpoint detection OFF (the measured config). Any whole number, `0` included, turns it ON (`enable_endpoint_detection: true`) with `max_endpoint_delay_ms` clamped to 500–3000. Not a whole number → WARN, stays off. |
 
+### Guests' live translation, Gemini Live Translate (#999)
+
+`/poslech` plays the sermon translated into the guest's language. Read once at
+startup; an empty value counts as unset.
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `PRESENTER_LISTEN_GEMINI_API_KEY` | unset | The Gemini API key, sent only as the `x-goog-api-key` header of the WebSocket upgrade. Unset → guests are refused ("Preklad tu nie je nastavený"). Deployed from `listen.env`. |
+| `PRESENTER_LISTEN_GEMINI_MODEL` | `gemini-3.5-live-translate-preview` | The Live Translate model id. |
+| `PRESENTER_LISTEN_GEMINI_URL` | Gemini Live `BidiGenerateContent` (v1beta) | Tests point it at a fake; the E2E harness defaults it to `ws://127.0.0.1:9` with no key. |
+| `PRESENTER_LISTEN_GUEST_MIC` | `dante-mic-1` | The mic whose frames are translated. |
+
+Caps (constants, logged): at most 4 languages at once, 480 audio minutes sent
+per local day over all languages; nothing is sent while the mic is silent.
+
 #### The key file `listen.env` (#852 C3-8)
 
 Every deploy path — `pipeline.yml` (dev), `deploy-site.yml` (SNV through
 `deploy.yml`, and PRBA), `release.yml` (PP) — runs "Configure listening
 transcription" before the service starts, the same shape as `ai.env`: a 0600
 root-only `<etc dir>/listen.env` (`/etc/presenter`, PRBA `/etc/presenter-prba`)
-written from the `LISTEN_SONIOX_API_KEY` GitHub secret and the
-`LISTEN_SONIOX_MODEL` GitHub Actions variable (default `stt-rt-v6`):
+written from the `LISTEN_SONIOX_API_KEY` and (#999) `LISTEN_GEMINI_API_KEY`
+GitHub secrets and the `LISTEN_SONIOX_MODEL` / `LISTEN_GEMINI_MODEL` GitHub
+Actions variables — a line pair per key that is set:
 
 ```
 PRESENTER_LISTEN_SONIOX_API_KEY=<LISTEN_SONIOX_API_KEY secret>
 PRESENTER_LISTEN_SONIOX_MODEL=<LISTEN_SONIOX_MODEL variable, default stt-rt-v6>
+PRESENTER_LISTEN_GEMINI_API_KEY=<LISTEN_GEMINI_API_KEY secret>
+PRESENTER_LISTEN_GEMINI_MODEL=<LISTEN_GEMINI_MODEL variable, default gemini-3.5-live-translate-preview>
 ```
 
 The units (`presenter.service`, `presenter-dev.service`, `presenter-prba.service`)
-read it as `EnvironmentFile=-<etc dir>/listen.env`. An empty or missing secret
-REMOVES the file and the deploy goes on: no key, transcription off. The key is
+read it as `EnvironmentFile=-<etc dir>/listen.env`. Both secrets empty or
+missing REMOVES the file and the deploy goes on: no key, transcription and
+guest translation off. The key is
 piped over ssh stdin (never an argv) and never printed.
 `scripts/ci/check_deploy_workflows.py` (invariant 7) fails CI when a service
 deploy job lacks this step, runs it after the start, or the step differs in any
