@@ -131,7 +131,12 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 - E2E `guest-translate.spec.ts` + `fake-gemini.ts`: `PRESENTER_GUEST_HOST=localhost` (the other
   specs use 127.0.0.1, so `http://localhost:<port>/` IS the guest host); phone, pick → Play →
   `waiting` (nothing sent) → the real VBAN sender → `live`, chunks + played samples, transcript,
-  original toggle; the guest host 404s everything else; zero console errors. `support.ts` gives
+  original toggle; the guest host 404s everything else; zero console errors. The PLAYED-samples
+  proof runs in Firefox through a private null-sink PulseAudio (`startNullSink`): the runner has no
+  sound server (a browser never resumes its AudioContext without one), and dev2's Chromium never
+  loads an AudioWorklet module at all — `addModule` stays pending without even fetching the file,
+  headless or headed, with or without a sound server (probed 27.11.2026). Never assert
+  `data-guest-played` in a Chromium test. `support.ts` gives
   every other server a dead Gemini URL, NO key and no guest host.
 - Deploy: the Gemini key rides the SAME "Configure listening transcription" step as Soniox
   (invariant 7's canonical text in `scripts/ci/check_deploy_workflows.py`; both secrets, one file).

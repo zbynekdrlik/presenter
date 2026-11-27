@@ -1,6 +1,8 @@
-import { test, expect, type Browser, type BrowserContextOptions, type Page } from "@playwright/test";
+import { test, expect, firefox, type Browser, type BrowserContextOptions, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   REPO_ROOT,
@@ -154,8 +156,6 @@ test("a guest picks a language on a phone and hears the translation with its tex
   try {
     await expect(state).toHaveAttribute("data-state", "live");
     await expect.poll(() => bodyNumber(page, "data-guest-chunks")).toBeGreaterThan(5);
-    // the worklet really played the speech (samples counted by the player)
-    await expect.poll(() => bodyNumber(page, "data-guest-played")).toBeGreaterThan(4_800);
     const transcript = page.locator('[data-role="guest-transcript"]');
     await expect(transcript).toContainText("Word1 Word2");
     // the Slovak original shows only when asked for
@@ -182,6 +182,74 @@ test("a guest picks a language on a phone and hears the translation with its tex
   await expect(languages.filter({ hasText: "English" })).toHaveAttribute("data-active", "true");
 
   await page.context().close();
+  expect(errors).toEqual([]);
+});
+
+/** A private PulseAudio with one null sink: the runner has no sound server, and a
+ * browser without one never renders audio (Firefox's AudioContext never resumes).
+ * A missing `pulseaudio` fails the test — never a skip. */
+async function startNullSink(): Promise<{ server: string; stop: () => Promise<void> }> {
+  const dir = mkdtempSync(path.join(tmpdir(), "e2e-pulse-"));
+  const socket = path.join(dir, "native");
+  const pulse = spawn(
+    "pulseaudio",
+    [
+      "-n",
+      "--daemonize=no",
+      "--exit-idle-time=-1",
+      "--use-pid-file=no",
+      "-L",
+      `module-native-protocol-unix socket=${socket} auth-anonymous=1`,
+      "-L",
+      "module-null-sink sink_name=e2e",
+    ],
+    { stdio: "inherit", env: { ...process.env, XDG_RUNTIME_DIR: dir, HOME: dir } },
+  );
+  await expect.poll(() => existsSync(socket) || pulse.exitCode !== null, { timeout: 10_000 }).toBe(true);
+  expect(pulse.exitCode, "pulseaudio started").toBeNull();
+  return {
+    server: `unix:${socket}`,
+    stop: async () => {
+      if (pulse.exitCode === null) {
+        pulse.kill("SIGTERM");
+        await once(pulse, "exit");
+      }
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+// The speech itself is proven in Firefox through a null-sink PulseAudio: Chromium
+// on the runner (dev2) never loads an AudioWorklet module — addModule stays pending
+// without fetching the file, headless or headed, with or without a sound server
+// (27.11.2026) — while Firefox loads it in ~150 ms. Every other step runs in Chromium.
+test("the speech really plays through the AudioWorklet (Firefox)", async () => {
+  const errors: string[] = [];
+  const sink = await startNullSink();
+  const browser = await firefox.launch({ env: { ...process.env, PULSE_SERVER: sink.server } });
+  try {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+    const page = await context.newPage();
+    attachConsoleErrorCollector(page, errors);
+    await page.goto(`${guestURL}?lang=de`);
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.locator('[data-role="guest-play"]').tap();
+    const state = page.locator('[data-role="guest-state"]');
+    await expect(state).toHaveAttribute("data-state", "waiting");
+    const sender = startSender(await vbanPort(page), 60);
+    try {
+      await expect(state).toHaveAttribute("data-state", "live");
+      // the worklet played the speech (samples it rendered), not only received it
+      await expect.poll(() => bodyNumber(page, "data-guest-played")).toBeGreaterThan(4_800);
+      expect(await bodyNumber(page, "data-guest-chunks")).toBeGreaterThan(2);
+    } finally {
+      await stopSender(sender);
+    }
+    await context.close();
+  } finally {
+    await browser.close();
+    await sink.stop();
+  }
   expect(errors).toEqual([]);
 });
 
