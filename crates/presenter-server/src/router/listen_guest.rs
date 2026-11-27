@@ -251,6 +251,7 @@ async fn serve_guest(state: AppState, mut socket: WebSocket, lang: String, clien
 
 #[derive(Default)]
 struct StreamStats {
+    /// Speech chunks written to the guest's socket.
     audio_chunks: u64,
     skipped: u64,
 }

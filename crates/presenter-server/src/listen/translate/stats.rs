@@ -55,7 +55,9 @@ impl DayMeter {
     }
 }
 
-/// Samples kept per segment and minute (the max and count see every one).
+/// Samples kept per segment and minute (the max and count see every one;
+/// past it the median is the minute's first samples — ~17 listeners' worth
+/// of 4 chunks a second, plenty for a church).
 const SAMPLE_CAP: usize = 4_096;
 
 /// One segment's delays in µs since the last summary.
@@ -150,6 +152,8 @@ pub struct MinuteStats {
     /// (#999 L6a; the model streams its silence too, and the speech before
     /// its pause is the previous phrase's backlog).
     pub first_voiced_ms: Vec<u64>,
+    /// Onsets never answered by speech (20 s, or pushed out by newer ones).
+    pub onsets_expired: u64,
     /// Translated audio stopped for [`STALL_AFTER`] while the preacher spoke.
     pub stalls: u64,
     pub reconnects: u64,
@@ -191,6 +195,7 @@ impl MinuteStats {
                 output_chars = self.output_chars,
                 onsets = self.onsets,
                 first_voiced_timed = latencies.len(),
+                onsets_expired = self.onsets_expired,
                 first_voiced_ms_median = median,
                 first_voiced_ms_max = latencies.last().copied(),
                 stalls = self.stalls,

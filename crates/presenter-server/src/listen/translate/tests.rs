@@ -516,6 +516,32 @@ async fn an_onset_during_the_backlog_is_not_timed_on_it() {
     );
 }
 
+/// #999 L6a review: a translation that streams only silence while the
+/// preacher speaks is a stall (6 s from the onset), and its onset, never
+/// answered, is counted as expired after 20 s — never silently lost.
+#[tokio::test(start_paused = true)]
+async fn only_silence_back_is_a_stall_and_the_onset_expires() {
+    let capture = crate::tracing_capture::Capture::install();
+    let fake = FakeGemini::new(vec![Script {
+        quiet: std::iter::once(1..10_000).collect(),
+        ..Script::default()
+    }]);
+    let listen = listen_with_source();
+    let service = guest(&fake, Some("test-key-not-real"), DayMeter::default());
+    let _listener = service.join(&listen, "en").expect("joined");
+    feed(&listen, true, 80).await;
+    let stalls = capture.events_with_message("stalled while the preacher speaks");
+    assert_eq!(stalls.len(), 1, "one stall, 6 s after the onset");
+    feed(&listen, false, 150).await;
+    tokio::time::sleep(Duration::from_secs(40)).await;
+    let summary = capture.events_with_message("guest translation minute summary");
+    assert_eq!(summary.len(), 1);
+    assert_eq!(summary[0].field("onsets"), Some("1"));
+    assert_eq!(summary[0].field("first_voiced_timed"), Some("0"));
+    assert_eq!(summary[0].field("onsets_expired"), Some("1"));
+    assert_eq!(summary[0].field("stalls"), Some("1"));
+}
+
 /// #999 L6a: our own delay to Gemini is timed per live frame (the pre-roll
 /// is old on purpose and left out) and reported, then drained, by the
 /// minute summary.

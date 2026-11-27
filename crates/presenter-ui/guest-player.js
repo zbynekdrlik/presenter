@@ -47,6 +47,7 @@ class GuestPlayer extends AudioWorkletProcessor {
         this.started = false;
         return;
       }
+      if (data.length === 0) return;
       let chunk = data;
       if (this.started && silent(chunk)) {
         const room = Math.max(0, Math.round(TRIM * sampleRate) - this.queued);

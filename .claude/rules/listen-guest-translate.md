@@ -91,8 +91,16 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   in `Session::onsets` for the first VOICED output chunk that follows the model's own pause
   (`OUTPUT_GAP` 750 ms of unvoiced output audio, or 750 ms with no voiced output); speech before such a
   pause is the previous phrase's backlog. 750 ms from replaying R2 (0 ms read 0.0–0.2 s backlog, 500 ms
-  once 0.14 s, 750 ms gives 2.0–3.6 s). Unanswered after 20 s → given up. Tests: the fake's
+  once 0.14 s, 750 ms gives 2.0–3.6 s). ALL waiting onsets take that speech (oldest-only drifted to a
+  10 s median: the model merges phrases), so a 2nd onset inside a merged phrase reads short and one
+  heard during the backlog long. Unanswered after 20 s (or pushed out past 8) → `onsets_expired`; a
+  stall counts from the onset too, so a model answering only silence is a stall. Tests: the fake's
   `Script::quiet` ranges answer near-silence (the model's latency), everything else speech level.
+- `goAway` + streamed silence: the new connection `spoke` only on VOICED output, and its silence is
+  skipped while the old one drains, so the old backlog plays in one piece (silence once marked it
+  spoken and dropped the old backlog — review of L6a).
+- `PRESENTER_LISTEN_GEMINI_CONTEXT` has no deploy input (no `listen.env` line, not in invariant 7):
+  every site runs the default; another site sets it in a hand-made systemd drop-in.
 
 ## The guest listener (`PRESENTER_GUEST_PORT`, arch review 27.11 — fail CLOSED)
 
