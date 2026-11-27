@@ -40,12 +40,14 @@ pub(super) async fn wasm_ui_asset(Path(path): Path<String>, headers: HeaderMap) 
         return (StatusCode::NOT_FOUND, "Asset not found").into_response();
     };
     // Trunk fingerprints asset filenames (presenter-ui-<hash>.js/.wasm),
-    // so a given URL's bytes never change — cache them aggressively.
+    // so a given URL's bytes never change — cache them aggressively. A file
+    // copied as it is (#999 `guest-player.js`) has no hash: revalidated, or a
+    // fix would never reach a phone.
     let mut response = (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, mime_from_path(&path)),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::CACHE_CONTROL, asset_cache_control(&path)),
         ],
         asset.body,
     )
@@ -58,6 +60,22 @@ pub(super) async fn wasm_ui_asset(Path(path): Path<String>, headers: HeaderMap) 
         response_headers.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
     }
     response
+}
+
+/// `immutable` for a fingerprinted file (`name-<16 hex>.ext`), else
+/// `no-cache` for a script (a copied file like the guest's AudioWorklet); fonts
+/// and other copied media keep the long cache (they never change in place).
+fn asset_cache_control(path: &str) -> &'static str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.split('.').next().unwrap_or(name);
+    let hashed = stem
+        .rsplit_once('-')
+        .is_some_and(|(_, hash)| hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()));
+    if hashed || !name.ends_with(".js") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
 }
 
 /// The bytes one asset request gets.
@@ -186,6 +204,22 @@ fn mime_from_path(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_copied_script_is_revalidated() {
+        const LONG: &str = "public, max-age=31536000, immutable";
+        assert_eq!(
+            asset_cache_control("presenter-ui-1a2b3c4d5e6f7a8b.js"),
+            LONG
+        );
+        assert_eq!(
+            asset_cache_control("presenter-ui-1a2b3c4d5e6f7a8b_bg.wasm"),
+            LONG
+        );
+        assert_eq!(asset_cache_control("app-3e7742a97ced667a.css"), LONG);
+        assert_eq!(asset_cache_control("fonts/Inter-Regular.woff2"), LONG);
+        assert_eq!(asset_cache_control("guest-player.js"), "no-cache");
+    }
+
     use super::*;
     use std::collections::HashMap;
 

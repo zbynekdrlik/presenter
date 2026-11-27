@@ -4,8 +4,10 @@
 //! C3: the guest's live transcript — token assembly ([`transcript`]), the
 //! session state, rows, start decision and cost ([`transcription`]), the
 //! `/listen/ws` wire ([`ws`]) and the Soniox context terms ([`context`]).
+//! #999: the guests' live translation wire ([`guest`]).
 
 pub mod context;
+pub mod guest;
 pub mod mics;
 pub mod recorder;
 pub mod status;

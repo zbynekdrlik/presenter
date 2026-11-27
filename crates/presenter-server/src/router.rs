@@ -9,6 +9,7 @@ mod integrations;
 mod interpreter_tips;
 mod libraries;
 mod listen;
+mod listen_guest;
 mod listen_ws;
 pub mod network_mode;
 mod playlists;
@@ -449,6 +450,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/network-mode", get(network_mode::get_network_mode))
         // #851: the Bible study page, its manifest and service worker.
         .merge(study_pwa::routes())
+        // #999: the guest endpoints `/listen/guest/*` + the operator's QR page.
+        .merge(listen_guest::routes())
         // #852: šepkár tips for the interpreter (/interpreter/tips*).
         .merge(interpreter_tips::router())
         .merge(ui_usage::router())
@@ -484,6 +487,14 @@ pub fn build_router(state: AppState) -> Router {
     let router = access_identity::with_access_identity(router, &state);
     // #850 O1: one DEBUG request span + response line per request (polls quiet).
     request_log::with_request_log(router).with_state(state)
+}
+
+/// #999: the guest-only listener (`PRESENTER_GUEST_PORT`): the guest page and
+/// its stream, nothing else — every other path is a 404. The public no-login
+/// tunnel points at this port, so a missing setting means no listener (the
+/// tunnel answers 502), never the operator app (arch review, fail closed).
+pub fn build_guest_router(state: AppState) -> Router {
+    request_log::with_request_log(listen_guest::guest_routes()).with_state(state)
 }
 
 /// Application version from Cargo.toml

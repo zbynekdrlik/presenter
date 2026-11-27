@@ -153,6 +153,10 @@ jobs:
       library_sync: true
       # #915: Access app da73d2e3 (prsnv.newlevel.media).
       access_aud: e5f02695d01e3e6122dc20276b49a621c09ed2fd5ef49f8d92197e8f313206b1
+      # #999: the guest-only listener (the public guest tunnel points here, never at :80) and
+      # the guests' public hostname (QR page only), a repository variable.
+      guest_port: "8099"
+      guest_host: ${{ vars.SNV_GUEST_HOST }}
 
   # PRBA (#918): hosted on dev1 (tailscale) until PRBA has its own PC. Its data came from a
   # one-time seed of SNV (scripts/ops/seed_prba_from_snv.sh); afterwards PRBA edits its own,

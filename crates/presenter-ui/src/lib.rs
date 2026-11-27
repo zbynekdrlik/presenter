@@ -29,7 +29,12 @@ fn App() -> impl IntoView {
         let _ = body.set_attribute("data-wasm-ready", "true");
     }
 
-    state::ui_usage::install();
+    // #999: the guest page (the root of the guest-only listener, served
+    // there only) is public — it counts nothing, and that listener has no
+    // `/ui/usage` at all.
+    if pathname != "/" {
+        state::ui_usage::install();
+    }
 
     // Client-side routing based on pathname
     let page_view = move || {
@@ -64,6 +69,12 @@ fn App() -> impl IntoView {
             view! { <pages::interpreter::InterpreterPage /> }.into_any()
         } else if p == "/ui/study" {
             view! { <pages::study::StudyPage /> }.into_any()
+        } else if p == "/" {
+            // #999: the server serves the WASM shell at `/` only on the guest-only
+            // listener (`PRESENTER_GUEST_PORT`); the main port's `/` is the SSR home.
+            view! { <pages::guest::GuestPage /> }.into_any()
+        } else if p == "/ui/guest-qr" {
+            view! { <pages::guest::GuestQrPage /> }.into_any()
         } else if p == "/ui/sepkar" {
             view! { <pages::sepkar::SepkarPage /> }.into_any()
         } else {

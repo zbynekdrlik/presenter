@@ -222,6 +222,42 @@ impl AppState {
         });
     }
 
+    /// Count a guest in for a language's live translation (#999).
+    pub(crate) fn guest_join(
+        &self,
+        code: &str,
+    ) -> Result<crate::listen::translate::Listener, crate::listen::translate::Refusal> {
+        self.listen.guest().join(&self.listen, code)
+    }
+
+    /// The guests' public hostname (#999, `PRESENTER_GUEST_HOST`): only what
+    /// the operator's QR page prints.
+    pub(crate) fn guest_host(&self) -> Option<String> {
+        self.listen.guest().guest_host().map(str::to_string)
+    }
+
+    /// The guest-only listener's port (#999, `PRESENTER_GUEST_PORT`).
+    pub fn guest_port(&self) -> Option<u16> {
+        self.listen.guest().guest_port()
+    }
+
+    /// Whether guests can listen now and which languages run (#999).
+    pub(crate) fn guest_status(&self) -> crate::listen::translate::GuestStatus {
+        self.listen.guest().status(&self.listen)
+    }
+
+    /// Point the guest translation at a test fake (#999).
+    #[cfg(test)]
+    pub(crate) fn set_guest_translate(&self, guest: crate::listen::translate::GuestTranslate) {
+        self.listen.set_guest(guest);
+    }
+
+    /// The listen service (tests publish mics and feed frames through it).
+    #[cfg(test)]
+    pub(crate) fn listen_service(&self) -> &crate::listen::ListenService {
+        &self.listen
+    }
+
     /// The transcript `GET /listen/ws` serves (#852 C3-6).
     pub(crate) fn listen_transcripts(&self) -> crate::listen::transcript_hub::TranscriptHub {
         self.listen.transcripts()

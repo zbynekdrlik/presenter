@@ -121,6 +121,10 @@ jobs:
       - name: Run companion tests
         run: npm run test:companion
 
+      # #999: the guest page's AudioWorklet player (plain JS the platform requires).
+      - name: Run guest player worklet tests
+        run: npm run test:guest-player
+
       # Deploy-tool logic (#733): re-pin transform is Python (the box has python3 +
       # stdlib sqlite3, no sqlite3 CLI). Run by file path — the file stem has hyphens,
       # so `-m unittest` cannot import it as a module.
@@ -852,8 +856,15 @@ jobs:
         # tell "video plays" from "video silently fails to decode but
         # ontrack fires". `--with-deps` also pulls system libraries the
         # branded Chrome needs (libnss, libasound, etc.). Default Chromium
-        # is kept so non-video tests can still use the headless shell.
-        run: npx playwright install --with-deps chromium chrome
+        # is kept so non-video tests can still use the headless shell. Firefox
+        # (#999): the guest page's AudioWorklet playback proof — this runner's
+        # Chromium never loads a worklet module.
+        run: npx playwright install --with-deps chromium chrome firefox
+
+      - name: Install PulseAudio
+        # #999: the Firefox playback proof starts a private null-sink PulseAudio
+        # (the hosted image has no sound server; a missing binary fails the test).
+        run: sudo apt-get install -y --no-install-recommends pulseaudio
 
       - name: Run Playwright tests
         # Exclude @synthetic-ndi — those need a live NDI source + GPU encoder
@@ -1611,7 +1622,8 @@ jobs:
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
-      # #852 C3-8: the listening transcription key (Soniox) → 0600 root-only
+      # #852 C3-8 / #999: the listening keys (Soniox transcription, Gemini guest
+      # translation) → 0600 root-only
       # EnvironmentFile `listen.env`, the same shape as the AI step above (the
       # committed unit reads it as `EnvironmentFile=-`). The key is a SECRET:
       # printf builtin over ssh stdin (never argv), `umask 077` so 0600 from
@@ -1623,18 +1635,23 @@ jobs:
         env:
           LISTEN_SONIOX_API_KEY: ${{ secrets.LISTEN_SONIOX_API_KEY }}
           LISTEN_SONIOX_MODEL: ${{ vars.LISTEN_SONIOX_MODEL }}
+          LISTEN_GEMINI_API_KEY: ${{ secrets.LISTEN_GEMINI_API_KEY }}
+          LISTEN_GEMINI_MODEL: ${{ vars.LISTEN_GEMINI_MODEL }}
         run: |
           set -euo pipefail
           SECRET_FILE=/etc/presenter/listen.env
-          if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
+          if [ -n "$LISTEN_SONIOX_API_KEY" ] || [ -n "$LISTEN_GEMINI_API_KEY" ]; then
             ssh deploy-target "sudo install -d -m 755 /etc/presenter"
-            printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
-              "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \
-              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
-            echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+            {
+              [ -z "$LISTEN_SONIOX_API_KEY" ] || printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
+                "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+              [ -z "$LISTEN_GEMINI_API_KEY" ] || printf 'PRESENTER_LISTEN_GEMINI_API_KEY=%s\nPRESENTER_LISTEN_GEMINI_MODEL=%s\n' \
+                "$LISTEN_GEMINI_API_KEY" "${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
+            } | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "Listening keys written to $SECRET_FILE (0600 root-only): soniox=${LISTEN_SONIOX_API_KEY:+set} model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}, gemini=${LISTEN_GEMINI_API_KEY:+set} model=${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
           else
             ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
-            echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
+            echo "No listening key set — transcription and guest translation have no key; any stale $SECRET_FILE removed"
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 

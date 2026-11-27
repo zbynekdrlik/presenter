@@ -8,6 +8,7 @@ pub mod bible_prepared_list;
 pub mod bible_prepared_sermon;
 pub mod bible_slides;
 pub mod camera;
+pub mod guest;
 pub mod interpreter;
 pub mod operator;
 pub(crate) mod operator_live;

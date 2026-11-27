@@ -121,7 +121,39 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!("PRESENTER_SKIP_MOCK_INTEGRATIONS set — skipping mock integrations");
     }
+    // #999: the guest-only listener — a second port with nothing but the
+    // guest page (never in validate mode). Its failure never stops the app.
+    if startup_mode.starts_integrations() {
+        spawn_guest_listener(&state, addr).await;
+    }
     serve_with_peer_addr(listener, app).await
+}
+
+/// Binds `PRESENTER_GUEST_PORT` (same interface as the main port) and serves
+/// only the guest routes there; unset = no listener (INFO), a bind or serve
+/// failure = ERROR and no listener — the public tunnel then answers 502, it
+/// never reaches the app.
+async fn spawn_guest_listener(state: &AppState, main: SocketAddr) {
+    const TARGET: &str = "presenter::listen::guest";
+    let Some(port) = state.guest_port() else {
+        tracing::info!(target: TARGET, "no guest listener (PRESENTER_GUEST_PORT unset): the guest page is not served");
+        return;
+    };
+    let addr = SocketAddr::new(main.ip(), port);
+    match TcpListener::bind(addr).await {
+        Ok(listener) => {
+            tracing::info!(target: TARGET, %addr, "guest listener: only the guest page is served here");
+            let app = presenter_server::router::build_guest_router(state.clone());
+            tokio::spawn(async move {
+                if let Err(err) = serve_with_peer_addr(listener, app).await {
+                    tracing::error!(target: TARGET, %addr, ?err, "guest listener stopped");
+                }
+            });
+        }
+        Err(err) => {
+            tracing::error!(target: TARGET, %addr, %err, "guest listener could not bind: no guest page");
+        }
+    }
 }
 
 /// Serve with connect-info so the live WS logs carry the real peer IP of each

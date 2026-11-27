@@ -55,17 +55,18 @@ until that swap step, ``<deploy dir>/ingest_bibles`` and
    ${{ env.SERVICE_NAME }}``) has the step "Configure listening transcription"
    (#852 C3-8) BEFORE that start, and the step is EXACTLY the canonical one
    (``LISTEN_STEP_ENV`` + ``LISTEN_STEP_RUN`` below; only the etc dir differs
-   per workflow): the ``LISTEN_SONIOX_API_KEY`` secret → a 0600 ``listen.env``
-   written under ``umask 077`` through ``printf`` piped into ssh stdin, the
-   file REMOVED when the secret is empty (the deploy goes on), the key never
-   echoed or in an argv. A shape comparison, not a shell parser: any edit of
+   per workflow): the ``LISTEN_SONIOX_API_KEY`` and (#999) the
+   ``LISTEN_GEMINI_API_KEY`` secrets → ONE 0600 ``listen.env`` written under
+   ``umask 077`` through ``printf`` piped into ssh stdin (a line pair per key
+   that is set), the file REMOVED when both secrets are empty (the deploy goes
+   on), a key never echoed or in an argv. A shape comparison, not a shell parser: any edit of
    the step (a ``tee``, a ``set -x``, a redirect, another write) fails until
    the canonical text here is changed with it, in review. The secret appears
    in no other step, no other job key and no workflow-level key (any
    spelling GitHub accepts, ``toJSON(secrets)`` too); the step has exactly
    ``name``/``env``/``run``, names ONE etc dir, and its job / workflow sets no
    ``defaults.run.shell`` and no shell-tracing env (``SHELLOPTS``, ``BASH_ENV``
-   …). ``vars.LISTEN_SONIOX_MODEL`` is trusted (repository admins only). A service deploy job is
+   …). ``vars.LISTEN_SONIOX_MODEL`` / ``vars.LISTEN_GEMINI_MODEL`` are trusted (repository admins only). A service deploy job is
    recognised by ``systemctl enable ${{ env.SERVICE_NAME }}``: a job that
    starts the service another way is not checked, so deploy jobs keep the
    shared ``enable … && start`` shape.
@@ -107,33 +108,38 @@ COMPANION_DEPLOY_RE = re.compile(
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # #852 C3-8: the service deploy start and the listening transcription key file.
 SERVICE_DEPLOY_RE = re.compile(r"systemctl\s+enable\s+\$\{\{\s*env\.SERVICE_NAME\s*\}\}")
-LISTEN_SECRET = "secrets.LISTEN_SONIOX_API_KEY"
+LISTEN_SECRET = "secrets.LISTEN_SONIOX_API_KEY` / `secrets.LISTEN_GEMINI_API_KEY"
 LISTEN_STEP_NAME = "Configure listening transcription"
 # GitHub reads secret names case-insensitively, by property or index, and
 # `toJSON(secrets)` dumps them all.
 LISTEN_SECRET_RE = re.compile(
-    r"secrets\s*(?:\.\s*|\[\s*['\"])LISTEN_SONIOX_API_KEY\b|toJSON\s*\(\s*secrets\s*\)", re.IGNORECASE
+    r"secrets\s*(?:\.\s*|\[\s*['\"])LISTEN_(?:SONIOX|GEMINI)_API_KEY\b|toJSON\s*\(\s*secrets\s*\)", re.IGNORECASE
 )
 # Env names that trace or replace the shell of a `run` step.
 TRACE_ENV = {"SHELLOPTS", "BASHOPTS", "BASH_ENV", "ENV", "PS4"}
 LISTEN_STEP_ENV = {
     "LISTEN_SONIOX_API_KEY": "${{ secrets.LISTEN_SONIOX_API_KEY }}",
     "LISTEN_SONIOX_MODEL": "${{ vars.LISTEN_SONIOX_MODEL }}",
+    "LISTEN_GEMINI_API_KEY": "${{ secrets.LISTEN_GEMINI_API_KEY }}",
+    "LISTEN_GEMINI_MODEL": "${{ vars.LISTEN_GEMINI_MODEL }}",
 }
 # The step's `run`, with `<ETC>` for the etc dir. Compared line by line after
 # stripping indentation and blank lines (`_normalized_run`).
 LISTEN_STEP_RUN = """
 set -euo pipefail
 SECRET_FILE=<ETC>/listen.env
-if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
+if [ -n "$LISTEN_SONIOX_API_KEY" ] || [ -n "$LISTEN_GEMINI_API_KEY" ]; then
 ssh deploy-target "sudo install -d -m 755 <ETC>"
-printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\\nPRESENTER_LISTEN_SONIOX_MODEL=%s\\n' \\
-"$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\
-| ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
-echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+{
+[ -z "$LISTEN_SONIOX_API_KEY" ] || printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\\nPRESENTER_LISTEN_SONIOX_MODEL=%s\\n' \\
+"$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+[ -z "$LISTEN_GEMINI_API_KEY" ] || printf 'PRESENTER_LISTEN_GEMINI_API_KEY=%s\\nPRESENTER_LISTEN_GEMINI_MODEL=%s\\n' \\
+"$LISTEN_GEMINI_API_KEY" "${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
+} | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+echo "Listening keys written to $SECRET_FILE (0600 root-only): soniox=${LISTEN_SONIOX_API_KEY:+set} model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}, gemini=${LISTEN_GEMINI_API_KEY:+set} model=${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
 else
 ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
-echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
+echo "No listening key set — transcription and guest translation have no key; any stale $SECRET_FILE removed"
 fi
 ssh deploy-target "sudo systemctl daemon-reload"
 """
@@ -454,7 +460,7 @@ def _normalized_run(run: str) -> tuple[list[str], set[str]]:
 
 
 def _listen_step_problem(step: dict[str, Any]) -> str | None:
-    """Why a step that carries the Soniox secret is not the canonical one."""
+    """Why a step that carries a listening secret is not the canonical one."""
     if step.get("name") != LISTEN_STEP_NAME:
         return f"carries the `{LISTEN_SECRET}` secret but is not the `{LISTEN_STEP_NAME}` step — the key belongs only there"
     if set(step) != {"name", "env", "run"}:
@@ -472,7 +478,7 @@ def _listen_step_problem(step: dict[str, Any]) -> str | None:
 
 
 def _carries_secret(value: Any) -> bool:
-    """Does this YAML value reach the Soniox secret (any spelling GitHub accepts)?
+    """Does this YAML value reach a listening secret (any spelling GitHub accepts)?
     Every key and scalar is searched as its own text (a `repr` would escape the
     quotes of `secrets['…']`)."""
     if isinstance(value, dict):
@@ -523,7 +529,7 @@ def check_listen_env(workflow: str, job: str, spec: dict[str, Any], document: di
 
 
 def check_workflow_secret(workflow: str, document: dict[Any, Any]) -> list[Violation]:
-    """Invariant 7: the Soniox secret never sits in workflow-level keys."""
+    """Invariant 7: the listening secrets never sit in workflow-level keys."""
     outside_jobs = {key: value for key, value in document.items() if key != "jobs"}
     if _carries_secret(outside_jobs):
         return [Violation(workflow, "workflow", "env", f"workflow-level keys carry the `{LISTEN_SECRET}` secret — every job would see the key (#852 C3-8)")]

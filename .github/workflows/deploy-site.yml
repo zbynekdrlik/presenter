@@ -51,6 +51,16 @@ on:
         description: "#915: the AUD tag of the site's Cloudflare Access app (not a secret: every token carries it)"
         type: string
         required: true
+      guest_port:
+        description: "#999: the guest-only listener's port (PRESENTER_GUEST_PORT; the public guest tunnel points there); empty = no guest listener"
+        type: string
+        required: false
+        default: ""
+      guest_host:
+        description: "#999: the guests' public hostname, only printed by the operator's QR page (PRESENTER_GUEST_HOST)"
+        type: string
+        required: false
+        default: ""
 
 jobs:
   deploy:
@@ -402,6 +412,9 @@ jobs:
           # #915: the site's Cloudflare Access app, so the server verifies the login token.
           ACCESS_TEAM_DOMAIN: newlevelchurch.cloudflareaccess.com
           ACCESS_AUD: ${{ inputs.access_aud }}
+          # #999: the guests' own hostname (a public tunnel, no Access app); empty = none.
+          GUEST_HOST: ${{ inputs.guest_host }}
+          GUEST_PORT: ${{ inputs.guest_port }}
         run: |
           scp -i ~/.ssh/id_deploy ${{ env.UNIT_FILE }} deploy-target:/tmp/${{ env.SERVICE_NAME }}.service
           # #544: the service's GStreamer registry must not survive this deploy — a driver
@@ -420,6 +433,18 @@ jobs:
           case "$ACCESS_AUD" in *[!a-f0-9]* | '') echo "::error::access_aud must be the hex AUD tag"; exit 1 ;; esac
           printf '[Service]\nEnvironment=PRESENTER_ACCESS_TEAM_DOMAIN=%s\nEnvironment=PRESENTER_ACCESS_AUD=%s\n' "$ACCESS_TEAM_DOMAIN" "$ACCESS_AUD" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/access.conf >/dev/null && sudo systemctl daemon-reload"
+          # #999: the guest-only listener (PRESENTER_GUEST_PORT — the public no-login tunnel points
+          # there, so a missing setting means no listener, never the app) and the public hostname the
+          # QR page prints. A root-written drop-in again: digits / host-name characters only; both
+          # empty removes it.
+          case "$GUEST_PORT" in *[!0-9]*) echo "::error::guest_port must be a port number"; exit 1 ;; esac
+          case "$GUEST_HOST" in *[!a-z0-9.-]*) echo "::error::guest_host must be a lowercase host name"; exit 1 ;; esac
+          if [ -n "$GUEST_PORT" ] || [ -n "$GUEST_HOST" ]; then
+            printf '[Service]\nEnvironment=PRESENTER_GUEST_PORT=%s\nEnvironment=PRESENTER_GUEST_HOST=%s\n' "$GUEST_PORT" "$GUEST_HOST" |
+              ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/guest-host.conf >/dev/null && sudo systemctl daemon-reload"
+          else
+            ssh deploy-target "sudo rm -f /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/guest-host.conf && sudo systemctl daemon-reload"
+          fi
           # #918: a site without devices (PRBA) has no encoder gate, no stage TVs and no
           # song-sync peer — the rest of this step is the hardware site's.
           if [ "${{ inputs.hardware }}" != "true" ]; then
@@ -538,7 +563,8 @@ jobs:
           if [ "$bad" -ne 0 ]; then echo "::error::EEE is still enabled on a wired NIC (#988)"; exit 1; fi
           REMOTE_SCRIPT
 
-      # #852 C3-8: the listening transcription key (Soniox) → 0600 root-only
+      # #852 C3-8 / #999: the listening keys (Soniox transcription, Gemini guest
+      # translation) → 0600 root-only
       # EnvironmentFile `listen.env`, the same shape as the AI step above (the
       # committed unit reads it as `EnvironmentFile=-`). The key is a SECRET:
       # printf builtin over ssh stdin (never argv), `umask 077` so 0600 from
@@ -550,18 +576,23 @@ jobs:
         env:
           LISTEN_SONIOX_API_KEY: ${{ secrets.LISTEN_SONIOX_API_KEY }}
           LISTEN_SONIOX_MODEL: ${{ vars.LISTEN_SONIOX_MODEL }}
+          LISTEN_GEMINI_API_KEY: ${{ secrets.LISTEN_GEMINI_API_KEY }}
+          LISTEN_GEMINI_MODEL: ${{ vars.LISTEN_GEMINI_MODEL }}
         run: |
           set -euo pipefail
           SECRET_FILE=${{ env.ETC_DIR }}/listen.env
-          if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
+          if [ -n "$LISTEN_SONIOX_API_KEY" ] || [ -n "$LISTEN_GEMINI_API_KEY" ]; then
             ssh deploy-target "sudo install -d -m 755 ${{ env.ETC_DIR }}"
-            printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
-              "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \
-              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
-            echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+            {
+              [ -z "$LISTEN_SONIOX_API_KEY" ] || printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
+                "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+              [ -z "$LISTEN_GEMINI_API_KEY" ] || printf 'PRESENTER_LISTEN_GEMINI_API_KEY=%s\nPRESENTER_LISTEN_GEMINI_MODEL=%s\n' \
+                "$LISTEN_GEMINI_API_KEY" "${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
+            } | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "Listening keys written to $SECRET_FILE (0600 root-only): soniox=${LISTEN_SONIOX_API_KEY:+set} model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}, gemini=${LISTEN_GEMINI_API_KEY:+set} model=${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
           else
             ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
-            echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
+            echo "No listening key set — transcription and guest translation have no key; any stale $SECRET_FILE removed"
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
@@ -662,6 +693,29 @@ jobs:
             exit 1
           fi
           echo "Operator UI: OK (HTTP 200)"
+
+          # #999: the guest listener is what the public no-login tunnel reaches — it must serve
+          # ONLY the guest surface; the main port's root stays the normal home (never the page).
+          GUEST_PORT="${{ inputs.guest_port }}"
+          if [ -n "$GUEST_PORT" ]; then
+            for path in ui/operator ui/settings settings listen/status listen/mics libraries/summary; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$GUEST_PORT/$path")
+              if [ "$code" != "404" ]; then
+                echo "::error::the guest listener :$GUEST_PORT serves /$path (HTTP $code) — it must be 404"
+                exit 1
+              fi
+            done
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$GUEST_PORT/")
+            if [ "$code" != "200" ]; then
+              echo "::error::the guest page on :$GUEST_PORT returned HTTP $code"
+              exit 1
+            fi
+            if curl -sf "http://localhost:${{ env.HTTP_PORT }}/" | grep -q 'presenter-ui-'; then
+              echo "::error::the main port's / serves the WASM guest page — it must stay the home page"
+              exit 1
+            fi
+            echo "Guest listener :$GUEST_PORT: only the guest surface; main / is the home page (OK)"
+          fi
           REMOTE_SCRIPT
 
       # #661 added this AI-path check; #675 review finding 2 fixed two bugs

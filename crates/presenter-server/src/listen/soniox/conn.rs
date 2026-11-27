@@ -50,13 +50,13 @@ pub type WsStream = WebSocketStream<MaybeTlsStream<Box<dyn Io>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
-    #[error("no Soniox API key")]
+    #[error("no API key")]
     NoKey,
-    #[error("invalid Soniox URL: {0}")]
+    #[error("invalid provider URL: {0}")]
     Url(String),
     #[error("the API key is not a valid header value")]
     Header,
-    #[error("Soniox refused the upgrade with HTTP {0}")]
+    #[error("the provider refused the upgrade with HTTP {0}")]
     Refused(u16),
     #[error("no connection within {} s", CONNECT_TIMEOUT.as_secs())]
     Timeout,
