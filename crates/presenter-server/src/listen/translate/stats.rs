@@ -62,7 +62,9 @@ pub struct MinuteStats {
     pub output_chars: u64,
     /// Speech starts after a pause (the moments the room reacts to).
     pub onsets: u64,
-    /// Speech start → the first translated audio, per onset that got one.
+    /// Speech start → the first translated audio, per onset heard after the
+    /// translation went quiet (`session::onset_timed`; else the first audio is
+    /// the previous phrase's backlog and would read as a false ~0.2 s).
     pub first_voiced_ms: Vec<u64>,
     /// Translated audio stopped for [`STALL_AFTER`] while the preacher spoke.
     pub stalls: u64,

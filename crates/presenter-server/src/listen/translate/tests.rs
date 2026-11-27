@@ -383,3 +383,15 @@ async fn the_listener_cap_refuses_the_next_guest() {
     drop(held);
     assert!(service.join(&listen, "en").is_ok());
 }
+
+#[test]
+fn only_an_onset_after_the_translation_went_quiet_is_timed() {
+    use super::session::{onset_timed, OUTPUT_DRAINED};
+    let now = tokio::time::Instant::now();
+    assert!(onset_timed(None, now), "nothing played yet");
+    assert!(onset_timed(Some(now - OUTPUT_DRAINED), now));
+    assert!(
+        !onset_timed(Some(now - Duration::from_millis(300)), now),
+        "still the previous phrase's backlog"
+    );
+}

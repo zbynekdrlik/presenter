@@ -55,6 +55,8 @@ pub const NO_ANSWER: Duration = Duration::from_secs(10);
 /// once can never make the session loop on connects.
 pub const IDLE_CUT_MIN_AGE: Duration = Duration::from_secs(60);
 const FRAME_MS: u64 = 100;
+/// The translation quiet this long = the previous phrase is fully spoken.
+pub const OUTPUT_DRAINED: Duration = Duration::from_secs(1);
 
 /// Everything a session needs besides its language.
 #[derive(Clone)]
@@ -183,6 +185,13 @@ async fn sleep_until(at: Option<Instant>) {
         Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending().await,
     }
+}
+
+/// Whether an onset's first-voiced latency can be measured: only when the
+/// translation was quiet for [`OUTPUT_DRAINED`] — before that, the next
+/// translated audio is still the previous phrase's backlog, not this one.
+pub fn onset_timed(last_output: Option<Instant>, now: Instant) -> bool {
+    last_output.is_none_or(|at| now - at >= OUTPUT_DRAINED)
 }
 
 /// The pause before reconnect attempt `failures + 1`: 1, 2, 4 … s, ≤ 30 s.
@@ -318,7 +327,7 @@ impl Session {
         if is_voiced(rms_dbfs(&frame)) {
             if self.last_voiced.is_none_or(|at| now - at >= ONSET_GAP) {
                 self.stats.onsets += 1;
-                self.onset_pending = Some(now);
+                self.onset_pending = onset_timed(self.last_output, now).then_some(now);
                 self.in_stall = false;
                 self.last_output = None;
             }
