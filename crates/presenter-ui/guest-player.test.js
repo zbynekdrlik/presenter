@@ -76,3 +76,35 @@ test("an underrun waits for 150 ms again and reset empties the queue", () => {
   assert.equal(player.queued, 0);
   assert.equal(player.chunks.length, 0);
 });
+
+test("while playing, a silent chunk is cut so at most 650 ms stay queued; speech never", () => {
+  const { player, post, render } = loadProcessor();
+  // The session's start burst: 750 ms of speech arrives at once.
+  for (let i = 0; i < 3; i += 1) post(chunk(0.25, 0.5));
+  render();
+  const queued = player.queued;
+  assert.ok(queued > 0.65 * RATE, "the burst is over TRIM");
+  // The model's pause (−60 dBFS) while over TRIM: dropped entirely.
+  post(chunk(0.25, 0.001));
+  assert.equal(player.queued, queued);
+  assert.equal(player.trimmed, 0.25 * RATE);
+  // Speech is never cut, whatever the queue.
+  post(chunk(0.25, 0.5));
+  assert.equal(player.queued, queued + 0.25 * RATE);
+  // Played down below TRIM, a pause fills the queue up to TRIM and no more.
+  while (player.queued > 0.5 * RATE) render();
+  const before = player.queued;
+  post(chunk(0.25, 0.001));
+  assert.equal(player.queued, Math.round(0.65 * RATE));
+  assert.equal(player.trimmed, 0.25 * RATE + before + 0.25 * RATE - Math.round(0.65 * RATE));
+  for (let i = 0; i < 50; i += 1) render();
+  assert.equal(player.port.sent.at(-1).trimmed, player.trimmed, "reported");
+});
+
+test("nothing is trimmed before playback starts (the start keeps its 150 ms)", () => {
+  const { player, post } = loadProcessor();
+  post(chunk(0.25, 0));
+  post(chunk(0.25, 0));
+  assert.equal(player.trimmed, 0);
+  assert.equal(player.queued, 0.5 * RATE);
+});
