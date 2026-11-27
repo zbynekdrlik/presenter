@@ -68,6 +68,11 @@ async fn a_guest_hears_the_translation_and_silence_is_never_sent() {
         Some(b"test-key-not-real".as_slice())
     );
     assert!(!format!("{:?}", setup).contains("test-key-not-real"));
+    assert_eq!(
+        setup["systemInstruction"]["parts"][0]["text"],
+        super::config::DEFAULT_CONTEXT,
+        "every session's setup carries the church context (#999 L6c)"
+    );
 
     feed(&listen, false, 30).await;
     assert_eq!(fake.audio(), vec![0], "a silent mic sends nothing");

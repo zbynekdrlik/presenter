@@ -242,6 +242,7 @@ pub(crate) fn env(key: Option<&str>) -> GeminiEnv {
         source_mic: "dante-mic-1".to_string(),
         guest_host: Some("listen.example.org".to_string()),
         guest_port: None,
+        context: super::config::DEFAULT_CONTEXT.to_string(),
     }
 }
 

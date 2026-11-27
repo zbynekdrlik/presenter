@@ -291,6 +291,7 @@ impl Session {
         let setup = setup_message(
             &self.deps.env.model,
             self.language.code,
+            &self.deps.env.context,
             self.handle.as_deref(),
         );
         let (tx, abort) = conn::spawn(
