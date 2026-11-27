@@ -449,11 +449,15 @@ fn install_pwa() {
     let Some(head) = document.head() else {
         return;
     };
-    let tags: [(&str, &[(&str, &str)]); 5] = [
+    let tags: [(&str, &[(&str, &str)]); 6] = [
         ("link", &[("rel", "manifest"), ("href", "/manifest.json")]),
         (
             "link",
             &[("rel", "apple-touch-icon"), ("href", "/icon-192.png")],
+        ),
+        (
+            "meta",
+            &[("name", "mobile-web-app-capable"), ("content", "yes")],
         ),
         (
             "meta",
