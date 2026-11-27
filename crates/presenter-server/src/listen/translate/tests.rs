@@ -395,3 +395,73 @@ fn only_an_onset_after_the_translation_went_quiet_is_timed() {
         "still the previous phrase's backlog"
     );
 }
+
+/// The per-onset DEBUG lines' values (`… after an onset`).
+fn timed_onsets(capture: &crate::tracing_capture::Capture) -> Vec<String> {
+    capture
+        .events_with_message("after an onset")
+        .iter()
+        .filter_map(|line| line.field("first_voiced_ms").map(str::to_string))
+        .collect()
+}
+
+/// #999 L6a: the model streams audio all the time, silence included, so an
+/// onset is timed to the first SPEECH-level output after the model's own
+/// pause — every onset, never the first chunk of any level.
+#[tokio::test(start_paused = true)]
+async fn every_onset_is_timed_to_the_first_voiced_translation() {
+    let capture = crate::tracing_capture::Capture::install();
+    // Audio messages 1–30 and 41–80 are answered with the model's
+    // near-silence: its latency to speech.
+    let fake = FakeGemini::new(vec![Script {
+        quiet: vec![1..31, 41..81],
+        ..Script::default()
+    }]);
+    let listen = listen_with_source();
+    let service = guest(&fake, Some("test-key-not-real"), DayMeter::default());
+    let _listener = service.join(&listen, "en").expect("joined");
+    feed(&listen, false, 30).await;
+    // Onset 1: pre-roll 10 + 1 = messages 1–11 at once, then one per 100 ms:
+    // message 31 (the first voiced answer) goes out 2.0 s after the onset.
+    feed(&listen, true, 25).await;
+    // 2 s hangover (messages 36–55), the gate closes, 1 s of quiet.
+    feed(&listen, false, 30).await;
+    // Onset 2: messages 56–66 at once, message 81 goes out 1.5 s after it.
+    feed(&listen, true, 20).await;
+    assert_eq!(timed_onsets(&capture), vec!["2000", "1500"]);
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let summary = capture.events_with_message("guest translation minute summary");
+    assert_eq!(summary.len(), 1, "one minute summary");
+    assert_eq!(summary[0].field("onsets"), Some("2"));
+    assert_eq!(summary[0].field("first_voiced_timed"), Some("2"));
+    assert_eq!(summary[0].field("first_voiced_ms_median"), Some("2000"));
+    assert_eq!(summary[0].field("first_voiced_ms_max"), Some("2000"));
+}
+
+/// #999 L6a: an onset heard while the previous phrase is still being spoken
+/// is never timed on that backlog (it would read as ~0 s).
+#[tokio::test(start_paused = true)]
+async fn an_onset_during_the_backlog_is_not_timed_on_it() {
+    let capture = crate::tracing_capture::Capture::install();
+    // After the first second the model answers speech to everything: no
+    // pause to time the second onset from.
+    let fake = FakeGemini::new(vec![Script {
+        quiet: vec![1..21],
+        ..Script::default()
+    }]);
+    let listen = listen_with_source();
+    let service = guest(&fake, Some("test-key-not-real"), DayMeter::default());
+    let _listener = service.join(&listen, "en").expect("joined");
+    feed(&listen, false, 30).await;
+    feed(&listen, true, 10).await;
+    // A 1.6 s pause is a new onset, but the gate (2 s hangover) never
+    // closed: the model keeps speaking the previous phrase.
+    feed(&listen, false, 16).await;
+    feed(&listen, true, 10).await;
+    assert_eq!(
+        timed_onsets(&capture),
+        vec!["1000"],
+        "only the first onset is timed"
+    );
+}

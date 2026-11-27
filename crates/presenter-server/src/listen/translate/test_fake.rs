@@ -2,7 +2,8 @@
 //! shared by the session tests and the guest stream's router tests: every
 //! connection takes the next [`Script`], the upgrade headers and the setup are
 //! kept, every audio message is counted and answered with 100 ms of 24 kHz
-//! audio, a text fragment and a new resumption handle.
+//! audio (speech level, or the model's near-silence for the messages a
+//! [`Script::quiet`] range names), a text fragment and a new resumption handle.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -45,6 +46,9 @@ pub(crate) struct Script {
     /// After a `goAway`, this long later send 5 more speech chunks (first
     /// sample 30 000) — a replaced connection still speaking its backlog.
     pub(crate) late_speech_after_go_away: Option<Duration>,
+    /// The audio messages (1-based) answered with near-silence, as the real
+    /// model streams between phrases (#999 L6a): its latency to speech.
+    pub(crate) quiet: Vec<std::ops::Range<usize>>,
 }
 
 /// The first sample of a replaced connection's late speech.
@@ -98,11 +102,21 @@ impl Connector for DuplexConnector {
     }
 }
 
+/// 100 ms of 24 kHz s16le whose first sample is `mark`: speech level (a
+/// ±8000 square wave, about −12 dBFS) or the model's near-silence (zeros).
+pub(crate) fn pcm(mark: i16, voiced: bool) -> Vec<u8> {
+    let level: i16 = if voiced { 8_000 } else { 0 };
+    let mut samples: Vec<i16> = (0..2_400)
+        .map(|i| if i % 24 < 12 { level } else { -level })
+        .collect();
+    samples[0] = mark;
+    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+}
+
 /// The fake's answer to the `n`-th audio message: 100 ms of 24 kHz audio
 /// whose first sample is `n`, the text `w<n> ` and a new handle.
-fn answer(conn: usize, n: usize) -> Vec<Message> {
-    let mut pcm = vec![0_u8; 4_800];
-    pcm[..2].copy_from_slice(&i16::try_from(n).unwrap_or(i16::MAX).to_le_bytes());
+fn answer(conn: usize, n: usize, voiced: bool) -> Vec<Message> {
+    let pcm = pcm(i16::try_from(n).unwrap_or(i16::MAX), voiced);
     let audio = serde_json::json!({"serverContent": {"modelTurn": {"parts": [
         {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode(&pcm)}}]}}});
     let text =
@@ -173,7 +187,8 @@ async fn serve(fake: Arc<FakeGemini>, conn: usize, io: DuplexStream, script: Scr
         if script.deaf_after.is_some_and(|after| n > after) {
             continue;
         }
-        for message in answer(conn, n) {
+        let voiced = !script.quiet.iter().any(|range| range.contains(&n));
+        for message in answer(conn, n, voiced) {
             if ws.send(message).await.is_err() {
                 return;
             }
@@ -205,8 +220,7 @@ async fn sleep_until(at: Option<tokio::time::Instant>) {
 
 /// 100 ms of 24 kHz speech whose first sample is `mark`.
 fn speech(mark: i16) -> Message {
-    let mut pcm = vec![0_u8; 4_800];
-    pcm[..2].copy_from_slice(&mark.to_le_bytes());
+    let pcm = pcm(mark, true);
     let audio = serde_json::json!({"serverContent": {"modelTurn": {"parts": [
         {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode(&pcm)}}]}}});
     Message::binary(audio.to_string().into_bytes())
