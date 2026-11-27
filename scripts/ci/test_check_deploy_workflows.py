@@ -499,18 +499,23 @@ LISTEN_STEP = r"""
         env:
           LISTEN_SONIOX_API_KEY: ${{ secrets.LISTEN_SONIOX_API_KEY }}
           LISTEN_SONIOX_MODEL: ${{ vars.LISTEN_SONIOX_MODEL }}
+          LISTEN_GEMINI_API_KEY: ${{ secrets.LISTEN_GEMINI_API_KEY }}
+          LISTEN_GEMINI_MODEL: ${{ vars.LISTEN_GEMINI_MODEL }}
         run: |
           set -euo pipefail
           SECRET_FILE=/etc/presenter/listen.env
-          if [ -n "$LISTEN_SONIOX_API_KEY" ]; then
+          if [ -n "$LISTEN_SONIOX_API_KEY" ] || [ -n "$LISTEN_GEMINI_API_KEY" ]; then
             ssh deploy-target "sudo install -d -m 755 /etc/presenter"
-            printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
-              "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \
-              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
-            echo "Listening transcription key written to $SECRET_FILE (0600 root-only), model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+            {
+              [ -z "$LISTEN_SONIOX_API_KEY" ] || printf 'PRESENTER_LISTEN_SONIOX_API_KEY=%s\nPRESENTER_LISTEN_SONIOX_MODEL=%s\n' \
+                "$LISTEN_SONIOX_API_KEY" "${LISTEN_SONIOX_MODEL:-stt-rt-v6}"
+              [ -z "$LISTEN_GEMINI_API_KEY" ] || printf 'PRESENTER_LISTEN_GEMINI_API_KEY=%s\nPRESENTER_LISTEN_GEMINI_MODEL=%s\n' \
+                "$LISTEN_GEMINI_API_KEY" "${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
+            } | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "Listening keys written to $SECRET_FILE (0600 root-only): soniox=${LISTEN_SONIOX_API_KEY:+set} model=${LISTEN_SONIOX_MODEL:-stt-rt-v6}, gemini=${LISTEN_GEMINI_API_KEY:+set} model=${LISTEN_GEMINI_MODEL:-gemini-3.5-live-translate-preview}"
           else
             ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
-            echo "LISTEN_SONIOX_API_KEY unset — transcription has no key; any stale $SECRET_FILE removed"
+            echo "No listening key set — transcription and guest translation have no key; any stale $SECRET_FILE removed"
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 """
@@ -562,9 +567,11 @@ class ListenEnvTest(unittest.TestCase):
             "no rm on an empty secret": ("sudo rm -f $SECRET_FILE", "true"),
             "another file removed": ("sudo rm -f $SECRET_FILE", "sudo rm -f /tmp/other"),
             "key echoed": ("          else\n", '            echo "$LISTEN_SONIOX_API_KEY"\n          else\n'),
-            "key teed to the log": ("              | ssh deploy-target \"sudo sh", "              | tee /dev/stderr | ssh deploy-target \"sudo sh"),
+            "key teed to the log": ("            } | ssh deploy-target \"sudo sh", "            } | tee /dev/stderr | ssh deploy-target \"sudo sh"),
+            "gemini key echoed": ("          fi\n", '            echo "$LISTEN_GEMINI_API_KEY"\n          fi\n'),
+            "gemini key without its test": ('[ -z "$LISTEN_GEMINI_API_KEY" ] || printf', 'printf'),
             "key in the remote argv": ("cat > $SECRET_FILE'\"", "cat > $SECRET_FILE' && echo $LISTEN_SONIOX_API_KEY\""),
-            "key redirected to stderr": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" >&2 \\'),
+            "key redirected to stderr": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}"\n', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" >&2\n'),
             "xtrace": ("set -euo pipefail", "set -euxo pipefail"),
             "tee write without umask": ("umask 077 && cat > $SECRET_FILE", "tee $SECRET_FILE"),
             "a backup name": ("SECRET_FILE=/etc/presenter/listen.env", "SECRET_FILE=/etc/presenter/listen.env.bak"),
@@ -580,6 +587,7 @@ class ListenEnvTest(unittest.TestCase):
         for label, (old, new) in {
             "second alias": ("          LISTEN_SONIOX_MODEL:", "          KEY2: ${{ secrets.LISTEN_SONIOX_API_KEY }}\n          LISTEN_SONIOX_MODEL:"),
             "renamed": ("LISTEN_SONIOX_API_KEY: ${{", "SONIOX_KEY: ${{"),
+            "gemini renamed": ("LISTEN_GEMINI_API_KEY: ${{", "GEMINI_KEY: ${{"),
         }.items():
             with self.subTest(edit=label):
                 found = self._mutated(old, new)
@@ -606,7 +614,13 @@ class ListenEnvTest(unittest.TestCase):
         self.assertTrue(any("no `if:`" in message for message in found), found)
 
     def test_every_spelling_of_the_secret_in_another_step_is_flagged(self) -> None:
-        for spelling in ("${{ secrets.listen_soniox_api_key }}", "${{ secrets['LISTEN_SONIOX_API_KEY'] }}", "${{ toJSON(secrets) }}"):
+        for spelling in (
+            "${{ secrets.listen_soniox_api_key }}",
+            "${{ secrets['LISTEN_SONIOX_API_KEY'] }}",
+            "${{ secrets.LISTEN_GEMINI_API_KEY }}",
+            "${{ secrets['listen_gemini_api_key'] }}",
+            "${{ toJSON(secrets) }}",
+        ):
             with self.subTest(spelling=spelling):
                 other = f"""
       - name: Leak
@@ -645,8 +659,8 @@ class ListenEnvTest(unittest.TestCase):
 
     def test_a_broken_line_join_is_flagged(self) -> None:
         for label, (old, new) in {
-            "space after the backslash": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\\n', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\ \n'),
-            "blank line after the backslash": ('"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\\n', '"${LISTEN_SONIOX_MODEL:-stt-rt-v6}" \\\n\n'),
+            "space after the backslash": ("MODEL=%s\\n' \\\n                \"$LISTEN_SONIOX", "MODEL=%s\\n' \\ \n                \"$LISTEN_SONIOX"),
+            "blank line after the backslash": ("MODEL=%s\\n' \\\n                \"$LISTEN_GEMINI", "MODEL=%s\\n' \\\n\n                \"$LISTEN_GEMINI"),
         }.items():
             with self.subTest(edit=label):
                 found = self._mutated(old, new)

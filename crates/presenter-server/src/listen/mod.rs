@@ -35,6 +35,7 @@ mod tests;
 pub(crate) mod transcript_hub;
 pub(crate) mod transcript_store;
 pub(crate) mod transcription;
+pub(crate) mod translate;
 mod vban_rx;
 
 use std::collections::HashMap;
@@ -57,6 +58,7 @@ use self::soniox::config::SonioxEnv;
 use self::soniox::session::SonioxAsr;
 use self::transcript_hub::TranscriptHub;
 use self::transcription::{Transcription, TranscriptionDeps, TranscriptionStore};
+use self::translate::GuestTranslate;
 
 /// The target of every receiver log line (spec §14 `presenter::listen::mic`).
 pub(crate) const MIC_TARGET: &str = "presenter::listen::mic";
@@ -108,6 +110,8 @@ struct Inner {
     /// The guest's transcription rows, meter and state (#852 C3-7).
     transcription: Transcription,
     transcription_started: AtomicBool,
+    /// The guests' live translation sessions (#999).
+    guest: Mutex<GuestTranslate>,
 }
 
 /// Where the published mic list comes from (#933).
@@ -148,6 +152,7 @@ impl ListenService {
                 soniox,
                 transcription,
                 transcription_started: AtomicBool::new(false),
+                guest: Mutex::new(GuestTranslate::production()),
             }),
         }
     }
@@ -192,6 +197,25 @@ impl ListenService {
     /// The transcript hub (#852 C3-6): the same hub on every call.
     pub(crate) fn transcripts(&self) -> TranscriptHub {
         self.inner.transcripts.clone()
+    }
+
+    /// The guests' live translation (#999): the same registry on every call.
+    pub(crate) fn guest(&self) -> GuestTranslate {
+        self.inner
+            .guest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Point the guest translation at a test fake.
+    #[cfg(test)]
+    pub(crate) fn set_guest(&self, guest: GuestTranslate) {
+        *self
+            .inner
+            .guest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = guest;
     }
 
     /// The guest's transcription rows, meter and state (#852 C3-7).
@@ -306,7 +330,7 @@ impl ListenService {
     }
 
     /// The mic's frame channel, created on first use.
-    fn frame_sender(&self, mic_id: &str) -> broadcast::Sender<MicFrame> {
+    pub(crate) fn frame_sender(&self, mic_id: &str) -> broadcast::Sender<MicFrame> {
         let mut frames = self
             .inner
             .frames
