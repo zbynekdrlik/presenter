@@ -287,6 +287,43 @@ async fn a_connection_that_answers_nothing_is_replaced() {
     );
 }
 
+/// #999 L6a review: the model streams silence too, so the new connection's
+/// first SILENT chunks are no speech — the old one's backlog still plays,
+/// in one piece (the new one's silence is not mixed into it).
+#[tokio::test(start_paused = true)]
+async fn the_old_backlog_plays_while_the_new_connection_is_only_silent() {
+    let fake = FakeGemini::new(vec![
+        Script {
+            go_away_after: Some(5),
+            late_speech_after_go_away: Some(Duration::from_millis(1_500)),
+            ..Script::default()
+        },
+        Script {
+            quiet: std::iter::once(1..1_000).collect(),
+            ..Script::default()
+        },
+    ]);
+    let listen = listen_with_source();
+    let service = guest(&fake, Some("test-key-not-real"), DayMeter::default());
+    let mut listener = service.join(&listen, "en").expect("joined");
+    feed(&listen, true, 30).await;
+    assert_eq!(fake.connects(), 2);
+    let audio: Vec<bool> = drain(&mut listener)
+        .iter()
+        .filter_map(|p| match p {
+            GuestPacket::Audio(pcm, _) => Some(i16::from_le_bytes([pcm[0], pcm[1]]) == LATE_MARK),
+            _ => None,
+        })
+        .collect();
+    let late: Vec<usize> = (0..audio.len()).filter(|&i| audio[i]).collect();
+    assert_eq!(
+        late.len(),
+        5,
+        "the old connection's backlog reaches the guest"
+    );
+    assert_eq!(late[4] - late[0], 4, "in one piece, no silence mixed in");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_replaced_connection_never_speaks_over_the_new_one() {
     let fake = FakeGemini::new(vec![Script {
@@ -460,7 +497,7 @@ async fn an_onset_during_the_backlog_is_not_timed_on_it() {
     // After the first second the model answers speech to everything: no
     // pause to time the second onset from.
     let fake = FakeGemini::new(vec![Script {
-        quiet: vec![1..21],
+        quiet: std::iter::once(1..21).collect(),
         ..Script::default()
     }]);
     let listen = listen_with_source();
