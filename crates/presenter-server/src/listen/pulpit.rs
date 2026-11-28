@@ -17,7 +17,9 @@
 //! chunk channel of every published Dante mic, judges each chunk the moment it
 //! arrives (`rms_dbfs` > `VOICED_DBFS`, the one voicing rule) and forwards the
 //! chosen mic's chunks to `pulpit`'s chunk channel; every 5 forwarded chunks
-//! are `pulpit`'s 100 ms frame. Each chunk is handled on its own arrival, so a
+//! are `pulpit`'s 100 ms frame. A mic not forwarded keeps its last 2 s, so on a
+//! switch its onset (from 200 ms before its first voiced chunk) goes out first
+//! — an interpreter who starts during the preacher's hangover loses nothing. Each chunk is handled on its own arrival, so a
 //! mic whose chunks stop (unpatched, lagging) never holds up another: its last
 //! voiced chunk just ages until the policy leaves it. `pulpit` is not in the
 //! mic list (no status row, no recording: the handhelds themselves are
@@ -32,9 +34,10 @@ use std::time::Duration;
 
 use futures_util::future::select_all;
 use presenter_core::audio::level::{is_voiced, rms_dbfs, SILENCE_DBFS};
-use presenter_core::listen::mics::{MicConfig, PULPIT_MIC_ID};
+use presenter_core::listen::mics::{MicConfig, MicLanguage, PULPIT_MIC_ID};
 use tokio::sync::broadcast::{self, error::RecvError};
-use tokio::time::Instant;
+use tokio::sync::watch;
+use tokio::time::{interval, Instant, MissedTickBehavior};
 use tracing::{info, warn};
 
 use super::translate::session::HANGOVER;
@@ -49,9 +52,18 @@ pub(crate) const LEVEL_WINDOW_CHUNKS: usize = 10;
 const CHUNKS_PER_FRAME: usize = 5;
 /// Switch lines logged per minute; the rest are counted into one summary.
 pub(crate) const SWITCH_LINES_PER_MINUTE: u32 = 20;
+const SWITCH_LOG_WINDOW: Duration = Duration::from_secs(60);
+/// The chunks a mic not forwarded keeps (2 s = the hangover: the longest a
+/// new speaker can wait for the switch).
+pub(crate) const ONSET_BUFFER_CHUNKS: usize = 100;
+/// The held chunks before a new mic's first voiced one sent with its onset
+/// (200 ms: the start of the word below the voicing level).
+pub(crate) const SWITCH_PRE_ROLL_CHUNKS: usize = 10;
 
-/// What a mic's speaker speaks, once something tells (language detection is
-/// a later step; every mic is `None` today).
+type ConfigRx = watch::Receiver<Arc<Vec<MicConfig>>>;
+
+/// What a mic's speaker speaks, from its configured language (the fixed
+/// Dante mics are `off` = `None`: language detection is a later step).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpokenLanguage {
     Slovak,
@@ -145,15 +157,20 @@ struct Input {
     last_voiced: Option<Instant>,
     levels: VecDeque<f32>,
     language: Option<SpokenLanguage>,
+    /// Its last [`ONSET_BUFFER_CHUNKS`] chunks while it is not forwarded, and
+    /// whether each was voiced: a mic that starts while the forwarded one is
+    /// still in its hangover loses nothing — its onset goes out on the switch.
+    held: VecDeque<(MicChunk, bool)>,
 }
 
 impl Input {
-    fn new(id: String) -> Self {
+    fn new(mic: &MicConfig) -> Self {
         Self {
-            id,
+            id: mic.id.clone(),
             last_voiced: None,
             levels: VecDeque::with_capacity(LEVEL_WINDOW_CHUNKS),
-            language: None,
+            language: spoken_language(mic.language),
+            held: VecDeque::with_capacity(ONSET_BUFFER_CHUNKS),
         }
     }
 
@@ -163,6 +180,32 @@ impl Input {
             recent_dbfs: self.levels.iter().copied().fold(SILENCE_DBFS, f32::max),
             language: self.language,
         }
+    }
+
+    /// The held chunks from [`SWITCH_PRE_ROLL_CHUNKS`] before the first voiced
+    /// one on (the held quiet before it stays behind); the hold empties.
+    fn take_onset(&mut self) -> Vec<MicChunk> {
+        let first_voiced = self
+            .held
+            .iter()
+            .position(|(_, voiced)| *voiced)
+            .unwrap_or(self.held.len());
+        let start = first_voiced.saturating_sub(SWITCH_PRE_ROLL_CHUNKS);
+        self.held
+            .drain(..)
+            .skip(start)
+            .map(|(chunk, _)| chunk)
+            .collect()
+    }
+}
+
+/// The policy's language of a mic's configured language (the fixed Dante
+/// mics are `off` = unknown until language detection labels them).
+fn spoken_language(language: MicLanguage) -> Option<SpokenLanguage> {
+    match language {
+        MicLanguage::Sk => Some(SpokenLanguage::Slovak),
+        MicLanguage::En => Some(SpokenLanguage::Foreign),
+        MicLanguage::Off => None,
     }
 }
 
@@ -178,18 +221,21 @@ pub(crate) struct Selector {
 /// What one chunk produced.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Forwarded {
-    /// `pulpit`'s chunk (the arriving one, when it is the forwarded mic's).
-    pub(crate) chunk: Option<MicChunk>,
-    /// A frame completed by that chunk.
-    pub(crate) frame: Option<MicFrame>,
+    /// `pulpit`'s chunks, in order: the arriving one when it is the forwarded
+    /// mic's; after a switch first the new mic's held onset.
+    pub(crate) chunks: Vec<MicChunk>,
+    /// The frames those chunks completed. A frame cut across a switch holds
+    /// both mics' chunks: the stream stays continuous.
+    pub(crate) frames: Vec<MicFrame>,
     /// A switch this chunk caused: (from, to, reason).
     pub(crate) switch: Option<(Option<String>, String, SwitchReason)>,
 }
 
 impl Selector {
-    pub(crate) fn new(ids: &[String]) -> Self {
+    /// One input per mic, in order (their ids and configured languages).
+    pub(crate) fn new(mics: &[MicConfig]) -> Self {
         Self {
-            inputs: ids.iter().cloned().map(Input::new).collect(),
+            inputs: mics.iter().map(Input::new).collect(),
             current: None,
             frame: Vec::with_capacity(CHUNKS_PER_FRAME * 320),
             frame_chunks: 0,
@@ -204,8 +250,9 @@ impl Selector {
     }
 
     /// Judge the chunk of input `index` arriving at `now`, decide, and
-    /// forward it when it is the (new) current mic's.
+    /// forward what the (new) current mic has.
     pub(crate) fn push(&mut self, index: usize, chunk: MicChunk, now: Instant) -> Forwarded {
+        let forwarded_now = self.current == Some(index);
         let Some(input) = self.inputs.get_mut(index) else {
             return Forwarded::default();
         };
@@ -214,31 +261,40 @@ impl Selector {
             input.levels.pop_front();
         }
         input.levels.push_back(level);
-        if is_voiced(level) {
+        let voiced = is_voiced(level);
+        if voiced {
             input.last_voiced = Some(now);
         }
-        let views: Vec<MicView> = self.inputs.iter().map(|input| input.view(now)).collect();
         let mut out = Forwarded::default();
+        if forwarded_now {
+            out.chunks.push(chunk);
+        } else {
+            if input.held.len() == ONSET_BUFFER_CHUNKS {
+                input.held.pop_front();
+            }
+            input.held.push_back((chunk, voiced));
+        }
+        let views: Vec<MicView> = self.inputs.iter().map(|input| input.view(now)).collect();
         if let Decision::Switch { to, reason } = choose(self.current, &views) {
             let from = self.current().map(str::to_string);
             self.current = Some(to);
-            if let Some(input) = self.inputs.get(to) {
+            if let Some(input) = self.inputs.get_mut(to) {
+                out.chunks.extend(input.take_onset());
                 out.switch = Some((from, input.id.clone(), reason));
             }
         }
-        if self.current == Some(index) {
-            self.frame.extend_from_slice(&chunk);
+        for chunk in &out.chunks {
+            self.frame.extend_from_slice(chunk);
             self.frame_chunks += 1;
             if self.frame_chunks == CHUNKS_PER_FRAME {
-                out.frame = Some(Arc::from(std::mem::take(&mut self.frame)));
+                out.frames.push(Arc::from(std::mem::take(&mut self.frame)));
                 self.frame_chunks = 0;
             }
-            out.chunk = Some(chunk);
         }
         out
     }
 
-    /// Label a mic's language (a later step; tests supply it today).
+    /// Label a mic's language (language detection, a later step; tests today).
     #[cfg(test)]
     pub(crate) fn set_language(&mut self, index: usize, language: Option<SpokenLanguage>) {
         if let Some(input) = self.inputs.get_mut(index) {
@@ -264,18 +320,21 @@ impl SwitchLog {
         }
     }
 
-    /// `true` = log this switch. A new minute first reports what the last
-    /// one suppressed (returned as `Some(n)` in the tuple).
-    pub(crate) fn admit(&mut self, now: Instant) -> (bool, Option<u64>) {
-        let mut summary = None;
-        if now.saturating_duration_since(self.window_start) >= Duration::from_secs(60) {
-            if self.suppressed > 0 {
-                summary = Some(self.suppressed);
-            }
-            self.window_start = now;
-            self.lines = 0;
-            self.suppressed = 0;
+    /// Once the minute is over: start the next one and return how many
+    /// switches the last one did not log (`None` = none or still running).
+    pub(crate) fn roll(&mut self, now: Instant) -> Option<u64> {
+        if now.saturating_duration_since(self.window_start) < SWITCH_LOG_WINDOW {
+            return None;
         }
+        let suppressed = std::mem::take(&mut self.suppressed);
+        self.window_start = now;
+        self.lines = 0;
+        (suppressed > 0).then_some(suppressed)
+    }
+
+    /// `true` = log this switch (the minute's summary first, from [`Self::roll`]).
+    pub(crate) fn admit(&mut self, now: Instant) -> (bool, Option<u64>) {
+        let summary = self.roll(now);
         if self.lines < SWITCH_LINES_PER_MINUTE {
             self.lines += 1;
             (true, summary)
@@ -286,82 +345,108 @@ impl SwitchLog {
     }
 }
 
-/// The Dante mics of a list, by id, in list (= channel) order.
-fn input_ids(mics: &[MicConfig]) -> Vec<String> {
-    mics.iter()
-        .filter(|mic| mic.is_dante())
-        .map(|mic| mic.id.clone())
-        .collect()
+/// The Dante mics of a list, in list (= channel) order.
+fn input_mics(mics: &[MicConfig]) -> Vec<MicConfig> {
+    mics.iter().filter(|mic| mic.is_dante()).cloned().collect()
 }
 
 /// The `pulpit` task: see the module.
 pub(crate) async fn supervise(service: ListenService) {
     let mut config = service.config_receiver();
-    let chunks_out = service.chunk_sender(PULPIT_MIC_ID);
-    let frames_out = service.frame_sender(PULPIT_MIC_ID);
     loop {
-        let ids = input_ids(&config.borrow_and_update());
-        if ids.is_empty() {
+        let mics = input_mics(&config.borrow_and_update());
+        if mics.is_empty() {
             if config.changed().await.is_err() {
                 return;
             }
             continue;
         }
+        let ids: Vec<&str> = mics.iter().map(|mic| mic.id.as_str()).collect();
         info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, inputs = ?ids, "pulpit selects one of the Dante mics");
-        let mut receivers: Vec<broadcast::Receiver<MicChunk>> =
-            ids.iter().map(|id| service.subscribe_chunks(id)).collect();
-        let mut selector = Selector::new(&ids);
-        let mut log = SwitchLog::new(Instant::now());
-        let mut lagged: u64 = 0;
-        loop {
-            let next = select_all(
-                receivers
-                    .iter_mut()
-                    .enumerate()
-                    .map(|(index, rx)| Box::pin(async move { (index, rx.recv().await) })),
-            );
-            let (index, received) = tokio::select! {
-                changed = config.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
-                    // a VBAN save leaves the Dante mics and the selection as they are
-                    if input_ids(&config.borrow_and_update()) == ids {
-                        continue;
-                    }
-                    break;
-                }
-                ((index, received), _, _) = next => (index, received),
-            };
-            let chunk = match received {
-                Ok(chunk) => chunk,
-                Err(RecvError::Lagged(missed)) => {
-                    lagged += 1;
-                    if should_log_event(lagged) {
-                        warn!(target: MIC_TARGET, mic = PULPIT_MIC_ID, input = ids[index].as_str(), missed, events = lagged, "pulpit fell behind a Dante mic — chunks skipped");
-                    }
+        let Some(last) = select(&service, &mut config, &mics).await else {
+            return;
+        };
+        info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, last = last.as_deref(), "the Dante mics changed — pulpit restarts its selection");
+    }
+}
+
+/// Forward from `mics` until the Dante mics change (`Some(the last forwarded
+/// mic)`) or the service is gone (`None`).
+async fn select(
+    service: &ListenService,
+    config: &mut ConfigRx,
+    mics: &[MicConfig],
+) -> Option<Option<String>> {
+    let chunks_out = service.chunk_sender(PULPIT_MIC_ID);
+    let frames_out = service.frame_sender(PULPIT_MIC_ID);
+    let mut receivers: Vec<broadcast::Receiver<MicChunk>> = mics
+        .iter()
+        .map(|mic| service.subscribe_chunks(&mic.id))
+        .collect();
+    let mut selector = Selector::new(mics);
+    let mut log = SwitchLog::new(Instant::now());
+    let mut lagged = vec![0u64; mics.len()];
+    let mut minute = interval(SWITCH_LOG_WINDOW);
+    minute.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        let next = select_all(
+            receivers
+                .iter_mut()
+                .enumerate()
+                .map(|(index, rx)| Box::pin(async move { (index, rx.recv().await) })),
+        );
+        let (index, received) = tokio::select! {
+            changed = config.changed() => {
+                changed.ok()?;
+                // a VBAN save leaves the Dante mics and the selection as they are
+                if input_mics(&config.borrow_and_update()) == mics {
                     continue;
                 }
-                // a mic's channel lives as long as the service: not reached
-                Err(RecvError::Closed) => return,
-            };
-            let now = Instant::now();
-            let out = selector.push(index, chunk, now);
-            if let Some((from, to, reason)) = out.switch {
-                log_switch(&mut log, now, from.as_deref(), &to, reason);
+                return Some(selector.current().map(str::to_string));
             }
-            if let Some(chunk) = out.chunk {
-                if chunks_out.receiver_count() > 0 {
-                    let _receivers = chunks_out.send(chunk);
+            _ = minute.tick() => {
+                log_suppressed(log.roll(Instant::now()));
+                continue;
+            }
+            ((index, received), _, _) = next => (index, received),
+        };
+        let chunk = match received {
+            Ok(chunk) => chunk,
+            Err(RecvError::Lagged(missed)) => {
+                if let (Some(count), Some(mic)) = (lagged.get_mut(index), mics.get(index)) {
+                    *count += 1;
+                    if should_log_event(*count) {
+                        warn!(target: MIC_TARGET, mic = PULPIT_MIC_ID, input = mic.id.as_str(), missed, events = *count, "pulpit fell behind a Dante mic — chunks skipped");
+                    }
                 }
+                continue;
             }
-            if let Some(frame) = out.frame {
-                if frames_out.receiver_count() > 0 {
-                    let _receivers = frames_out.send(frame);
-                }
-            }
+            // a mic's channel lives as long as the service: not reached
+            Err(RecvError::Closed) => return None,
+        };
+        let now = Instant::now();
+        let out = selector.push(index, chunk, now);
+        if let Some((from, to, reason)) = out.switch {
+            log_switch(&mut log, now, from.as_deref(), &to, reason);
         }
-        info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, last = selector.current(), "the mic list changed — pulpit restarts its selection");
+        send_all(&chunks_out, out.chunks);
+        send_all(&frames_out, out.frames);
+    }
+}
+
+/// To every reader of `pulpit`; never waits.
+fn send_all(out: &broadcast::Sender<Arc<[i16]>>, pieces: Vec<Arc<[i16]>>) {
+    if out.receiver_count() == 0 {
+        return;
+    }
+    for piece in pieces {
+        let _receivers = out.send(piece);
+    }
+}
+
+fn log_suppressed(summary: Option<u64>) {
+    if let Some(suppressed) = summary {
+        info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, suppressed, "pulpit switches in the last minute not logged one by one");
     }
 }
 
@@ -373,9 +458,7 @@ fn log_switch(
     reason: SwitchReason,
 ) {
     let (admit, summary) = log.admit(now);
-    if let Some(suppressed) = summary {
-        info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, suppressed, "pulpit switches in the last minute not logged one by one");
-    }
+    log_suppressed(summary);
     if admit {
         info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, from, to, reason = reason.as_str(), "pulpit switched mic");
     }

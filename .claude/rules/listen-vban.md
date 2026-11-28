@@ -293,9 +293,14 @@ paths:
   within `HANGOVER` (2 s, translate's) of its last voiced chunk; then switch to a mic voiced within
   `CANDIDATE_WINDOW` (100 ms) — rank `SpokenLanguage` Foreign < unknown < Slovak (the Slovak one is the
   interpreter; every mic `None` until language detection lands), then the loudest of its last 10
-  chunks, then channel order; no candidate = stay. Each chunk is judged on arrival
+  chunks, then channel order; no candidate = stay; the language comes from the mic's configured
+  `language` (`sk` / `en`; the Dante mics are `off` = unknown). A mic not forwarded holds its last 2 s
+  (`ONSET_BUFFER_CHUNKS`): on a switch its onset (from `SWITCH_PRE_ROLL_CHUNKS` = 10 before its first
+  voiced chunk) goes out first, so an interpreter who starts inside the preacher's hangover loses
+  nothing (a short burst into the translation). Each chunk is judged on arrival
   (`rms_dbfs` > `VOICED_DBFS`), so a mic that stops sending never stalls another. INFO `pulpit
-  switched mic` (from, to, reason), ≤ 20 lines/min then one summary line. `pulpit` is NOT in the mic
+  switched mic` (from, to, reason), ≤ 20 lines/min, the rest one summary line on the minute tick;
+  a lagging input WARNs per input on power-of-two lag events. `pulpit` is NOT in the mic
   list (no status row, no recorder writer: the handhelds are recorded); `ListenService::has_source`
   knows it while a Dante mic is published; the id is reserved (`ReservedId`).
 - **Dante latency (dstack#381):** `dlink_config` sets `receive_buffer_ns(RECEIVE_BUFFER_NS)` = 4 ms, so with dlink's

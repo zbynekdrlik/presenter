@@ -12,8 +12,8 @@
 //! three; an unpatched channel is silence), on every box that names a Dante
 //! interface; which source feeds them is Dante patching (dstack), never a
 //! Presenter choice. So `listen.mics` holds no Dante mic and no id of theirs.
-//! Nor the id [`PULPIT_MIC_ID`]: the virtual mic the server mixes from the
-//! voiced Dante mics (the guests' translation reads it).
+//! Nor the id [`PULPIT_MIC_ID`]: the virtual mic that forwards ONE voiced
+//! Dante mic at a time (never a sum; the guests' translation reads it).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -32,8 +32,8 @@ pub const MIC_STREAM_NAME_MAX_CHARS: usize = 16;
 /// names; #852 28.11: four, one per handheld — the handhelds are patched
 /// there, post-fader, so a muted one is digital silence).
 pub const DANTE_MIC_CHANNELS: [&str; 4] = ["mic 1", "mic 2", "mic 3", "mic 4"];
-/// The virtual mic = the sum of the voiced Dante mics (#852 28.11 DESIGN
-/// "pulpit"); reserved, no saved mic may take it.
+/// The virtual mic that forwards ONE voiced Dante mic at a time (#852 28.11
+/// "pulpit", a selector, never a sum); reserved, no saved mic may take it.
 pub const PULPIT_MIC_ID: &str = "pulpit";
 /// The ids of the fixed Dante mics start with this; no saved mic may.
 pub const DANTE_MIC_ID_PREFIX: &str = "dante-";
@@ -84,7 +84,7 @@ pub enum MicLanguage {
 }
 
 /// Who speaks into the mic (spec §5.6). `moderator` = a fixed Dante mic
-/// (#933): one of the two moderator mics, the guest preacher's or the
+/// (#933, #852 28.11): one of the handhelds — the preacher's, a guest's or the
 /// interpreter's — which one is told later by the language spoken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -148,7 +148,7 @@ pub enum MicsValidationError {
     Ambiguous(String, String),
     #[error("Mikrofón „{0}“: mikrofóny Dante sa nenastavujú — Presenter má štyri pevné kanály Dante „mic 1“ až „mic 4“, zdroj sa zapojí v Dante.")]
     DanteNotConfigurable(String),
-    #[error("Identifikátor „{0}“ je vyhradený (pevné mikrofóny Dante „dante-…“ a „pulpit“).")]
+    #[error("Identifikátor „{0}“ je vyhradený: patrí pevnému mikrofónu Dante („dante-…“) alebo výberu „pulpit“.")]
     ReservedId(String),
 }
 
@@ -600,7 +600,7 @@ mod tests {
         assert_eq!(
             validate_mics(vec![mic(PULPIT_MIC_ID, "GUEST_EN", None)]),
             Err(MicsValidationError::ReservedId("pulpit".into())),
-            "the mixed mic's id is reserved too"
+            "the pulpit id is reserved too"
         );
         let text = MicsValidationError::DanteNotConfigurable("guest".into()).to_string();
         assert!(
