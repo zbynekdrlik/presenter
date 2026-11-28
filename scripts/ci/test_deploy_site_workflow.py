@@ -14,6 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SITE = ROOT / ".github/workflows/deploy-site.yml"
 DEPLOY = ROOT / ".github/workflows/deploy.yml"
+RELEASE = ROOT / ".github/workflows/release.yml"
 
 # The SNV deploy job's steps before #918 (deploy.yml at d0381c73), in order, plus
 # "Ensure the service user" (#929), "Enforce EEE off on wired NICs (rig PC)" (#988)
@@ -86,23 +87,33 @@ def runs_for(step: dict, inputs: dict[str, object]) -> bool:
         return bool(inputs["library_sync"])
     if cond == "!inputs.library_sync":
         return not inputs["library_sync"]
-    if cond.startswith("inputs.site == '"):
-        site = cond.split("'")[1]
-        return inputs["site"] == site  # the vars part is set per repo, assumed set
+    # `inputs.site == 'A' && vars… || inputs.site == 'B' && vars…` (the vars part is set per
+    # repo, assumed set).
+    alternatives = [part.strip() for part in cond.split("||")]
+    if all(part.startswith("inputs.site == '") for part in alternatives):
+        return any(inputs["site"] == part.split("'")[1] for part in alternatives)
     raise AssertionError(f"unknown if: {cond}")
 
 
-def call_inputs(job: str) -> dict[str, object]:
-    return load(DEPLOY)["jobs"][job]["with"]
+def call_inputs(job: str, workflow: Path = DEPLOY) -> dict[str, object]:
+    return load(workflow)["jobs"][job]["with"]
+
+
+def pp_inputs() -> dict[str, object]:
+    return call_inputs("deploy-pp", RELEASE)
 
 
 class DeploySiteWorkflowTest(unittest.TestCase):
-    def names_for(self, job: str) -> list[str]:
-        inputs = call_inputs(job)
+    def names_for(self, job: str, workflow: Path = DEPLOY) -> list[str]:
+        inputs = call_inputs(job, workflow)
         return [s["name"] for s in site_steps() if "name" in s and runs_for(s, inputs)]
 
     def test_snv_runs_exactly_its_old_steps(self) -> None:
         self.assertEqual(self.names_for("deploy"), SNV_STEPS)
+
+    def test_pp_runs_every_hardware_site_step(self) -> None:
+        """#1004: PP is a hardware site — the same steps as SNV, nothing skipped."""
+        self.assertEqual(self.names_for("deploy-pp", RELEASE), SNV_STEPS)
 
     def test_prba_skips_device_and_library_steps(self) -> None:
         names = self.names_for("deploy-prba")
@@ -311,22 +322,111 @@ class ServiceUserTest(unittest.TestCase):
         self.assertIn("exit 1", run[run.index("PID_USER"):])
 
 
+class PpReleaseTest(unittest.TestCase):
+    """#1004: release.yml deploys PP through the same reusable site deploy as SNV."""
+
+    def test_pp_call_is_a_hardware_site_with_its_own_service_user(self) -> None:
+        inputs = pp_inputs()
+        self.assertEqual(inputs["site"], "PP")
+        self.assertEqual(inputs["deploy_host"], "companion-pp.lan")
+        self.assertEqual(inputs["service_user"], "presenter")
+        self.assertEqual(inputs["deploy_user"], "newlevel")
+        self.assertEqual(inputs["deploy_dir"], "/opt/presenter")
+        self.assertEqual(inputs["http_port"], "80")
+        self.assertIs(inputs["hardware"], True)
+        self.assertIs(inputs["library_sync"], True)
+        # GPU-less: the VA-API encoder is a warning there, never a failed release.
+        self.assertIs(inputs["vaapi_required"], False)
+        self.assertNotIn("vaapi_required", call_inputs("deploy"))
+
+    def test_pp_gets_the_guest_listener(self) -> None:
+        inputs = pp_inputs()
+        self.assertEqual(inputs["guest_port"], "8099")
+        self.assertEqual(inputs["guest_host"], "${{ vars.PP_GUEST_HOST }}")
+        smoke = run_of("Post-deploy smoke test")
+        self.assertIn('GUEST_PORT="${{ inputs.guest_port }}"', smoke)
+        self.assertIn("must be 404", smoke)
+
+    def test_every_hardware_site_gets_the_dante_listening_dropins(self) -> None:
+        run = run_of("Deploy systemd service")
+        hardware_part = run[run.index('if [ "${{ inputs.hardware }}" != "true" ]'):]
+        self.assertIn("Environment=DANTE_SUBNET=10.77.7.0/24", hardware_part)
+        self.assertIn("Environment=PRESENTER_LISTEN_DANTE_IFACE=enp2s0.70", hardware_part)
+
+    def test_every_hardware_site_names_its_stage_and_sync_urls(self) -> None:
+        for inputs in (call_inputs("deploy"), pp_inputs()):
+            self.assertTrue(str(inputs["stage_url"]).startswith("${{ vars."), inputs["site"])
+            self.assertTrue(str(inputs["sync_peer_url"]).startswith("http://100."), inputs["site"])
+        # SNV pulls from PP and PP from SNV — never itself.
+        self.assertNotEqual(call_inputs("deploy")["sync_peer_url"], pp_inputs()["sync_peer_url"])
+        run = run_of("Deploy systemd service")
+        self.assertIn("PRESENTER_ANDROID_STAGE_URL=%s\\n' \"$STAGE_URL\"", run)
+        self.assertIn("PRESENTER_SYNC_PEER_URL=%s\\n' \"$SYNC_PEER_URL\"", run)
+
+    def test_release_has_no_deploy_steps_of_its_own(self) -> None:
+        jobs = load(RELEASE)["jobs"]
+        self.assertEqual(set(jobs), {"build-release", "deploy-pp"})
+        pp = jobs["deploy-pp"]
+        self.assertEqual(pp["uses"], "./.github/workflows/deploy-site.yml")
+        self.assertEqual(pp["needs"], "build-release")
+        self.assertEqual(pp["secrets"], "inherit")
+        # The staged pull lists this run's artifacts through the API.
+        self.assertEqual(pp["permissions"].get("actions"), "read")
+        upload = next(s for s in jobs["build-release"]["steps"] if s.get("name") == "Upload binaries for deploy job")
+        self.assertEqual(upload["with"]["name"], "build-artifacts")
+
+    def test_pp_uses_its_own_ssh_key_without_fallback(self) -> None:
+        setup = step("Setup SSH for deployment")
+        self.assertEqual(setup["env"]["KEY_PP"], "${{ secrets.DEPLOY_SSH_KEY_PP }}")
+        run = code_lines(str(setup["run"]))
+        self.assertIn('if [ "$SITE_NAME" = "PP" ]; then KEY="$KEY_PP"; else KEY="$KEY_DEFAULT"; fi', run)
+        self.assertIn('if [ -z "$KEY" ]', run)
+        self.assertNotIn("secrets.", run)
+        self.assertNotIn("||", str(setup["env"]))
+
+    def test_cloudflared_token_is_the_sites_own(self) -> None:
+        cf = step("Install & configure cloudflared (skipped if vars unset)")
+        self.assertNotIn("||", str(cf["env"]))
+        run = str(cf["run"])
+        self.assertIn('SNV) TUNNEL_TOKEN="$TOKEN_PROD"', run)
+        self.assertIn('PP) TUNNEL_TOKEN="$TOKEN_PP"', run)
+        self.assertFalse(runs_for(cf, call_inputs("deploy-prba")))
+
+    def test_vaapi_failure_is_fatal_only_where_required(self) -> None:
+        run = run_of("Ensure GStreamer + VA-API are installed")
+        missing = run[run.index("if ! gst-inspect-1.0 vah264enc"):]
+        self.assertIn('if [ "${{ inputs.vaapi_required }}" = "true" ]', missing)
+        self.assertLess(missing.index("exit 1"), missing.index("::warning::"))
+        inp = load(SITE)[True]["workflow_call"]["inputs"]["vaapi_required"]
+        self.assertIs(inp["default"], True)
+
+    def test_companion_label_is_the_site(self) -> None:
+        self.assertEqual(
+            run_of("Deploy Companion module"),
+            "bash scripts/deploy/deploy_companion_module.sh deploy-target ${{ inputs.site }}",
+        )
+
+
 class ImportDataServiceUserTest(unittest.TestCase):
-    """#929: the manual re-import writes SNV's tree as its service user too."""
+    """#929/#1004: the manual re-import writes a site's tree as the user its service runs as."""
 
     def setUp(self) -> None:
         self.steps = {s["name"]: str(s.get("run", "")) for s in load(ROOT / ".github/workflows/import-data.yml")["jobs"]["import"]["steps"] if "name" in s}
 
-    def test_production_runs_as_the_snv_service_user(self) -> None:
-        env = self.steps["Set environment variables"]
-        prod = env[env.index('"production"'):env.index('"pp"')]
-        self.assertIn('echo "service_user=presenter"', prod)
-        self.assertEqual(env.count("service_user="), 3)
-        self.assertEqual(call_inputs("deploy")["service_user"], "presenter")
+    def test_service_user_is_read_from_the_running_unit(self) -> None:
+        """Right before and after a site's user migration (PP: newlevel until its #1004 release)."""
+        self.assertNotIn("service_user=", self.steps["Set environment variables"])
+        su = self.steps["Read the service user"]
+        self.assertIn('ssh deploy-target "systemctl show -p User --value ${{ steps.env.outputs.service_name }}"', su)
+        self.assertIn("exit 1", su)
+        self.assertIn('echo "service_user=$SU" >> "$GITHUB_OUTPUT"', su)
+        names = list(self.steps)
+        self.assertLess(names.index("Setup SSH"), names.index("Read the service user"))
+        self.assertLess(names.index("Read the service user"), names.index("Backup database"))
 
     def test_db_writers_and_files_go_through_the_service_user(self) -> None:
         self.assertIn("sudo -u $SU env PRESENTER_DB_URL", self.steps["Import ProPresenter libraries"])
-        self.assertIn("sudo -u ${{ steps.env.outputs.service_user }} env", self.steps["Import Bible translations"])
+        self.assertIn("sudo -u ${{ steps.su.outputs.service_user }} env", self.steps["Import Bible translations"])
         self.assertIn('--rsync-path="sudo rsync" --chown=$SU:$SU', self.steps["Sync ProPresenter libraries from git"])
         backup = self.steps["Backup database"]
         self.assertIn('sudo mkdir -p "$BACKUP_DIR"', backup)

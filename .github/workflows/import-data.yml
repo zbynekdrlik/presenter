@@ -52,22 +52,18 @@ jobs:
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.9.205" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
-            # #929: SNV's service runs as its own user (deploy.yml `service_user`), which owns the tree.
-            echo "service_user=presenter" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           elif [ "${{ inputs.environment }}" = "pp" ]; then
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=companion-pp.lan" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
-            echo "service_user=newlevel" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_PP" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           else
             echo "deploy_dir=/opt/presenter-dev" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.8.134" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter-dev" >> "$GITHUB_OUTPUT"
-            echo "service_user=newlevel" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_DEV" >> "$GITHUB_OUTPUT"
             echo "health_port=8080" >> "$GITHUB_OUTPUT"
           fi
@@ -97,6 +93,18 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan ${{ steps.env.outputs.deploy_host }} >> ~/.ssh/known_hosts 2>/dev/null
 
+      # #929/#1004: the tree and the DB belong to the user the service RUNS as (SNV and, after its
+      # first release with #1004, PP: `presenter`; dev: newlevel). Read it from the host's unit, so
+      # this workflow is right before and after a site's user migration.
+      - name: Read the service user
+        id: su
+        run: |
+          set -euo pipefail
+          SU=$(ssh deploy-target "systemctl show -p User --value ${{ steps.env.outputs.service_name }}")
+          case "$SU" in [!a-z]* | *[!a-z0-9-]* | '') echo "::error::${{ steps.env.outputs.service_name }} has no usable User= ('$SU')"; exit 1 ;; esac
+          echo "Service user: $SU"
+          echo "service_user=$SU" >> "$GITHUB_OUTPUT"
+
       - name: Backup database
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -108,7 +116,7 @@ jobs:
           if [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
             TIMESTAMP=$(date +%Y%m%d-%H%M%S)
             sudo cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
-            sudo chown ${{ steps.env.outputs.service_user }}: "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            sudo chown ${{ steps.su.outputs.service_user }}: "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
             echo "Database backed up to ${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
           else
             echo "No existing database to back up"
@@ -123,7 +131,7 @@ jobs:
         if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
         run: |
           command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
-          SU=${{ steps.env.outputs.service_user }}
+          SU=${{ steps.su.outputs.service_user }}
           ssh deploy-target "sudo install -d -o $SU -g $SU ${{ steps.env.outputs.deploy_dir }}/libraries"
           # #929: written as root on the host, owned by the service user.
           rsync -avz --delete --rsync-path="sudo rsync" --chown=$SU:$SU -e "ssh -i ~/.ssh/id_deploy" \
@@ -138,7 +146,7 @@ jobs:
             KEEP_FLAG="--keep"
           fi
           DEPLOY_DIR="${{ steps.env.outputs.deploy_dir }}"
-          SU=${{ steps.env.outputs.service_user }}
+          SU=${{ steps.su.outputs.service_user }}
           # #929: as the service user — the database is its own.
           ssh deploy-target "set -e; cd /; echo 'Importing ProPresenter libraries (purge=${{ inputs.purge }})...'; sudo -u $SU env PRESENTER_DB_URL=sqlite://${DEPLOY_DIR}/presenter.db ${DEPLOY_DIR}/import_propresenter --root '${DEPLOY_DIR}/libraries' ${KEEP_FLAG}"
 
@@ -218,7 +226,7 @@ jobs:
           # #929: as the service user (the database is its own), with the variables set above.
           cd /
           # shellcheck disable=SC2046 # one word per NAME=value (paths without spaces)
-          sudo -u ${{ steps.env.outputs.service_user }} env $(env | grep -E '^PRESENTER_(DB_URL|BIBLE_[A-Z]+)=') \
+          sudo -u ${{ steps.su.outputs.service_user }} env $(env | grep -E '^PRESENTER_(DB_URL|BIBLE_[A-Z]+)=') \
             ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
           REMOTE_SCRIPT
 

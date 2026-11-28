@@ -80,7 +80,16 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   `library_sync: true`), then PRBA on dev1 (`needs: [build, deploy]`, `hardware: false`,
   `library_sync: false`). Every SNV path/port/service is an input (`/opt/presenter`, `80`,
   `presenter`, `/etc/presenter`), so a step edit lands in `deploy-site.yml`, never deploy.yml.
-- `scripts/ci/test_deploy_site_workflow.py` pins SNV's exact 29-step list and PRBA's skips; the
+- **release.yml (PP) CALLS it too (#1004)**: job `deploy-pp` = site `PP`, `hardware: true`,
+  `library_sync: true`, `service_user: presenter`, `vaapi_required: false` (GPU-less: vah264enc
+  missing is a `::warning::`), guest port 8099 + `vars.PP_GUEST_HOST`, `stage_url` /
+  `sync_peer_url` inputs (SNV's come from deploy.yml). Site-name branches inside deploy-site.yml:
+  the SSH key (`DEPLOY_SSH_KEY_PP` for PP) and the cloudflared token (`_PROD` / `_PP`) are picked
+  in the SHELL from env — never `cond && secrets.A || secrets.B`, which falls back to ANOTHER
+  site's key/token when the wanted secret is empty. The caller job needs `permissions:
+  actions: read` (release.yml's workflow-level `contents: write` zeroes every other scope, and the
+  staged pull lists the run's artifacts); its artifact is named `build-artifacts`.
+- `scripts/ci/test_deploy_site_workflow.py` pins SNV's exact step list (PP runs the same list) and PRBA's skips; the
   shell guards `tests/ci/adb-install-set-e.test.sh` and `tests/deploy/deploy-config.test.sh` read
   `deploy-site.yml` (a guard that greps deploy.yml for a step finds nothing since #918).
 - PRBA without the library sync must already hold its seeded DB (`require_seeded_db.sh`, seed:
@@ -93,8 +102,9 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
 - **The service runs as `service_user`, the deploy SSHs in as `deploy_user`** (SNV: `presenter` /
   `newlevel`; PRBA: `presenter-prba` for both). dcontroller's dante-guard lets a Dante app (dlink)
   onto the Dante leg by socket uid, so the admin login must never be the process (dstack
-  two-networks.md §3). The committed `presenter.service` is also PP's (release.yml) and keeps
-  `User=newlevel`; deploy-site.yml writes the site's `service-user.conf` drop-in.
+  two-networks.md §3). The committed `presenter.service` (SNV + PP) keeps `User=newlevel`;
+  deploy-site.yml writes the site's `service-user.conf` drop-in at the swap (PP migrates on its
+  first release with #1004).
 - **`scripts/deploy/ensure_service_user.sh`** creates the system user (home = deploy dir, the unit's
   only `ReadWritePaths`), never modifies an existing account (PRBA's is its SSH login — a moved
   home loses its authorized_keys), and on a device site seeds `<deploy_dir>/.android/adbkey` from
@@ -108,8 +118,9 @@ the PREVIOUS job's alias — SNV prod (10.77.9.205). Harmless only because auth 
   --chown`); the swap step does `sudo mv` + `sudo chown -R <service_user>:` between stop and start;
   DB writers (`import_propresenter`, `ingest_bibles`) run `sudo -u <service_user> env …`. "Verify
   deployment" fails unless the unit User and the MainPID's user are the service user.
-- **Other writers of SNV's tree follow it:** `import-data.yml` (production `service_user=presenter`,
-  PP/dev `newlevel`) uses the same sudo / `sudo -u … env` shapes; pipeline.yml's prod-DB snapshot
+- **Other writers of SNV's tree follow it:** `import-data.yml` reads the service user from the
+  host's unit (`systemctl show -p User --value`, step "Read the service user", #1004 — right before
+  and after a site's migration) and uses the same sudo / `sudo -u … env` shapes; pipeline.yml's prod-DB snapshot
   for dev runs as the DB file's OWNER (`sudo -n -u "$(stat -c %U …)"`) — never as root (a -wal/-shm
   created by root locks the service out) and never as newlevel (no write on the -shm). A command
   run via `sudo -u` starts with `cd /` (the deploy user's home may be closed to the service user).
