@@ -1,4 +1,4 @@
-//! #852 C3-7 supervisor tests: the real `ListenService` and supervisor, a
+//! #852 C3-7 / T1 supervisor tests: the real `ListenService` and supervisor, a
 //! fake `StreamingAsr` (records each open and the frames it got, answers a
 //! closed input with `Finished(None)`), a fake store, the paused clock and a
 //! settable local clock for the day.
@@ -10,13 +10,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{NaiveDate, NaiveDateTime, Utc};
 use presenter_core::listen::context::ContextInputs;
+use presenter_core::listen::language::SpokenLanguage;
 use presenter_core::listen::mics::MicConfig;
 use presenter_core::listen::transcript::{AsrToken, TokenBatch};
 use presenter_core::listen::transcription::{
     next_override, MicUsage, OffReason, SessionMode, SessionOverride, TranscriptionSetting,
     TranscriptionState, UsageRow,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 
 use super::{TranscriptionDeps, TranscriptionStore};
 use crate::listen::asr::{
@@ -124,7 +125,6 @@ struct Rig {
     listen: ListenService,
     asr: Arc<FakeAsr>,
     store: Arc<FakeStore>,
-    layout: Arc<RwLock<String>>,
     now: Arc<Mutex<NaiveDateTime>>,
 }
 
@@ -184,19 +184,16 @@ fn rig_with(
         inputs,
         ..FakeStore::default()
     });
-    let layout = Arc::new(RwLock::new("lyrics".to_string()));
     assert!(listen.start_transcription_with(TranscriptionDeps {
         asr: Arc::clone(&asr) as Arc<dyn StreamingAsr>,
         key,
         model: "stt-rt-v6".to_string(),
-        layout: Arc::clone(&layout),
         store: Arc::clone(&store) as Arc<dyn TranscriptionStore>,
     }));
     Rig {
         listen,
         asr,
         store,
-        layout,
         now,
     }
 }
@@ -216,8 +213,23 @@ async fn wait(seconds: u64) {
 }
 
 impl Rig {
-    async fn set_layout(&self, layout: &str) {
-        *self.layout.write().await = layout.to_string();
+    /// The index of the newest session the fake opened for `mic`.
+    fn session_of(&self, mic: &str) -> usize {
+        let opened = self.asr.opened.lock().unwrap();
+        opened
+            .iter()
+            .rposition(|o| o.cfg.mic_id == mic)
+            .expect("a session for the mic")
+    }
+
+    fn state_of(&self, mic: &str) -> (TranscriptionState, Option<OffReason>) {
+        let status = self.listen.transcription().status(day());
+        let shown = status
+            .mics
+            .iter()
+            .find(|m| m.mic_id == mic)
+            .expect("the mic is shown");
+        (shown.state, shown.reason)
     }
 
     /// The guest's status line: (state, reason).
@@ -234,7 +246,7 @@ impl Rig {
 }
 
 #[tokio::test(start_paused = true)]
-async fn nothing_starts_without_the_switch_the_guest_mic_the_key_and_the_layout() {
+async fn nothing_starts_without_the_switch_a_mic_the_key_or_under_the_cap() {
     let missing = TranscriptionSetting {
         guest_mic: Some("nobody".to_string()),
         ..on(240)
@@ -251,7 +263,6 @@ async fn nothing_starts_without_the_switch_the_guest_mic_the_key_and_the_layout(
         .into(),
     });
     let cases = [
-        (on(240), None, true, OffReason::NotPreach),
         (
             TranscriptionSetting {
                 enabled: false,
@@ -281,7 +292,6 @@ async fn nothing_starts_without_the_switch_the_guest_mic_the_key_and_the_layout(
         guest_mic: None,
         ..on(240)
     });
-    no_mic.set_layout("preach").await;
     wait(3).await;
     assert_eq!(no_mic.asr.opens(), 0);
     assert!(no_mic.listen.transcription().status(day()).mics.is_empty());
@@ -290,7 +300,6 @@ async fn nothing_starts_without_the_switch_the_guest_mic_the_key_and_the_layout(
         .listen
         .transcription()
         .set_override(choice(SessionMode::Off));
-    stopped_today.set_layout("preach").await;
     wait(3).await;
     assert_eq!(stopped_today.asr.opens(), 0);
     assert_eq!(
@@ -300,45 +309,37 @@ async fn nothing_starts_without_the_switch_the_guest_mic_the_key_and_the_layout(
 }
 
 #[tokio::test(start_paused = true)]
-async fn preach_starts_the_guest_session_and_leaving_it_stops_after_sixty_seconds() {
+async fn automatic_runs_at_every_service_whatever_the_stage_shows() {
     let rig = rig(on(240));
-    rig.set_layout("preach").await;
     wait(1).await;
-    assert_eq!(rig.asr.opens(), 1);
+    assert_eq!(rig.asr.opens(), 1, "no Kázeň layout gate since #852 T1");
     assert_eq!(rig.guest(), (TranscriptionState::Armed, None));
-    rig.set_layout("lyrics").await;
-    wait(58).await;
-    assert!(!rig.asr.closed(0), "still within the 60 s stop delay");
-    wait(3).await;
-    assert!(rig.asr.closed(0), "stopped after the delay");
-    assert_eq!(
-        rig.guest(),
-        (TranscriptionState::Off, Some(OffReason::NotPreach))
+    wait(120).await;
+    assert!(
+        !rig.asr.closed(0),
+        "it keeps running; only its mic's voice connects it"
     );
-    rig.set_layout("preach").await;
-    wait(1).await;
-    assert_eq!(rig.asr.opens(), 2, "Kázeň again starts a new session");
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_on_override_starts_without_preach_and_off_stops_for_the_rest_of_the_day() {
+async fn an_on_choice_keeps_the_session_and_off_stops_it_for_the_rest_of_the_day() {
     let rig = rig(on(240));
     wait(1).await;
+    assert_eq!(rig.asr.opens(), 1, "automatic already runs");
     let generation = rig
         .listen
         .transcription()
         .set_override(choice(SessionMode::On));
     // What a PUT does before it answers: the answer shows the started session.
     rig.listen.transcription_decided_on(generation).await;
-    assert_eq!(rig.asr.opens(), 1, "on runs without Kázeň");
+    assert_eq!(rig.asr.opens(), 1, "on keeps the running session");
     assert_eq!(rig.guest(), (TranscriptionState::Armed, None));
     rig.listen
         .transcription()
         .set_override(choice(SessionMode::Off));
-    rig.set_layout("preach").await;
     wait(5).await;
     assert!(rig.asr.closed(0));
-    assert_eq!(rig.asr.opens(), 1, "off wins over Kázeň today");
+    assert_eq!(rig.asr.opens(), 1, "off stops it for today");
     assert_eq!(
         rig.guest().1,
         Some(OffReason::OverrideOff),
@@ -346,7 +347,7 @@ async fn an_on_override_starts_without_preach_and_off_stops_for_the_rest_of_the_
     );
     *rig.now.lock().unwrap() = "2026-11-23T08:00:00".parse().unwrap();
     wait(2).await;
-    assert_eq!(rig.asr.opens(), 2, "the next day follows Kázeň again");
+    assert_eq!(rig.asr.opens(), 2, "the next day is automatic again");
 }
 
 #[tokio::test(start_paused = true)]
@@ -486,7 +487,6 @@ async fn the_context_carries_todays_prepared_references_and_tip_terms() {
         tip_terms: vec!["Shuttlesworth".to_string()],
     };
     let rig = rig_with(on(240), None, true, FakeAsr::default(), inputs);
-    rig.set_layout("preach").await;
     wait(1).await;
     let opened = rig.asr.opened.lock().unwrap();
     let cfg = &opened[0].cfg;
@@ -717,10 +717,7 @@ async fn a_provider_stop_is_lifted_by_a_new_guest_mic_or_a_new_day() {
     assert_eq!(rig.asr.opens(), 2, "another guest mic runs");
     refuse(1).await;
     wait(3).await;
-    assert_eq!(rig.asr.opens(), 2);
-    rig.set_layout("preach").await;
-    wait(2).await;
-    assert_eq!(rig.asr.opens(), 2, "Kázeň does not lift a refusal");
+    assert_eq!(rig.asr.opens(), 2, "no restart loop");
     *rig.now.lock().unwrap() = "2026-11-23T08:00:00".parse().unwrap();
     wait(2).await;
     assert_eq!(rig.asr.opens(), 3, "a new day runs again");
@@ -864,4 +861,194 @@ async fn usage_after_midnight_counts_for_the_new_day() {
         (500, 30_000),
         "only the delta after midnight is the new day's"
     );
+}
+
+/// A rig whose box also publishes the four fixed Dante handhelds (#852 T1).
+async fn handheld_rig(setting: TranscriptionSetting) -> Rig {
+    let rig = rig(setting);
+    rig.listen.set_dante_mics(true);
+    wait(1).await;
+    rig
+}
+
+const HANDHELDS: [&str; 4] = ["dante-mic-1", "dante-mic-2", "dante-mic-3", "dante-mic-4"];
+
+#[tokio::test(start_paused = true)]
+async fn every_handheld_gets_its_own_session_with_only_its_frames() {
+    let rig = handheld_rig(on(240)).await;
+    assert_eq!(rig.asr.opens(), 5, "four handhelds and the VBAN guest mic");
+    for (n, mic) in HANDHELDS.iter().enumerate() {
+        rig.send(mic, n as i16 + 1);
+    }
+    rig.send("guest", 9);
+    rig.send("interp", 7);
+    wait(1).await;
+    for (n, mic) in HANDHELDS.iter().enumerate() {
+        assert_eq!(rig.asr.frames(rig.session_of(mic)), [n as i16 + 1], "{mic}");
+    }
+    assert_eq!(rig.asr.frames(rig.session_of("guest")), [9]);
+    let status = rig.listen.transcription().status(day());
+    let shown: Vec<&str> = status.mics.iter().map(|m| m.mic_id.as_str()).collect();
+    assert_eq!(shown, [HANDHELDS.as_slice(), &["guest"]].concat());
+    assert!(status
+        .mics
+        .iter()
+        .all(|m| m.state == TranscriptionState::Armed));
+    rig.listen.set_dante_mics(false);
+    wait(2).await;
+    for mic in HANDHELDS {
+        assert!(rig.asr.closed(rig.session_of(mic)), "{mic} left the list");
+    }
+    assert!(!rig.asr.closed(rig.session_of("guest")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_daily_cap_counts_every_mics_connected_time() {
+    let rig = handheld_rig(on(10)).await;
+    usage(
+        &rig.asr.events(rig.session_of("dante-mic-1")),
+        1_000,
+        300_000,
+    )
+    .await;
+    wait(1).await;
+    assert!(!rig.asr.closed(0), "5 of 10 minutes");
+    usage(
+        &rig.asr.events(rig.session_of("dante-mic-2")),
+        1_000,
+        300_000,
+    )
+    .await;
+    wait(2).await;
+    for mic in HANDHELDS.iter().chain(&["guest"]) {
+        assert!(rig.asr.closed(rig.session_of(mic)), "{mic}");
+        assert_eq!(
+            rig.state_of(mic),
+            (TranscriptionState::Off, Some(OffReason::CapReached))
+        );
+    }
+    let status = rig.listen.transcription().status(day());
+    let one = status
+        .mics
+        .iter()
+        .find(|m| m.mic_id == "dante-mic-2")
+        .unwrap();
+    assert_eq!(
+        one.connected_ms_today, 300_000,
+        "each mic keeps its own figure"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_on_one_mic_stops_every_mic_without_a_restart_loop() {
+    let rig = handheld_rig(on(240)).await;
+    let events = rig.asr.events(rig.session_of("dante-mic-3"));
+    events
+        .send(AsrEvent::State {
+            state: TranscriptionState::Stopped,
+            error: Some("402 payment required".to_string()),
+        })
+        .await
+        .unwrap();
+    events
+        .send(AsrEvent::Finished(Some(OffReason::Payment)))
+        .await
+        .unwrap();
+    wait(10).await;
+    assert_eq!(rig.asr.opens(), 5, "no restart loop");
+    for mic in HANDHELDS.iter().chain(&["guest"]) {
+        assert!(rig.asr.closed(rig.session_of(mic)), "{mic}");
+        assert_eq!(
+            rig.state_of(mic),
+            (TranscriptionState::Stopped, Some(OffReason::Payment))
+        );
+    }
+    let status = rig.listen.transcription().status(day());
+    assert!(status
+        .mics
+        .iter()
+        .all(|m| m.error.as_deref() == Some("402 payment required")));
+    rig.listen
+        .transcription()
+        .set_override(choice(SessionMode::On));
+    wait(1).await;
+    assert_eq!(rig.asr.opens(), 10, "a new choice runs every mic again");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unexpected_end_retries_only_its_own_mic() {
+    let rig = handheld_rig(on(240)).await;
+    let first = rig.session_of("dante-mic-2");
+    rig.asr
+        .events(first)
+        .send(AsrEvent::Finished(None))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        rig.state_of("dante-mic-2"),
+        (TranscriptionState::Reconnecting, None)
+    );
+    assert_eq!(
+        rig.state_of("dante-mic-1"),
+        (TranscriptionState::Armed, None)
+    );
+    wait(2).await;
+    assert_eq!(rig.asr.opens(), 6, "only mic 2 was opened again");
+    assert_ne!(rig.session_of("dante-mic-2"), first);
+    for mic in ["dante-mic-1", "dante-mic-3", "dante-mic-4", "guest"] {
+        assert!(!rig.asr.closed(rig.session_of(mic)), "{mic} kept running");
+    }
+}
+
+fn tagged(text: &str, language: &str) -> AsrToken {
+    AsrToken {
+        language: Some(language.to_string()),
+        ..token(text, 0, true)
+    }
+}
+
+async fn words(rig: &Rig, mic: &str, language: &str, n: usize) {
+    let batch = TokenBatch {
+        connection: 1,
+        offset_ms: 0,
+        tokens: (0..n).map(|_| tagged(" word", language)).collect(),
+        received_at: Utc::now(),
+    };
+    let events = rig.asr.events(rig.session_of(mic));
+    events.send(AsrEvent::Tokens(batch)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_mics_final_token_language_becomes_its_spoken_language() {
+    let capture = Capture::install();
+    let rig = handheld_rig(on(240)).await;
+    let spoken = rig.listen.spoken_languages();
+    words(&rig, "dante-mic-1", "en", 5).await;
+    assert!(spoken.borrow().is_empty(), "five words are not enough yet");
+    words(&rig, "dante-mic-1", "en", 1).await;
+    words(&rig, "dante-mic-2", "sk", 8).await;
+    assert_eq!(
+        spoken.borrow().get("dante-mic-1"),
+        Some(&SpokenLanguage::Foreign)
+    );
+    assert_eq!(
+        spoken.borrow().get("dante-mic-2"),
+        Some(&SpokenLanguage::Slovak)
+    );
+    words(&rig, "dante-mic-1", "en", 10).await;
+    let changes = capture.events_with_message("mic language changed");
+    assert_eq!(changes.len(), 2, "logged on a change only: {changes:?}");
+    assert_eq!(changes[0].field("mic"), Some("\"dante-mic-1\""));
+    assert_eq!(changes[0].field("to"), Some("\"foreign\""));
+    // the guest preacher's mic hands over to Slovak: one more line
+    words(&rig, "dante-mic-1", "sk", 30).await;
+    assert_eq!(
+        spoken.borrow().get("dante-mic-1"),
+        Some(&SpokenLanguage::Slovak)
+    );
+    let changes = capture.events_with_message("mic language changed");
+    assert_eq!(changes.len(), 3);
+    assert_eq!(changes[2].field("from"), Some("\"foreign\""));
 }

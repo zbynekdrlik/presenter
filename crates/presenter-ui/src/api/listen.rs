@@ -43,7 +43,7 @@ pub async fn put_transcription(
     put_json_refusal("/listen/transcription", setting).await
 }
 
-/// Today's choice: start now, stop, or follow the Kázeň layout.
+/// Today's choice: start now, stop, or automatic (runs while a mic is voiced).
 pub async fn put_session(mode: SessionMode) -> Result<TranscriptionStatus, ApiError> {
     put_json_refusal("/listen/session", &SessionChoice { mode }).await
 }

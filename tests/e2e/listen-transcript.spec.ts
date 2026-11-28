@@ -180,9 +180,13 @@ test("the owner switches the guest transcription on in Settings", async ({ brows
   expect(status.keyConfigured).toBe(true);
   expect(status.model).toBe("stt-rt-v6");
 
-  // auto: waits for the Kázeň layout; the three choices show today's mode
+  // auto runs at every service (#852 T1): armed, it connects on the first
+  // voiced frame; the three choices show today's mode
   const line = section.locator('[data-role="listen-transcription-line"]');
-  await expect(line).toContainText("Čaká na rozloženie Kázeň");
+  await expect(section.locator('[data-role="listen-transcription-state"]')).toHaveAttribute(
+    "data-state",
+    "armed",
+  );
   await expect(line).toContainText("/ 30 min dnes");
   const auto = section.locator('[data-role="listen-session-auto"]');
   await expect(auto).toHaveAttribute("aria-pressed", "true");
@@ -221,11 +225,15 @@ test("the interpreter reads the guest live, through an outage, and can look back
   const errors: string[] = [];
   const setting = { enabled: true, guestMic: "guest", dailyCapMinutes: 30 };
   const owner = await openPage(browser, { viewport: { width: 1400, height: 900 } }, "/ui/settings", errors);
-  expect((await owner.request.put(url("/listen/transcription"), { data: setting })).ok()).toBe(true);
+  const switchedOff = { ...setting, enabled: false };
+  expect((await owner.request.put(url("/listen/transcription"), { data: switchedOff })).ok()).toBe(true);
   const tablet = await openPage(browser, TABLET_1180, "/ui/interpreter", errors);
   const grid = tablet.locator('[data-role="interpreter-grid"]');
-  // nothing runs yet (auto, no Kázeň): the tips keep the whole page
+  // nothing runs while the switch is off: the tips keep the whole page
   await expect(grid).toHaveAttribute("data-transcript", "absent");
+  expect((await owner.request.put(url("/listen/transcription"), { data: setting })).ok()).toBe(true);
+  // auto runs at every service (#852 T1): the session is armed, the column is there
+  await expect(grid).toHaveAttribute("data-transcript", "present");
 
   await owner.locator('[data-role="listen-session-on"]').click();
   await expect.poll(async () => (await transcription(owner)).mode).toBe("on");
@@ -251,7 +259,8 @@ test("the interpreter reads the guest live, through an outage, and can look back
       audio_format: "pcm_s16le",
       sample_rate: 16000,
       num_channels: 1,
-      language_hints: ["en"],
+      language_hints: ["sk", "en"],
+      enable_language_identification: true,
     });
     expect(config).not.toHaveProperty("api_key");
     const terms = (config.context as { terms: string[] }).terms;

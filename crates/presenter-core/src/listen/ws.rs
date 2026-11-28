@@ -208,7 +208,6 @@ mod tests {
             (OffReason::GuestMicMissing, "guestMicMissing"),
             (OffReason::NoKey, "noKey"),
             (OffReason::CapReached, "capReached"),
-            (OffReason::NotPreach, "notPreach"),
             (OffReason::OverrideOff, "overrideOff"),
             (OffReason::Auth, "auth"),
             (OffReason::Payment, "payment"),

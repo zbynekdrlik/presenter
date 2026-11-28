@@ -106,7 +106,7 @@ fn newest_tail(tails: &[TranscriptTail]) -> Option<&TranscriptTail> {
 }
 
 /// The column shows once it has text, a session that runs, or a reason worth
-/// a banner — never for "waiting for the Kázeň layout".
+/// a banner — never for a plain "stopped today".
 fn shows(has_sentences: bool, has_tail: bool, session: Option<&MicTranscription>) -> bool {
     has_sentences
         || has_tail
@@ -404,10 +404,10 @@ mod tests {
             !shows(false, false, None),
             "no session, no text: the tips stay full width"
         );
-        let waiting = session(TranscriptionState::Off, Some(OffReason::NotPreach));
+        let waiting = session(TranscriptionState::Off, Some(OffReason::OverrideOff));
         assert!(
             !shows(false, false, Some(&waiting)),
-            "waiting for the Kázeň layout is not worth a column"
+            "stopped for today is not worth a column"
         );
         let cap = session(TranscriptionState::Off, Some(OffReason::CapReached));
         assert!(shows(false, false, Some(&cap)), "the cap is worth a banner");

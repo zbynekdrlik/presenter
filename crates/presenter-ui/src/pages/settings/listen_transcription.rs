@@ -1,10 +1,12 @@
 //! Settings → "Počúvanie" → "Prepis hosťa" (#852 C3-9, spec §22.5 / §6.4): the
-//! owner's controls of the paid live transcript of the guest's microphone —
-//! the switch, which mic is the guest's (every published mic, VBAN and Dante,
-//! by name), the daily cap in minutes, today's choice "Spustiť teraz" /
-//! "Zastaviť" / "Automaticky (Kázeň)" (`PUT /listen/session`), a warning when
-//! the box has no Soniox key, and ONE status line (state, reason, minutes
-//! against the cap, today's cost, latency). Everything it shows comes from the
+//! owner's controls of the paid live transcript — since #852 T1 of EVERY
+//! handheld (the Dante mics) plus an optional extra mic ("Ďalší mikrofón",
+//! every published mic by name; a Dante one is transcribed anyway), the
+//! switch, the daily cap in minutes (one cap for all mics), today's choice
+//! "Spustiť teraz" / "Zastaviť" / "Automaticky" (`PUT /listen/session`), a
+//! warning when the box has no Soniox key, and ONE status line (the most
+//! active mic's state and reason, every mic's minutes against the cap and
+//! today's cost, the latency). Everything it shows comes from the
 //! card's one `GET /listen/status` poll (no second poll); a change is a
 //! `PUT /listen/transcription` of the whole setting, its answer is shown at
 //! once and the poll confirms. A refused PUT (the server's Slovak 422 rule)
@@ -51,11 +53,34 @@ fn badge_modifier(state: TranscriptionState) -> &'static str {
     }
 }
 
-/// The guest mic's session, or — with no guest session in the status (no mic
-/// chosen) — an `off` one whose reason the setting gives.
+/// How active a state is: the status line speaks about the most active mic.
+fn activity(state: TranscriptionState) -> u8 {
+    match state {
+        TranscriptionState::Streaming => 7,
+        TranscriptionState::Connecting => 6,
+        TranscriptionState::Reconnecting => 5,
+        TranscriptionState::Gated => 4,
+        TranscriptionState::Stopped => 3,
+        TranscriptionState::Armed => 2,
+        TranscriptionState::Parked => 1,
+        TranscriptionState::Off => 0,
+    }
+}
+
+/// The line's session: the most active mic's (the first of equals), with
+/// every mic's time and cost today (ONE cap counts them all, #852 T1); with
+/// no mic in the status (none to transcribe), an `off` one whose reason the
+/// setting gives.
 fn guest_session(t: &TranscriptionStatus) -> MicTranscription {
-    if let Some(mic) = t.mics.first() {
-        return mic.clone();
+    let most_active = t.mics.iter().rev().max_by_key(|mic| activity(mic.state));
+    if let Some(mic) = most_active {
+        let sum = |f: fn(&MicTranscription) -> u64| t.mics.iter().map(f).sum::<u64>();
+        return MicTranscription {
+            audio_ms_today: sum(|m| m.audio_ms_today),
+            connected_ms_today: sum(|m| m.connected_ms_today),
+            cost_usd_today: t.mics.iter().map(|m| m.cost_usd_today).sum(),
+            ..mic.clone()
+        };
     }
     let reason = if t.setting.enabled {
         OffReason::NoGuestMic
@@ -207,7 +232,7 @@ impl Section {
                 let text = match mode {
                     SessionMode::On => "Prepis hosťa sa spúšťa.",
                     SessionMode::Off => "Prepis hosťa je dnes zastavený.",
-                    SessionMode::Auto => "Prepis hosťa sa spustí s rozložením Kázeň.",
+                    SessionMode::Auto => "Prepis beží automaticky, keď niekto hovorí do mikrofónu.",
                 };
                 self.toast.show(text, "success");
             }
@@ -241,7 +266,7 @@ fn mode_button(
     let (role, label) = match mode {
         SessionMode::On => ("listen-session-on", "Spustiť teraz"),
         SessionMode::Off => ("listen-session-off", "Zastaviť"),
-        SessionMode::Auto => ("listen-session-auto", "Automaticky (Kázeň)"),
+        SessionMode::Auto => ("listen-session-auto", "Automaticky"),
     };
     let on = move || current.get() == Some(mode);
     view! {
@@ -315,7 +340,7 @@ pub(super) fn GuestTranscription(
         <div class="settings__form" data-role="listen-transcription">
             <div class="settings__form-header"><h3>"Prepis hosťa"</h3></div>
             <p class="settings__list-meta settings__list-meta--muted">
-                "Anglický prepis reči hosťa pre tlmočníka (služba Soniox, platená podľa minút pripojenia). Beží len pre mikrofón hosťa."
+                "Prepis reči z každého ručného mikrofónu (slovenčina aj angličtina, jazyk rozpozná služba Soniox; platená podľa minút pripojenia). Pripojí sa len keď niekto do mikrofónu hovorí."
             </p>
             <Show when=move || no_key.get()>
                 <p class="settings__list-meta settings__list-meta--warning" data-role="listen-transcription-key">
@@ -334,7 +359,7 @@ pub(super) fn GuestTranscription(
                     <span>"Prepis hosťa (Soniox)"</span>
                 </label>
                 <label>
-                    "Mikrofón hosťa"
+                    "Ďalší mikrofón"
                     <select node_ref=section.mic_ref data-role="listen-guest-mic"
                         prop:disabled=move || locked.get()
                         on:change=move |ev| {
@@ -516,6 +541,39 @@ mod tests {
             guest_session(&t).state,
             TranscriptionState::Gated,
             "the server's own session wins"
+        );
+    }
+
+    #[test]
+    fn the_line_speaks_about_the_most_active_mic_with_every_mics_time() {
+        let mut t = TranscriptionStatus::default();
+        t.setting.enabled = true;
+        let mic = |id: &str, state, connected_ms, cost| MicTranscription {
+            mic_id: id.into(),
+            state,
+            connected_ms_today: connected_ms,
+            audio_ms_today: connected_ms / 2,
+            cost_usd_today: cost,
+            ..MicTranscription::default()
+        };
+        t.mics = vec![
+            mic("dante-mic-1", TranscriptionState::Armed, 60_000, 0.01),
+            mic("dante-mic-2", TranscriptionState::Streaming, 120_000, 0.02),
+            mic("dante-mic-3", TranscriptionState::Gated, 0, 0.0),
+        ];
+        let line = guest_session(&t);
+        assert_eq!(line.mic_id, "dante-mic-2", "the one that streams");
+        assert_eq!(line.state, TranscriptionState::Streaming);
+        assert_eq!(line.connected_ms_today, 180_000, "one cap counts every mic");
+        assert_eq!(line.audio_ms_today, 90_000);
+        assert!((line.cost_usd_today - 0.03).abs() < 1e-9);
+        t.mics[1].state = TranscriptionState::Armed;
+        assert_eq!(guest_session(&t).mic_id, "dante-mic-3", "gated beats armed");
+        t.mics[2].state = TranscriptionState::Armed;
+        assert_eq!(
+            guest_session(&t).mic_id,
+            "dante-mic-1",
+            "the first of equals"
         );
     }
 

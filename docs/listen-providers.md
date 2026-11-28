@@ -21,7 +21,7 @@ still unverified. Spec: `docs/superpowers/specs/2026-10-14-sermon-listening-inte
 ### Config sent (the measured one, spec §22.3)
 
 `audio_format: "pcm_s16le"`, `sample_rate: 16000`, `num_channels: 1`,
-`language_hints: ["en"]`, `context.general` (domain "Christian church sermon",
+`language_hints: ["en"]` (since #852 T1: `["sk", "en"]` + `enable_language_identification: true`), `context.general` (domain "Christian church sermon",
 topic "preacher reads and cites Bible books, chapters and verses"),
 `context.terms` (the 66 English book names from the resolver table, Christian
 terms, today's prepared references, today's šepkár source terms). No

@@ -23,7 +23,7 @@ fn over(d: u32, mode: SessionMode, extra_minutes: u32) -> SessionOverride {
     }
 }
 
-/// Everything allowed: published mic, key, under the cap, stage on Kázeň.
+/// Everything allowed: published mics, key, under the cap.
 fn inputs<'a>(setting: &'a TranscriptionSetting, published: &'a [MicConfig]) -> StartInputs<'a> {
     StartInputs {
         setting,
@@ -31,7 +31,6 @@ fn inputs<'a>(setting: &'a TranscriptionSetting, published: &'a [MicConfig]) -> 
         key: true,
         today: day(15),
         over: None,
-        preach: true,
         connected_ms_today: 0,
     }
 }
@@ -77,19 +76,16 @@ fn absent_rows_mean_off() {
 }
 
 #[test]
-fn the_decision_checks_switch_mic_key_cap_override_then_preach_in_that_order() {
+fn the_decision_checks_switch_mic_key_cap_then_override_in_that_order() {
     let published = fixed_dante_mics();
     let all_on = enabled();
-    assert_eq!(
-        start_decision(&inputs(&all_on, &published)),
-        Ok("dante-mic-1".into())
-    );
+    let all_four: Vec<String> = published.iter().map(|m| m.id.clone()).collect();
+    assert_eq!(start_decision(&inputs(&all_on, &published)), Ok(all_four));
 
     // Each case breaks one condition AND every later one: the earliest wins.
     let off_today = over(15, SessionMode::Off, 0);
     let mut later_broken = inputs(&all_on, &[]);
     later_broken.key = false;
-    later_broken.preach = false;
     later_broken.over = Some(&off_today);
     later_broken.connected_ms_today = u64::MAX;
 
@@ -117,7 +113,7 @@ fn the_decision_checks_switch_mic_key_cap_override_then_preach_in_that_order() {
     assert_eq!(
         start_decision(&later_broken),
         Err(OffReason::GuestMicMissing),
-        "the chosen mic is not published"
+        "no handheld, and the chosen mic is not published"
     );
 
     let case = StartInputs {
@@ -136,7 +132,51 @@ fn the_decision_checks_switch_mic_key_cap_override_then_preach_in_that_order() {
     assert_eq!(start_decision(&case), Err(OffReason::OverrideOff));
 
     let case = StartInputs { over: None, ..case };
-    assert_eq!(start_decision(&case), Err(OffReason::NotPreach));
+    assert!(
+        start_decision(&case).is_ok(),
+        "automatic runs at every service — no Kázeň layout gate (#852 T1)"
+    );
+}
+
+#[test]
+fn every_handheld_and_the_guest_mic_are_transcribed() {
+    let mut published = fixed_dante_mics();
+    let mut vban = published[0].clone();
+    vban.id = "guest".into();
+    vban.transport = crate::listen::mics::MicTransport::Vban;
+    vban.dante = None;
+    published.push(vban);
+    let dante_guest = enabled();
+    assert_eq!(
+        transcribed_mics(&dante_guest, &published),
+        vec!["dante-mic-1", "dante-mic-2", "dante-mic-3", "dante-mic-4"],
+        "a Dante guest mic is not listed twice"
+    );
+    let vban_guest = TranscriptionSetting {
+        guest_mic: Some("guest".into()),
+        ..enabled()
+    };
+    assert_eq!(
+        transcribed_mics(&vban_guest, &published),
+        vec![
+            "dante-mic-1",
+            "dante-mic-2",
+            "dante-mic-3",
+            "dante-mic-4",
+            "guest"
+        ]
+    );
+    let vban_only: Vec<MicConfig> = published[4..].to_vec();
+    assert_eq!(transcribed_mics(&vban_guest, &vban_only), vec!["guest"]);
+    let missing = TranscriptionSetting {
+        guest_mic: Some("nobody".into()),
+        ..enabled()
+    };
+    assert_eq!(
+        transcribed_mics(&missing, &published[..2]),
+        vec!["dante-mic-1", "dante-mic-2"],
+        "a missing guest mic never stops the handhelds"
+    );
 }
 
 #[test]
@@ -157,9 +197,8 @@ fn an_override_from_yesterday_is_ignored() {
     let yesterday_off = over(14, SessionMode::Off, 60);
     let mut i = inputs(&setting, &published);
     i.over = Some(&yesterday_off);
-    assert_eq!(
-        start_decision(&i),
-        Ok("dante-mic-1".into()),
+    assert!(
+        start_decision(&i).is_ok(),
         "yesterday's stop does not stop today"
     );
     assert_eq!(today_mode(Some(&yesterday_off), day(15)), SessionMode::Auto);
@@ -168,46 +207,23 @@ fn an_override_from_yesterday_is_ignored() {
         240 * 60_000,
         "yesterday's extra hour is not today's"
     );
-    i.preach = false;
-    assert_eq!(start_decision(&i), Err(OffReason::NotPreach));
 }
 
 #[test]
-fn on_override_starts_without_preach() {
+fn on_and_auto_both_run_and_off_stops() {
     let published = fixed_dante_mics();
     let setting = enabled();
-    let on_today = over(15, SessionMode::On, 0);
-    let mut i = inputs(&setting, &published);
-    i.preach = false;
-    i.over = Some(&on_today);
-    assert_eq!(start_decision(&i), Ok("dante-mic-1".into()));
-    let auto_today = over(15, SessionMode::Auto, 0);
-    i.over = Some(&auto_today);
-    assert_eq!(start_decision(&i), Err(OffReason::NotPreach));
+    for (mode, runs) in [
+        (SessionMode::On, true),
+        (SessionMode::Auto, true),
+        (SessionMode::Off, false),
+    ] {
+        let today = over(15, mode, 0);
+        let mut i = inputs(&setting, &published);
+        i.over = Some(&today);
+        assert_eq!(start_decision(&i).is_ok(), runs, "{mode:?}");
+    }
 }
-
-#[test]
-fn preach_keeps_running_sixty_seconds_after_leaving() {
-    let left = Instant::now();
-    assert!(preach_active("preach", None, left));
-    assert!(!preach_active("worship", None, left));
-    assert!(preach_active("worship", Some(left), left));
-    assert!(preach_active(
-        "worship",
-        Some(left),
-        left + Duration::from_millis(59_999)
-    ));
-    assert!(!preach_active(
-        "worship",
-        Some(left),
-        left + Duration::from_secs(60)
-    ));
-    assert!(
-        preach_active("preach", Some(left), left + Duration::from_secs(3_600)),
-        "back on Kázeň runs whatever the old leave time"
-    );
-}
-
 #[test]
 fn a_start_after_the_cap_adds_an_hour() {
     let setting = enabled();
@@ -351,7 +367,6 @@ fn every_off_reason_has_its_own_slovak_line() {
         OffReason::GuestMicMissing,
         OffReason::NoKey,
         OffReason::CapReached,
-        OffReason::NotPreach,
         OffReason::OverrideOff,
         OffReason::Auth,
         OffReason::Payment,

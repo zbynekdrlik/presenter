@@ -22,13 +22,14 @@ fn config(endpoint_delay_ms: Option<u32>) -> SonioxConfig {
 }
 
 #[test]
-fn the_config_matches_the_measured_one() {
+fn the_config_matches_the_measured_one_with_language_identification() {
     let message = config_message(&config(None));
     assert_eq!(
         message,
         concat!(
             r#"{"model":"stt-rt-v6","audio_format":"pcm_s16le","sample_rate":16000,"#,
-            r#""num_channels":1,"language_hints":["en"],"context":{"general":["#,
+            r#""num_channels":1,"language_hints":["sk","en"],"#,
+            r#""enable_language_identification":true,"context":{"general":["#,
             r#"{"key":"domain","value":"Christian church sermon"},"#,
             r#"{"key":"topic","value":"preacher cites Bible verses"}],"#,
             r#""terms":["Genesis","Romans 8:37"]}}"#

@@ -41,10 +41,12 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   tungstenite still answers a SERVER ping by itself.
 - **The key goes only in the upgrade's `Authorization: Bearer` header** — never the deprecated
   `api_key` config field, never a log, `Debug`, status or error text (C3-3 / C3-5 below).
-- **The config is the measured one** (`stt-rt-v6`, `pcm_s16le` 16 kHz mono, `language_hints: ["en"]`,
-  the `context` of spec §22.3, no translation, endpoint detection OFF unless
-  `PRESENTER_LISTEN_SONIOX_ENDPOINT_DELAY_MS` is set). A change to it is a measured decision (C3-10 /
-  the owner), never a tweak.
+- **The config is the measured one** (`stt-rt-v6`, `pcm_s16le` 16 kHz mono, the `context` of spec
+  §22.3, no translation, endpoint detection OFF unless `PRESENTER_LISTEN_SONIOX_ENDPOINT_DELAY_MS` is
+  set) plus, since #852 T1 (owner 28.11.2026), `language_hints: ["sk", "en"]` +
+  `enable_language_identification: true` (docs `stt/concepts/language-identification`: every token
+  carries `language`; never `language_hints_strict` — the language is what we learn). A change to it
+  is a measured decision (C3-10 / the owner), never a tweak.
 - **The numbers** (`listen/soniox/machine.rs` consts, each pinned by a test): lazy connect on the first
   voiced frame (> −50 dBFS) with a 1 s pre-roll; gate after 10 s without voice → ONE `finalize`, then
   keepalives; park after 5 min gated (empty TEXT frame = end), the next voice reconnects without
@@ -52,8 +54,20 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   replay); stall = 15 s without a response while ≥ 10 s of audio went out; stop without retry on
   401 / 402 / 403 / 400 and on > 20 connections in 10 min; rollover from 280 min at a gated moment,
   295 min regardless (`<fin>` wait ≤ 3 s).
-- **Only the guest mic** (`listen.transcription.guestMic`) is transcribed; the interpreter mic never
-  goes to the cloud in C3.
+- **Every handheld (#852 T1, ROZHODNUTÉ 28.11.2026 option b):** core `transcribed_mics` = every
+  published Dante mic (`dante-mic-1` … `-4`) + the chosen `guestMic` when published and not one of
+  them; one session per mic, at EVERY service — no Kázeň layout gate any more (`auto` = runs, `off`
+  stops today, `on` also runs past the cap). Each session connects only on its mic's voice (gate 10 s,
+  park 5 min), so a silent handheld costs nothing. ONE daily cap over every mic's connected ms
+  (`Meter::connected_total`); a provider refusal (key / account / request / > 20 connections) stops
+  EVERY mic (one `Block`); an unexpected end retries only its own mic (`Retry` per mic); stops run
+  together (one 5 s wait, `join_all`). The Settings line shows the most active mic with every mic's
+  minutes and cost.
+- **Spoken language (#852 T2, core `listen/language.rs`):** each mic task feeds its FINAL tagged word
+  tokens into a `LanguageWindow` (last 30 tokens ≈ 20 words; ≥ 6 needed; majority, a tie to the
+  newest; `cs` counts as Slovak) → `ListenService::set_spoken_language` (a `watch` map) → `pulpit`
+  ranks by it over the mic's configured language. INFO `mic language changed` (mic, from, to) on a
+  change only; a mic keeps its last language across sessions.
 - **Cost:** the daily cap counts CONNECTED time (not voiced time); no voice = no connection.
 - **The mock seam:** tests never reach Soniox — the scripted server `listen/soniox/tests/mock.rs`
   (`Connector` over `tokio::io::duplex`), a fake `StreamingAsr` for the supervisor, and in E2E
@@ -86,8 +100,8 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   `listen/testdata/soniox-assembly-fixture.jsonl` is hand-written (own text): never commit an eval log
   of a sermon.
 - **Transcription rules + context (#852 C3-2, core `listen/transcription.rs`, `listen/context.rs`, pure):**
-  ONE `start_decision` (switch → guest mic chosen → published → key → cap → today's `listen.session`
-  choice → Kázeň with the 60 s stop delay) used by the supervisor AND the status; the cap counts
+  ONE `start_decision` (switch → a mic to transcribe (`transcribed_mics`) → key → cap → today's
+  `listen.session` choice; the Kázeň gate was removed by #852 T1) → `Ok(mics)`, used by the supervisor AND the status; the cap counts
   connected ms (`>=` = reached), a start after it adds 60 min to today's row only. Save a
   `listen.transcription` row with `validate_transcription_change(new, stored, published)`: a mic the
   stored row names stays valid while missing (spec gap 7 — the switch must go off then). Context terms:
@@ -158,8 +172,7 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
 - **Transcription supervisor (#852 C3-7, server `listen/transcription/{mod,mic,meter}.rs`,
   `state/listen_transcription.rs`):** ONE supervisor task (`ListenService::start_transcription`, from
   `start_listen` after the three rows are read under the save lock — never in validate mode) runs core
-  `start_decision` on every rows / mic-list change and a 1 s tick that also reads `AppState.stage_layout`
-  (the moment it left `preach` starts the 60 s delay); it never adds a channel into `state/mod.rs`. A
+  `start_decision` on every rows / mic-list change and a 1 s tick; it never adds a channel into `state/mod.rs`. A
   running session = ONE mic task: frames → `rms_dbfs` → `try_send` (a full input = a counted drop, a lagging
   frame channel = counted lost frames, both #484-gated WARNs — the chain never waits), events → assembler →
   hub (`push_sentence` / `set_tail`), `State` / `Usage` (session RUNNING TOTALS → the mic task adds deltas
