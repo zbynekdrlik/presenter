@@ -337,6 +337,9 @@ struct Supervisor {
     /// The running sessions by mic id.
     running: BTreeMap<String, Running>,
     blocked: Option<Block>,
+    /// Per mic: a session stopped for its own "too many connections" (that
+    /// one handheld reconnecting, never the box's key or account).
+    mic_blocks: BTreeMap<String, Block>,
     /// Per mic: sessions that ended unexpectedly in a row.
     retries: BTreeMap<String, Retry>,
     /// The rows the last decision saw (a change resets the back-off).
@@ -395,6 +398,7 @@ pub(crate) async fn supervise(listen: ListenService, deps: TranscriptionDeps) {
         deps,
         running: BTreeMap::new(),
         blocked: None,
+        mic_blocks: BTreeMap::new(),
         retries: BTreeMap::new(),
         last_key: None,
         last_saved: Instant::now(),
@@ -465,6 +469,9 @@ impl Supervisor {
         });
         let off = decision.as_ref().err().copied();
         let want = decision.unwrap_or_default();
+        // A mic not transcribed now keeps no language: pulpit must not rank
+        // a handheld by a speaker of an earlier service or day (#852 T2).
+        self.listen.keep_spoken_languages(&want);
         let key = BlockKey::of(&rows, today);
         self.follow_rows(&key);
         // A block or a back-off only exists while no session of that mic runs.
@@ -476,22 +483,31 @@ impl Supervisor {
             .collect();
         if !unwanted.is_empty() {
             let why = match (off, self.blocked.is_some()) {
-                (Some(reason), _) => reason.slovak(),
+                (Some(_), _) => "the decision is off",
                 (None, true) => "blocked",
-                (None, false) => "the mic is no longer published",
+                (None, false) => "the mic is no longer transcribed",
             };
-            self.stop(&unwanted, why).await;
+            self.stop(&unwanted, why, off).await;
             // That stop may have come back refused: its block names the rows
             // the session ran under, so rows changed since lift it at once.
             self.follow_rows(&key);
         }
         if self.blocked.is_none() {
             let now = Instant::now();
-            for mic in &want {
-                let backing_off = self.retries.get(mic).is_some_and(|r| r.backing_off(now));
-                if !backing_off && !self.running.contains_key(mic) {
-                    self.start(mic.clone(), today, &published, key.clone())
-                        .await;
+            let starting: Vec<&String> = want
+                .iter()
+                .filter(|mic| {
+                    !self.running.contains_key(*mic)
+                        && !self.mic_blocks.contains_key(*mic)
+                        && !self.retries.get(*mic).is_some_and(|r| r.backing_off(now))
+                })
+                .collect();
+            if !starting.is_empty() {
+                // One read for every mic that starts now (a decision's answer
+                // waits for it, `decided_on`).
+                let inputs = self.context_inputs(today).await;
+                for mic in starting {
+                    self.start(mic.clone(), &inputs, &published, key.clone());
                 }
             }
         }
@@ -511,27 +527,33 @@ impl Supervisor {
             tracing::info!(target: ASR_TARGET, "the setting changed, the stopped transcription may run again");
             self.blocked = None;
         }
+        self.mic_blocks.retain(|_, block| block.key == *key);
         if self.last_key.as_ref() != Some(key) {
             self.retries.clear();
             self.last_key = Some(key.clone());
         }
     }
 
-    async fn start(
-        &mut self,
-        mic: String,
-        today: NaiveDate,
-        published: &[MicConfig],
-        key: BlockKey,
-    ) {
-        let inputs = match self.deps.store.context_inputs(today).await {
+    /// Today's references and tips for the context (fixed terms only when
+    /// they cannot be read).
+    async fn context_inputs(&self, today: NaiveDate) -> ContextInputs {
+        match self.deps.store.context_inputs(today).await {
             Ok(inputs) => inputs,
             Err(err) => {
                 tracing::warn!(target: ASR_TARGET, error = %err, "today's references and tips cannot be read — the context carries the fixed terms only");
                 ContextInputs::default()
             }
-        };
-        let context = context_terms(&inputs);
+        }
+    }
+
+    fn start(
+        &mut self,
+        mic: String,
+        inputs: &ContextInputs,
+        published: &[MicConfig],
+        key: BlockKey,
+    ) {
+        let context = context_terms(inputs);
         let name = published
             .iter()
             .find(|m| m.id == mic)
@@ -570,7 +592,7 @@ impl Supervisor {
 
     /// End these mics' sessions together: their last words go out, then they
     /// are gone (each gets [`STOP_WAIT`], all at once).
-    async fn stop(&mut self, mics: &[String], why: &str) {
+    async fn stop(&mut self, mics: &[String], why: &str, reason: Option<OffReason>) {
         let mut stopping: Vec<Running> = mics
             .iter()
             .filter_map(|mic| self.running.remove(mic))
@@ -596,7 +618,7 @@ impl Supervisor {
         }))
         .await;
         for (running, ended) in stopping.iter().zip(ends) {
-            tracing::info!(target: ASR_TARGET, mic = running.task.mic_id.as_str(), why, "transcription stopped");
+            tracing::info!(target: ASR_TARGET, mic = running.task.mic_id.as_str(), why, reason = ?reason, "transcription stopped");
             self.after_session(running, ended).await;
         }
     }
@@ -614,12 +636,18 @@ impl Supervisor {
                     view.session_mut(mic)
                         .and_then(|session| session.error.clone())
                 });
-                tracing::warn!(target: ASR_TARGET, mic, reason = ?reason, "transcription of every mic stopped until the setting or today's choice changes");
-                self.blocked = Some(Block {
+                let block = Block {
                     reason,
                     error,
                     key: running.key.clone(),
-                });
+                };
+                if reason == OffReason::TooManyConnections {
+                    tracing::warn!(target: ASR_TARGET, mic, reason = ?reason, "this mic's transcription stopped until the setting or today's choice changes");
+                    let _previous = self.mic_blocks.insert(mic.to_string(), block);
+                } else {
+                    tracing::warn!(target: ASR_TARGET, mic, reason = ?reason, "transcription of every mic stopped until the setting or today's choice changes");
+                    self.blocked = Some(block);
+                }
             }
             Ended::Unexpected => {
                 let retry = self.retries.entry(mic.to_string()).or_default();
@@ -652,14 +680,19 @@ impl Supervisor {
         }
         let hub = self.listen.transcripts();
         for old in self.shown.iter().filter(|old| !shown.contains(old)) {
+            // off, no reason: a handheld no longer published is no fault
             hub.set_session(MicTranscription {
                 mic_id: old.clone(),
-                reason: Some(OffReason::NoGuestMic),
                 ..MicTranscription::default()
             });
         }
         let cap = cap_ms(&rows.setting, rows.over.as_ref(), today);
         let blocked = self.blocked.as_ref().map(|b| (b.reason, b.error.clone()));
+        let mic_blocks: BTreeMap<&String, (OffReason, Option<String>)> = self
+            .mic_blocks
+            .iter()
+            .map(|(mic, b)| (mic, (b.reason, b.error.clone())))
+            .collect();
         let now = Instant::now();
         transcription.with_view(|view| {
             let mut previous = std::mem::take(&mut view.sessions);
@@ -673,7 +706,8 @@ impl Supervisor {
                     let waiting = (off.is_none()
                         && self.retries.get(mic).is_some_and(|r| r.backing_off(now)))
                     .then_some(TranscriptionState::Reconnecting);
-                    shown_session(mic, live, blocked.as_ref(), off, waiting, cap)
+                    let block = blocked.as_ref().or_else(|| mic_blocks.get(mic));
+                    shown_session(mic, live, block, off, waiting, cap)
                 })
                 .collect();
         });

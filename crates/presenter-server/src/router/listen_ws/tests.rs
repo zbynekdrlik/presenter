@@ -91,6 +91,7 @@ async fn the_first_message_is_a_snapshot_with_the_newest_sentences() {
             final_text: "For God so".into(),
             partial_text: " loved".into(),
             start_ms: Some(0),
+            language: None,
         }),
         at(),
     );
@@ -135,6 +136,7 @@ async fn sentences_and_tails_follow_in_order() {
         final_text: "Turn with me".into(),
         partial_text: " to".into(),
         start_ms: Some(0),
+        language: None,
     };
     hub.set_tail("guest", Some(tail), at());
     let id = hub.push_sentence("guest", closed("Turn with me to John 3:16."));

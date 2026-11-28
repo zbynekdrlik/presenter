@@ -62,6 +62,7 @@ fn finals_append_and_partials_replace_the_tail() {
             final_text: String::new(),
             partial_text: "B".into(),
             start_ms: Some(960),
+            language: Some("en".into()),
         })
     );
     let out = a.apply(batch(1, 0, vec![part("B", 960), part("eca", 1020)]));
@@ -212,6 +213,7 @@ fn a_connection_end_drops_its_tail_but_keeps_its_finals() {
             final_text: "For God".into(),
             partial_text: String::new(),
             start_ms: Some(0),
+            language: Some("en".into()),
         })
     );
     // The resend connection recreates the rest; nothing is doubled. Its

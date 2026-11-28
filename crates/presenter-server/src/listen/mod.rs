@@ -247,17 +247,22 @@ impl ListenService {
             .unwrap_or_else(PoisonError::into_inner) = guest;
     }
 
-    /// A mic's spoken language as its transcript shows it (#852 T2; `None`
-    /// = not known yet). `true` when it changed.
-    pub(crate) fn set_spoken_language(
-        &self,
-        mic_id: &str,
-        language: Option<SpokenLanguage>,
-    ) -> bool {
-        self.inner.spoken.send_if_modified(|spoken| match language {
-            Some(language) => spoken.insert(mic_id.to_string(), language) != Some(language),
-            None => spoken.remove(mic_id).is_some(),
+    /// A mic's spoken language as its transcript shows it (#852 T2; the
+    /// supervisor forgets it, [`Self::keep_spoken_languages`]). `true` when
+    /// it changed.
+    pub(crate) fn set_spoken_language(&self, mic_id: &str, language: SpokenLanguage) -> bool {
+        self.inner.spoken.send_if_modified(|spoken| {
+            spoken.insert(mic_id.to_string(), language) != Some(language)
         })
+    }
+
+    /// Forget the language of every mic not in `mics` (not transcribed now).
+    pub(crate) fn keep_spoken_languages(&self, mics: &[String]) {
+        self.inner.spoken.send_if_modified(|spoken| {
+            let before = spoken.len();
+            spoken.retain(|mic, _| mics.contains(mic));
+            spoken.len() != before
+        });
     }
 
     /// Every mic's spoken language, told on each change (`pulpit`).

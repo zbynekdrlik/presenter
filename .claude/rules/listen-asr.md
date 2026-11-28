@@ -59,9 +59,11 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   them; one session per mic, at EVERY service — no Kázeň layout gate any more (`auto` = runs, `off`
   stops today, `on` also runs past the cap). Each session connects only on its mic's voice (gate 10 s,
   park 5 min), so a silent handheld costs nothing. ONE daily cap over every mic's connected ms
-  (`Meter::connected_total`); a provider refusal (key / account / request / > 20 connections) stops
-  EVERY mic (one `Block`); an unexpected end retries only its own mic (`Retry` per mic); stops run
-  together (one 5 s wait, `join_all`). The Settings line shows the most active mic with every mic's
+  (`Meter::connected_total`); a provider refusal of the key / account / request stops EVERY mic (one
+  `Block`), "> 20 connections in 10 min" only its own mic (`mic_blocks`: one flaky handheld never
+  silences the others); an unexpected end retries only its own mic (`Retry` per mic); stops run
+  together (one 5 s wait, `join_all`, pinned); the context is read once per reconcile that starts
+  sessions; a mic leaving the transcribed set forgets its spoken language (`keep_spoken_languages`). The Settings line shows the most active mic with every mic's
   minutes and cost.
 - **Spoken language (#852 T2, core `listen/language.rs`):** each mic task feeds its FINAL tagged word
   tokens into a `LanguageWindow` (last 30 tokens ≈ 20 words; ≥ 6 needed; majority, a tie to the
@@ -190,10 +192,10 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   `reconnects` = entries into `reconnecting` (an outage, not each retry), lost frames summed. `listen.usage` = the meter's row, written every 60 s while
   it changed and at every session end (a failure keeps it dirty, WARN gated); `listen.transcription` /
   `listen.session` are written only by the PUTs (`validate_transcription_change` → 422, one audit row each,
-  audit WARN under `presenter::listen::asr`). The status shows only the CURRENT guest mic; a guest mic that
-  was replaced is sent to `/listen/ws` once as `off` / `noGuestMic`. Context = today's sermon items
-  (`reference_term(book_number − 1, …)`) + active tips' `source_term`, read per start (a read error = fixed
-  terms only + WARN). Tests: `listen/transcription/tests.rs` (real `ListenService`, fake `StreamingAsr`
+  audit WARN under `presenter::listen::asr`). The status shows every transcribed mic (#852 T1; with none, the chosen
+  guest mic with its reason); a mic no longer shown is sent to `/listen/ws` once as `off` with no reason.
+  Context = today's sermon items (`reference_term(book_number − 1, …)`) + active tips' `source_term`, read
+  ONCE per reconcile that starts sessions (a read error = fixed terms only + WARN). Tests: `listen/transcription/tests.rs` (real `ListenService`, fake `StreamingAsr`
   answering a Stop / closed input with `Finished(None)`, fake store, `start_paused`, settable day clock via
   `set_recorder_env`); endpoints + the real sermon/tip context read in `state/listen_transcription/tests.rs`.
 - **Transcript store (#852 C3-persist, migration `m20261121_000001_create_listen_transcript`, persistence
@@ -213,11 +215,14 @@ Plan: `docs/superpowers/plans/2026-11-14-listen-c3-soniox.md`. Provider facts, m
   `ListenTranscriptError` (u64 > i64 refused on write, a negative stored value refused on read). No read API:
   the seeded `/listen/ws` snapshot is the reader. The `TranscriptRows` trait is the seam (tests: `FakeRows`).
 - **UI + E2E (#852 C3-9, presenter-ui `pages/settings/listen_transcription.rs`, `components/interpreter/transcript.rs`,
-  `ws/listen.rs`):** the "Prepis hosťa" section reads the Počúvanie card's ONE `/listen/status` poll (never a
+  `ws/listen.rs`):** the "Prepis mikrofónov" section (was "Prepis hosťa") reads the Počúvanie card's ONE `/listen/status` poll (never a
   second poll) and calls the card's `refresh` after every PUT (a poll answered after the write must not show
-  the old setting); a refused PUT toasts and restores the controls from the stored setting. Without a guest
-  mic the status has no `MicTranscription`: the section derives the reason (Disabled / NoGuestMic) and the
-  cap from the setting. The `/listen/ws` client is NOT `ws::passive` (that one drops a socket silent for 5 s;
+  the old setting); a refused PUT toasts and restores the controls from the stored setting. With no mic to
+  transcribe (no handheld, no guest mic) the status has no `MicTranscription`: the section derives the
+  reason (Disabled / NoGuestMic) and the cap from the setting; with several, its line is the most active
+  mic's with every mic's minutes and cost (#852 T1). The interpreter column keeps only text NOT in Slovak
+  (`for_the_interpreter`: sentence / tail `language`, `cs` = Slovak, untagged kept) and opens only with
+  text or a banner — a session that merely runs (every service since T1) opens nothing. The `/listen/ws` client is NOT `ws::passive` (that one drops a socket silent for 5 s;
   `/listen/ws` is quiet outside a sermon, only server pings the page never sees) but shares its back-off,
   `Generation` and `watch_long_hide`; its read loop checks the generation every 500 ms. The column changes its
   three signals IN PLACE through pure helpers (a tail every ~0.2 s must not copy 300 sentences); it shows only

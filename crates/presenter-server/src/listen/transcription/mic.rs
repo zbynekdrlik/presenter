@@ -213,7 +213,7 @@ impl MicRun {
         }
         let from = self.spoken.map(SpokenLanguage::as_str);
         self.spoken = Some(now);
-        let _changed = self.listen.set_spoken_language(&self.mic_id, Some(now));
+        let _changed = self.listen.set_spoken_language(&self.mic_id, now);
         tracing::info!(target: ASR_TARGET, mic = self.mic_id.as_str(), from, to = now.as_str(), "mic language changed");
     }
 

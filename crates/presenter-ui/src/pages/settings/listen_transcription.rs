@@ -1,4 +1,4 @@
-//! Settings → "Počúvanie" → "Prepis hosťa" (#852 C3-9, spec §22.5 / §6.4): the
+//! Settings → "Počúvanie" → "Prepis mikrofónov" (#852 C3-9, spec §22.5 / §6.4): the
 //! owner's controls of the paid live transcript — since #852 T1 of EVERY
 //! handheld (the Dante mics) plus an optional extra mic ("Ďalší mikrofón",
 //! every published mic by name; a Dante one is transcribed anyway), the
@@ -217,9 +217,9 @@ impl Section {
         leptos::task::spawn_local(async move {
             let answer = listen::put_transcription(&setting).await;
             if answer.is_ok() {
-                self.toast.show("Prepis hosťa je uložený.", "success");
+                self.toast.show("Prepis mikrofónov je uložený.", "success");
             }
-            self.finish(answer, "Prepis hosťa sa nepodarilo uložiť.");
+            self.finish(answer, "Prepis mikrofónov sa nepodarilo uložiť.");
         });
     }
 
@@ -230,8 +230,8 @@ impl Section {
             let answer = listen::put_session(mode).await;
             if answer.is_ok() {
                 let text = match mode {
-                    SessionMode::On => "Prepis hosťa sa spúšťa.",
-                    SessionMode::Off => "Prepis hosťa je dnes zastavený.",
+                    SessionMode::On => "Prepis mikrofónov sa spúšťa.",
+                    SessionMode::Off => "Prepis mikrofónov je dnes zastavený.",
                     SessionMode::Auto => "Prepis beží automaticky, keď niekto hovorí do mikrofónu.",
                 };
                 self.toast.show(text, "success");
@@ -278,7 +278,7 @@ fn mode_button(
     }
 }
 
-/// The "Prepis hosťa" part of the Počúvanie card.
+/// The "Prepis mikrofónov" part of the Počúvanie card.
 #[component]
 pub(super) fn GuestTranscription(
     status: RwSignal<Option<ListenStatus>>,
@@ -338,7 +338,7 @@ pub(super) fn GuestTranscription(
 
     view! {
         <div class="settings__form" data-role="listen-transcription">
-            <div class="settings__form-header"><h3>"Prepis hosťa"</h3></div>
+            <div class="settings__form-header"><h3>"Prepis mikrofónov"</h3></div>
             <p class="settings__list-meta settings__list-meta--muted">
                 "Prepis reči z každého ručného mikrofónu (slovenčina aj angličtina, jazyk rozpozná služba Soniox; platená podľa minút pripojenia). Pripojí sa len keď niekto do mikrofónu hovorí."
             </p>
@@ -356,7 +356,7 @@ pub(super) fn GuestTranscription(
                             let on = event_target_checked(&ev);
                             section.save(move |s| s.enabled = on);
                         } />
-                    <span>"Prepis hosťa (Soniox)"</span>
+                    <span>"Prepis mikrofónov (Soniox)"</span>
                 </label>
                 <label>
                     "Ďalší mikrofón"

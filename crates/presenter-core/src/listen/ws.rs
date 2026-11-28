@@ -29,6 +29,9 @@ pub struct TranscriptTail {
     pub final_text: String,
     pub partial_text: String,
     pub updated_at: DateTime<Utc>,
+    /// The open sentence's language (#852 T1; absent from an older server).
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// What a reader gets first: the newest sentences, every tail and every
@@ -82,6 +85,7 @@ mod tests {
             final_text: "For God so".into(),
             partial_text: " loved the".into(),
             updated_at: at(),
+            language: Some("en".into()),
         }
     }
 
@@ -110,7 +114,7 @@ mod tests {
 
     fn tail_json() -> Value {
         json!({"micId": "guest", "finalText": "For God so", "partialText": " loved the",
-               "updatedAt": "2026-11-22T09:30:05Z"})
+               "updatedAt": "2026-11-22T09:30:05Z", "language": "en"})
     }
 
     fn session_json() -> Value {
@@ -145,6 +149,18 @@ mod tests {
         let expected = json!({"type": "tail", "tail": tail_json()});
         assert_eq!(encode(&message), expected);
         assert_eq!(decode(expected), message);
+    }
+
+    #[test]
+    fn a_tail_without_a_language_still_decodes() {
+        let mut older = tail_json();
+        older.as_object_mut().unwrap().remove("language");
+        let decoded = decode(json!({"type": "tail", "tail": older}));
+        let ListenWsMessage::Tail { tail } = decoded else {
+            panic!("a tail message");
+        };
+        assert_eq!(tail.language, None);
+        assert_eq!(tail.final_text, "For God so");
     }
 
     #[test]

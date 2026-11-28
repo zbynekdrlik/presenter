@@ -20,7 +20,7 @@ import { startFakeSoniox, type FakeSoniox } from "./fake-soniox";
 // scripted fake Soniox (tests/e2e/fake-soniox.ts; the real service is never
 // reached). The test server dials the fake through PRESENTER_LISTEN_SONIOX_URL
 // with the key `e2e-test-key-not-real`. A real browser switches the paid
-// transcription on in Settings → Počúvanie → "Prepis hosťa" (switch, guest mic
+// transcription on in Settings → Počúvanie → "Prepis mikrofónov" (switch, guest mic
 // select, daily cap; the status endpoint reflects it), presses "Spustiť teraz",
 // and the real VBAN sender (scripts/dev/listen/vban_send.py) plays a voiced tone
 // as the guest: on /ui/interpreter (tablet, touch) the live tail shows the
@@ -232,12 +232,15 @@ test("the interpreter reads the guest live, through an outage, and can look back
   // nothing runs while the switch is off: the tips keep the whole page
   await expect(grid).toHaveAttribute("data-transcript", "absent");
   expect((await owner.request.put(url("/listen/transcription"), { data: setting })).ok()).toBe(true);
-  // auto runs at every service (#852 T1): the session is armed, the column is there
-  await expect(grid).toHaveAttribute("data-transcript", "present");
+  // auto runs at every service (#852 T1): armed, but with no words yet the
+  // tips keep the whole page
+  await expect
+    .poll(async () => (await transcription(owner)).mics.map((m) => m.state))
+    .toEqual(["armed"]);
+  await expect(grid).toHaveAttribute("data-transcript", "absent");
 
   await owner.locator('[data-role="listen-session-on"]').click();
   await expect.poll(async () => (await transcription(owner)).mode).toBe("on");
-  await expect(grid).toHaveAttribute("data-transcript", "present");
   const column = tablet.locator('[data-role="transcript"]');
   const sentences = column.locator('[data-role="transcript-sentence"]');
   const sender = startSender(await vbanPort(owner), 170);
@@ -245,6 +248,7 @@ test("the interpreter reads the guest live, through an outage, and can look back
     // the live words first, then the closed sentence
     await expect(column.locator('[data-role="transcript-tail"] [data-partial]')).not.toBeEmpty();
     await expect(sentences.filter({ hasText: FIRST_SENTENCE }).first()).toBeVisible();
+    await expect(grid).toHaveAttribute("data-transcript", "present");
     await expect(owner.locator('[data-role="listen-transcription-state"]')).toHaveAttribute(
       "data-state",
       "streaming",

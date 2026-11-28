@@ -686,7 +686,8 @@ async fn a_new_guest_mic_stops_the_old_session_and_shows_it_off() {
     let old = sessions.iter().find(|s| s.mic_id == "guest").unwrap();
     assert_eq!(
         (old.state, old.reason),
-        (TranscriptionState::Off, Some(OffReason::NoGuestMic))
+        (TranscriptionState::Off, None),
+        "off with no reason: a mic that left the list is no fault"
     );
     let status = transcription.status(day());
     assert_eq!(status.mics.len(), 1, "only the current guest is shown");
@@ -1051,4 +1052,88 @@ async fn a_mics_final_token_language_becomes_its_spoken_language() {
     let changes = capture.events_with_message("mic language changed");
     assert_eq!(changes.len(), 3);
     assert_eq!(changes[2].field("from"), Some("\"foreign\""));
+}
+
+#[tokio::test(start_paused = true)]
+async fn too_many_connections_on_one_handheld_stops_only_that_mic() {
+    let rig = handheld_rig(on(240)).await;
+    let events = rig.asr.events(rig.session_of("dante-mic-4"));
+    events
+        .send(AsrEvent::Finished(Some(OffReason::TooManyConnections)))
+        .await
+        .unwrap();
+    wait(5).await;
+    assert_eq!(rig.asr.opens(), 5, "not reopened");
+    assert_eq!(
+        rig.state_of("dante-mic-4"),
+        (
+            TranscriptionState::Stopped,
+            Some(OffReason::TooManyConnections)
+        )
+    );
+    for mic in ["dante-mic-1", "dante-mic-2", "dante-mic-3", "guest"] {
+        assert!(!rig.asr.closed(rig.session_of(mic)), "{mic} keeps running");
+        assert_eq!(rig.state_of(mic), (TranscriptionState::Armed, None));
+    }
+    rig.listen
+        .transcription()
+        .set_override(choice(SessionMode::On));
+    wait(1).await;
+    assert_eq!(rig.asr.opens(), 6, "a new choice runs that mic again");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_mic_that_is_no_longer_transcribed_forgets_its_language() {
+    let rig = handheld_rig(on(240)).await;
+    let spoken = rig.listen.spoken_languages();
+    words(&rig, "dante-mic-1", "en", 8).await;
+    words(&rig, "guest", "en", 8).await;
+    assert_eq!(spoken.borrow().len(), 2);
+    rig.listen.set_dante_mics(false);
+    wait(2).await;
+    assert_eq!(
+        spoken.borrow().keys().collect::<Vec<_>>(),
+        ["guest"],
+        "the unpublished handheld's speaker is forgotten"
+    );
+    rig.listen
+        .transcription()
+        .set_override(choice(SessionMode::Off));
+    wait(2).await;
+    assert!(
+        spoken.borrow().is_empty(),
+        "nothing transcribed, nothing ranked"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_mic_stops_within_one_five_second_wait() {
+    let capture = Capture::install();
+    let stuck = FakeAsr {
+        stuck: true,
+        ..FakeAsr::default()
+    };
+    let rig = rig_with(on(240), None, true, stuck, ContextInputs::default());
+    rig.listen.set_dante_mics(true);
+    wait(1).await;
+    assert_eq!(rig.asr.opens(), 5);
+    let started = tokio::time::Instant::now();
+    let generation = rig
+        .listen
+        .transcription()
+        .set_override(choice(SessionMode::Off));
+    rig.listen.transcription_decided_on(generation).await;
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_millis(6_500),
+        "five stuck sessions end together, not one after another: {took:?}"
+    );
+    let ended = capture.events_with_message("did not end within 5 s");
+    assert_eq!(ended.len(), 5, "{ended:?}");
+    for mic in HANDHELDS.iter().chain(&["guest"]) {
+        assert_eq!(
+            rig.state_of(mic),
+            (TranscriptionState::Off, Some(OffReason::OverrideOff))
+        );
+    }
 }

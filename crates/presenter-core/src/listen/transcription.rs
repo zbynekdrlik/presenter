@@ -13,14 +13,15 @@
 //! Rows (absent = the default, so a box nobody set up runs nothing):
 //! `listen.transcription` `{enabled, guestMic, dailyCapMinutes}` (the paid
 //! switch, off by default); `listen.session` `{day, mode, extraMinutes}`
-//! (today's choice, it overrides the Kázeň automation for the rest of the
+//! (today's choice, it overrides the automatic mode for the rest of the
 //! day); `listen.usage` `{day, mics}` (today's metered time, so the cap
 //! survives a restart).
 
-use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::listen::mics::MicConfig;

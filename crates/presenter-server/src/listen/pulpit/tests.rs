@@ -460,9 +460,9 @@ async fn the_running_pulpit_ranks_by_the_published_transcript_language() {
     let mut pulpit = listen.subscribe_chunks(PULPIT_MIC_ID);
     tokio::spawn(supervise(listen.clone()));
     tokio::time::sleep(MS(1)).await;
-    assert!(listen.set_spoken_language("dante-mic-1", Some(SpokenLanguage::Slovak)));
-    assert!(listen.set_spoken_language("dante-mic-2", Some(SpokenLanguage::Foreign)));
-    assert!(!listen.set_spoken_language("dante-mic-2", Some(SpokenLanguage::Foreign)));
+    assert!(listen.set_spoken_language("dante-mic-1", SpokenLanguage::Slovak));
+    assert!(listen.set_spoken_language("dante-mic-2", SpokenLanguage::Foreign));
+    assert!(!listen.set_spoken_language("dante-mic-2", SpokenLanguage::Foreign));
     tokio::time::sleep(MS(1)).await;
 
     send_for(&listen, "dante-mic-3", 8_000, 5).await;
