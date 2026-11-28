@@ -1,13 +1,16 @@
-//! One running guest session (#852 C3-7, plan Task 7.3): the mic's frames go
+//! One running mic session (#852 C3-7, plan Task 7.3): the mic's frames go
 //! to the provider with their level through `try_send` (a full input counts
 //! a drop, a lagging frame channel counts the lost frames — the chain never
 //! waits for the transcript); the provider's events become hub sentences and
-//! a tail (core `TranscriptAssembler`), the guest's state and the meter. A
+//! a tail (core `TranscriptAssembler`), the mic's state and the meter, and
+//! its final tokens' language tags the mic's spoken language (#852 T2, core
+//! `LanguageWindow`) that `pulpit` ranks by — INFO when it changes. A
 //! stop sends `AsrInput::Stop` and drops the input sender (the provider
 //! finalizes and ends); the task returns the provider's `Finished` reason.
 
 use chrono::Utc;
 use presenter_core::audio::level::rms_dbfs;
+use presenter_core::listen::language::{LanguageWindow, SpokenLanguage};
 use presenter_core::listen::transcript::{AssemblyOutput, TranscriptAssembler};
 use presenter_core::listen::transcription::{OffReason, TranscriptionState};
 use tokio::sync::broadcast::error::RecvError;
@@ -41,10 +44,15 @@ pub(super) fn spawn(
     listen: ListenService,
 ) -> MicTask {
     let (stop, stopped) = oneshot::channel();
+    // A new session starts from the mic's last known language (no "changed"
+    // line for the same speaker after a park).
+    let spoken = listen.spoken_languages().borrow().get(&mic_id).copied();
     let task = MicRun {
         mic_id: mic_id.clone(),
         listen,
         assembler: TranscriptAssembler::new(),
+        language: LanguageWindow::new(),
+        spoken,
         totals: (0, 0),
         newest_connection: 0,
         last_state: TranscriptionState::Armed,
@@ -64,6 +72,10 @@ struct MicRun {
     mic_id: String,
     listen: ListenService,
     assembler: TranscriptAssembler,
+    /// The language of the mic's last final words (#852 T2).
+    language: LanguageWindow,
+    /// What [`Self::language`] last said (published on a change).
+    spoken: Option<SpokenLanguage>,
     /// The session's last reported `(audio_ms, connected_ms)` totals.
     totals: (u64, u64),
     newest_connection: u32,
@@ -137,6 +149,10 @@ impl MicRun {
         match event {
             AsrEvent::Tokens(batch) => {
                 self.note_connection(batch.connection);
+                for token in &batch.tokens {
+                    self.language.push(token);
+                }
+                self.follow_language();
                 let out = self.assembler.apply(batch);
                 self.publish(out);
             }
@@ -154,12 +170,12 @@ impl MicRun {
                     if outage {
                         view.meter.add_reconnect(mic);
                     }
-                    if let Some(guest) = view.guest.as_mut().filter(|g| g.mic_id == mic) {
-                        guest.state = state;
-                        guest.error = error;
+                    if let Some(session) = view.session_mut(mic) {
+                        session.state = state;
+                        session.error = error;
                     }
                 });
-                transcription.publish_guest(&self.listen.transcripts());
+                transcription.publish_mic(&self.listen.transcripts(), mic);
             }
             AsrEvent::Usage {
                 audio_ms,
@@ -183,6 +199,22 @@ impl MicRun {
             }
             AsrEvent::Finished(_) => {}
         }
+    }
+
+    /// The window's dominant language changed: tell `pulpit` and log it. A
+    /// mic keeps its last known language across its sessions (a quiet pause
+    /// never forgets who speaks there).
+    fn follow_language(&mut self) {
+        let Some(now) = self.language.dominant() else {
+            return;
+        };
+        if self.spoken == Some(now) {
+            return;
+        }
+        let from = self.spoken.map(SpokenLanguage::as_str);
+        self.spoken = Some(now);
+        let _changed = self.listen.set_spoken_language(&self.mic_id, now);
+        tracing::info!(target: ASR_TARGET, mic = self.mic_id.as_str(), from, to = now.as_str(), "mic language changed");
     }
 
     /// Connections are numbered from 1 per session: a new number = one more.
@@ -212,7 +244,7 @@ impl MicRun {
         let out = self.assembler.flush(Utc::now());
         self.publish(out);
         if self.dropped > 0 || self.lost > 0 {
-            tracing::info!(target: ASR_TARGET, mic = self.mic_id.as_str(), dropped = self.dropped, lost = self.lost, lag_events = self.lag_events, "guest transcription session lost frames");
+            tracing::info!(target: ASR_TARGET, mic = self.mic_id.as_str(), dropped = self.dropped, lost = self.lost, lag_events = self.lag_events, "transcription session lost frames");
         }
         reason
     }

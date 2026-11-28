@@ -42,7 +42,7 @@ pub(crate) mod transcription;
 pub(crate) mod translate;
 mod vban_rx;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -50,6 +50,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use presenter_core::audio::vban::VBAN_DEFAULT_PORT;
+use presenter_core::listen::language::SpokenLanguage;
 use presenter_core::listen::mics::{fixed_dante_mics, MicConfig, PULPIT_MIC_ID};
 use presenter_core::listen::recorder::RecorderSetting;
 use presenter_core::listen::status::ListenStatus;
@@ -124,6 +125,9 @@ struct Inner {
     transcription_started: AtomicBool,
     /// The guests' live translation sessions (#999).
     guest: Mutex<GuestTranslate>,
+    /// Each transcribed mic's spoken language from its own transcript
+    /// (#852 T2): the transcription writes it, `pulpit` ranks by it.
+    spoken: watch::Sender<BTreeMap<String, SpokenLanguage>>,
 }
 
 /// Where the published mic list comes from (#933).
@@ -147,6 +151,7 @@ impl ListenService {
         let (config, _) = watch::channel(Arc::new(Vec::new()));
         let (recorder, _) = watch::channel(None);
         let (recorder_cleared, _) = watch::channel(None);
+        let (spoken, _) = watch::channel(BTreeMap::new());
         let soniox = SonioxEnv::from_env();
         let transcription = Transcription::new(&soniox);
         Self {
@@ -166,6 +171,7 @@ impl ListenService {
                 transcription,
                 transcription_started: AtomicBool::new(false),
                 guest: Mutex::new(GuestTranslate::production()),
+                spoken,
             }),
         }
     }
@@ -241,24 +247,42 @@ impl ListenService {
             .unwrap_or_else(PoisonError::into_inner) = guest;
     }
 
-    /// The guest's transcription rows, meter and state (#852 C3-7).
+    /// A mic's spoken language as its transcript shows it (#852 T2; the
+    /// supervisor forgets it, [`Self::keep_spoken_languages`]). `true` when
+    /// it changed.
+    pub(crate) fn set_spoken_language(&self, mic_id: &str, language: SpokenLanguage) -> bool {
+        self.inner.spoken.send_if_modified(|spoken| {
+            spoken.insert(mic_id.to_string(), language) != Some(language)
+        })
+    }
+
+    /// Forget the language of every mic not in `mics` (not transcribed now).
+    pub(crate) fn keep_spoken_languages(&self, mics: &[String]) {
+        self.inner.spoken.send_if_modified(|spoken| {
+            let before = spoken.len();
+            spoken.retain(|mic, _| mics.contains(mic));
+            spoken.len() != before
+        });
+    }
+
+    /// Every mic's spoken language, told on each change (`pulpit`).
+    pub(crate) fn spoken_languages(&self) -> watch::Receiver<BTreeMap<String, SpokenLanguage>> {
+        self.inner.spoken.subscribe()
+    }
+
+    /// The transcription rows, meter and per-mic state (#852 C3-7, T1).
     pub(crate) fn transcription(&self) -> &Transcription {
         &self.inner.transcription
     }
 
     /// Start the transcription supervisor once with the real Soniox provider
     /// (never in validate mode); `false` when it was already started.
-    pub(crate) fn start_transcription(
-        &self,
-        layout: Arc<tokio::sync::RwLock<String>>,
-        store: Arc<dyn TranscriptionStore>,
-    ) -> bool {
+    pub(crate) fn start_transcription(&self, store: Arc<dyn TranscriptionStore>) -> bool {
         let env = self.inner.soniox.clone();
         self.start_transcription_with(TranscriptionDeps {
             key: env.key.is_some(),
             model: env.model.clone(),
             asr: Arc::new(SonioxAsr::production(env)),
-            layout,
             store,
         })
     }

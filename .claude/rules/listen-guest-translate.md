@@ -149,8 +149,9 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   (every fingerprinted asset stays `immutable`). The WASM route `/` is the
   guest page — the server serves the shell at `/` ONLY on the guest listener. The shell does NOT install
   `ui_usage` there (that listener has no `/ui/usage`).
-- Phone first, ENGLISH copy (owner 27.11: the page is for foreigners), language names in their own
-  language (core `GUEST_LANGUAGES`); `?lang=` keeps the pick. Play = the gesture that creates +
+- Phone first, ENGLISH copy (owner 27.11: the page is for foreigners), language names in English with
+  their own name in brackets (owner 28.11: Cyrillic alone is unreadable for the team →
+  "Ukrainian (Українська)", core `GUEST_LANGUAGES`); `?lang=` keeps the pick. Play = the gesture that creates +
   resumes the `AudioContext` synchronously in the tap (iOS unlock), asked for 24 kHz (a refusing phone gets a linear
   resample, `state::guest::resample`). The worklet starts at 150 ms queued and drops back to 150 ms
   when > 1 s queued (latency first); while playing it cuts a SILENT chunk (≤ −45 dBFS) so at most

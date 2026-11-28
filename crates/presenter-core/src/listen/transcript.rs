@@ -65,6 +65,9 @@ pub struct TailText {
     pub final_text: String,
     pub partial_text: String,
     pub start_ms: Option<u64>,
+    /// Its first tagged token's language (Soniox language identification,
+    /// #852 T1): the reader can hide the Slovak interpreter's words.
+    pub language: Option<String>,
 }
 
 /// What one call changed.
@@ -117,6 +120,7 @@ pub struct TranscriptAssembler {
     /// The non-final tokens of the current connection's last batch.
     partial: String,
     partial_start_ms: Option<u64>,
+    partial_language: Option<String>,
     /// The newest session ms seen; a token without times takes it.
     last_ms: u64,
     reported: TailText,
@@ -133,6 +137,7 @@ impl TranscriptAssembler {
         let mut closed = Vec::new();
         let mut partial = String::new();
         let mut partial_start_ms = None;
+        let mut partial_language = None;
         for token in &batch.tokens {
             if token.is_translation || token.text.is_empty() {
                 continue;
@@ -152,12 +157,16 @@ impl TranscriptAssembler {
                 if partial_start_ms.is_none() {
                     partial_start_ms = session_ms(batch.offset_ms, token.start_ms);
                 }
+                if partial_language.is_none() {
+                    partial_language.clone_from(&token.language);
+                }
                 partial.push_str(&token.text);
             }
         }
         if current {
             self.partial = partial;
             self.partial_start_ms = partial_start_ms;
+            self.partial_language = partial_language;
         }
         AssemblyOutput {
             closed,
@@ -259,6 +268,7 @@ impl TranscriptAssembler {
     fn clear_partial(&mut self) {
         self.partial.clear();
         self.partial_start_ms = None;
+        self.partial_language = None;
     }
 
     fn tail_change(&mut self) -> Option<TailText> {
@@ -281,6 +291,11 @@ impl TranscriptAssembler {
             final_text: self.open.text.clone(),
             partial_text,
             start_ms: self.open.start_ms.or(self.partial_start_ms),
+            language: self
+                .open
+                .language
+                .clone()
+                .or_else(|| self.partial_language.clone()),
         };
         if tail == self.reported {
             return None;

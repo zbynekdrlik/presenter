@@ -70,6 +70,14 @@ impl Meter {
         self.usage.get(mic).copied().unwrap_or_default()
     }
 
+    /// Every mic's connected time today: what the ONE daily cap counts
+    /// (#852 T1).
+    pub(crate) fn connected_total(&self) -> u64 {
+        self.usage
+            .values()
+            .fold(0, |total, usage| total.saturating_add(usage.connected_ms))
+    }
+
     /// Add what a session metered since its last report.
     pub(crate) fn add_usage(&mut self, mic: &str, audio_ms: u64, connected_ms: u64) {
         if audio_ms == 0 && connected_ms == 0 {

@@ -1,13 +1,18 @@
 //! The interpreter's EN column (#852 C3-9, spec §8.2, plan Decision 15): the
-//! guest's live English transcript from `GET /listen/ws`. Closed sentences
+//! guest's live transcript from `GET /listen/ws`. Since #852 T1 every handheld
+//! is transcribed with its language: the column keeps only the words NOT in
+//! Slovak ([`for_the_interpreter`]) — the original speaker, never the
+//! pastor's or the interpreter's own Slovak. Closed sentences
 //! newest at the bottom (older ones dimmed, the newest 300 kept), then the open
 //! sentence: its final words normal, the live (non-final) rest lighter. The
 //! column follows the bottom while the reader is there; scrolling up pauses it
 //! and shows "▼ Naživo · N nové" (N = sentences closed since), a tap jumps
 //! back. A banner says when the transcript cannot come (C-S7) or the socket is
 //! down. The column shows only once there is something to show — a sentence, a
-//! session that runs, or a reason worth a banner — so a box without
-//! transcription keeps the tips area full width (`data-transcript="absent"`).
+//! live tail, or a reason worth a banner — so a service without a foreign
+//! speaker keeps the tips area full width (`data-transcript="absent"`; the
+//! sessions run at every service since #852 T1, so a running one alone does
+//! not open the column).
 //!
 //! Every (re)connect starts with the server's snapshot, which REPLACES what the
 //! column held; the messages after it are applied in arrival order, in place.
@@ -17,6 +22,7 @@
 
 use crate::ws::passive::PassiveWsState;
 use leptos::prelude::*;
+use presenter_core::listen::language::SpokenLanguage;
 use presenter_core::listen::transcription::{MicTranscription, OffReason, TranscriptionState};
 use presenter_core::listen::ws::{
     ListenWsMessage, TranscriptSentence, TranscriptSnapshot, TranscriptTail,
@@ -37,22 +43,33 @@ type Parts = (
     Vec<MicTranscription>,
 );
 
+/// A text in this language is for the interpreter: anything but Slovak (a
+/// Slovak speaker tagged Czech counts as Slovak, core `SpokenLanguage`); an
+/// untagged one is kept (an older server, or no language identification).
+fn for_the_interpreter(language: Option<&str>) -> bool {
+    language.is_none_or(|code| SpokenLanguage::from_code(code) != SpokenLanguage::Slovak)
+}
+
 fn snapshot_parts(snapshot: TranscriptSnapshot) -> Parts {
-    let mut sentences = snapshot.sentences;
+    let mut sentences: Vec<TranscriptSentence> = snapshot
+        .sentences
+        .into_iter()
+        .filter(|s| for_the_interpreter(s.language.as_deref()))
+        .collect();
     sentences.sort_by_key(|s| s.id);
     let cut = sentences.len().saturating_sub(MAX_SENTENCES);
     let tails = snapshot
         .tails
         .into_iter()
-        .filter(|tail| !tail_is_empty(tail))
+        .filter(|tail| !tail_is_empty(tail) && for_the_interpreter(tail.language.as_deref()))
         .collect();
     (sentences.split_off(cut), tails, snapshot.sessions)
 }
 
-/// Append a sentence newer than every one held (a repeat or an older one is
-/// ignored → `false`); the oldest goes past [`MAX_SENTENCES`].
+/// Append a sentence newer than every one held (a repeat, an older one or a
+/// Slovak one is ignored → `false`); the oldest goes past [`MAX_SENTENCES`].
 fn push_sentence(sentences: &mut Vec<TranscriptSentence>, sentence: TranscriptSentence) -> bool {
-    if !is_newer(sentences, &sentence) {
+    if !is_newer(sentences, &sentence) || !for_the_interpreter(sentence.language.as_deref()) {
         return false;
     }
     sentences.push(sentence);
@@ -76,10 +93,10 @@ fn unseen_after(unseen: usize, following: bool) -> usize {
     }
 }
 
-/// A mic's tail replaces its previous one; an empty one clears it.
+/// A mic's tail replaces its previous one; an empty or a Slovak one clears it.
 fn apply_tail(tails: &mut Vec<TranscriptTail>, tail: TranscriptTail) {
     tails.retain(|t| t.mic_id != tail.mic_id);
-    if !tail_is_empty(&tail) {
+    if !tail_is_empty(&tail) && for_the_interpreter(tail.language.as_deref()) {
         tails.push(tail);
     }
 }
@@ -105,12 +122,11 @@ fn newest_tail(tails: &[TranscriptTail]) -> Option<&TranscriptTail> {
     tails.iter().max_by_key(|tail| tail.updated_at)
 }
 
-/// The column shows once it has text, a session that runs, or a reason worth
-/// a banner — never for "waiting for the Kázeň layout".
+/// The column shows once it has text or a reason worth a banner — never for
+/// a session that only runs (#852 T1: it runs at every service) or a plain
+/// "stopped today".
 fn shows(has_sentences: bool, has_tail: bool, session: Option<&MicTranscription>) -> bool {
-    has_sentences
-        || has_tail
-        || session.is_some_and(|s| s.state != TranscriptionState::Off || banner_text(s).is_some())
+    has_sentences || has_tail || session.is_some_and(|s| banner_text(s).is_some())
 }
 
 fn tail_is_empty(tail: &TranscriptTail) -> bool {
@@ -191,7 +207,8 @@ impl TranscriptModel {
                 self.sessions.set(sessions);
             }
             ListenWsMessage::Sentence { sentence } => {
-                if self.sentences.with_untracked(|s| is_newer(s, &sentence)) {
+                let shown = for_the_interpreter(sentence.language.as_deref());
+                if shown && self.sentences.with_untracked(|s| is_newer(s, &sentence)) {
                     self.sentences.update(|s| {
                         push_sentence(s, sentence);
                     });
@@ -332,6 +349,7 @@ mod tests {
             final_text: final_text.into(),
             partial_text: partial.into(),
             updated_at: at(second),
+            language: None,
         }
     }
 
@@ -404,17 +422,59 @@ mod tests {
             !shows(false, false, None),
             "no session, no text: the tips stay full width"
         );
-        let waiting = session(TranscriptionState::Off, Some(OffReason::NotPreach));
+        let waiting = session(TranscriptionState::Off, Some(OffReason::OverrideOff));
         assert!(
             !shows(false, false, Some(&waiting)),
-            "waiting for the Kázeň layout is not worth a column"
+            "stopped for today is not worth a column"
         );
         let cap = session(TranscriptionState::Off, Some(OffReason::CapReached));
         assert!(shows(false, false, Some(&cap)), "the cap is worth a banner");
         let gated = session(TranscriptionState::Gated, None);
-        assert!(shows(false, false, Some(&gated)));
+        assert!(
+            !shows(false, false, Some(&gated)),
+            "#852 T1: a session runs at every service, alone it is no column"
+        );
         assert!(shows(true, false, None), "text from before stays readable");
         assert!(shows(false, true, None));
+    }
+
+    #[test]
+    fn only_words_not_in_slovak_reach_the_column() {
+        assert!(for_the_interpreter(Some("en")));
+        assert!(for_the_interpreter(None), "untagged text is kept");
+        assert!(!for_the_interpreter(Some("sk")));
+        assert!(!for_the_interpreter(Some("cs")), "Czech-tagged Slovak too");
+
+        let mut held = Vec::new();
+        let mut slovak = sentence(2);
+        slovak.language = Some("sk".into());
+        assert!(push_sentence(&mut held, sentence(1)));
+        assert!(
+            !push_sentence(&mut held, slovak.clone()),
+            "the interpreter's own words"
+        );
+        assert!(push_sentence(&mut held, sentence(3)));
+        let ids: Vec<u64> = held.iter().map(|s| s.id).collect();
+        assert_eq!(ids, [1, 3]);
+
+        let mut tails = vec![tail("Grace", " and", 1)];
+        let mut slovak_tail = tail("Milosť", " a", 2);
+        slovak_tail.language = Some("sk".into());
+        slovak_tail.mic_id = "dante-mic-2".into();
+        apply_tail(&mut tails, slovak_tail.clone());
+        assert_eq!(tails.len(), 1, "a Slovak tail is never shown");
+        slovak_tail.mic_id = "guest".into();
+        apply_tail(&mut tails, slovak_tail);
+        assert!(tails.is_empty(), "and it clears that mic's earlier tail");
+
+        let snapshot = TranscriptSnapshot {
+            sentences: vec![sentence(4), slovak],
+            tails: Vec::new(),
+            sessions: Vec::new(),
+        };
+        let (sentences, _, _) = snapshot_parts(snapshot);
+        let ids: Vec<u64> = sentences.iter().map(|s| s.id).collect();
+        assert_eq!(ids, [4], "the snapshot is filtered the same way");
     }
 
     #[test]

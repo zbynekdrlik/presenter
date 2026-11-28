@@ -83,7 +83,7 @@ async fn a_guest_gets_hello_state_speech_and_text() {
         next_text(&mut client).await,
         GuestWsMessage::Hello {
             language: "de".into(),
-            name: "Deutsch".into(),
+            name: "German (Deutsch)".into(),
             sample_rate: 24_000
         }
     );

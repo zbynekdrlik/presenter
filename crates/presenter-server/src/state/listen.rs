@@ -315,10 +315,9 @@ impl AppState {
             )
             .await;
             // #852 C3-7: after the rows above, so it decides on the stored ones.
-            let _first = self.listen.start_transcription(
-                std::sync::Arc::clone(&self.stage_layout),
-                std::sync::Arc::new(self.clone()),
-            );
+            let _first = self
+                .listen
+                .start_transcription(std::sync::Arc::new(self.clone()));
         }
         started
     }

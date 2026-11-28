@@ -1,6 +1,7 @@
 //! `pulpit` (#852 28.11): the pure policy, the selector on explicit instants,
 //! and the real task on the paused clock.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::*;
@@ -252,8 +253,12 @@ fn the_held_onset_leaves_the_quiet_before_its_pre_roll_behind() {
 #[test]
 fn a_labelled_mic_is_picked_by_the_selector_too() {
     let mut selector = Selector::new(&mics(2));
-    selector.set_language(0, Some(SpokenLanguage::Slovak));
-    selector.set_language(1, Some(SpokenLanguage::Foreign));
+    let spoken = BTreeMap::from([
+        ("dante-mic-1".to_string(), SpokenLanguage::Slovak),
+        ("dante-mic-2".to_string(), SpokenLanguage::Foreign),
+    ]);
+    assert!(selector.set_detected(&spoken));
+    assert!(!selector.set_detected(&spoken), "nothing new");
     let t0 = Instant::now();
     // both speak in the same 20 ms: the Slovak (louder) one arrives first
     selector.push(0, chunk(16_000), t0);
@@ -273,8 +278,11 @@ fn a_mic_configured_slovak_or_english_carries_that_language() {
     configured[0].language = MicLanguage::Sk;
     configured[1].language = MicLanguage::En;
     let selector = Selector::new(&configured);
-    let languages: Vec<Option<SpokenLanguage>> =
-        selector.inputs.iter().map(|input| input.language).collect();
+    let languages: Vec<Option<SpokenLanguage>> = selector
+        .inputs
+        .iter()
+        .map(|input| input.configured)
+        .collect();
     assert_eq!(
         languages,
         [
@@ -401,4 +409,77 @@ async fn a_lagging_input_is_skipped_and_warned_about_once_and_never_stalls_pulpi
     assert_eq!(warns.len(), 1);
     assert_eq!(warns[0].field("input"), Some("\"dante-mic-3\""));
     assert_eq!(warns[0].field("missed"), Some("88"));
+}
+
+/// Mic 3 speaks, then goes quiet; mics 1 and 2 both speak through its
+/// hangover. The first chunk after the hangover decides between them.
+fn rank_after_hangover(selector: &mut Selector, t0: Instant) -> Option<String> {
+    let _ = selector.push(2, chunk(8_000), t0);
+    let mut at = t0;
+    while at < t0 + HANGOVER + MS(40) {
+        at += MS(20);
+        let _ = selector.push(0, chunk(16_000), at);
+        let _ = selector.push(1, chunk(4_000), at);
+    }
+    selector.current().map(str::to_string)
+}
+
+#[test]
+fn a_transcript_language_wins_over_the_configured_one() {
+    let mut configured = mics(3);
+    configured[0].language = MicLanguage::En;
+    let t0 = Instant::now();
+    let mut by_config = Selector::new(&configured);
+    assert_eq!(
+        rank_after_hangover(&mut by_config, t0).as_deref(),
+        Some("dante-mic-1"),
+        "configured English beats the unknown mic 2"
+    );
+    let mut by_transcript = Selector::new(&configured);
+    let spoken = BTreeMap::from([
+        ("dante-mic-1".to_string(), SpokenLanguage::Slovak),
+        ("dante-mic-2".to_string(), SpokenLanguage::Foreign),
+    ]);
+    assert!(by_transcript.set_detected(&spoken));
+    assert_eq!(
+        rank_after_hangover(&mut by_transcript, t0).as_deref(),
+        Some("dante-mic-2"),
+        "the transcript says mic 1 is the Slovak interpreter: the quieter original wins"
+    );
+    assert!(by_transcript.set_detected(&BTreeMap::new()), "forgotten");
+}
+
+/// #852 T2 end to end: a language the transcription publishes reaches the
+/// running `pulpit` task, so after the forwarded mic's hangover the foreign
+/// (original) speaker beats the louder Slovak interpreter.
+#[tokio::test(start_paused = true)]
+async fn the_running_pulpit_ranks_by_the_published_transcript_language() {
+    let capture = Capture::install();
+    let listen = ListenService::new();
+    listen.set_dante_mics(true);
+    let mut pulpit = listen.subscribe_chunks(PULPIT_MIC_ID);
+    tokio::spawn(supervise(listen.clone()));
+    tokio::time::sleep(MS(1)).await;
+    assert!(listen.set_spoken_language("dante-mic-1", SpokenLanguage::Slovak));
+    assert!(listen.set_spoken_language("dante-mic-2", SpokenLanguage::Foreign));
+    assert!(!listen.set_spoken_language("dante-mic-2", SpokenLanguage::Foreign));
+    tokio::time::sleep(MS(1)).await;
+
+    send_for(&listen, "dante-mic-3", 8_000, 5).await;
+    for _ in 0..115 {
+        let _ = listen.chunk_sender("dante-mic-1").send(chunk(16_000));
+        let _ = listen.chunk_sender("dante-mic-2").send(chunk(4_000));
+        tokio::time::sleep(MS(20)).await;
+    }
+    let _ = drain(&mut pulpit);
+    let switches = capture.events_with_message("pulpit switched mic");
+    let to: Vec<_> = switches.iter().map(|e| e.field("to")).collect();
+    assert_eq!(
+        to,
+        [Some("\"dante-mic-3\""), Some("\"dante-mic-2\"")],
+        "the original speaker"
+    );
+    let ranked =
+        capture.events_with_message("pulpit ranks the Dante mics by their transcript language");
+    assert!(!ranked.is_empty());
 }

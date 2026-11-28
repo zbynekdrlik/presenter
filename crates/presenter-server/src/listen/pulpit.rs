@@ -9,9 +9,10 @@
 //! or within [`HANGOVER`] of its last voiced chunk (no switch mid-sentence);
 //! once it has been quiet past that and another mic is voiced, switch to the
 //! best candidate — a non-Slovak mic before an unknown one before a Slovak one
-//! ([`SpokenLanguage`]: the Slovak one is the interpreter; no mic carries a
-//! label yet, the rule waits for language detection), then the loudest
-//! recent level, then the channel order.
+//! ([`SpokenLanguage`]: the Slovak one is the interpreter), then the loudest
+//! recent level, then the channel order. A mic's language is the one its own
+//! transcript shows (#852 T2: the dominant token language of its last final
+//! words, `ListenService::spoken_languages`), else its configured language.
 //!
 //! [`supervise`] (started by `ListenService::start`) subscribes the 20 ms
 //! chunk channel of every published Dante mic, judges each chunk the moment it
@@ -28,12 +29,13 @@
 #[cfg(test)]
 mod tests;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::select_all;
 use presenter_core::audio::level::{is_voiced, rms_dbfs, SILENCE_DBFS};
+use presenter_core::listen::language::SpokenLanguage;
 use presenter_core::listen::mics::{MicConfig, MicLanguage, PULPIT_MIC_ID};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
@@ -61,15 +63,7 @@ pub(crate) const ONSET_BUFFER_CHUNKS: usize = 100;
 pub(crate) const SWITCH_PRE_ROLL_CHUNKS: usize = 10;
 
 type ConfigRx = watch::Receiver<Arc<Vec<MicConfig>>>;
-
-/// What a mic's speaker speaks, from its configured language (the fixed
-/// Dante mics are `off` = `None`: language detection is a later step).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SpokenLanguage {
-    Slovak,
-    /// Any other language: the guest preacher.
-    Foreign,
-}
+type SpokenRx = watch::Receiver<BTreeMap<String, SpokenLanguage>>;
 
 /// What the policy knows about one mic now.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,7 +150,10 @@ struct Input {
     id: String,
     last_voiced: Option<Instant>,
     levels: VecDeque<f32>,
-    language: Option<SpokenLanguage>,
+    /// From the mic's configured language (the Dante mics: `off` = `None`).
+    configured: Option<SpokenLanguage>,
+    /// From its transcript (#852 T2); wins over `configured`.
+    detected: Option<SpokenLanguage>,
     /// Its last [`ONSET_BUFFER_CHUNKS`] chunks while it is not forwarded, and
     /// whether each was voiced: a mic that starts while the forwarded one is
     /// still in its hangover loses nothing — its onset goes out on the switch.
@@ -169,7 +166,8 @@ impl Input {
             id: mic.id.clone(),
             last_voiced: None,
             levels: VecDeque::with_capacity(LEVEL_WINDOW_CHUNKS),
-            language: spoken_language(mic.language),
+            configured: spoken_language(mic.language),
+            detected: None,
             held: VecDeque::with_capacity(ONSET_BUFFER_CHUNKS),
         }
     }
@@ -178,7 +176,7 @@ impl Input {
         MicView {
             voiced_ago: self.last_voiced.map(|at| now.saturating_duration_since(at)),
             recent_dbfs: self.levels.iter().copied().fold(SILENCE_DBFS, f32::max),
-            language: self.language,
+            language: self.detected.or(self.configured),
         }
     }
 
@@ -200,7 +198,7 @@ impl Input {
 }
 
 /// The policy's language of a mic's configured language (the fixed Dante
-/// mics are `off` = unknown until language detection labels them).
+/// mics are `off` = unknown until their transcript shows one).
 fn spoken_language(language: MicLanguage) -> Option<SpokenLanguage> {
     match language {
         MicLanguage::Sk => Some(SpokenLanguage::Slovak),
@@ -294,12 +292,18 @@ impl Selector {
         out
     }
 
-    /// Label a mic's language (language detection, a later step; tests today).
-    #[cfg(test)]
-    pub(crate) fn set_language(&mut self, index: usize, language: Option<SpokenLanguage>) {
-        if let Some(input) = self.inputs.get_mut(index) {
-            input.language = language;
+    /// Every input's language from its transcript (`None` = not known, the
+    /// configured one counts); `true` when one changed.
+    pub(crate) fn set_detected(&mut self, spoken: &BTreeMap<String, SpokenLanguage>) -> bool {
+        let mut changed = false;
+        for input in &mut self.inputs {
+            let detected = spoken.get(&input.id).copied();
+            if input.detected != detected {
+                input.detected = detected;
+                changed = true;
+            }
         }
+        changed
     }
 }
 
@@ -383,7 +387,9 @@ async fn select(
         .iter()
         .map(|mic| service.subscribe_chunks(&mic.id))
         .collect();
+    let mut spoken = service.spoken_languages();
     let mut selector = Selector::new(mics);
+    let _changed = selector.set_detected(&spoken.borrow_and_update());
     let mut log = SwitchLog::new(Instant::now());
     let mut lagged = vec![0u64; mics.len()];
     let mut minute = interval(SWITCH_LOG_WINDOW);
@@ -403,6 +409,13 @@ async fn select(
                     continue;
                 }
                 return Some(selector.current().map(str::to_string));
+            }
+            changed = spoken.changed() => {
+                // the sender lives in the service: never closed
+                if changed.is_ok() {
+                    follow_languages(&mut selector, &mut spoken);
+                }
+                continue;
             }
             _ = minute.tick() => {
                 log_suppressed(log.roll(Instant::now()));
@@ -431,6 +444,18 @@ async fn select(
         }
         send_all(&chunks_out, out.chunks);
         send_all(&frames_out, out.frames);
+    }
+}
+
+/// Take the inputs' new transcript languages (logged: the rank changed).
+fn follow_languages(selector: &mut Selector, spoken: &mut SpokenRx) {
+    let languages = spoken.borrow_and_update().clone();
+    if selector.set_detected(&languages) {
+        let ranked: Vec<(String, &str)> = languages
+            .iter()
+            .map(|(mic, language)| (mic.clone(), language.as_str()))
+            .collect();
+        info!(target: MIC_TARGET, mic = PULPIT_MIC_ID, languages = ?ranked, "pulpit ranks the Dante mics by their transcript language");
     }
 }
 
