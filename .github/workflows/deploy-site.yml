@@ -123,12 +123,13 @@ jobs:
       - name: Setup SSH for deployment
         id: ssh_setup
         env:
-          # #1004: PP has its own deploy key; every other site uses DEPLOY_SSH_KEY. Chosen in the
-          # shell by the site name — never `a && b || c`, which would fall back to another
-          # site's key when PP's secret is empty.
+          # #1004: PP has its own deploy key; every other site uses DEPLOY_SSH_KEY. Only the site's
+          # own key reaches this step (the other one renders empty), and the shell picks by the
+          # site name — never `a && secrets.A || secrets.B`, which falls back to ANOTHER site's
+          # key when the wanted secret is empty.
           SITE_NAME: ${{ inputs.site }}
-          KEY_DEFAULT: ${{ secrets.DEPLOY_SSH_KEY }}
-          KEY_PP: ${{ secrets.DEPLOY_SSH_KEY_PP }}
+          KEY_DEFAULT: ${{ inputs.site != 'PP' && secrets.DEPLOY_SSH_KEY || '' }}
+          KEY_PP: ${{ inputs.site == 'PP' && secrets.DEPLOY_SSH_KEY_PP || '' }}
         run: |
           mkdir -p ~/.ssh
           # #795: (re)write the deploy-target alias FIRST, before ssh-keyscan.
@@ -890,8 +891,9 @@ jobs:
         if: ${{ inputs.site == 'SNV' && vars.CLOUDFLARED_TUNNEL_ID_PROD != '' && vars.CLOUDFLARED_HOSTNAME_PROD != '' || inputs.site == 'PP' && vars.CLOUDFLARED_TUNNEL_ID_PP != '' && vars.CLOUDFLARED_HOSTNAME_PP != '' }}
         env:
           SITE_NAME: ${{ inputs.site }}
-          TOKEN_PROD: ${{ secrets.CLOUDFLARED_CREDS_PROD }}
-          TOKEN_PP: ${{ secrets.CLOUDFLARED_CREDS_PP }}
+          # Only the site's own token reaches the step (the other renders empty).
+          TOKEN_PROD: ${{ inputs.site == 'SNV' && secrets.CLOUDFLARED_CREDS_PROD || '' }}
+          TOKEN_PP: ${{ inputs.site == 'PP' && secrets.CLOUDFLARED_CREDS_PP || '' }}
         run: |
           set -euo pipefail
           case "$SITE_NAME" in

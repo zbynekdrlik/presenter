@@ -276,7 +276,7 @@ paths:
   drops + counts (atomic), a media-time jump ≤ 1 s → silence, more → resync. The 20 ms drain makes one
   `mic_chain::Block` (16 kHz mono f32) per LIVE channel into the mic's `BlockQueue` → the UNCHANGED
   `run_chain`. Env (per site, like `DANTE_SUBNET`): `PRESENTER_LISTEN_DANTE_IFACE` (unset = no device and no
-  Dante mics, status `no_interface` + the Slovak reason in `dante.error` — dev/CI/PP), `_NAME` (`presenter-listen`), `_RATE`
+  Dante mics, status `no_interface` + the Slovak reason in `dante.error` — dev/CI/PRBA; SNV + PP set it, #1004), `_NAME` (`presenter-listen`), `_RATE`
   (96000). Health: `MicCounters.transport`; `set_transport_mics` / `end_session` touch only their own
   transport (a VBAN socket closing never wipes a Dante mic); `vban_rx` routes only VBAN mics and stays
   idle without one. Status `dante: {state, device, interface, error}`; a Dante mic's `sender` =

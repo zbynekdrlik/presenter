@@ -377,16 +377,19 @@ class PpReleaseTest(unittest.TestCase):
 
     def test_pp_uses_its_own_ssh_key_without_fallback(self) -> None:
         setup = step("Setup SSH for deployment")
-        self.assertEqual(setup["env"]["KEY_PP"], "${{ secrets.DEPLOY_SSH_KEY_PP }}")
+        # Each env var carries only its own site's secret, and falls back to EMPTY, never to the
+        # other site's secret (`|| ''` is the last operand).
+        self.assertEqual(setup["env"]["KEY_PP"], "${{ inputs.site == 'PP' && secrets.DEPLOY_SSH_KEY_PP || '' }}")
+        self.assertEqual(setup["env"]["KEY_DEFAULT"], "${{ inputs.site != 'PP' && secrets.DEPLOY_SSH_KEY || '' }}")
         run = code_lines(str(setup["run"]))
         self.assertIn('if [ "$SITE_NAME" = "PP" ]; then KEY="$KEY_PP"; else KEY="$KEY_DEFAULT"; fi', run)
         self.assertIn('if [ -z "$KEY" ]', run)
         self.assertNotIn("secrets.", run)
-        self.assertNotIn("||", str(setup["env"]))
 
     def test_cloudflared_token_is_the_sites_own(self) -> None:
         cf = step("Install & configure cloudflared (skipped if vars unset)")
-        self.assertNotIn("||", str(cf["env"]))
+        self.assertEqual(cf["env"]["TOKEN_PROD"], "${{ inputs.site == 'SNV' && secrets.CLOUDFLARED_CREDS_PROD || '' }}")
+        self.assertEqual(cf["env"]["TOKEN_PP"], "${{ inputs.site == 'PP' && secrets.CLOUDFLARED_CREDS_PP || '' }}")
         run = str(cf["run"])
         self.assertIn('SNV) TUNNEL_TOKEN="$TOKEN_PROD"', run)
         self.assertIn('PP) TUNNEL_TOKEN="$TOKEN_PP"', run)

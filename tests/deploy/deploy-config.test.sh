@@ -345,7 +345,7 @@ every_site_call_names_its_service_user() {
   done
 }
 
-shared_unit_keeps_pp_user_and_needs_no_login_home() {
+shared_unit_keeps_the_pre_migration_user_and_needs_no_login_home() {
   # The service user is a drop-in written at the swap, while the service is stopped (#929; PP
   # too since #1004): the committed unit keeps the pre-migration User=newlevel, so a
   # crash-restart before the swap never starts the old service as `presenter` on a tree it does
@@ -374,7 +374,7 @@ check "#547 units hard-bound the gate with timeout + TimeoutStartSec" units_hard
 check "#547 every deploy ships the gate script" every_deploy_ships_the_gate_script
 check "#929 site deploy writes the service-user drop-in" site_deploy_writes_the_service_user_dropin
 check "#929 every site call names its service user (SNV, PP = presenter)" every_site_call_names_its_service_user
-check "#929 shared unit keeps PP's user and needs no login home" shared_unit_keeps_pp_user_and_needs_no_login_home
+check "#929 shared unit keeps the pre-migration user and needs no login home" shared_unit_keeps_the_pre_migration_user_and_needs_no_login_home
 
 if [ "$failures" -ne 0 ]; then
   echo "Deploy-config guards: $failures FAILED"
