@@ -84,18 +84,26 @@ fn dlink_sized_blocks_become_exact_100_ms_frames_with_nothing_lost() {
         start += size as u64;
         if k % 8 == 7 {
             let samples = outputs.drain(0);
-            frames.extend(chain.push(&Block {
-                format: DANTE_BLOCK_FORMAT,
-                silence_frames: 0,
-                samples,
-            }));
+            frames.extend(
+                chain
+                    .push(&Block {
+                        format: DANTE_BLOCK_FORMAT,
+                        silence_frames: 0,
+                        samples,
+                    })
+                    .frames,
+            );
         }
     }
-    frames.extend(chain.push(&Block {
-        format: DANTE_BLOCK_FORMAT,
-        silence_frames: 0,
-        samples: outputs.drain(0),
-    }));
+    frames.extend(
+        chain
+            .push(&Block {
+                format: DANTE_BLOCK_FORMAT,
+                silence_frames: 0,
+                samples: outputs.drain(0),
+            })
+            .frames,
+    );
     assert_eq!(fed.len(), 16_000, "375 blocks of 42⅔ frames = 1 s");
     assert_eq!(frames.len(), 10, "ten whole 100 ms frames");
     assert!(frames.iter().all(|frame| frame.len() == 1_600));
