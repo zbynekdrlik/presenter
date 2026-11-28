@@ -1,18 +1,24 @@
-//! The guest's live transcription (#852 C3, spec §22.5): the per-mic session
-//! state carried by `GET /listen/status` and the `/listen/ws` wire
+//! The live transcription (#852 C3, spec §22.5): the per-mic session state
+//! carried by `GET /listen/status` and the `/listen/ws` wire
 //! ([`crate::listen::ws`]), the three `app_settings` rows, the start decision,
 //! the daily cap and the cost (plan Decisions 9–11).
+//!
+//! #852 T1 (ROZHODNUTÉ 28.11.2026, option b): the transcript runs at EVERY
+//! service on EACH handheld ([`transcribed_mics`]: every published Dante mic,
+//! plus the chosen guest mic), one session per mic, each connected only while
+//! its mic is voiced (the session's own gate / park) — no Kázeň layout gate
+//! any more; the switch, today's choice and ONE daily cap over all mics stay
+//! the cost guard.
 //!
 //! Rows (absent = the default, so a box nobody set up runs nothing):
 //! `listen.transcription` `{enabled, guestMic, dailyCapMinutes}` (the paid
 //! switch, off by default); `listen.session` `{day, mode, extraMinutes}`
-//! (today's choice, it overrides the Kázeň automation for the rest of the
+//! (today's choice, it overrides the automatic mode for the rest of the
 //! day); `listen.usage` `{day, mics}` (today's metered time, so the cap
 //! survives a restart).
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
-use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -30,14 +36,10 @@ pub const USAGE_KEY: &str = "listen.usage";
 pub const DEFAULT_DAILY_CAP_MINUTES: u32 = 240;
 /// The daily caps the setting accepts, in minutes.
 pub const DAILY_CAP_MINUTES_RANGE: RangeInclusive<u32> = 10..=600;
-/// After the stage leaves Kázeň, the automatic session keeps running this long.
-pub const PREACH_STOP_DELAY: Duration = Duration::from_secs(60);
 /// A start after the cap is reached adds this many minutes to today's cap.
 pub const START_EXTRA_MINUTES: u32 = 60;
 /// Soniox real-time price (docs, pricing), per connected hour.
 pub const SONIOX_USD_PER_HOUR: f64 = 0.12;
-/// The stage layout code that starts the automatic session.
-pub const PREACH_LAYOUT: &str = "preach";
 
 const MS_PER_MINUTE: u64 = 60_000;
 const MS_PER_HOUR: f64 = 3_600_000.0;
@@ -70,7 +72,7 @@ pub enum TranscriptionState {
 pub enum OffReason {
     /// The paid switch is off.
     Disabled,
-    /// No guest mic is chosen.
+    /// No handheld (Dante) mic is published and no guest mic is chosen.
     NoGuestMic,
     /// The chosen guest mic is not in the published list.
     GuestMicMissing,
@@ -78,8 +80,6 @@ pub enum OffReason {
     NoKey,
     /// Today's cap of connected minutes is reached.
     CapReached,
-    /// Automatic mode and the stage layout is not Kázeň.
-    NotPreach,
     /// Today's choice is "stopped".
     OverrideOff,
     /// The key was refused (401 / 403).
@@ -117,11 +117,10 @@ impl OffReason {
     pub fn slovak(&self) -> &'static str {
         match self {
             Self::Disabled => "Prepis je vypnutý",
-            Self::NoGuestMic => "Nie je vybraný mikrofón hosťa",
+            Self::NoGuestMic => "Nie je žiadny ručný mikrofón ani mikrofón hosťa",
             Self::GuestMicMissing => "Mikrofón hosťa nie je v zozname mikrofónov",
             Self::NoKey => "Chýba kľúč služby prepisu (Soniox)",
             Self::CapReached => "Denný limit prepisu dosiahnutý",
-            Self::NotPreach => "Čaká na rozloženie Kázeň",
             Self::OverrideOff => "Prepis je dnes zastavený",
             Self::Auth => "Prepis vypnutý — služba odmietla kľúč",
             Self::Payment => "Prepis vypnutý — problém s účtom služby",
@@ -137,7 +136,8 @@ impl OffReason {
 pub struct TranscriptionSetting {
     /// The paid switch.
     pub enabled: bool,
-    /// The id of the mic the guest speaks into (any published mic).
+    /// A mic transcribed besides the handhelds (any published mic, e.g. a
+    /// VBAN guest mic; a Dante one is transcribed anyway).
     pub guest_mic: Option<String>,
     pub daily_cap_minutes: u32,
 }
@@ -152,7 +152,8 @@ impl Default for TranscriptionSetting {
     }
 }
 
-/// Today's choice: run now, stay stopped, or follow the Kázeň layout.
+/// Today's choice: run now (also past the cap: [`next_override`]), stay
+/// stopped, or automatic (runs whenever a mic is voiced).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionMode {
@@ -217,25 +218,43 @@ pub struct StartInputs<'a> {
     pub key: bool,
     pub today: NaiveDate,
     pub over: Option<&'a SessionOverride>,
-    /// [`preach_active`] now.
-    pub preach: bool,
-    /// The guest mic's connected time today.
+    /// Every transcribed mic's connected time today (ONE cap for all).
     pub connected_ms_today: u64,
 }
 
-/// Whether the guest session runs, and for which mic. Checked in this order
-/// (plan Decision 9): the switch, a chosen guest mic, that mic published, a
-/// key, today's cap, today's choice (`on` runs, `off` stops), then the Kázeň
-/// automation.
-pub fn start_decision(i: &StartInputs) -> Result<String, OffReason> {
+/// The mics a session runs for (#852 T1): every published Dante mic in
+/// channel order, then the chosen guest mic when it is published and not one
+/// of them.
+pub fn transcribed_mics(setting: &TranscriptionSetting, published: &[MicConfig]) -> Vec<String> {
+    let mut mics: Vec<String> = published
+        .iter()
+        .filter(|mic| mic.is_dante())
+        .map(|mic| mic.id.clone())
+        .collect();
+    if let Some(guest) = setting.guest_mic.as_deref() {
+        if !mics.iter().any(|id| id == guest) && published.iter().any(|mic| mic.id == guest) {
+            mics.push(guest.to_string());
+        }
+    }
+    mics
+}
+
+/// Whether the sessions run, and for which mics. Checked in this order (plan
+/// Decision 9, #852 T1): the switch, a mic to transcribe (none: the chosen
+/// guest mic is missing, or none is chosen), a key, today's cap over all
+/// mics, today's choice (`off` stops; `on` and `auto` run — each session
+/// connects only while its mic is voiced).
+pub fn start_decision(i: &StartInputs) -> Result<Vec<String>, OffReason> {
     if !i.setting.enabled {
         return Err(OffReason::Disabled);
     }
-    let Some(guest) = i.setting.guest_mic.as_deref() else {
-        return Err(OffReason::NoGuestMic);
-    };
-    if !i.published.iter().any(|mic| mic.id == guest) {
-        return Err(OffReason::GuestMicMissing);
+    let mics = transcribed_mics(i.setting, i.published);
+    if mics.is_empty() {
+        return Err(if i.setting.guest_mic.is_some() {
+            OffReason::GuestMicMissing
+        } else {
+            OffReason::NoGuestMic
+        });
     }
     if !i.key {
         return Err(OffReason::NoKey);
@@ -244,10 +263,8 @@ pub fn start_decision(i: &StartInputs) -> Result<String, OffReason> {
         return Err(OffReason::CapReached);
     }
     match today_mode(i.over, i.today) {
-        SessionMode::On => Ok(guest.to_string()),
         SessionMode::Off => Err(OffReason::OverrideOff),
-        SessionMode::Auto if i.preach => Ok(guest.to_string()),
-        SessionMode::Auto => Err(OffReason::NotPreach),
+        SessionMode::On | SessionMode::Auto => Ok(mics),
     }
 }
 
@@ -274,16 +291,6 @@ pub fn cap_ms(
 /// The provider's price of `connected_ms` of connected time, in US dollars.
 pub fn cost_usd(connected_ms: u64) -> f64 {
     connected_ms as f64 / MS_PER_HOUR * SONIOX_USD_PER_HOUR
-}
-
-/// The Kázeň automation: the stage shows `preach`, or left it less than
-/// [`PREACH_STOP_DELAY`] ago (`left_preach_at`). `std` instants: a tokio
-/// caller passes `tokio::time::Instant::into_std()` (exact under the paused
-/// test clock too).
-pub fn preach_active(layout: &str, left_preach_at: Option<Instant>, now: Instant) -> bool {
-    layout == PREACH_LAYOUT
-        || left_preach_at
-            .is_some_and(|left| now.saturating_duration_since(left) < PREACH_STOP_DELAY)
 }
 
 /// The row stored when the operator picks `mode` today. Today's extra

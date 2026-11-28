@@ -166,6 +166,7 @@ impl TranscriptHub {
                 final_text: tail.final_text,
                 partial_text: tail.partial_text,
                 updated_at: at,
+                language: tail.language,
             },
         );
         let gate = state.gates.entry(mic_id.to_string()).or_default();

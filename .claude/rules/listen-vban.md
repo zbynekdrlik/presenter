@@ -292,9 +292,11 @@ paths:
   forwarded chunks = its 100 ms frame). Pure policy `choose`: stay while the forwarded mic is voiced or
   within `HANGOVER` (2 s, translate's) of its last voiced chunk; then switch to a mic voiced within
   `CANDIDATE_WINDOW` (100 ms) — rank `SpokenLanguage` Foreign < unknown < Slovak (the Slovak one is the
-  interpreter; every mic `None` until language detection lands), then the loudest of its last 10
-  chunks, then channel order; no candidate = stay; the language comes from the mic's configured
-  `language` (`sk` / `en`; the Dante mics are `off` = unknown). A mic not forwarded holds its last 2 s
+  interpreter), then the loudest of its last 10 chunks, then channel order; no candidate = stay; the
+  language is the mic's TRANSCRIPT language (#852 T2: `ListenService::spoken_languages`, a `watch`
+  the `select` loop follows, `Selector::set_detected`, INFO `pulpit ranks the Dante mics by their
+  transcript language`), else its configured `language` (`sk` / `en`; the Dante mics are `off` =
+  unknown). A mic not forwarded holds its last 2 s
   (`ONSET_BUFFER_CHUNKS`): on a switch its onset (from `SWITCH_PRE_ROLL_CHUNKS` = 10 before its first
   voiced chunk) goes out first, so an interpreter who starts inside the preacher's hangover loses
   nothing (a short burst into the translation). Each chunk is judged on arrival

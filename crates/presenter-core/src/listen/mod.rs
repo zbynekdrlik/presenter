@@ -5,9 +5,11 @@
 //! session state, rows, start decision and cost ([`transcription`]), the
 //! `/listen/ws` wire ([`ws`]) and the Soniox context terms ([`context`]).
 //! #999: the guests' live translation wire ([`guest`]).
+//! #852 T2: a mic's spoken language from its transcript ([`language`]).
 
 pub mod context;
 pub mod guest;
+pub mod language;
 pub mod mics;
 pub mod recorder;
 pub mod status;

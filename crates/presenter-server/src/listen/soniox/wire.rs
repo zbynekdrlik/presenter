@@ -18,8 +18,12 @@ pub const DEFAULT_MODEL: &str = "stt-rt-v6";
 const AUDIO_FORMAT: &str = "pcm_s16le";
 const SAMPLE_RATE: u32 = 16_000;
 const NUM_CHANNELS: u32 = 1;
-/// The guest session is always English (plan Decision 3).
-const LANGUAGE_HINTS: [&str; 1] = ["en"];
+/// Every handheld is transcribed (#852 T1, ROZHODNUTÉ 28.11.2026): the
+/// Slovak pastor or interpreter and an English guest, so both are hinted and
+/// Soniox tags each token with its `language` (`docs.soniox.com
+/// stt/concepts/language-identification`, read 2026-11-28; never
+/// `language_hints_strict` — the language is what we want to learn).
+const LANGUAGE_HINTS: [&str; 2] = ["sk", "en"];
 /// Soniox's documented range of `max_endpoint_delay_ms`.
 pub const ENDPOINT_DELAY_MIN_MS: u32 = 500;
 pub const ENDPOINT_DELAY_MAX_MS: u32 = 3_000;
@@ -45,6 +49,7 @@ struct ConfigJson<'a> {
     sample_rate: u32,
     num_channels: u32,
     language_hints: &'a [&'a str],
+    enable_language_identification: bool,
     context: ContextJson<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     enable_endpoint_detection: Option<bool>,
@@ -75,6 +80,7 @@ pub fn config_message(c: &SonioxConfig) -> String {
         sample_rate: SAMPLE_RATE,
         num_channels: NUM_CHANNELS,
         language_hints: &LANGUAGE_HINTS,
+        enable_language_identification: true,
         context: ContextJson {
             general: c
                 .context

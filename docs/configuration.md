@@ -179,8 +179,9 @@ server started) and a Slovak `error`. What exists so far, by unit of #852 C1b:
 
 ### Sermon listening — guest transcription, Soniox (#852 C3)
 
-The guest microphone's English transcript runs on Soniox real-time (`stt-rt-v6`,
-provider notes in [listen-providers.md](listen-providers.md)). Each variable is
+The live transcript of every handheld (the Dante mics) and the chosen guest mic
+runs on Soniox real-time (`stt-rt-v6`, Slovak and English with language
+identification, #852 T1; provider notes in [listen-providers.md](listen-providers.md)). Each variable is
 read once at startup; an empty or whitespace-only value counts as unset. The
 switch, the guest mic and the daily cap are settings (Settings → Počúvanie), not
 env vars; the transcription ships OFF.

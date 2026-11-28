@@ -29,6 +29,7 @@ fn tail(final_text: &str, partial_text: &str) -> TailText {
         final_text: final_text.to_string(),
         partial_text: partial_text.to_string(),
         start_ms: Some(1_000),
+        language: None,
     }
 }
 
