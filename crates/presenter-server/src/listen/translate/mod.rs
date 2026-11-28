@@ -238,7 +238,7 @@ impl GuestTranslate {
         let listeners = Arc::new(AtomicUsize::new(1));
         let times = SegmentTimes::default();
         let io = SessionIo {
-            frames: listen.subscribe_frames(&self.inner.deps.env.source_mic),
+            chunks: listen.subscribe_chunks(&self.inner.deps.env.source_mic),
             out: out.clone(),
             state: state_tx,
             stop: stop_rx,

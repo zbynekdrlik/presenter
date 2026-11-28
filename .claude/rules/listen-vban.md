@@ -79,6 +79,12 @@ paths:
   `FRAME_CHANNEL_CAPACITY` = 128 frames (12.8 s; tokio rounds a capacity up to a power of two, so keep
   one): `send` never waits; a consumer that falls behind gets `Lagged(n)` and counts it. Never make a
   chain wait for a consumer (no `mpsc::send().await`, no lock held by a consumer).
+- **Chunk channel** (#999 L6e, `ListenService::chunk_sender` / `subscribe_chunks`): the same per mic
+  for 20 ms chunks (`MicChunk`, 320 samples, capacity 512 = 10.24 s), cut by `Resampler16k` from the
+  SAME 16 kHz stream the moment each is complete; every 5 chunks make the unchanged frame
+  (`Converted { chunks, frames }`, frames = the chunks concatenated). `run_chain` sends the chunks
+  BEFORE the frame they complete, under the same generation gate. Consumer: the guests' translation
+  (lowest latency); everything else stays on frames.
 - **rubato's lock footprint:** 13 packages, byte-identical to songplayer's lock — incl.
   `audio-codec-algorithms` (a dependency of `audioadapter-sample`, 0BSD OR Apache-2.0). Resolve a
   dependency change with `cargo metadata` (non-compiling) and diff `Cargo.lock`: only `+` lines, no

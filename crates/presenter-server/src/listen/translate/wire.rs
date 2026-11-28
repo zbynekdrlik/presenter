@@ -1,6 +1,6 @@
 //! The Gemini Live wire (#999 L1), as the raw probes of 2026-11-27 saw it (no
 //! SDK): ONE setup message, then `realtimeInput` audio (16 kHz s16le, base64,
-//! ~100 ms per message); the server answers every message as a BINARY frame
+//! 20 ms per message since #999 L6e); the server answers every message as a BINARY frame
 //! holding JSON — `setupComplete`, `serverContent` (output audio 24 kHz s16le
 //! in `modelTurn.parts[].inlineData`, `outputTranscription` = the guest's
 //! text, `inputTranscription` = the Slovak original, `turnComplete`),
@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 /// The output rate the model documents and the probes saw.
 pub const OUTPUT_RATE: u32 = 24_000;
-/// The input rate we send (the mic frames are 16 kHz).
+/// The input rate we send (the mic chunks are 16 kHz).
 pub const INPUT_MIME: &str = "audio/pcm;rate=16000";
 
 /// The setup: audio out, both transcriptions, the target language, the
@@ -47,7 +47,7 @@ pub fn setup_message(model: &str, language: &str, context: &str, handle: Option<
     .to_string()
 }
 
-/// One mic frame as `realtimeInput` audio.
+/// One mic chunk (20 ms) as `realtimeInput` audio.
 pub fn audio_message(pcm: &[i16]) -> String {
     let bytes: Vec<u8> = pcm.iter().flat_map(|sample| sample.to_le_bytes()).collect();
     serde_json::json!({

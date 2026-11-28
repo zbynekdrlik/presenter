@@ -3,13 +3,15 @@
 //! and never waits: on a full queue the OLDEST block goes and is counted
 //! (songplayer `vban-out.md` "The queue never blocks"). One task per mic
 //! ([`run_chain`]) picks the channel, converts to 16 kHz mono
-//! (`resample::Resampler16k`), cuts 100 ms frames and records how many and the
-//! last one's level; it spends a unit of its coop budget per block, so a full
+//! (`resample::Resampler16k`), cuts 20 ms chunks and 100 ms frames and records
+//! how many frames and the last one's level; it spends a unit of its coop budget per block, so a full
 //! queue never pins a worker. A format change rebuilds the converter; its log
 //! line goes through the #484 gate on the mic's format count (health). The
-//! frames go to the mic's frame channel (`ListenService::frame_sender`) only
-//! while the chain's generation is the mic's current one; `broadcast::send`
-//! never waits — a consumer that falls behind loses the oldest frames.
+//! chunks go to the mic's chunk channel (`ListenService::chunk_sender`, #999
+//! L6e: the guests' translation) and then the frames to its frame channel
+//! (`ListenService::frame_sender`), only while the chain's generation is the
+//! mic's current one; `broadcast::send` never waits — a consumer that falls
+//! behind loses the oldest ones.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -20,7 +22,7 @@ use presenter_core::listen::mics::MicChannel;
 use tokio::sync::{broadcast, Notify};
 use tracing::{info, warn};
 
-use super::resample::Resampler16k;
+use super::resample::{Converted, Resampler16k};
 use super::{should_log_event, ListenService, MicFrame, MIC_TARGET};
 
 /// ≈ 340 ms of 256-frame packets at 48 kHz — far above the ≥ 6 × 256
@@ -144,13 +146,14 @@ impl MicChain {
         }
     }
 
-    /// One block → the 100 ms frames it completes (none while the format is refused).
-    pub(crate) fn push(&mut self, block: &Block) -> Vec<Vec<i16>> {
+    /// One block → the 20 ms chunks and 100 ms frames it completes (none
+    /// while the format is refused).
+    pub(crate) fn push(&mut self, block: &Block) -> Converted {
         if self.format != Some(block.format) {
             self.reset(block.format);
         }
         let Some(resampler) = self.resampler.as_mut() else {
-            return Vec::new();
+            return Converted::default();
         };
         let mut mono = vec![0.0; block.silence_frames];
         mono.extend(pick_channel(
@@ -195,10 +198,11 @@ pub(crate) async fn run_chain(
     queue: Arc<BlockQueue>,
 ) {
     let frames_out = service.frame_sender(&mic_id);
+    let chunks_out = service.chunk_sender(&mic_id);
     let mut chain = MicChain::new(channel);
     while let Some(block) = queue.pop().await {
         let before = chain.format();
-        let frames = chain.push(&block);
+        let Converted { chunks, frames } = chain.push(&block);
         if before != chain.format() {
             let formats = service.with_health(|health| health.record_format(&mic_id, generation));
             if should_log_event(formats) {
@@ -211,7 +215,9 @@ pub(crate) async fn run_chain(
             health.record_chain(&mic_id, generation, produced, level, chain.error())
         });
         if current {
-            send_frames(&frames_out, frames);
+            // the chunks first: the low-latency consumer never waits behind a frame
+            send_all(&chunks_out, chunks);
+            send_all(&frames_out, frames);
         }
         // `pop` touches no tokio resource: while blocks are queued (a sender
         // flooding counter jumps queues a second of silence per packet) the
@@ -220,14 +226,14 @@ pub(crate) async fn run_chain(
     }
 }
 
-/// The frames to every consumer of the mic. Never waits: `broadcast::send`
-/// overwrites the oldest frame a consumer has not read yet.
-fn send_frames(frames_out: &broadcast::Sender<MicFrame>, frames: Vec<Vec<i16>>) {
-    if frames_out.receiver_count() == 0 {
+/// The frames (or chunks) to every consumer of the mic. Never waits:
+/// `broadcast::send` overwrites the oldest one a consumer has not read yet.
+fn send_all(out: &broadcast::Sender<MicFrame>, pieces: Vec<Vec<i16>>) {
+    if out.receiver_count() == 0 {
         return;
     }
-    for frame in frames {
-        let _receivers = frames_out.send(MicFrame::from(frame));
+    for piece in pieces {
+        let _receivers = out.send(Arc::from(piece));
     }
 }
 
@@ -361,8 +367,8 @@ mod tests {
             .collect();
         for (pick, expected) in [(MicChannel::Right, -9.03), (MicChannel::Left, -120.0)] {
             let mut chain = MicChain::new(pick);
-            let mut frames = chain.push(&block(STEREO_48K, 0, stereo.clone()));
-            frames.extend(chain.push(&block(STEREO_48K, 0, stereo.clone())));
+            let mut frames = chain.push(&block(STEREO_48K, 0, stereo.clone())).frames;
+            frames.extend(chain.push(&block(STEREO_48K, 0, stereo.clone())).frames);
             assert_eq!(frames.len(), 2, "{pick:?}: 200 ms in, 2 frames out");
             let level = rms_dbfs(&frames[1]);
             assert!((level - expected).abs() <= 0.3, "{pick:?}: {level}");
@@ -372,10 +378,10 @@ mod tests {
     #[test]
     fn inserted_silence_is_part_of_the_output() {
         let mut chain = MicChain::new(MicChannel::Left);
-        let mut frames = chain.push(&block(MONO_48K, 4_800, Vec::new()));
+        let mut frames = chain.push(&block(MONO_48K, 4_800, Vec::new())).frames;
         for start in [0, 4_800] {
             let samples = tone(48_000, 1_000.0, 0.5, start, 4_800, 1);
-            frames.extend(chain.push(&block(MONO_48K, 0, samples)));
+            frames.extend(chain.push(&block(MONO_48K, 0, samples)).frames);
         }
         assert_eq!(
             frames.len(),
@@ -393,13 +399,19 @@ mod tests {
     #[test]
     fn a_format_change_resets_the_converter_and_an_unsupported_rate_says_why() {
         let mut chain = MicChain::new(MicChannel::Left);
-        assert_eq!(chain.push(&block(MONO_48K, 0, vec![0.0; 4_800])).len(), 1);
+        assert_eq!(
+            chain
+                .push(&block(MONO_48K, 0, vec![0.0; 4_800]))
+                .frames
+                .len(),
+            1
+        );
         let at_44k = VbanAudioFormat {
             rate_hz: 44_100,
             ..MONO_48K
         };
         assert_eq!(
-            chain.push(&block(at_44k, 0, vec![0.0; 4_410])).len(),
+            chain.push(&block(at_44k, 0, vec![0.0; 4_410])).frames.len(),
             1,
             "a fresh converter"
         );
@@ -408,12 +420,21 @@ mod tests {
             rate_hz: 11_025,
             ..MONO_48K
         };
-        assert!(chain.push(&block(at_11k, 0, vec![0.0; 1_102])).is_empty());
+        assert_eq!(
+            chain.push(&block(at_11k, 0, vec![0.0; 1_102])),
+            Converted::default()
+        );
         assert_eq!(
             chain.error(),
             Some("nepodporovaná vzorkovacia frekvencia 11025 Hz")
         );
-        assert_eq!(chain.push(&block(MONO_48K, 0, vec![0.0; 4_800])).len(), 1);
+        assert_eq!(
+            chain
+                .push(&block(MONO_48K, 0, vec![0.0; 4_800]))
+                .frames
+                .len(),
+            1
+        );
         assert_eq!(chain.error(), None, "a supported format clears the error");
     }
 
@@ -568,6 +589,42 @@ mod tests {
             frames.try_recv().is_err(),
             "exactly one frame: the stale chain sent none"
         );
+    }
+
+    /// #999 L6e: a Dante drain's 20 ms (320 samples at 16 kHz) reaches the
+    /// chunk channel at once, long before its 100 ms frame exists; a stale
+    /// chain sends no chunk either.
+    #[tokio::test]
+    async fn the_current_chain_hands_each_20_ms_chunk_on_at_once() {
+        let service = ListenService::new();
+        let stale = service.with_health(|health| health.set_mics(&[], &["guest"]));
+        let current = service.with_health(|health| health.set_mics(&[], &["guest"]));
+        let mut chunks = service.chunk_sender("guest").subscribe();
+        let mut frames = service.frame_sender("guest").subscribe();
+        for (generation, level) in [(stale, 0.5), (current, 0.25)] {
+            let queue = Arc::new(BlockQueue::new(QUEUE_CAPACITY));
+            queue.push(block(MONO_16K, 0, vec![level; 320]));
+            queue.close();
+            let chain = tokio::spawn(run_chain(
+                service.clone(),
+                "guest".to_string(),
+                MicChannel::Left,
+                generation,
+                Arc::clone(&queue),
+            ));
+            tokio::time::timeout(Duration::from_secs(5), chain)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let chunk = chunks.try_recv().unwrap();
+        assert_eq!(chunk.len(), 320, "20 ms at 16 kHz");
+        assert!(
+            chunk.iter().all(|&s| s == f32_to_int16(0.25)),
+            "the current chain's chunk"
+        );
+        assert!(chunks.try_recv().is_err(), "the stale chain sent none");
+        assert!(frames.try_recv().is_err(), "no 100 ms frame yet");
     }
 
     fn guest() -> MicConfig {

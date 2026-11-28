@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::stats::{DayMeter, DAILY_CAP_MINUTES};
 use super::test_fake::{guest, today, FakeGemini, Script, LATE_MARK};
 use super::*;
-use crate::listen::{ListenService, MicFrame};
+use crate::listen::{ListenService, MicChunk};
 
 fn listen_with_source() -> ListenService {
     let listen = ListenService::new();
@@ -14,21 +14,23 @@ fn listen_with_source() -> ListenService {
     listen
 }
 
-/// A 100 ms frame: a loud square wave (voiced) or digital silence.
-fn frame(voiced: bool) -> MicFrame {
+/// A 20 ms chunk (320 samples, what the mic chain hands the session, #999
+/// L6e): a loud square wave (voiced) or digital silence.
+fn chunk(voiced: bool) -> MicChunk {
     let level = if voiced { 8_000 } else { 0 };
-    (0..1_600)
+    (0..320)
         .map(|i| if i % 20 < 10 { level } else { -level })
         .collect::<Vec<i16>>()
         .into()
 }
 
-/// Sends `count` frames 100 ms apart into the source mic's channel.
+/// Sends `count` × 100 ms of audio into the source mic's chunk channel, as
+/// the chain does: one 20 ms chunk every 20 ms.
 async fn feed(listen: &ListenService, voiced: bool, count: usize) {
-    let sender = listen.frame_sender("dante-mic-1");
-    for _ in 0..count {
-        let _ = sender.send(frame(voiced));
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    let sender = listen.chunk_sender("dante-mic-1");
+    for _ in 0..count * 5 {
+        let _ = sender.send(chunk(voiced));
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -201,12 +203,13 @@ async fn a_go_away_moves_the_audio_to_a_resumed_connection_without_a_gap() {
         serde_json::json!({})
     );
     assert_eq!(setups[1]["setup"]["sessionResumption"]["handle"], "h-0-12");
-    let audio = fake.audio();
+    let samples = fake.audio_samples();
     assert_eq!(
-        audio.iter().sum::<usize>(),
-        30,
-        "every frame sent once: {audio:?}"
+        samples.iter().sum::<usize>(),
+        30 * 1_600,
+        "every chunk sent once: {samples:?}"
     );
+    let audio = fake.audio();
     assert!(audio[0] >= 12 && audio[1] > 0, "{audio:?}");
     assert_eq!(audio_count(&drain(&mut listener)), 30);
     assert_eq!(*listener.state.borrow(), SessionState::Live);
@@ -561,16 +564,63 @@ async fn the_frames_to_gemini_are_timed_and_summarised() {
         "10 pre-roll + 5 voiced + 20 hangover"
     );
     let segments = listener.times.peek();
-    assert_eq!(segments.to_gemini.count(), 25, "the live frames only");
+    assert_eq!(
+        segments.to_gemini.count(),
+        125,
+        "the live chunks only (2.5 s of 20 ms)"
+    );
     assert_eq!(segments.to_gemini.max(), Some(0), "the paused clock");
     assert_eq!(segments.to_guest.count(), 0, "no guest socket here");
 
     tokio::time::sleep(Duration::from_secs(60)).await;
     let summary = capture.events_with_message("guest translation minute summary");
     assert_eq!(summary.len(), 1);
-    assert_eq!(summary[0].field("to_gemini_frames"), Some("25"));
+    assert_eq!(summary[0].field("to_gemini_chunks"), Some("125"));
     assert_eq!(summary[0].field("to_gemini_us_median"), Some("0"));
     assert_eq!(summary[0].field("to_guest_chunks"), Some("0"));
     assert_eq!(summary[0].field("to_guest_us_max"), None, "no sample");
     assert_eq!(listener.times.peek().to_gemini.count(), 0, "drained");
+}
+
+/// #999 L6e (owner 27.11: our side adds minimal latency): the audio goes to
+/// Gemini in 20 ms chunks, and an onset's first chunk leaves the moment it
+/// reaches the session — never held until 100 ms of audio exist. `sent_ms`
+/// (and with it the day's cap) counts 20 ms per chunk.
+#[tokio::test(start_paused = true)]
+async fn the_audio_goes_out_in_20_ms_chunks_without_waiting_for_100_ms() {
+    let capture = crate::tracing_capture::Capture::install();
+    let fake = FakeGemini::new(vec![]);
+    let listen = listen_with_source();
+    let service = guest(&fake, Some("test-key-not-real"), DayMeter::default());
+    let listener = service.join(&listen, "en").expect("joined");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(*listener.state.borrow(), SessionState::Waiting);
+
+    let sent_at = tokio::time::Instant::now();
+    let _ = listen.chunk_sender("dante-mic-1").send(chunk(true));
+    let deadline = sent_at + Duration::from_secs(1);
+    while fake.messages().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "no audio left");
+        tokio::task::yield_now().await;
+    }
+    let (samples, arrived) = fake.messages()[0];
+    assert_eq!(samples, 320, "one 20 ms chunk (the pre-roll was empty)");
+    assert!(
+        arrived - sent_at < Duration::from_millis(20),
+        "it left at once: {:?}",
+        arrived - sent_at
+    );
+
+    feed(&listen, true, 10).await;
+    let sizes: Vec<usize> = fake.messages().iter().map(|(n, _)| *n).collect();
+    assert_eq!(sizes.len(), 51, "1 + 50 chunks");
+    assert!(
+        sizes.iter().all(|&n| n == 320),
+        "every message 20 ms: {sizes:?}"
+    );
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let summary = capture.events_with_message("guest translation minute summary");
+    assert_eq!(summary.len(), 1);
+    assert_eq!(summary[0].field("sent_ms"), Some("1020"), "51 × 20 ms");
 }

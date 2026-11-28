@@ -94,9 +94,9 @@ impl Samples {
 }
 
 /// Our side of the model, per segment (#999 L6a, owner 27.11: only the
-/// model's latency may remain): `to_gemini` = a mic frame handed to the
-/// session → written to Gemini's socket (live frames; the pre-roll and the
-/// frames held for a connection are old on purpose), `to_guest` = a Gemini
+/// model's latency may remain): `to_gemini` = a mic chunk (20 ms, #999 L6e)
+/// handed to the session → written to Gemini's socket (live chunks; the
+/// pre-roll and the chunks held for a connection are old on purpose), `to_guest` = a Gemini
 /// audio message read off the socket → written to a guest's WebSocket (every
 /// listener). Shared by the session, its connection tasks and its listeners;
 /// the minute summary drains it.
@@ -157,7 +157,9 @@ pub struct MinuteStats {
     /// Translated audio stopped for [`STALL_AFTER`] while the preacher spoke.
     pub stalls: u64,
     pub reconnects: u64,
-    pub dropped_frames: u64,
+    /// Input chunks (20 ms) lost: the session fell behind the mic, or the
+    /// oldest held chunk went while no connection was ready.
+    pub dropped_chunks: u64,
     /// A replaced connection's speech dropped because the new one already spoke.
     pub overlap_dropped_ms: u64,
 }
@@ -180,7 +182,7 @@ impl MinuteStats {
             || self.output_ms > 0
             || self.stalls > 0
             || self.reconnects > 0
-            || self.dropped_frames > 0
+            || self.dropped_chunks > 0
         {
             let mut latencies = self.first_voiced_ms.clone();
             latencies.sort_unstable();
@@ -200,9 +202,9 @@ impl MinuteStats {
                 first_voiced_ms_max = latencies.last().copied(),
                 stalls = self.stalls,
                 reconnects = self.reconnects,
-                dropped_frames = self.dropped_frames,
+                dropped_chunks = self.dropped_chunks,
                 overlap_dropped_ms = self.overlap_dropped_ms,
-                to_gemini_frames = segments.to_gemini.count(),
+                to_gemini_chunks = segments.to_gemini.count(),
                 to_gemini_us_median = segments.to_gemini.median(),
                 to_gemini_us_max = segments.to_gemini.max(),
                 to_guest_chunks = segments.to_guest.count(),
