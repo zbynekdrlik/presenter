@@ -1,14 +1,15 @@
 name: Deploy site
 
 # #918: the release deploy of ONE Presenter site, called by deploy.yml once per site (SNV, then
-# PRBA). The steps are the SNV deploy job as it was, parameterized by the inputs below; the SNV
-# call (hardware + library_sync true) runs every step it always ran. PRBA (no devices, its own
-# data after a one-time seed from SNV) skips the hardware steps and never syncs SNV's song files.
+# PRBA) and by release.yml for PP (#1004). The steps are the SNV deploy job as it was,
+# parameterized by the inputs below; a hardware site (SNV, PP: hardware + library_sync true) runs
+# every step. PRBA (no devices, its own data after a one-time seed from SNV) skips the hardware
+# steps and never syncs SNV's song files.
 on:
   workflow_call:
     inputs:
       site:
-        description: "SNV or PRBA"
+        description: "SNV, PRBA or PP (PP: its own SSH key + cloudflared vars, picked by this name)"
         type: string
         required: true
       deploy_host:
@@ -61,6 +62,21 @@ on:
         type: string
         required: false
         default: ""
+      stage_url:
+        description: "#538: the URL the site's stage TVs open (PRESENTER_ANDROID_STAGE_URL); a hardware site needs one"
+        type: string
+        required: false
+        default: ""
+      sync_peer_url:
+        description: "#555: the other site's song-sync URL over tailscale (PRESENTER_SYNC_PEER_URL); a hardware site needs one"
+        type: string
+        required: false
+        default: ""
+      vaapi_required:
+        description: "#469: the host must have the VA-API H.264 encoder (vah264enc); false on the GPU-less PP (a warning instead)"
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   deploy:
@@ -106,6 +122,14 @@ jobs:
 
       - name: Setup SSH for deployment
         id: ssh_setup
+        env:
+          # #1004: PP has its own deploy key; every other site uses DEPLOY_SSH_KEY. Only the site's
+          # own key reaches this step (the other one renders empty), and the shell picks by the
+          # site name — never `a && secrets.A || secrets.B`, which falls back to ANOTHER site's
+          # key when the wanted secret is empty.
+          SITE_NAME: ${{ inputs.site }}
+          KEY_DEFAULT: ${{ inputs.site != 'PP' && secrets.DEPLOY_SSH_KEY || '' }}
+          KEY_PP: ${{ inputs.site == 'PP' && secrets.DEPLOY_SSH_KEY_PP || '' }}
         run: |
           mkdir -p ~/.ssh
           # #795: (re)write the deploy-target alias FIRST, before ssh-keyscan.
@@ -120,7 +144,9 @@ jobs:
               IdentityFile ~/.ssh/id_deploy
           EOF
           touch ~/.ssh/known_hosts
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          if [ "$SITE_NAME" = "PP" ]; then KEY="$KEY_PP"; else KEY="$KEY_DEFAULT"; fi
+          if [ -z "$KEY" ]; then echo "::error::the deploy SSH key of $SITE_NAME is empty"; exit 1; fi
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           # #674: the host's STALE key is replaced (ssh-keygen -R, inside the loop below,
           # only after a successful scan), so a re-deploy never accumulates duplicate
@@ -230,12 +256,18 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq $MISSING
           fi
-          # Probe that VAAPI H264 encoder is available
+          # Probe that VAAPI H264 encoder is available. #469: optional on a GPU-less host (PP,
+          # Alder Lake-N without working VA-API) — there NDI hardware encode is simply
+          # unavailable, the stage display and the software paths work.
           if ! gst-inspect-1.0 vah264enc >/dev/null 2>&1; then
-            echo "::error::vah264enc element not available after install — VA-API driver missing or kernel/firmware mismatch"
-            exit 1
+            if [ "${{ inputs.vaapi_required }}" = "true" ]; then
+              echo "::error::vah264enc element not available after install — VA-API driver missing or kernel/firmware mismatch"
+              exit 1
+            fi
+            echo "::warning::vah264enc not available on ${{ inputs.site }} — VA-API hardware H264 encoding unavailable (expected on a GPU-less host). Continuing deploy."
+          else
+            echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           fi
-          echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           REMOTE_SCRIPT
 
       # STAGED deploy, PULL model: the runner→prod point-to-point path can be
@@ -404,11 +436,12 @@ jobs:
       - name: Deploy systemd service
         env:
           # #538: the stage URL is PER SITE and no longer lives in the shared unit —
-          # each deploy writes its own drop-in. SNV prod points its TVs at itself.
+          # each deploy writes its own drop-in; a site points its TVs at itself.
           # Passed through `env:` rather than interpolated straight into the shell line:
           # the value ends up inside a remote ssh command, where a quote in it would run
           # as a command under passwordless sudo.
-          PROD_STAGE_URL: ${{ vars.PROD_STAGE_URL || 'http://10.77.9.205/stage' }}
+          STAGE_URL: ${{ inputs.stage_url }}
+          SYNC_PEER_URL: ${{ inputs.sync_peer_url }}
           # #915: the site's Cloudflare Access app, so the server verifies the login token.
           ACCESS_TEAM_DOMAIN: newlevelchurch.cloudflareaccess.com
           ACCESS_AUD: ${{ inputs.access_aud }}
@@ -456,24 +489,27 @@ jobs:
           ssh deploy-target "sudo install -m 0755 /tmp/wait-for-h264-encoder.sh ${{ env.DEPLOY_DIR }}/wait-for-h264-encoder.sh"
           # A newline in the variable would inject arbitrary [Service] directives into the
           # drop-in — accept only a single-line http(s) URL.
-          case "$PROD_STAGE_URL" in
-            *[$'\n\r']* | '') echo "::error::PROD_STAGE_URL must be a single-line URL"; exit 1 ;;
-            http://* | https://*) ;;
-            *) echo "::error::PROD_STAGE_URL must start with http:// or https://"; exit 1 ;;
-          esac
+          for pair in "stage_url=$STAGE_URL" "sync_peer_url=$SYNC_PEER_URL"; do
+            case "${pair#*=}" in
+              *[$'\n\r']* | '') echo "::error::${pair%%=*} must be a single-line URL"; exit 1 ;;
+              http://* | https://*) ;;
+              *) echo "::error::${pair%%=*} must start with http:// or https://"; exit 1 ;;
+            esac
+          done
           # #925: the hardware site's Dante VLAN subnet (dstack two-networks.md §4) — never
-          # used for NDI. SNV is the only hardware site deployed from main.
+          # used for NDI. Both hardware sites (SNV, PP #1004) have their Dante leg on VLAN 70,
+          # 10.77.7.0/24, interface enp2s0.70.
           printf '[Service]\nEnvironment=DANTE_SUBNET=10.77.7.0/24\n' |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/dante-subnet.conf >/dev/null && sudo systemctl daemon-reload"
           # #852: the Dante VLAN interface the in-process Dante device (dlink) uses for a
           # Dante listening mic. No device starts while no Dante mic is configured.
           printf '[Service]\nEnvironment=PRESENTER_LISTEN_DANTE_IFACE=enp2s0.70\n' |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/dante-listen.conf >/dev/null && sudo systemctl daemon-reload"
-          printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$PROD_STAGE_URL" |
+          printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' "$STAGE_URL" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/stage-url.conf >/dev/null && sudo systemctl daemon-reload"
-          # #555: song-sync peer — SNV pulls from PP over tailscale (the two sites
-          # have overlapping 10.77.8.0/23 LANs; tailscale is the only inter-site path).
-          printf '[Service]\nEnvironment=PRESENTER_SYNC_PEER_URL=%s\n' "http://100.101.72.101" |
+          # #555: song-sync peer — SNV and PP pull from each other over tailscale (the two
+          # sites have overlapping 10.77.8.0/23 LANs; tailscale is the only inter-site path).
+          printf '[Service]\nEnvironment=PRESENTER_SYNC_PEER_URL=%s\n' "$SYNC_PEER_URL" |
             ssh deploy-target "sudo tee /etc/systemd/system/${{ env.SERVICE_NAME }}.service.d/sync-peer.conf >/dev/null && sudo systemctl daemon-reload"
 
       # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only
@@ -849,14 +885,24 @@ jobs:
           echo "Service: ${{ env.SERVICE_NAME }}"
           ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true
 
+      # SNV (vars/secret suffix PROD) and PP (#1004, suffix PP) — each its own tunnel token,
+      # chosen in the shell by the site name (never another site's token as a fallback).
       - name: Install & configure cloudflared (skipped if vars unset)
-        if: ${{ inputs.site == 'SNV' && vars.CLOUDFLARED_TUNNEL_ID_PROD != '' && vars.CLOUDFLARED_HOSTNAME_PROD != '' }}
+        if: ${{ inputs.site == 'SNV' && vars.CLOUDFLARED_TUNNEL_ID_PROD != '' && vars.CLOUDFLARED_HOSTNAME_PROD != '' || inputs.site == 'PP' && vars.CLOUDFLARED_TUNNEL_ID_PP != '' && vars.CLOUDFLARED_HOSTNAME_PP != '' }}
         env:
-          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARED_CREDS_PROD }}
+          SITE_NAME: ${{ inputs.site }}
+          # Only the site's own token reaches the step (the other renders empty).
+          TOKEN_PROD: ${{ inputs.site == 'SNV' && secrets.CLOUDFLARED_CREDS_PROD || '' }}
+          TOKEN_PP: ${{ inputs.site == 'PP' && secrets.CLOUDFLARED_CREDS_PP || '' }}
         run: |
           set -euo pipefail
+          case "$SITE_NAME" in
+            SNV) TUNNEL_TOKEN="$TOKEN_PROD"; SECRET_NAME=CLOUDFLARED_CREDS_PROD ;;
+            PP) TUNNEL_TOKEN="$TOKEN_PP"; SECRET_NAME=CLOUDFLARED_CREDS_PP ;;
+            *) echo "::error::no cloudflared service tunnel for site $SITE_NAME"; exit 1 ;;
+          esac
           if [ -z "$TUNNEL_TOKEN" ]; then
-            echo "::error::CLOUDFLARED_CREDS_PROD secret is empty. Register the tunnel token in repo settings."
+            echo "::error::$SECRET_NAME secret is empty. Register the tunnel token in repo settings."
             exit 1
           fi
           ssh deploy-target "set -euo pipefail
@@ -938,7 +984,7 @@ jobs:
       # before the RUST_LOG check; Companion is always started again (the script fails loudly).
       - name: Deploy Companion module
         if: ${{ inputs.hardware }}
-        run: bash scripts/deploy/deploy_companion_module.sh deploy-target SNV
+        run: bash scripts/deploy/deploy_companion_module.sh deploy-target ${{ inputs.site }}
 
       # #850 O1: a systemd drop-in (or an EnvironmentFile) that sets RUST_LOG replaces the unit's
       # value — the old SNV ableset-debug.conf hid the request log and let every SQL statement

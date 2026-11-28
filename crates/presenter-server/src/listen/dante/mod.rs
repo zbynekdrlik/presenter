@@ -1,13 +1,14 @@
 //! The Dante microphones (#852, #933): Presenter's own Dante device, embedded
-//! in-process through dstack's `dlink`, with two FIXED mono RX channels
-//! `mic 1` / `mic 2` (core `fixed_dante_mics`: ids `dante-mic-1` /
-//! `dante-mic-2`). Which source feeds them is Dante patching (dstack), never a
+//! in-process through dstack's `dlink`, with four FIXED mono RX channels
+//! `mic 1` … `mic 4` (core `fixed_dante_mics`: ids `dante-mic-1` …
+//! `dante-mic-4`, #852 28.11: every handheld; an unpatched channel never
+//! advances, so it never reaches its chain and logs nothing). Which source feeds them is Dante patching (dstack), never a
 //! Presenter setting: the device subscribes to nothing. Their audio feeds the
 //! SAME per-mic chain as a VBAN mic (`mic_chain::BlockQueue` → `run_chain`:
 //! 100 ms frames, level, the mic's one frame channel → recorder / ASR).
 //!
 //! [`supervise`] (started by `ListenService::start` only, so validate mode
-//! never starts a device) first publishes the two fixed mics when the box
+//! never starts a device) first publishes the four fixed mics when the box
 //! names a Dante interface (`PRESENTER_LISTEN_DANTE_IFACE`, a per-site setting
 //! like `DANTE_SUBNET`) — independent of the saved `listen.mics` — and then
 //! keeps the device in step with the Dante mics of the published list: no
@@ -66,7 +67,7 @@ const DRAIN: Duration = Duration::from_millis(20);
 /// A channel whose `written` count advanced this recently is live.
 pub(crate) const LIVE_WINDOW: Duration = Duration::from_secs(1);
 const NO_INTERFACE: &str =
-    "Na tomto počítači nie je nastavené rozhranie Dante (PRESENTER_LISTEN_DANTE_IFACE) — kanály „mic 1“ a „mic 2“ tu nie sú.";
+    "Na tomto počítači nie je nastavené rozhranie Dante (PRESENTER_LISTEN_DANTE_IFACE) — kanály „mic 1“ až „mic 4“ tu nie sú.";
 
 /// The box's Dante settings (env; tests set their own).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +116,7 @@ impl DanteEnv {
         }
     }
 
-    /// The device for `mics` (the Dante ones, in order: the fixed pair);
+    /// The device for `mics` (the Dante ones, in order: the fixed four);
     /// `None` without one or without an interface.
     fn plan(&self, mics: &[MicConfig]) -> Option<LinkPlan> {
         let channels: Vec<DanteInput> = mics.iter().filter_map(|mic| mic.dante.clone()).collect();

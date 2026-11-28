@@ -12,12 +12,13 @@ import {
 } from "./support";
 
 // #933 — Settings → "Počúvanie" on a box that names a Dante interface: Presenter's
-// own Dante device has two FIXED mono RX channels, "mic 1" and "mic 2", whatever
+// own Dante device has four FIXED mono RX channels, "mic 1" … "mic 4" (#852:
+// one per handheld), whatever
 // the saved mic list holds (it is empty here). The card shows them read-only —
 // name, channel, state, id — and saving a VBAN mic in the editor never touches
 // them. This server names an interface that does not exist on the runner
 // (PRESENTER_LISTEN_DANTE_IFACE), so dlink refuses to start and the device line
-// and both mics say why and that it retries: the start path is the real one,
+// and every mic says why and that it retries: the start path is the real one,
 // only the network interface is missing.
 
 let serverHandle: ServerHandle | undefined;
@@ -63,27 +64,36 @@ async function micIds(page: Page): Promise<string[]> {
   return status.mics.map((mic: { id: string }) => mic.id);
 }
 
-test("the two fixed Dante mics show read-only beside the saved VBAN mics", async ({ page }) => {
+test("the four fixed Dante mics show read-only beside the saved VBAN mics", async ({ page }) => {
   const errors: string[] = [];
   attachConsoleErrorCollector(page, errors);
   await page.goto(url("/ui/settings"));
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   const card = page.locator('[data-role="listen-card"]');
 
-  // nothing saved, yet both channels are there
+  // nothing saved, yet every channel is there
   await expect(card.locator('[data-role="listen-empty"]')).toBeVisible();
   const rows = card.locator('[data-role="listen-dante-mics"] [data-role="listen-dante-mic"]');
-  await expect(rows).toHaveCount(2);
-  await expect(rows.locator(".settings__host-label")).toHaveText(["Dante mic 1", "Dante mic 2"]);
+  await expect(rows).toHaveCount(4);
+  await expect(rows.locator(".settings__host-label")).toHaveText([
+    "Dante mic 1",
+    "Dante mic 2",
+    "Dante mic 3",
+    "Dante mic 4",
+  ]);
   await expect(rows.locator('[data-role="listen-dante-channel"]')).toHaveText([
     "kanál Dante „mic 1“",
     "kanál Dante „mic 2“",
+    "kanál Dante „mic 3“",
+    "kanál Dante „mic 4“",
   ]);
   await expect(rows.locator('[data-role="listen-config"]')).toHaveText([
     "neprepisovať · moderátor · id dante-mic-1",
     "neprepisovať · moderátor · id dante-mic-2",
+    "neprepisovať · moderátor · id dante-mic-3",
+    "neprepisovať · moderátor · id dante-mic-4",
   ]);
-  for (const index of [0, 1]) {
+  for (const index of [0, 1, 2, 3]) {
     await expect(rows.nth(index).locator('[data-role="listen-state"]')).toHaveAttribute("data-state", "waiting");
   }
   await expect(rows.locator('[data-role="listen-health"]').first()).toHaveText("Zatiaľ žiadny zvuk z Dante.");
@@ -96,9 +106,9 @@ test("the two fixed Dante mics show read-only beside the saved VBAN mics", async
   await expect(rows.first().locator('[data-role="listen-error"]')).toContainText("zariadenie Dante sa nedá spustiť");
   const status = await (await page.request.get(url("/listen/status"))).json();
   expect(status.dante).toMatchObject({ state: "retrying", device: "presenter-listen", interface: IFACE });
-  expect(status.mics.map((mic: { dante: { channel: string } }) => mic.dante.channel)).toEqual(["mic 1", "mic 2"]);
+  expect(status.mics.map((mic: { dante: { channel: string } }) => mic.dante.channel)).toEqual(["mic 1", "mic 2", "mic 3", "mic 4"]);
 
-  // a VBAN mic saved in the editor comes first and the fixed pair stays
+  // a VBAN mic saved in the editor comes first and the fixed mics stay
   await card.locator('[data-role="listen-add"]').click();
   const editor = card.locator('[data-role="listen-new-item"] [data-role="listen-editor"]');
   await editor.locator('[data-role="listen-name"]').fill("Hosť");
@@ -106,8 +116,8 @@ test("the two fixed Dante mics show read-only beside the saved VBAN mics", async
   await editor.locator('[data-role="listen-submit"]').click();
   await expect(card.locator('[data-role="listen-mic-list"] li[data-id="guest"]')).toBeVisible();
   await expect(card.locator('[data-role="listen-count"]')).toHaveText("1");
-  await expect.poll(() => micIds(page)).toEqual(["guest", "dante-mic-1", "dante-mic-2"]);
-  await expect(rows).toHaveCount(2);
+  await expect.poll(() => micIds(page)).toEqual(["guest", "dante-mic-1", "dante-mic-2", "dante-mic-3", "dante-mic-4"]);
+  await expect(rows).toHaveCount(4);
   const stored = await (await page.request.get(url("/listen/mics"))).json();
   expect(stored.map((mic: { id: string }) => mic.id)).toEqual(["guest"]);
 

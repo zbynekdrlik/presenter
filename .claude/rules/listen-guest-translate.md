@@ -62,8 +62,10 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   listener starts it, it ends `LINGER` (60 s) after the last left (a reload keeps it). ≤ 4
   languages (`MAX_LANGUAGES`; a running language takes more guests when full). Cost scales with
   languages, never listeners.
-- Source = `PRESENTER_LISTEN_GUEST_MIC` (default `dante-mic-1`), its 16 kHz 20 ms chunks. A box
-  without that mic refuses (`noSource`) — PP until #991, PRBA, CI.
+- Source = `PRESENTER_LISTEN_GUEST_MIC` (default `pulpit`, #852 28.11: the ONE voiced Dante handheld,
+  `listen/pulpit.rs` — Gemini detects the spoken language, so a Slovak pastor or a foreign guest needs
+  no switch), its 16 kHz 20 ms chunks. A box without that source refuses (`noSource`,
+  `ListenService::has_source`) — PRBA, CI; dev names a VBAN mic (PP has `pulpit` from its first release with #1004).
 - Audio goes out only while the mic is voiced: a chunk > −50 dBFS opens the gate, `HANGOVER` 2 s of
   quiet closes it, the last 1 s (`PRE_ROLL_CHUNKS` = 50) is sent with every onset. A silent mic = no
   messages = no cost. Chunks before a connection is ready wait in `pending` (≤ 5 s = 250, oldest
@@ -131,7 +133,8 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 - Deploy: `deploy-site.yml` inputs `guest_port` + `guest_host` → the drop-in `guest-host.conf`
   (`PRESENTER_GUEST_PORT` digits only, `PRESENTER_GUEST_HOST` host-name characters only; both empty
   removes it). SNV: `guest_port: "8099"` in deploy.yml + the repository variable `SNV_GUEST_HOST`
-  (`listen.newlevel.media`); PRBA / PP / dev have none. "Verify deployment" curls the guest port:
+  (`listen.newlevel.media`); PP (#1004): the same inputs in release.yml + `PP_GUEST_HOST`
+  (`listen-pp.newlevel.media`); PRBA / dev have none. "Verify deployment" curls the guest port:
   `/` = 200, `/ui/operator`, `/ui/settings`, `/settings`, `/listen/status`, `/listen/mics`,
   `/libraries/summary` = 404, and fails if the main port's `/` is the WASM shell.
 - The hostname itself (DNS + tunnel ingress to the guest port) is airuleset's publish-app lane

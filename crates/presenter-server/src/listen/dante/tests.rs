@@ -185,7 +185,12 @@ fn plan(rate: u32, device: &str) -> LinkPlan {
         interface: "enp2s0.70".to_string(),
         network_rate: rate,
         state_file: std::env::temp_dir().join("presenter-dante-test.toml"),
-        channels: vec![input("mic 1"), input("mic 2")],
+        channels: vec![
+            input("mic 1"),
+            input("mic 2"),
+            input("mic 3"),
+            input("mic 4"),
+        ],
     }
 }
 
@@ -365,7 +370,7 @@ fn mic_ids(service: &ListenService) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_device_starts_with_its_two_fixed_channels_and_no_saved_mic() {
+async fn the_device_starts_with_its_four_fixed_channels_and_no_saved_mic() {
     let service = ListenService::new();
     let device = Arc::new(FakeDevice::default());
     let backend: Arc<dyn DanteBackend> = Arc::new(FakeBackend(Arc::clone(&device)));
@@ -375,12 +380,23 @@ async fn the_device_starts_with_its_two_fixed_channels_and_no_saved_mic() {
     // #933: the saved list stays empty, the device starts anyway
     wait_until("the device starts", || started(&device) == 1).await;
     let plan = lock(&device.starts)[0].clone();
-    assert_eq!(plan.channels, vec![input("mic 1"), input("mic 2")]);
+    assert_eq!(
+        plan.channels,
+        vec![
+            input("mic 1"),
+            input("mic 2"),
+            input("mic 3"),
+            input("mic 4")
+        ]
+    );
     assert_eq!(
         (plan.interface.as_str(), plan.network_rate),
         ("enp2s0.70", 48_000)
     );
-    assert_eq!(mic_ids(&service), ["dante-mic-1", "dante-mic-2"]);
+    assert_eq!(
+        mic_ids(&service),
+        ["dante-mic-1", "dante-mic-2", "dante-mic-3", "dante-mic-4"]
+    );
     wait_until("running", || {
         service.status().dante.state == DanteState::Running
     })
@@ -391,8 +407,8 @@ async fn the_device_starts_with_its_two_fixed_channels_and_no_saved_mic() {
         && mic.state == MicState::Waiting));
     assert_eq!(
         status.recorder.mics.len(),
-        2,
-        "the recorder counts both fixed mics"
+        4,
+        "the recorder counts every fixed mic"
     );
 
     let mut start = 0;
@@ -435,12 +451,24 @@ async fn the_device_starts_with_its_two_fixed_channels_and_no_saved_mic() {
         dante("interp", "Tlmočník", "Host EN"),
     ]);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(mic_ids(&service), ["guest", "dante-mic-1", "dante-mic-2"]);
+    assert_eq!(
+        mic_ids(&service),
+        [
+            "guest",
+            "dante-mic-1",
+            "dante-mic-2",
+            "dante-mic-3",
+            "dante-mic-4"
+        ]
+    );
     assert_eq!(started(&device), 1, "the device keeps running");
     assert!(service.status().mics[1].frames_out >= mic.frames_out);
     service.apply(Vec::new());
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(mic_ids(&service), ["dante-mic-1", "dante-mic-2"]);
+    assert_eq!(
+        mic_ids(&service),
+        ["dante-mic-1", "dante-mic-2", "dante-mic-3", "dante-mic-4"]
+    );
     assert_eq!(
         (started(&device), device.stops.load(Ordering::SeqCst)),
         (1, 0),
@@ -549,8 +577,8 @@ async fn a_vban_mic_beside_a_dante_mic_keeps_both_counters() {
     wait_until("the device starts", || started(&device) == 1).await;
     assert_eq!(
         lock(&device.starts)[0].channels.len(),
-        2,
-        "only the fixed pair are channels"
+        4,
+        "only the fixed four are channels"
     );
     wait_until("the VBAN socket binds", || {
         service.status().socket.state == presenter_core::listen::status::SocketState::Bound

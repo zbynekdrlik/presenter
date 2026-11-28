@@ -58,7 +58,10 @@ prod_deploy_writes_stage_url_dropin() {
 }
 
 pp_release_writes_stage_url_dropin() {
-  grep -q 'stage-url.conf' "$REPO_ROOT/.github/workflows/release.yml"
+  # #1004: PP's release calls the same deploy-site.yml (a hardware site), with its own stage URL.
+  grep -q 'uses: ./.github/workflows/deploy-site.yml' "$REPO_ROOT/.github/workflows/release.yml" &&
+    grep -qE '^ *stage_url: .*PP_STAGE_URL' "$REPO_ROOT/.github/workflows/release.yml" &&
+    grep -q 'stage-url.conf' "$REPO_ROOT/.github/workflows/deploy-site.yml"
 }
 
 # ── #539: the encoder-ready gate ───────────────────────────────────────────────
@@ -291,10 +294,10 @@ deploy_deletes_the_registry_under_its_deploy_dir() {
     grep -qE 'rm -f +(\$\{\{ *env\.DEPLOY_DIR *\}\}|'"$dir"')/gstreamer-registry\.bin' "$wf"
 }
 
-# #918: SNV's deploy dir is an input deploy.yml passes to the reusable deploy-site.yml,
-# whose step deletes the registry under that input.
-snv_deploy_deletes_the_registry_under_opt_presenter() {
-  grep -qE '^ *deploy_dir: */opt/presenter *$' "$REPO_ROOT/.github/workflows/deploy.yml" &&
+# #918: SNV's (and since #1004 PP's) deploy dir is an input deploy.yml / release.yml pass to the
+# reusable deploy-site.yml, whose step deletes the registry under that input.
+site_deploy_deletes_the_registry_under_opt_presenter() {
+  grep -qE '^ *deploy_dir: */opt/presenter *$' "$REPO_ROOT/.github/workflows/${1:?caller}" &&
     grep -qE 'rm -f +\$\{\{ *env\.DEPLOY_DIR *\}\}/gstreamer-registry\.bin' \
       "$REPO_ROOT/.github/workflows/deploy-site.yml"
 }
@@ -303,8 +306,8 @@ every_deploy_rebuilds_the_registry() {
   # Deleting the registry file is what guarantees the next start re-probes the plugins
   # against the CURRENT permissions/driver. Without it, #544 comes back the first time a
   # host's GPU access or driver changes.
-  snv_deploy_deletes_the_registry_under_opt_presenter &&
-    deploy_deletes_the_registry_under_its_deploy_dir release.yml /opt/presenter &&
+  site_deploy_deletes_the_registry_under_opt_presenter deploy.yml &&
+    site_deploy_deletes_the_registry_under_opt_presenter release.yml &&
     deploy_deletes_the_registry_under_its_deploy_dir pipeline.yml /opt/presenter-dev
 }
 
@@ -315,7 +318,8 @@ every_deploy_ships_the_gate_script() {
   # host, and the install that puts it in the deploy dir. Grepping the bare filename
   # would stay green with the scp deleted.
   local wf
-  for wf in deploy-site.yml release.yml pipeline.yml; do
+  # release.yml (PP) runs deploy-site.yml since #1004.
+  for wf in deploy-site.yml pipeline.yml; do
     grep -qE 'scp .*wait-for-h264-encoder\.sh' "$REPO_ROOT/.github/workflows/$wf" || return 1
     grep -qE 'install .*wait-for-h264-encoder\.sh' "$REPO_ROOT/.github/workflows/$wf" || return 1
   done
@@ -331,17 +335,22 @@ site_deploy_writes_the_service_user_dropin() {
 }
 
 every_site_call_names_its_service_user() {
-  local wf="$REPO_ROOT/.github/workflows/deploy.yml" calls users
-  calls=$(grep -c 'uses: ./.github/workflows/deploy-site.yml' "$wf")
-  users=$(grep -cE '^ *service_user: *[a-z0-9-]+ *$' "$wf")
-  [ "$calls" -ge 1 ] && [ "$calls" = "$users" ] &&
-    grep -qE '^ *service_user: *presenter *$' "$wf"
+  local name wf calls users
+  for name in deploy.yml release.yml; do
+    wf="$REPO_ROOT/.github/workflows/$name"
+    calls=$(grep -c 'uses: ./.github/workflows/deploy-site.yml' "$wf")
+    users=$(grep -cE '^ *service_user: *[a-z0-9-]+ *$' "$wf")
+    [ "$calls" -ge 1 ] && [ "$calls" = "$users" ] &&
+      grep -qE '^ *service_user: *presenter *$' "$wf" || return 1
+  done
 }
 
-shared_unit_keeps_pp_user_and_needs_no_login_home() {
-  # PP is released by release.yml with no user migration: the committed unit must stay
-  # newlevel, and nothing in it may depend on a home under /home (the service user's home
-  # is the deploy dir).
+shared_unit_keeps_the_pre_migration_user_and_needs_no_login_home() {
+  # The service user is a drop-in written at the swap, while the service is stopped (#929; PP
+  # too since #1004): the committed unit keeps the pre-migration User=newlevel, so a
+  # crash-restart before the swap never starts the old service as `presenter` on a tree it does
+  # not own yet. Nothing in it may depend on a home under /home (the service user's home is the
+  # deploy dir).
   grep -qE '^User=newlevel$' "$PROD_UNIT" &&
     grep -qE '^ProtectHome=read-only$' "$PROD_UNIT" &&
     ! grep -E '^[A-Za-z]+=' "$PROD_UNIT" | grep -q '/home/'
@@ -364,8 +373,8 @@ check "#547 gate bounds every probe (a wedged driver cannot hang the unit)" boun
 check "#547 units hard-bound the gate with timeout + TimeoutStartSec" units_hard_bound_the_gate
 check "#547 every deploy ships the gate script" every_deploy_ships_the_gate_script
 check "#929 site deploy writes the service-user drop-in" site_deploy_writes_the_service_user_dropin
-check "#929 every site call names its service user (SNV = presenter)" every_site_call_names_its_service_user
-check "#929 shared unit keeps PP's user and needs no login home" shared_unit_keeps_pp_user_and_needs_no_login_home
+check "#929 every site call names its service user (SNV, PP = presenter)" every_site_call_names_its_service_user
+check "#929 shared unit keeps the pre-migration user and needs no login home" shared_unit_keeps_the_pre_migration_user_and_needs_no_login_home
 
 if [ "$failures" -ne 0 ]; then
   echo "Deploy-config guards: $failures FAILED"

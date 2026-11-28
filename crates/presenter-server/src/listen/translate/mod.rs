@@ -179,11 +179,7 @@ impl GuestTranslate {
         if deps.env.key.is_none() {
             return Some(Refusal::NoKey);
         }
-        if !listen
-            .mics()
-            .iter()
-            .any(|mic| mic.id == deps.env.source_mic)
-        {
+        if !listen.has_source(&deps.env.source_mic) {
             return Some(Refusal::NoSource);
         }
         if deps.meter.exhausted((deps.today)()) {

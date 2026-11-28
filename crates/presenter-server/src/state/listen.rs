@@ -47,7 +47,7 @@ impl AppState {
     }
 
     /// The stored list and the ids it holds from before #933 that are left
-    /// out: a Dante mic (the Dante mics are the two fixed channels now) and a
+    /// out: a Dante mic (the Dante mics are the fixed channels now) and a
     /// mic with a `dante-` id (theirs). The next save drops them from the row.
     async fn stored_mics(&self) -> anyhow::Result<(Vec<MicConfig>, Vec<String>)> {
         let Some(raw) = self.repository.get_app_setting(LISTEN_MICS_KEY).await? else {
@@ -282,7 +282,7 @@ impl AppState {
                         tracing::warn!(
                             target: MIC_TARGET,
                             mic = id.as_str(),
-                            "a stored mic is ignored — the Dante mics are the two fixed channels now (#933)"
+                            "a stored mic is ignored — the Dante mics are the fixed channels now (#933)"
                         );
                     }
                     self.listen.apply(mics);

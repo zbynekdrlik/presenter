@@ -4,8 +4,8 @@
 //! decision — a preview model id churns, so it is a setting),
 //! `PRESENTER_LISTEN_GEMINI_URL` (default [`DEFAULT_URL`]; tests and E2E point
 //! it at a fake, `ws://` allowed) and `PRESENTER_LISTEN_GUEST_MIC` (the mic id
-//! whose audio is translated, default [`DEFAULT_SOURCE_MIC`] = the preacher's
-//! handheld on Dante), `PRESENTER_GUEST_PORT` (the guest listener: a second
+//! whose audio is translated, default [`DEFAULT_SOURCE_MIC`] = `pulpit`, the
+//! voiced handheld of the Dante mics; a box without Dante names a mic), `PRESENTER_GUEST_PORT` (the guest listener: a second
 //! TCP port that serves ONLY the guest surface — the public no-login tunnel
 //! points there, so a missing setting means no listener, never the app; unset =
 //! no guest page on this box, #999 arch review) and `PRESENTER_GUEST_HOST`
@@ -26,8 +26,9 @@ pub const CONTEXT_VAR: &str = "PRESENTER_LISTEN_GEMINI_CONTEXT";
 pub const DEFAULT_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 /// FINDING R2 (#999): the only Gemini model that translates continuously.
 pub const DEFAULT_MODEL: &str = "gemini-3.5-live-translate-preview";
-/// `HAND 1 post` on SNV's Dante (#933): the preacher.
-pub const DEFAULT_SOURCE_MIC: &str = "dante-mic-1";
+/// `pulpit` (#852 28.11): whichever handheld speaks — the preacher, a guest
+/// or his interpreter — with no switch to set; Gemini detects the language.
+pub const DEFAULT_SOURCE_MIC: &str = presenter_core::listen::mics::PULPIT_MIC_ID;
 /// The translation context every session's setup carries as its
 /// `systemInstruction` (#999 L6c, owner 27.11: "Newlevel Church" must come
 /// out as the church's name). The doc names it the place for "custom
@@ -142,7 +143,7 @@ mod tests {
             .starts_with("wss://generativelanguage.googleapis.com/ws/"));
         assert_eq!(defaults.model, "gemini-3.5-live-translate-preview");
         assert_eq!(defaults.key, None);
-        assert_eq!(defaults.source_mic, "dante-mic-1");
+        assert_eq!(defaults.source_mic, "pulpit");
 
         let set = env(&[
             (URL_VAR, "ws://127.0.0.1:9/fake"),

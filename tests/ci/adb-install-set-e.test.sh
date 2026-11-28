@@ -62,7 +62,7 @@ assert_set_e() {
 
 # #918: the SNV deploy job moved into the reusable deploy-site.yml (deploy.yml calls it).
 assert_set_e deploy-site.yml
-assert_set_e release.yml
+# release.yml (PP) runs deploy-site.yml since #1004 — no ADB heredoc of its own.
 # pipeline.yml's deploy-dev job has its OWN ADB-install heredoc — the same gap.
 assert_set_e pipeline.yml
 
@@ -71,4 +71,4 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-echo "Shell tests for ADB-install set -e gate (deploy-site.yml + release.yml + pipeline.yml): all passed"
+echo "Shell tests for ADB-install set -e gate (deploy-site.yml + pipeline.yml): all passed"

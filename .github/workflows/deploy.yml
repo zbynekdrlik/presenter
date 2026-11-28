@@ -157,6 +157,9 @@ jobs:
       # the guests' public hostname (QR page only), a repository variable.
       guest_port: "8099"
       guest_host: ${{ vars.SNV_GUEST_HOST }}
+      # #538: SNV's stage TVs open SNV itself; #555: SNV pulls songs from PP over tailscale.
+      stage_url: ${{ vars.PROD_STAGE_URL || 'http://10.77.9.205/stage' }}
+      sync_peer_url: http://100.101.72.101
 
   # PRBA (#918): hosted on dev1 (tailscale) until PRBA has its own PC. Its data came from a
   # one-time seed of SNV (scripts/ops/seed_prba_from_snv.sh); afterwards PRBA edits its own,

@@ -636,3 +636,41 @@ async fn the_audio_goes_out_in_20_ms_chunks_without_waiting_for_100_ms() {
     assert_eq!(summary.len(), 1);
     assert_eq!(summary[0].field("sent_ms"), Some("1020"), "51 × 20 ms");
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_default_source_pulpit_translates_whichever_handheld_speaks() {
+    // #852 28.11: the default source is `pulpit`, the one voiced Dante mic —
+    // here the 2nd handheld; the 1st stays digital silence
+    assert_eq!(super::config::DEFAULT_SOURCE_MIC, "pulpit");
+    let fake = FakeGemini::new(vec![]);
+    let listen = listen_with_source();
+    tokio::spawn(crate::listen::pulpit::supervise(listen.clone()));
+    let mut deps = guest(&fake, Some("test-key-not-real"), DayMeter::default())
+        .inner
+        .deps
+        .clone();
+    deps.env.source_mic = super::config::DEFAULT_SOURCE_MIC.to_string();
+    let service = GuestTranslate::with_deps(deps);
+    assert_eq!(service.status(&listen).refusal, None);
+    assert_eq!(
+        service.status(&ListenService::new()).refusal,
+        Some(Refusal::NoSource),
+        "no Dante mic, no pulpit"
+    );
+    let mut listener = service.join(&listen, "en").expect("joined");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let first = listen.chunk_sender("dante-mic-1");
+    let second = listen.chunk_sender("dante-mic-2");
+    for _ in 0..25 {
+        let _ = first.send(chunk(false));
+        let _ = second.send(chunk(true));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        fake.audio_samples(),
+        vec![ms100(5)],
+        "exactly the 2nd mic's 25 voiced chunks"
+    );
+    assert_eq!(*listener.state.borrow(), SessionState::Live);
+    assert_eq!(audio_count(&drain(&mut listener)), 5);
+}
