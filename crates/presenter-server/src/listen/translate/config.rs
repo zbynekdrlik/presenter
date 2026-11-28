@@ -9,7 +9,9 @@
 //! TCP port that serves ONLY the guest surface — the public no-login tunnel
 //! points there, so a missing setting means no listener, never the app; unset =
 //! no guest page on this box, #999 arch review) and `PRESENTER_GUEST_HOST`
-//! (only the public address the operator's QR page prints). An empty or
+//! (only the public address the operator's QR page prints) and
+//! `PRESENTER_LISTEN_GEMINI_CONTEXT` (the setup's `systemInstruction`, the
+//! translation context; default [`DEFAULT_CONTEXT`], #999 L6c). An empty or
 //! whitespace-only value counts as unset. `Debug` never prints the key.
 
 pub const KEY_VAR: &str = "PRESENTER_LISTEN_GEMINI_API_KEY";
@@ -18,6 +20,7 @@ pub const URL_VAR: &str = "PRESENTER_LISTEN_GEMINI_URL";
 pub const SOURCE_MIC_VAR: &str = "PRESENTER_LISTEN_GUEST_MIC";
 pub const GUEST_HOST_VAR: &str = "PRESENTER_GUEST_HOST";
 pub const GUEST_PORT_VAR: &str = "PRESENTER_GUEST_PORT";
+pub const CONTEXT_VAR: &str = "PRESENTER_LISTEN_GEMINI_CONTEXT";
 
 /// Gemini Live's WebSocket (`BidiGenerateContent`, API v1beta).
 pub const DEFAULT_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
@@ -25,6 +28,16 @@ pub const DEFAULT_URL: &str = "wss://generativelanguage.googleapis.com/ws/google
 pub const DEFAULT_MODEL: &str = "gemini-3.5-live-translate-preview";
 /// `HAND 1 post` on SNV's Dante (#933): the preacher.
 pub const DEFAULT_SOURCE_MIC: &str = "dante-mic-1";
+/// The translation context every session's setup carries as its
+/// `systemInstruction` (#999 L6c, owner 27.11: "Newlevel Church" must come
+/// out as the church's name). The doc names it the place for "custom
+/// translation context (such as glossaries, terminology, and register)".
+/// Measured on Slovak speech, 3 clips × EN/DE × 3 runs each way: without it
+/// "New Level Church" every time, once "New Level Chair", "veríme" heard as
+/// "v Ríme" ("in Rome", 6/6 runs of one clip) and "zbor" as a choir; with it
+/// "Newlevel Church" 36/36 and those errors gone. The repo is public: only
+/// the church's public name belongs here, never an address.
+pub const DEFAULT_CONTEXT: &str = "This is a live sermon at the Slovak church \"Newlevel Church\" (also written \"New Level Church\"). \"Newlevel Church\" is the church's name: keep it exactly as \"Newlevel Church\" in every language, never translate, respell or split it. Use the register of a Christian sermon and the usual Bible terms of the target language.";
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct GeminiEnv {
@@ -36,6 +49,8 @@ pub struct GeminiEnv {
     pub guest_host: Option<String>,
     /// The port of the guest-only listener.
     pub guest_port: Option<u16>,
+    /// The setup's `systemInstruction` text.
+    pub context: String,
 }
 
 impl GeminiEnv {
@@ -65,6 +80,7 @@ impl GeminiEnv {
                 }
                 parsed
             }),
+            context: read(CONTEXT_VAR).unwrap_or_else(|| DEFAULT_CONTEXT.to_string()),
         }
     }
 }
@@ -99,6 +115,7 @@ impl std::fmt::Debug for GeminiEnv {
             .field("source_mic", &self.source_mic)
             .field("guest_host", &self.guest_host)
             .field("guest_port", &self.guest_port)
+            .field("context_chars", &self.context.chars().count())
             .finish()
     }
 }
@@ -146,7 +163,20 @@ mod tests {
             assert_eq!(env(&[(GUEST_PORT_VAR, bad)]).guest_port, None, "{bad}");
         }
 
-        let blank = env(&[(KEY_VAR, "  "), (MODEL_VAR, ""), (SOURCE_MIC_VAR, " ")]);
+        assert_eq!(defaults.context, DEFAULT_CONTEXT);
+        assert!(defaults.context.contains("\"Newlevel Church\""));
+        assert_eq!(
+            env(&[(CONTEXT_VAR, " A sermon at Example Chapel. ")]).context,
+            "A sermon at Example Chapel."
+        );
+
+        let blank = env(&[
+            (KEY_VAR, "  "),
+            (MODEL_VAR, ""),
+            (SOURCE_MIC_VAR, " "),
+            (CONTEXT_VAR, " \n"),
+        ]);
+        assert_eq!(blank.context, DEFAULT_CONTEXT);
         assert_eq!(blank.key, None);
         assert_eq!(blank.model, DEFAULT_MODEL);
         assert_eq!(blank.source_mic, DEFAULT_SOURCE_MIC);

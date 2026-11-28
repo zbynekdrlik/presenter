@@ -5,8 +5,26 @@
 // requirement, so the buffer stays short: playback starts once TARGET seconds
 // are queued, and a queue longer than MAX (a burst after a stall) drops its
 // oldest audio back to TARGET. Every ~250 ms it reports what it played.
+//
+// #999 L6b: the model streams audio all the time, its pauses included, so the
+// burst it sends when a session starts stays queued for the whole session
+// (0.5–0.7 s on the R2 runs, up to MAX). While playing, a near-silent chunk
+// (RMS at or below −45 dBFS, the model's pause) is cut so the queue holds at
+// most TRIM: the standing delay is shed in the pauses and never in speech.
+// TRIM 0.65 s = the lowest that added no gap in speech when the R2 output
+// arrival times were replayed through these rules, also with ±80 ms of
+// mobile-data jitter (0.55 s: 3–5 gaps in 5 min, 0.45 s: 24).
 const TARGET = 0.15;
 const MAX = 1.0;
+const TRIM = 0.65;
+// −45 dBFS as mean square: 10^(−45/10).
+const SILENT_MEAN_SQUARE = Math.pow(10, -4.5);
+
+function silent(data) {
+  let energy = 0;
+  for (let i = 0; i < data.length; i += 1) energy += data[i] * data[i];
+  return data.length > 0 && energy / data.length <= SILENT_MEAN_SQUARE;
+}
 
 class GuestPlayer extends AudioWorkletProcessor {
   constructor() {
@@ -17,6 +35,7 @@ class GuestPlayer extends AudioWorkletProcessor {
     this.started = false;
     this.played = 0;
     this.dropped = 0;
+    this.trimmed = 0;
     this.underruns = 0;
     this.sinceReport = 0;
     this.port.onmessage = (event) => {
@@ -28,8 +47,18 @@ class GuestPlayer extends AudioWorkletProcessor {
         this.started = false;
         return;
       }
-      this.chunks.push(data);
-      this.queued += data.length;
+      if (data.length === 0) return;
+      let chunk = data;
+      if (this.started && silent(chunk)) {
+        const room = Math.max(0, Math.round(TRIM * sampleRate) - this.queued);
+        if (room < chunk.length) {
+          this.trimmed += chunk.length - room;
+          if (room === 0) return;
+          chunk = chunk.subarray(0, room);
+        }
+      }
+      this.chunks.push(chunk);
+      this.queued += chunk.length;
       if (this.queued > MAX * sampleRate) {
         // Behind by more than MAX: drop whole chunks from the front until
         // about TARGET is left (never the newest chunk).
@@ -75,7 +104,7 @@ class GuestPlayer extends AudioWorkletProcessor {
     this.sinceReport += out.length;
     if (this.sinceReport >= sampleRate / 4) {
       this.sinceReport = 0;
-      this.port.postMessage({ played: this.played, queued: this.queued, dropped: this.dropped, underruns: this.underruns });
+      this.port.postMessage({ played: this.played, queued: this.queued, dropped: this.dropped, trimmed: this.trimmed, underruns: this.underruns });
     }
     return true;
   }

@@ -25,8 +25,8 @@ use tokio::task::AbortHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::config::GeminiEnv;
-use super::conn::{self, ConnEvent};
-use super::stats::{DayMeter, MinuteStats, STALL_AFTER};
+use super::conn::{self, ConnEvent, Outgoing};
+use super::stats::{DayMeter, MinuteStats, SegmentTimes, STALL_AFTER};
 use super::wire::{audio_message, classify_close, setup_message, CloseClass, ServerMessage};
 use super::{GuestPacket, Language, SessionState, StopReason, TARGET};
 use crate::listen::soniox::conn::Connector;
@@ -55,8 +55,22 @@ pub const NO_ANSWER: Duration = Duration::from_secs(10);
 /// once can never make the session loop on connects.
 pub const IDLE_CUT_MIN_AGE: Duration = Duration::from_secs(60);
 const FRAME_MS: u64 = 100;
-/// The translation quiet this long = the previous phrase is fully spoken.
-pub const OUTPUT_DRAINED: Duration = Duration::from_secs(1);
+/// Output above this RMS is translated speech (#999 L6a). The model streams
+/// audio all the time: on the R2 runs (3 × 1258 chunks of 250 ms) its pauses
+/// sit at or below −50 dBFS (digital silence −120), speech at −40 … −15 and
+/// the first chunk after ≥ 1 s of pause never below −41.8 — 5 dB clear of
+/// both sides.
+pub const OUTPUT_VOICED_DBFS: f32 = -45.0;
+/// Unvoiced output this long (audio time, or wall time without any output
+/// at all) is the model's own pause: the next speech is a new phrase's. An
+/// onset is timed only to speech after such a pause — the speech before it is
+/// the previous phrase's backlog (R2 replay: 0 ms gap reads 0.0–0.2 s, 500 ms
+/// still once 0.14 s; 750 ms gives 2.0–3.6 s, the measured onset lag).
+pub const OUTPUT_GAP: Duration = Duration::from_millis(750);
+/// An onset not answered by speech this long is given up (never timed).
+const ONSET_TIMEOUT: Duration = Duration::from_secs(20);
+/// Onsets waiting for their speech at once (more = the oldest is given up).
+const MAX_PENDING_ONSETS: usize = 8;
 
 /// Everything a session needs besides its language.
 #[derive(Clone)]
@@ -75,11 +89,12 @@ pub struct SessionIo {
     pub state: watch::Sender<SessionState>,
     pub stop: watch::Receiver<bool>,
     pub listeners: Arc<AtomicUsize>,
+    pub times: SegmentTimes,
 }
 
 struct Conn {
     id: u32,
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<Outgoing>,
     abort: AbortHandle,
     ready: bool,
     opened_at: Instant,
@@ -103,6 +118,7 @@ struct Session {
     state: watch::Sender<SessionState>,
     listeners: Arc<AtomicUsize>,
     events_tx: mpsc::Sender<ConnEvent>,
+    times: SegmentTimes,
     next_id: u32,
     current: Option<Conn>,
     /// Opened on `goAway`, takes over when ready.
@@ -119,8 +135,16 @@ struct Session {
     /// When the gate last opened (the "no answer" rule counts from here, so a
     /// long quiet stretch never reads as a dead connection).
     gate_opened_at: Option<Instant>,
-    onset_pending: Option<Instant>,
+    /// Onsets not yet answered by translated speech (oldest first).
+    onsets: VecDeque<Instant>,
+    /// Unvoiced output audio since the last voiced chunk (ms).
+    output_quiet_ms: u64,
+    /// The last output chunk of any level.
     last_output: Option<Instant>,
+    /// The last voiced output of the current speech stretch (stalls).
+    stretch_speech: Option<Instant>,
+    /// The onset that began the current speech stretch (stalls).
+    stretch_onset: Option<Instant>,
     in_stall: bool,
     stats: MinuteStats,
 }
@@ -132,9 +156,10 @@ pub async fn run(language: Language, deps: SessionDeps, io: SessionIo) {
         state,
         mut stop,
         listeners,
+        times,
     } = io;
     let (events_tx, mut events) = mpsc::channel(256);
-    let mut session = Session::new(language, deps, out, state, listeners, events_tx);
+    let mut session = Session::new(language, deps, out, state, listeners, events_tx, times);
     tracing::info!(target: TARGET, language = language.code, model = session.deps.env.model.as_str(), source_mic = session.deps.env.source_mic.as_str(), "guest translation session started");
     session.connect();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -187,11 +212,21 @@ async fn sleep_until(at: Option<Instant>) {
     }
 }
 
-/// Whether an onset's first-voiced latency can be measured: only when the
-/// translation was quiet for [`OUTPUT_DRAINED`] — before that, the next
-/// translated audio is still the previous phrase's backlog, not this one.
-pub fn onset_timed(last_output: Option<Instant>, now: Instant) -> bool {
-    last_output.is_none_or(|at| now - at >= OUTPUT_DRAINED)
+/// Whether an output chunk (s16le) is translated speech.
+pub fn output_voiced(chunk: &[u8]) -> bool {
+    let samples: Vec<i16> = chunk
+        .chunks_exact(2)
+        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    rms_dbfs(&samples) > OUTPUT_VOICED_DBFS
+}
+
+/// Whether voiced output now follows the model's own pause: [`OUTPUT_GAP`]
+/// of unvoiced audio, or no output chunk at all for that long (a gap between
+/// two voiced chunks of one phrase is NOT a pause — only silence is).
+pub fn after_pause(quiet_ms: u64, last_output: Option<Instant>, now: Instant) -> bool {
+    u128::from(quiet_ms) >= OUTPUT_GAP.as_millis()
+        || last_output.is_none_or(|at| now - at >= OUTPUT_GAP)
 }
 
 /// The pause before reconnect attempt `failures + 1`: 1, 2, 4 … s, ≤ 30 s.
@@ -208,6 +243,7 @@ impl Session {
         state: watch::Sender<SessionState>,
         listeners: Arc<AtomicUsize>,
         events_tx: mpsc::Sender<ConnEvent>,
+        times: SegmentTimes,
     ) -> Self {
         Self {
             language,
@@ -216,6 +252,7 @@ impl Session {
             state,
             listeners,
             events_tx,
+            times,
             next_id: 0,
             current: None,
             next: None,
@@ -229,8 +266,11 @@ impl Session {
             last_voiced: None,
             gate_open: false,
             gate_opened_at: None,
-            onset_pending: None,
+            onsets: VecDeque::new(),
+            output_quiet_ms: 0,
             last_output: None,
+            stretch_speech: None,
+            stretch_onset: None,
             in_stall: false,
             stats: MinuteStats::default(),
         }
@@ -261,6 +301,7 @@ impl Session {
         let setup = setup_message(
             &self.deps.env.model,
             self.language.code,
+            &self.deps.env.context,
             self.handle.as_deref(),
         );
         let (tx, abort) = conn::spawn(
@@ -269,6 +310,7 @@ impl Session {
             req,
             setup,
             self.events_tx.clone(),
+            self.times.clone(),
         );
         tracing::info!(target: TARGET, language = self.language.code, conn = id, resumed = self.handle.is_some(), "Gemini connection opening");
         let now = Instant::now();
@@ -327,9 +369,14 @@ impl Session {
         if is_voiced(rms_dbfs(&frame)) {
             if self.last_voiced.is_none_or(|at| now - at >= ONSET_GAP) {
                 self.stats.onsets += 1;
-                self.onset_pending = onset_timed(self.last_output, now).then_some(now);
+                if self.onsets.len() == MAX_PENDING_ONSETS {
+                    self.onsets.pop_front();
+                    self.stats.onsets_expired += 1;
+                }
+                self.onsets.push_back(now);
                 self.in_stall = false;
-                self.last_output = None;
+                self.stretch_speech = None;
+                self.stretch_onset = Some(now);
             }
             self.last_voiced = Some(now);
         }
@@ -337,12 +384,12 @@ impl Session {
         if open && !self.gate_open {
             self.gate_opened_at = Some(now);
             for held in std::mem::take(&mut self.pre_roll) {
-                self.send(held);
+                self.send(held, None);
             }
         }
         self.gate_open = open;
         if open {
-            self.send(frame);
+            self.send(frame, Some(now));
         } else {
             if self.pre_roll.len() == PRE_ROLL_FRAMES {
                 self.pre_roll.pop_front();
@@ -354,23 +401,28 @@ impl Session {
 
     /// One frame to the ready connection, counted against the day's cap
     /// (charged only when it really goes out). `false` = the cap is reached.
-    fn deliver(&mut self, frame: &MicFrame) -> bool {
+    fn deliver(&mut self, frame: &MicFrame, heard: Option<Instant>) -> bool {
         let Some(conn) = self.current.as_ref().filter(|conn| conn.ready) else {
             return true;
         };
         if !self.deps.meter.spend((self.deps.today)(), FRAME_MS) {
             return false;
         }
-        if conn.tx.send(audio_message(frame)).is_ok() {
+        let message = Outgoing {
+            text: audio_message(frame),
+            heard,
+        };
+        if conn.tx.send(message).is_ok() {
             self.stats.sent_ms += FRAME_MS;
         }
         true
     }
 
-    fn send(&mut self, frame: MicFrame) {
+    /// `heard` = when a live frame reached the session (timed to the socket).
+    fn send(&mut self, frame: MicFrame, heard: Option<Instant>) {
         match self.current.as_ref().filter(|conn| conn.ready) {
             Some(_) => {
-                if !self.deliver(&frame) {
+                if !self.deliver(&frame, heard) {
                     self.stop(StopReason::DailyCap);
                     return;
                 }
@@ -397,7 +449,7 @@ impl Session {
         let held = std::mem::take(&mut self.pending);
         let count = held.len();
         for frame in held {
-            if !self.deliver(&frame) {
+            if !self.deliver(&frame, None) {
                 self.stop(StopReason::DailyCap);
                 return;
             }
@@ -424,7 +476,11 @@ impl Session {
 
     fn on_event(&mut self, event: ConnEvent) {
         match event {
-            ConnEvent::Message { conn, message } => self.on_message(conn, message),
+            ConnEvent::Message {
+                conn,
+                message,
+                received,
+            } => self.on_message(conn, message, received),
             ConnEvent::Closed { conn, code, reason } => self.on_closed(conn, code, &reason),
             ConnEvent::Failed {
                 conn,
@@ -438,7 +494,7 @@ impl Session {
         slot.is_some_and(|conn| conn.id == id)
     }
 
-    fn on_message(&mut self, id: u32, message: ServerMessage) {
+    fn on_message(&mut self, id: u32, message: ServerMessage, received: Instant) {
         let from_current = self.is(self.current.as_ref(), id);
         let from_next = self.is(self.next.as_ref(), id);
         let from_draining = self
@@ -470,7 +526,7 @@ impl Session {
         if let Some(rate) = &message.unexpected_rate {
             tracing::warn!(target: TARGET, language = self.language.code, mime = rate.as_str(), "Gemini audio at an unexpected rate");
         }
-        self.forward(&message, from_draining);
+        self.forward(&message, from_draining, received);
         if from_current || from_next {
             if let Some(handle) = message.handle {
                 self.handle = Some(handle);
@@ -499,39 +555,20 @@ impl Session {
 
     /// Hands a message's speech and text to the listeners. A draining
     /// connection's speech is dropped once the new one speaks (no two voices).
-    fn forward(&mut self, message: &ServerMessage, from_draining: bool) {
+    fn forward(&mut self, message: &ServerMessage, from_draining: bool, received: Instant) {
         let now = Instant::now();
-        let new_spoke = self.current.as_ref().is_some_and(|conn| conn.spoke);
-        if from_draining && new_spoke && !message.audio.is_empty() {
-            self.stats.overlap_dropped_ms += message
-                .audio
-                .iter()
-                .map(|c| c.len() as u64 / 48)
-                .sum::<u64>();
-        }
-        let audio: &[Vec<u8>] = if from_draining && new_spoke {
-            &[]
-        } else {
-            &message.audio
-        };
-        if !from_draining && !audio.is_empty() {
-            if let Some(conn) = self.current.as_mut() {
-                conn.spoke = true;
+        for chunk in &message.audio {
+            let ms = chunk.len() as u64 / 48;
+            let voiced = output_voiced(chunk);
+            if !self.keep_chunk(from_draining, voiced, ms) {
+                continue;
             }
-        }
-        for chunk in audio {
-            if let Some(onset) = self.onset_pending.take() {
-                let ms = u64::try_from((now - onset).as_millis()).unwrap_or(u64::MAX);
-                self.stats.first_voiced_ms.push(ms);
-                tracing::debug!(target: TARGET, language = self.language.code, first_voiced_ms = ms, "first translated audio after an onset");
-            }
-            self.last_output = Some(now);
-            self.in_stall = false;
+            self.on_output_level(ms, voiced, now);
             self.failures = 0;
-            self.stats.output_ms += chunk.len() as u64 / 48;
+            self.stats.output_ms += ms;
             let _ = self
                 .io_out
-                .send(GuestPacket::Audio(Arc::from(chunk.as_slice())));
+                .send(GuestPacket::Audio(Arc::from(chunk.as_slice()), received));
         }
         if let Some(text) = &message.output_text {
             self.stats.output_chars += text.chars().count() as u64;
@@ -543,6 +580,53 @@ impl Session {
         if message.turn_complete {
             let _ = self.io_out.send(GuestPacket::TurnComplete);
         }
+    }
+
+    /// One voice at a time across a `goAway`: the replaced connection's
+    /// chunks are dropped once the new one SPOKE (`overlap_dropped_ms`), and
+    /// until then the new one's silence is skipped, so the old backlog plays
+    /// in one piece (the model streams its silence too — silence is never
+    /// "spoke", #999 L6a review). `true` = forward the chunk.
+    fn keep_chunk(&mut self, from_draining: bool, voiced: bool, ms: u64) -> bool {
+        let new_spoke = self.current.as_ref().is_some_and(|conn| conn.spoke);
+        if from_draining {
+            if new_spoke {
+                self.stats.overlap_dropped_ms += ms;
+            }
+            return !new_spoke;
+        }
+        if voiced {
+            if let Some(conn) = self.current.as_mut() {
+                conn.spoke = true;
+            }
+            return true;
+        }
+        new_spoke || self.draining.is_none()
+    }
+
+    /// Times every waiting onset to the first translated SPEECH after the
+    /// model's own pause (#999 L6a); a quiet chunk only adds to the pause.
+    /// All waiting onsets take the same speech: the model often merges two
+    /// phrases into one, and a queue (oldest first) drifted to a 10 s median
+    /// on the R2 replay — so a second onset inside one merged phrase reads
+    /// short, one heard during the backlog long (the max shows it).
+    fn on_output_level(&mut self, ms: u64, voiced: bool, now: Instant) {
+        let paused = after_pause(self.output_quiet_ms, self.last_output, now);
+        self.last_output = Some(now);
+        if !voiced {
+            self.output_quiet_ms += ms;
+            return;
+        }
+        if paused {
+            for onset in std::mem::take(&mut self.onsets) {
+                let ms = u64::try_from((now - onset).as_millis()).unwrap_or(u64::MAX);
+                self.stats.first_voiced_ms.push(ms);
+                tracing::debug!(target: TARGET, language = self.language.code, first_voiced_ms = ms, "first translated speech after an onset");
+            }
+        }
+        self.output_quiet_ms = 0;
+        self.stretch_speech = Some(now);
+        self.in_stall = false;
     }
 
     fn on_closed(&mut self, id: u32, code: Option<u16>, reason: &str) {
@@ -632,8 +716,10 @@ impl Session {
         self.set_state(SessionState::Reconnecting);
     }
 
-    /// Stalls: the preacher spoke in the last second, the first translated
-    /// audio of this stretch came, and nothing played for [`STALL_AFTER`].
+    /// Stalls: the preacher spoke in the last second and no translated
+    /// speech came for [`STALL_AFTER`] — since the stretch's last speech, or
+    /// since its onset when none came yet (the model's streamed silence is
+    /// no translation).
     fn on_tick(&mut self) {
         let now = Instant::now();
         let sending = self
@@ -654,25 +740,28 @@ impl Session {
         let speaking = self
             .last_voiced
             .is_some_and(|at| now - at <= Duration::from_secs(1));
-        if let Some(last) = self.last_output {
+        if let Some(last) = self.stretch_speech.or(self.stretch_onset) {
             if speaking && !self.in_stall && now - last >= STALL_AFTER {
                 self.in_stall = true;
                 self.stats.stalls += 1;
                 tracing::warn!(target: TARGET, language = self.language.code, silent_ms = u64::try_from((now - last).as_millis()).unwrap_or(u64::MAX), "guest translation stalled while the preacher speaks");
             }
         }
-        if self
-            .onset_pending
-            .is_some_and(|at| now - at > Duration::from_secs(20))
+        while self
+            .onsets
+            .front()
+            .is_some_and(|at| now - *at > ONSET_TIMEOUT)
         {
-            self.onset_pending = None;
+            self.onsets.pop_front();
+            self.stats.onsets_expired += 1;
         }
     }
 
     fn summary(&mut self) {
         let listeners = self.listeners.load(Ordering::SeqCst);
         let connected = self.current.as_ref().is_some_and(|conn| conn.ready);
+        let segments = self.times.take();
         self.stats
-            .log_and_reset(self.language.code, listeners, connected);
+            .log_and_reset(self.language.code, listeners, connected, &segments);
     }
 }

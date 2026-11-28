@@ -119,6 +119,23 @@ async fn a_guest_gets_hello_state_speech_and_text() {
     }
     assert_eq!(texts, vec!["w1 ", "w2 ", "w3 "]);
     assert_eq!(fake.connects(), 1);
+    // #999 L6a: every speech chunk written to this guest is timed from the
+    // moment its Gemini frame was read (recorded right after the send).
+    let probe = state.guest_join("de").expect("the same session");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while probe.times.peek().to_guest.count() < 3 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "3 guest sends timed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let to_guest = probe.times.peek().to_guest;
+    assert!(
+        to_guest.max() < Some(1_000_000),
+        "a loopback send takes well under a second: {to_guest:?}"
+    );
+    drop(probe);
     assert_eq!(
         fake.setups()[0]["setup"]["generationConfig"]["translationConfig"]["targetLanguageCode"],
         "de"

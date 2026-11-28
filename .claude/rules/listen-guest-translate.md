@@ -38,6 +38,20 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   **1008** + "not found" = bad model → stop; **1008 "client inactivity"** = the 120 s idle cut →
   reconnect AT ONCE with the handle (no back-off), so the next phrase never pays a connect.
 - When the input stops, the model still speaks out its backlog: pausing the send loses nothing.
+- The model streams audio ALL the time, its pauses included (a silent minute: `output_ms=60000`,
+  `sent_ms=0`): "any output chunk" is never a latency or stall signal — only output above −45 dBFS
+  (`session::OUTPUT_VOICED_DBFS`; R2: pauses ≤ −50, the first chunk after a pause ≥ −41.8).
+- No fast / latency mode exists (doc 27.11.2026: `translationConfig` = `targetLanguageCode` +
+  `echoTargetLanguage` only). The doc's 100 ms input chunks are what we send; 20 ms chunks measured
+  60–100 ms sooner (3.32 vs 3.38 s, 3.33 vs 3.43 s, 5 runs each) — the 100 ms frame is the whole
+  listen pipeline's unit, so that is a separate change, not done.
+- `systemInstruction` (setup-only) IS honoured: `config::DEFAULT_CONTEXT` (override
+  `PRESENTER_LISTEN_GEMINI_CONTEXT`) took "Newlevel Church" from 0/36 to 36/36 on Slovak TTS clips and
+  removed "veríme" → "in Rome" and "zbor" → "choir" (#999 comment "FINDING L6c"). It also improves the
+  INPUT transcription. Keep only public facts in it (the repo is public).
+- Parallel sessions on one key: past the account's concurrency quota the server closes **1011 "You
+  exceeded your current quota"** right after the setup (6 at once did; 4 languages is our cap) →
+  `Retry`, the back-off.
 
 ## The session (`listen/translate/session.rs`, `mod.rs`)
 
@@ -69,8 +83,24 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 - Logs on `presenter::listen::guest`: session start/stop, every state change, connection open /
   ready / close (code + reason + class), goAway, back-off WARN (power-of-two), stall WARN, and ONE
   INFO `guest translation minute summary` per language (listeners, sent_ms, output_ms,
-  first_voiced_ms median/max — onset after ≥ 1.5 s quiet → first translated audio, stalls = 6 s
-  without output while the preacher spoke, reconnects, dropped frames). A silent minute logs nothing.
+  `first_voiced_timed` + `first_voiced_ms` median/max, stalls = 6 s without translated SPEECH while
+  the preacher spoke, reconnects, dropped frames, and our own segments in µs: `to_gemini_us_*` = a live
+  mic frame reaching the session → written to Gemini's socket, `to_guest_us_*` = a Gemini frame read →
+  written to each guest's WebSocket). A silent minute logs nothing.
+- `first_voiced_ms` (#999 L6a): EVERY onset (a voiced input frame after `ONSET_GAP` 1.5 s quiet) waits
+  in `Session::onsets` for the first VOICED output chunk that follows the model's own pause
+  (`OUTPUT_GAP` 750 ms of unvoiced output audio, or 750 ms with no voiced output); speech before such a
+  pause is the previous phrase's backlog. 750 ms from replaying R2 (0 ms read 0.0–0.2 s backlog, 500 ms
+  once 0.14 s, 750 ms gives 2.0–3.6 s). ALL waiting onsets take that speech (oldest-only drifted to a
+  10 s median: the model merges phrases), so a 2nd onset inside a merged phrase reads short and one
+  heard during the backlog long. Unanswered after 20 s (or pushed out past 8) → `onsets_expired`; a
+  stall counts from the onset too, so a model answering only silence is a stall. Tests: the fake's
+  `Script::quiet` ranges answer near-silence (the model's latency), everything else speech level.
+- `goAway` + streamed silence: the new connection `spoke` only on VOICED output, and its silence is
+  skipped while the old one drains, so the old backlog plays in one piece (silence once marked it
+  spoken and dropped the old backlog — review of L6a).
+- `PRESENTER_LISTEN_GEMINI_CONTEXT` has no deploy input (no `listen.env` line, not in invariant 7):
+  every site runs the default; another site sets it in a hand-made systemd drop-in.
 
 ## The guest listener (`PRESENTER_GUEST_PORT`, arch review 27.11 — fail CLOSED)
 
@@ -113,7 +143,11 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   language (core `GUEST_LANGUAGES`); `?lang=` keeps the pick. Play = the gesture that creates +
   resumes the `AudioContext` synchronously in the tap (iOS unlock), asked for 24 kHz (a refusing phone gets a linear
   resample, `state::guest::resample`). The worklet starts at 150 ms queued and drops back to 150 ms
-  when > 1 s queued (latency first). Screen Wake Lock via `navigator.wakeLock` (Reflect; not in
+  when > 1 s queued (latency first); while playing it cuts a SILENT chunk (≤ −45 dBFS) so at most
+  `TRIM` 650 ms stay queued (#999 L6b): the session's start burst otherwise stayed queued all session
+  (R2 replay: 0.48–0.70 s standing). 650 ms = the lowest TRIM with no added gap in speech on the R2
+  arrivals, also with ±80 ms mobile jitter (550 ms: 3–5 gaps / 5 min, 450 ms: 24); never lower the
+  150 ms start (a 250 ms chunk always exceeds it, so it costs nothing). Screen Wake Lock via `navigator.wakeLock` (Reflect; not in
   stable web-sys), re-taken on `visibilitychange`, released on Stop / refusal / `stopped`; every
   Play and Stop bumps `Listening::start`, so a slow start of an earlier Play drops what it made.
 - E2E hooks: `body[data-guest-chunks]` (speech frames received), `body[data-guest-played]` (samples

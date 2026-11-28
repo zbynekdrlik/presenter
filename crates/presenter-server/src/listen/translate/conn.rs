@@ -10,6 +10,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::header::USER_AGENT;
@@ -17,6 +18,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::config::GeminiEnv;
+use super::stats::SegmentTimes;
 use super::wire::{parse_server, ServerMessage};
 use super::TARGET;
 use crate::listen::soniox::conn::{ConnectError, Connector, WsStream, CONNECT_TIMEOUT};
@@ -38,6 +40,8 @@ pub enum ConnEvent {
     Message {
         conn: u32,
         message: ServerMessage,
+        /// When the frame was read off the socket (#999 L6a: → the guests).
+        received: Instant,
     },
     Closed {
         conn: u32,
@@ -62,6 +66,15 @@ pub fn request(env: &GeminiEnv) -> Result<Request, ConnectError> {
     Ok(req)
 }
 
+/// One message for Gemini; `heard` = when its mic frame reached the session
+/// (a live frame; `None` for the pre-roll and held frames), timed to the
+/// socket write as [`SegmentTimes::to_gemini`].
+#[derive(Debug)]
+pub struct Outgoing {
+    pub text: String,
+    pub heard: Option<Instant>,
+}
+
 /// Spawns connection `conn`; `setup` is its first frame. The message channel is
 /// unbounded: a stuck socket must not stall the session (its `NO_ANSWER`
 /// rule drops a connection that answers nothing for 10 s while audio goes
@@ -72,9 +85,10 @@ pub fn spawn(
     req: Request,
     setup: String,
     events: mpsc::Sender<ConnEvent>,
-) -> (mpsc::UnboundedSender<String>, AbortHandle) {
+    times: SegmentTimes,
+) -> (mpsc::UnboundedSender<Outgoing>, AbortHandle) {
     let (messages, rx) = mpsc::unbounded_channel();
-    let task = tokio::spawn(run(conn, connector, req, setup, rx, events));
+    let task = tokio::spawn(run(conn, connector, req, setup, rx, events, times));
     (messages, task.abort_handle())
 }
 
@@ -83,8 +97,9 @@ async fn run(
     connector: Arc<dyn Connector>,
     req: Request,
     setup: String,
-    messages: mpsc::UnboundedReceiver<String>,
+    messages: mpsc::UnboundedReceiver<Outgoing>,
     events: mpsc::Sender<ConnEvent>,
+    times: SegmentTimes,
 ) {
     let connected = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(req)).await;
     let mut ws = match connected.unwrap_or(Err(ConnectError::Timeout)) {
@@ -104,7 +119,7 @@ async fn run(
         let _ = events.send(closed(conn, None, error.to_string())).await;
         return;
     }
-    if let Some(end) = pump(conn, ws, messages, &events).await {
+    if let Some(end) = pump(conn, ws, messages, &events, &times).await {
         let _ = events.send(end).await;
     }
 }
@@ -114,16 +129,20 @@ async fn run(
 async fn pump(
     conn: u32,
     mut ws: WsStream,
-    mut messages: mpsc::UnboundedReceiver<String>,
+    mut messages: mpsc::UnboundedReceiver<Outgoing>,
     events: &mpsc::Sender<ConnEvent>,
+    times: &SegmentTimes,
 ) -> Option<ConnEvent> {
     let mut unreadable = 0_u64;
     loop {
         tokio::select! {
             message = messages.recv() => {
-                let message = message?;
-                if let Err(error) = ws.send(Message::text(message)).await {
+                let Outgoing { text, heard } = message?;
+                if let Err(error) = ws.send(Message::text(text)).await {
                     return Some(closed(conn, None, error.to_string()));
+                }
+                if let Some(heard) = heard {
+                    times.to_gemini(heard.elapsed());
                 }
             }
             frame = ws.next() => match frame {
@@ -154,7 +173,11 @@ async fn pump(
 
 fn read(conn: u32, bytes: &[u8], unreadable: &mut u64) -> Option<ConnEvent> {
     match parse_server(bytes) {
-        Ok(message) => Some(ConnEvent::Message { conn, message }),
+        Ok(message) => Some(ConnEvent::Message {
+            conn,
+            message,
+            received: Instant::now(),
+        }),
         Err(error) => {
             *unreadable += 1;
             if crate::listen::should_log_event(*unreadable) {
