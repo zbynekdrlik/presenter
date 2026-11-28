@@ -1,6 +1,6 @@
 //! The Gemini Live wire (#999 L1), as the raw probes of 2026-11-27 saw it (no
 //! SDK): ONE setup message, then `realtimeInput` audio (16 kHz s16le, base64,
-//! 20 ms per message since #999 L6e); the server answers every message as a BINARY frame
+//! 20 ms per message since #999 L6e); every server message is a BINARY frame
 //! holding JSON — `setupComplete`, `serverContent` (output audio 24 kHz s16le
 //! in `modelTurn.parts[].inlineData`, `outputTranscription` = the guest's
 //! text, `inputTranscription` = the Slovak original, `turnComplete`),

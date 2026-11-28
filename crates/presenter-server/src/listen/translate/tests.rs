@@ -34,6 +34,11 @@ async fn feed(listen: &ListenService, voiced: bool, count: usize) {
     }
 }
 
+/// The samples of `n` × 100 ms of 16 kHz input (what [`FakeGemini::audio_samples`] counts).
+fn ms100(n: usize) -> usize {
+    n * 1_600
+}
+
 /// Every packet waiting for the listener now.
 fn drain(listener: &mut Listener) -> Vec<GuestPacket> {
     let mut packets = Vec::new();
@@ -77,15 +82,15 @@ async fn a_guest_hears_the_translation_and_silence_is_never_sent() {
     );
 
     feed(&listen, false, 30).await;
-    assert_eq!(fake.audio(), vec![0], "a silent mic sends nothing");
+    assert_eq!(fake.audio_samples(), vec![0], "a silent mic sends nothing");
 
     feed(&listen, true, 5).await;
     assert_eq!(*listener.state.borrow(), SessionState::Live);
     // 10 pre-roll frames of the quiet before + the 5 voiced ones.
-    assert_eq!(fake.audio(), vec![15]);
+    assert_eq!(fake.audio_samples(), vec![ms100(15)]);
     // 2 s of hangover is still sent, then the gate closes.
     feed(&listen, false, 40).await;
-    assert_eq!(fake.audio(), vec![15 + 20]);
+    assert_eq!(fake.audio_samples(), vec![ms100(15 + 20)]);
     assert_eq!(*listener.state.borrow(), SessionState::Waiting);
 
     let packets = drain(&mut listener);
@@ -129,7 +134,7 @@ async fn listeners_share_one_session_and_the_last_one_ends_it_after_the_linger()
     assert!(service.status(&listen).active.is_empty());
     // A frame now reaches no session: nothing more is sent.
     feed(&listen, true, 3).await;
-    assert_eq!(fake.audio(), vec![3]);
+    assert_eq!(fake.audio_samples(), vec![ms100(3)]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -183,7 +188,11 @@ async fn the_cap_reached_mid_session_stops_the_language() {
             reason: StopReason::DailyCap
         }
     );
-    assert!(fake.audio()[0] <= 3, "{:?}", fake.audio());
+    assert_eq!(
+        fake.audio_samples(),
+        vec![15 * 320],
+        "exactly the 300 ms left: 15 chunks of 20 ms, the 16th refused"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -209,8 +218,7 @@ async fn a_go_away_moves_the_audio_to_a_resumed_connection_without_a_gap() {
         30 * 1_600,
         "every chunk sent once: {samples:?}"
     );
-    let audio = fake.audio();
-    assert!(audio[0] >= 12 && audio[1] > 0, "{audio:?}");
+    assert!(samples[0] >= ms100(12) && samples[1] > 0, "{samples:?}");
     assert_eq!(audio_count(&drain(&mut listener)), 30);
     assert_eq!(*listener.state.borrow(), SessionState::Live);
 }
@@ -234,7 +242,7 @@ async fn an_idle_cut_reconnects_at_once_with_the_handle() {
         "h-0-5"
     );
     feed(&listen, true, 3).await;
-    assert_eq!(fake.audio(), vec![5, 3]);
+    assert_eq!(fake.audio_samples(), vec![ms100(5), ms100(3)]);
     assert_eq!(*listener.state.borrow(), SessionState::Live);
 }
 
@@ -387,7 +395,7 @@ async fn a_refused_key_stops_for_good_and_a_server_error_backs_off() {
     feed(&listen, true, 2).await;
     assert_eq!(*listener.state.borrow(), SessionState::Live);
     // The audio of the outage was held and sent to the new connection.
-    assert_eq!(flaky.audio(), vec![2, 5 + 2]);
+    assert_eq!(flaky.audio_samples(), vec![ms100(2), ms100(5 + 2)]);
 }
 
 #[test]
@@ -559,8 +567,8 @@ async fn the_frames_to_gemini_are_timed_and_summarised() {
     feed(&listen, true, 5).await;
     feed(&listen, false, 40).await;
     assert_eq!(
-        fake.audio(),
-        vec![35],
+        fake.audio_samples(),
+        vec![ms100(35)],
         "10 pre-roll + 5 voiced + 20 hangover"
     );
     let segments = listener.times.peek();
@@ -598,15 +606,19 @@ async fn the_audio_goes_out_in_20_ms_chunks_without_waiting_for_100_ms() {
 
     let sent_at = tokio::time::Instant::now();
     let _ = listen.chunk_sender("dante-mic-1").send(chunk(true));
-    let deadline = sent_at + Duration::from_secs(1);
-    while fake.messages().is_empty() {
-        assert!(tokio::time::Instant::now() < deadline, "no audio left");
-        tokio::task::yield_now().await;
-    }
+    // The paused clock moves while this waits: a session that held the chunk
+    // for more audio (a 100 ms frame) fails here instead of hanging.
+    tokio::time::timeout(Duration::from_millis(19), async {
+        while fake.messages().is_empty() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the first chunk left within 19 ms");
     let (samples, arrived) = fake.messages()[0];
     assert_eq!(samples, 320, "one 20 ms chunk (the pre-roll was empty)");
     assert!(
-        arrived - sent_at < Duration::from_millis(20),
+        arrived - sent_at < Duration::from_millis(19),
         "it left at once: {:?}",
         arrived - sent_at
     );

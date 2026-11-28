@@ -23,7 +23,7 @@ use tokio::sync::{broadcast, Notify};
 use tracing::{info, warn};
 
 use super::resample::{Converted, Resampler16k};
-use super::{should_log_event, ListenService, MicFrame, MIC_TARGET};
+use super::{should_log_event, ListenService, MIC_TARGET};
 
 /// ≈ 340 ms of 256-frame packets at 48 kHz — far above the ≥ 6 × 256
 /// samples a Voicemeeter receiver keeps (songplayer `vban-out.md`).
@@ -215,7 +215,7 @@ pub(crate) async fn run_chain(
             health.record_chain(&mic_id, generation, produced, level, chain.error())
         });
         if current {
-            // the chunks first: the low-latency consumer never waits behind a frame
+            // chunks before the frame they complete: a fixed order for every block
             send_all(&chunks_out, chunks);
             send_all(&frames_out, frames);
         }
@@ -226,9 +226,9 @@ pub(crate) async fn run_chain(
     }
 }
 
-/// The frames (or chunks) to every consumer of the mic. Never waits:
+/// The frames (or the chunks) to every consumer of the mic. Never waits:
 /// `broadcast::send` overwrites the oldest one a consumer has not read yet.
-fn send_all(out: &broadcast::Sender<MicFrame>, pieces: Vec<Vec<i16>>) {
+fn send_all(out: &broadcast::Sender<Arc<[i16]>>, pieces: Vec<Vec<i16>>) {
     if out.receiver_count() == 0 {
         return;
     }

@@ -61,7 +61,7 @@ impl Resampler16k {
             chunk_in: (rate_hz / CHUNKS_PER_SECOND) as usize,
             pending_in: Vec::new(),
             chunk_out: vec![0.0; CHUNK_OUT],
-            pending_out: Vec::with_capacity(2 * FRAME_SAMPLES),
+            pending_out: Vec::with_capacity(2 * CHUNK_OUT),
             frame_fill: Vec::with_capacity(FRAME_SAMPLES),
         })
     }

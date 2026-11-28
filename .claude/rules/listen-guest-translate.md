@@ -67,7 +67,9 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 - Audio goes out only while the mic is voiced: a chunk > −50 dBFS opens the gate, `HANGOVER` 2 s of
   quiet closes it, the last 1 s (`PRE_ROLL_CHUNKS` = 50) is sent with every onset. A silent mic = no
   messages = no cost. Chunks before a connection is ready wait in `pending` (≤ 5 s = 250, oldest
-  dropped); `CHUNK_MS` = 20 is what `sent_ms` and the cap count per chunk sent;
+  dropped); `CHUNK_MS` = 20 is what `sent_ms` and the cap count per chunk sent. The gate judges
+  each 20 ms chunk on its own (#999 comment "FINDING L6e": on 17 min of sermon audio no extra gate
+  opens vs 100 ms frames, onsets seen 60–80 ms sooner; a rolling 100 ms window gained less);
   a send NEVER opens a connection while a retry is scheduled (the back-off would be bypassed).
 - `goAway` opens the next connection with the newest handle; at its `setupComplete` the audio moves
   there and the old one drains `DRAIN` 4 s — but its speech is DROPPED once the new connection spoke
@@ -166,7 +168,10 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   100 ms "units" of input whatever the chunk size: answers 100 ms of audio + `w<n> ` + a handle the
   moment unit n STARTS, `Script` triggers (goAway / close after n, deaf after n, `quiet` ranges)
   count units, goAway / close fire once unit n is fully heard; idle cut after a time, late speech
-  after a goAway). The session tests `feed` 20 ms chunks every 20 ms (`count` = 100 ms steps). Session tests on the paused clock; the session's 1 s tick starts with
+  after a goAway). The session tests `feed` 20 ms chunks every 20 ms (`count` = 100 ms steps) and
+  assert exact SAMPLES (`ms100(n)`), never whole units (a floor hides up to 4 extra chunks); a wait
+  for audio is a `timeout` around a `sleep` loop (the paused clock moves, a regression fails instead
+  of spinning). Session tests on the paused clock; the session's 1 s tick starts with
   the session, so a time rule (`NO_ANSWER`, stalls) fires on the first WHOLE second past its bound —
   feed past it (the deaf test feeds 12.5 s for a 10 s rule + 1 s retry), never shorten the rule;
   router tests (`router/listen_guest/tests.rs`) on a real loopback server, incl. the guest

@@ -86,15 +86,6 @@ impl FakeGemini {
     pub(crate) fn setups(&self) -> Vec<serde_json::Value> {
         self.setups.lock().unwrap().clone()
     }
-    /// The whole 100 ms units of audio heard per connection.
-    pub(crate) fn audio(&self) -> Vec<usize> {
-        self.audio
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|s| s / UNIT)
-            .collect()
-    }
     /// The samples heard per connection.
     pub(crate) fn audio_samples(&self) -> Vec<usize> {
         self.audio.lock().unwrap().clone()
