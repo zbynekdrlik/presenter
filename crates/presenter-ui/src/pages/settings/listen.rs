@@ -9,7 +9,7 @@
 //! §5.6 ids) and never changes: it names the mic's recordings. Each row's
 //! health and recorder line, the socket line and the recorder's per-day switch
 //! come from `GET /listen/status`, polled every 2 s while the card is on screen
-//! (C1b-7), and so does the Dante part (`listen_dante.rs`, #933: the two fixed
+//! (C1b-7), and so does the Dante part (`listen_dante.rs`, #933: the fixed
 //! Dante mics, shown read-only — what feeds them is Dante patching). The list
 //! and its editor are the saved VBAN mics only. All copy is Slovak.
 
@@ -558,7 +558,7 @@ pub fn ListenCard(toast: ToastHandle) -> impl IntoView {
             <header class="settings__card-header">
                 <div>
                     <h2>"Počúvanie"</h2>
-                    <p>"Mikrofóny hosťa a tlmočníka (prepis kázne): VBAN mikrofóny sa nastavujú tu, Dante má Presenter dva pevné kanály „mic 1“ a „mic 2“ — zdroj sa zapája v Dante. Bez VBAN mikrofónu sa neotvorí žiadny port VBAN."</p>
+                    <p>"Mikrofóny hosťa a tlmočníka (prepis kázne): VBAN mikrofóny sa nastavujú tu, Dante má Presenter štyri pevné kanály „mic 1“ až „mic 4“ (ručné mikrofóny) — zdroj sa zapája v Dante. Bez VBAN mikrofónu sa neotvorí žiadny port VBAN."</p>
                 </div>
                 <div class="settings__badge-group">
                     <span class="settings__badge" data-role="listen-count">
