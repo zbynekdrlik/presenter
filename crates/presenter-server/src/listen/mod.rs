@@ -10,10 +10,13 @@
 //! (`recorder`, `recording_file`) has its own supervisor task, started with the
 //! socket task: it keeps one writer per configured mic while the per-day toggle
 //! names today and deletes day folders older than 30 days once per local date.
-//! The two fixed Dante mics (#852, #933, `dante`) arrive through Presenter's
+//! The four fixed Dante mics (#852, #933, `dante`) arrive through Presenter's
 //! own in-process Dante device (dstack's `dlink`) and feed the same chain:
 //! the mic list every consumer reads ([`ListenService::mics`]) is the saved
-//! VBAN list followed by those two, whenever the box names a Dante interface.
+//! VBAN list followed by those four, whenever the box names a Dante interface.
+//! The virtual mic `pulpit` ([`pulpit`], #852 28.11) forwards ONE of them at a
+//! time (the voiced handheld) on its own chunk / frame channels; it is a
+//! source ([`ListenService::has_source`]) but not in the mic list.
 //! The guest's transcript (#852 C3-6) lives in the [`transcript_hub`] the
 //! service owns; `GET /listen/ws` serves it. The guest's transcription
 //! (#852 C3-7, [`transcription`]): one supervisor decides whether the guest
@@ -26,6 +29,7 @@ mod dante;
 pub(crate) mod health;
 mod mic_chain;
 mod minute_summary;
+mod pulpit;
 pub(crate) mod recorder;
 mod recording_file;
 mod resample;
@@ -46,7 +50,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use presenter_core::audio::vban::VBAN_DEFAULT_PORT;
-use presenter_core::listen::mics::{fixed_dante_mics, MicConfig};
+use presenter_core::listen::mics::{fixed_dante_mics, MicConfig, PULPIT_MIC_ID};
 use presenter_core::listen::recorder::RecorderSetting;
 use presenter_core::listen::status::ListenStatus;
 use tokio::sync::{broadcast, watch};
@@ -180,7 +184,7 @@ impl ListenService {
         });
     }
 
-    /// Publish the two fixed Dante mics (`true`: the box names a Dante
+    /// Publish the four fixed Dante mics (`true`: the box names a Dante
     /// interface) or none (#933: independent of the saved list).
     pub(crate) fn set_dante_mics(&self, on: bool) {
         self.change_mics(|sources| {
@@ -201,6 +205,16 @@ impl ListenService {
             .inner
             .config
             .send_replace(Arc::new(sources.published()));
+    }
+
+    /// Whether a consumer can read `mic_id`'s audio here: a published mic, or
+    /// `pulpit` while a Dante mic is published (#852 28.11).
+    pub(crate) fn has_source(&self, mic_id: &str) -> bool {
+        let mics = self.mics();
+        if mic_id == PULPIT_MIC_ID {
+            return mics.iter().any(MicConfig::is_dante);
+        }
+        mics.iter().any(|mic| mic.id == mic_id)
     }
 
     /// The transcript hub (#852 C3-6): the same hub on every call.
@@ -300,8 +314,8 @@ impl ListenService {
     }
 
     /// Start the socket task, the Dante device's supervisor (#933: the device
-    /// with its two fixed channels whenever the box names a Dante interface)
-    /// and the recorder's supervisor once; `false` when they were already
+    /// with its four fixed channels whenever the box names a Dante interface),
+    /// the `pulpit` selector and the recorder's supervisor once; `false` when they were already
     /// started.
     pub(crate) fn start(&self, bind: SocketAddr) -> bool {
         if self.inner.started.swap(true, Ordering::SeqCst) {
@@ -314,6 +328,7 @@ impl ListenService {
             Arc::new(dante::DlinkBackend),
             dante::DanteEnv::from_env(),
         ));
+        tokio::spawn(pulpit::supervise(self.clone()));
         tokio::spawn(recorder::supervise(self.clone()));
         tokio::spawn(minute_summary::supervise(self.clone()));
         true

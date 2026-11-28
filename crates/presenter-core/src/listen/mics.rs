@@ -7,10 +7,13 @@
 //! receive one packet are refused. The server is the only validator.
 //!
 //! The Dante mics are NOT settings (#933, owner 2026-11-11): Presenter's own
-//! Dante device has two fixed mono RX channels, `mic 1` and `mic 2`
-//! ([`fixed_dante_mics`]), on every box that names a Dante interface; which
-//! source feeds them is Dante patching (dstack), never a Presenter choice. So
-//! `listen.mics` holds no Dante mic and no id of theirs.
+//! Dante device has four fixed mono RX channels, `mic 1` … `mic 4`
+//! ([`fixed_dante_mics`], #852 28.11: every handheld — SNV patches two, PP
+//! three; an unpatched channel is silence), on every box that names a Dante
+//! interface; which source feeds them is Dante patching (dstack), never a
+//! Presenter choice. So `listen.mics` holds no Dante mic and no id of theirs.
+//! Nor the id [`PULPIT_MIC_ID`]: the virtual mic that forwards ONE voiced
+//! Dante mic at a time (never a sum; the guests' translation reads it).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -26,8 +29,12 @@ pub const MIC_NAME_MAX_CHARS: usize = 40;
 /// = the VBAN stream-name field.
 pub const MIC_STREAM_NAME_MAX_CHARS: usize = 16;
 /// The RX channels of Presenter's Dante device, in order (#933: neutral
-/// names; both moderator mics are patched there).
-pub const DANTE_MIC_CHANNELS: [&str; 2] = ["mic 1", "mic 2"];
+/// names; #852 28.11: four, one per handheld — the handhelds are patched
+/// there, post-fader, so a muted one is digital silence).
+pub const DANTE_MIC_CHANNELS: [&str; 4] = ["mic 1", "mic 2", "mic 3", "mic 4"];
+/// The virtual mic that forwards ONE voiced Dante mic at a time (#852 28.11
+/// "pulpit", a selector, never a sum); reserved, no saved mic may take it.
+pub const PULPIT_MIC_ID: &str = "pulpit";
 /// The ids of the fixed Dante mics start with this; no saved mic may.
 pub const DANTE_MIC_ID_PREFIX: &str = "dante-";
 
@@ -77,7 +84,7 @@ pub enum MicLanguage {
 }
 
 /// Who speaks into the mic (spec §5.6). `moderator` = a fixed Dante mic
-/// (#933): one of the two moderator mics, the guest preacher's or the
+/// (#933, #852 28.11): one of the handhelds — the preacher's, a guest's or the
 /// interpreter's — which one is told later by the language spoken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -139,14 +146,14 @@ pub enum MicsValidationError {
     BadSenderIp(String),
     #[error("Mikrofóny „{0}“ a „{1}“ by dostávali ten istý VBAN stream.")]
     Ambiguous(String, String),
-    #[error("Mikrofón „{0}“: mikrofóny Dante sa nenastavujú — Presenter má dva pevné kanály Dante „mic 1“ a „mic 2“, zdroj sa zapojí v Dante.")]
+    #[error("Mikrofón „{0}“: mikrofóny Dante sa nenastavujú — Presenter má štyri pevné kanály Dante „mic 1“ až „mic 4“, zdroj sa zapojí v Dante.")]
     DanteNotConfigurable(String),
-    #[error("Identifikátor „{0}“ patrí pevnému mikrofónu Dante („dante-…“).")]
+    #[error("Identifikátor „{0}“ je vyhradený: patrí pevnému mikrofónu Dante („dante-…“) alebo výberu „pulpit“.")]
     ReservedId(String),
 }
 
-/// The two fixed Dante mics (#933), in channel order: ids `dante-mic-1` /
-/// `dante-mic-2` (they name the recordings), one mono RX channel each, not
+/// The four fixed Dante mics (#933, #852 28.11), in channel order: ids
+/// `dante-mic-1` … `dante-mic-4` (they name the recordings), one mono RX channel each, not
 /// transcribed until the language step picks the preacher.
 pub fn fixed_dante_mics() -> Vec<MicConfig> {
     DANTE_MIC_CHANNELS
@@ -216,7 +223,7 @@ fn normalize_mic(mut mic: MicConfig) -> Result<MicConfig, MicsValidationError> {
     if !is_valid_mic_id(&mic.id) {
         return Err(MicsValidationError::BadId(mic.id));
     }
-    if mic.id.starts_with(DANTE_MIC_ID_PREFIX) {
+    if mic.id.starts_with(DANTE_MIC_ID_PREFIX) || mic.id == PULPIT_MIC_ID {
         return Err(MicsValidationError::ReservedId(mic.id));
     }
     if mic.is_dante() {
@@ -528,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn the_two_fixed_dante_mics_are_mono_rx_channels_mic_1_and_mic_2() {
+    fn the_four_fixed_dante_mics_are_mono_rx_channels_mic_1_to_mic_4() {
         let mics = fixed_dante_mics();
         let shape: Vec<(&str, &str, MicTransport, MicChannel, MicRole, MicLanguage)> = mics
             .iter()
@@ -555,7 +562,12 @@ mod tests {
         };
         assert_eq!(
             shape,
-            vec![fixed("dante-mic-1", "mic 1"), fixed("dante-mic-2", "mic 2")]
+            vec![
+                fixed("dante-mic-1", "mic 1"),
+                fixed("dante-mic-2", "mic 2"),
+                fixed("dante-mic-3", "mic 3"),
+                fixed("dante-mic-4", "mic 4"),
+            ]
         );
         assert!(mics
             .iter()
@@ -584,6 +596,11 @@ mod tests {
         assert_eq!(
             validate_mics(vec![mic("dante-x", "GUEST_EN", None)]),
             Err(MicsValidationError::ReservedId("dante-x".into()))
+        );
+        assert_eq!(
+            validate_mics(vec![mic(PULPIT_MIC_ID, "GUEST_EN", None)]),
+            Err(MicsValidationError::ReservedId("pulpit".into())),
+            "the pulpit id is reserved too"
         );
         let text = MicsValidationError::DanteNotConfigurable("guest".into()).to_string();
         assert!(

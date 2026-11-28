@@ -255,8 +255,10 @@ paths:
 - **FOH routing** (VB-Matrix on fohabl, songplayer `vban-out.md`): only with the owner's go; `Mute` only
   (VB-Matrix ignores `dBGain=-inf`); record the prior values; read back every point after each write.
 - **Dante mics (#852, #933, `listen/dante/`)** — NOT a setting (owner 2026-11-11: presenter only
-  knows it has the preacher's audio; the source is patching). Core `fixed_dante_mics()`: two mics
-  `dante-mic-1` / `dante-mic-2`, RX channels `mic 1` / `mic 2` (`DANTE_MIC_CHANNELS`, mono, `channel:
+  knows it has the preacher's audio; the source is patching). Core `fixed_dante_mics()`: four mics
+  `dante-mic-1` … `dante-mic-4`, RX channels `mic 1` … `mic 4` (#852 28.11: one per handheld; SNV
+  patches 2, PP 3; an unpatched channel's `written` never advances, so it never reaches its chain and
+  logs nothing) (`DANTE_MIC_CHANNELS`, mono, `channel:
   left`), name `Dante mic N`, role `moderator` (never offered in the editor), language `off` (the
   language-based preacher pick comes after the Gemini key, #933's open line). `DanteInput` = `{channel}`
   only; `validate_mics` refuses a Dante mic (`DanteNotConfigurable`) and the `dante-` id prefix
@@ -283,7 +285,24 @@ paths:
   `channel@device (stav)`. Tests: `dante/tests.rs` — the only mock is `DanteBackend` (the dlink
   boundary); `dlink_config(plan).device()` is dlink's own check of the config, no network. E2E
   `settings-listen-dante.spec.ts` runs its own server with a Dante interface that does not exist on
-  the runner: the real start is refused (`retrying`) and the card shows both fixed mics read-only.
+  the runner: the real start is refused (`retrying`) and the card shows the four fixed mics read-only.
+- **`pulpit` (#852 / #999, DESIGN 28.11 + owner ruling: a SELECTOR, never a sum — a guest preacher
+  and his live interpreter speak on two handhelds), `listen/pulpit.rs`:** a virtual mic that forwards
+  exactly ONE Dante mic's 20 ms chunks at a time on its own chunk channel (`PULPIT_MIC_ID`, every 5
+  forwarded chunks = its 100 ms frame). Pure policy `choose`: stay while the forwarded mic is voiced or
+  within `HANGOVER` (2 s, translate's) of its last voiced chunk; then switch to a mic voiced within
+  `CANDIDATE_WINDOW` (100 ms) — rank `SpokenLanguage` Foreign < unknown < Slovak (the Slovak one is the
+  interpreter; every mic `None` until language detection lands), then the loudest of its last 10
+  chunks, then channel order; no candidate = stay; the language comes from the mic's configured
+  `language` (`sk` / `en`; the Dante mics are `off` = unknown). A mic not forwarded holds its last 2 s
+  (`ONSET_BUFFER_CHUNKS`): on a switch its onset (from `SWITCH_PRE_ROLL_CHUNKS` = 10 before its first
+  voiced chunk) goes out first, so an interpreter who starts inside the preacher's hangover loses
+  nothing (a short burst into the translation). Each chunk is judged on arrival
+  (`rms_dbfs` > `VOICED_DBFS`), so a mic that stops sending never stalls another. INFO `pulpit
+  switched mic` (from, to, reason), ≤ 20 lines/min, the rest one summary line on the minute tick;
+  a lagging input WARNs per input on power-of-two lag events. `pulpit` is NOT in the mic
+  list (no status row, no recorder writer: the handhelds are recorded); `ListenService::has_source`
+  knows it while a Dante mic is published; the id is reserved (`ReservedId`).
 - **Dante latency (dstack#381):** `dlink_config` sets `receive_buffer_ns(RECEIVE_BUFFER_NS)` = 4 ms, so with dlink's
   default 1 ms network latency the device advertises P = 5 ms (dlink's default buffer: 12.35 ms at 96 kHz). History:
   5 ms ran 21.–23.11.2026, rolled back after 463 late packets (dlink 0.6.178's false late counts, dstack v0.6.210 #477);

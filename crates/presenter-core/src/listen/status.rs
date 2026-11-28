@@ -35,7 +35,7 @@ pub struct SocketStatus {
 }
 
 /// The Dante device's life cycle (#852, #933): Presenter's own `dlink` device
-/// with the two fixed RX channels `mic 1` / `mic 2`, always on while the box
+/// with the four fixed RX channels `mic 1` … `mic 4`, always on while the box
 /// names a Dante interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +44,7 @@ pub enum DanteState {
     #[default]
     NotStarted,
     /// No Dante channel. Since #933 a box with an interface always has the
-    /// two fixed channels, so this is not reached; kept for the wire format.
+    /// four fixed channels, so this is not reached; kept for the wire format.
     Idle,
     /// The box names no Dante interface: no device and no Dante mics
     /// (dev, CI, PP).

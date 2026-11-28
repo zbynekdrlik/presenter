@@ -1,5 +1,6 @@
-//! Settings → "Počúvanie": the two fixed Dante mics (#933). Presenter's own
-//! Dante device has two mono RX channels, `mic 1` and `mic 2`, on every box
+//! Settings → "Počúvanie": the four fixed Dante mics (#933, #852 28.11).
+//! Presenter's own Dante device has four mono RX channels, `mic 1` … `mic 4`
+//! (one per handheld), on every box
 //! that names a Dante interface; what feeds them is Dante patching, never a
 //! setting, so this part of the card only SHOWS them: the device line, then per
 //! mic its name, RX channel, state badge, health and recorder lines — all from
@@ -19,7 +20,7 @@ pub(super) fn dante_line(dante: &DanteStatus) -> String {
         DanteState::NotStarted | DanteState::Idle => String::new(),
         DanteState::NoInterface => format!("Dante: {}", dante.error.as_deref().unwrap_or_default()),
         DanteState::Running => format!(
-            "Dante: zariadenie {device} beží na {} — kanály „mic 1“ a „mic 2“, zdroj sa zapája v Dante.",
+            "Dante: zariadenie {device} beží na {} — kanály „mic 1“ až „mic 4“, zdroj sa zapája v Dante.",
             dante.interface.as_deref().unwrap_or("?")
         ),
         DanteState::Retrying => format!(
@@ -120,7 +121,7 @@ fn dante_row(id: String, status: RwSignal<Option<ListenStatus>>) -> impl IntoVie
     }
 }
 
-/// The Dante part of the card: the device line and the two fixed mics.
+/// The Dante part of the card: the device line and the fixed mics.
 #[component]
 pub(super) fn DanteMics(status: RwSignal<Option<ListenStatus>>) -> impl IntoView {
     let ids =
@@ -190,7 +191,10 @@ mod tests {
             dante: DanteStatus::default(),
             transcription: Default::default(),
         };
-        assert_eq!(dante_mic_ids(&status), ["dante-mic-1", "dante-mic-2"]);
+        assert_eq!(
+            dante_mic_ids(&status),
+            ["dante-mic-1", "dante-mic-2", "dante-mic-3", "dante-mic-4"]
+        );
         assert_eq!(channel_text(&status.mics[2]), "kanál Dante „mic 2“");
         assert_eq!(
             dante_aside(&status.mics[1]),
@@ -211,7 +215,7 @@ mod tests {
         };
         assert_eq!(
             dante_line(&dante),
-            "Dante: zariadenie presenter-listen beží na enp2s0.70 — kanály „mic 1“ a „mic 2“, zdroj sa zapája v Dante."
+            "Dante: zariadenie presenter-listen beží na enp2s0.70 — kanály „mic 1“ až „mic 4“, zdroj sa zapája v Dante."
         );
         dante.state = DanteState::Retrying;
         dante.error = Some("no such interface".into());
