@@ -7,22 +7,23 @@
 use serde::{Deserialize, Serialize};
 
 /// The languages a guest can pick: a BCP-47 code Gemini Live Translate takes as
-/// `targetLanguageCode`, and the language's name IN that language — a guest
-/// who does not read Slovak finds their own. The owner's list (EN, DE, HU, UK,
+/// `targetLanguageCode`, and the language's English name with its own name in
+/// brackets (owner 28.11.2026: Cyrillic alone is unreadable for the team, so
+/// "Ukrainian (Українська)"); a guest still finds their own. The owner's list (EN, DE, HU, UK,
 /// PL, ES, FR, RO, RU) first, then a few more European languages.
 pub const GUEST_LANGUAGES: &[(&str, &str)] = &[
     ("en", "English"),
-    ("de", "Deutsch"),
-    ("hu", "Magyar"),
-    ("uk", "Українська"),
-    ("pl", "Polski"),
-    ("es", "Español"),
-    ("fr", "Français"),
-    ("ro", "Română"),
-    ("ru", "Русский"),
-    ("it", "Italiano"),
-    ("pt", "Português"),
-    ("nl", "Nederlands"),
+    ("de", "German (Deutsch)"),
+    ("hu", "Hungarian (Magyar)"),
+    ("uk", "Ukrainian (Українська)"),
+    ("pl", "Polish (Polski)"),
+    ("es", "Spanish (Español)"),
+    ("fr", "French (Français)"),
+    ("ro", "Romanian (Română)"),
+    ("ru", "Russian (Русский)"),
+    ("it", "Italian (Italiano)"),
+    ("pt", "Portuguese (Português)"),
+    ("nl", "Dutch (Nederlands)"),
 ];
 
 /// The offered language with this code (exact, lowercase): `(code, name)`.
@@ -155,17 +156,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_owners_languages_are_offered_in_their_own_names() {
+    fn the_owners_languages_are_offered_in_english_with_their_own_names() {
         for (code, name) in [
             ("en", "English"),
-            ("de", "Deutsch"),
-            ("hu", "Magyar"),
-            ("uk", "Українська"),
-            ("pl", "Polski"),
-            ("es", "Español"),
-            ("fr", "Français"),
-            ("ro", "Română"),
-            ("ru", "Русский"),
+            ("de", "German (Deutsch)"),
+            ("hu", "Hungarian (Magyar)"),
+            ("uk", "Ukrainian (Українська)"),
+            ("pl", "Polish (Polski)"),
+            ("es", "Spanish (Español)"),
+            ("fr", "French (Français)"),
+            ("ro", "Romanian (Română)"),
+            ("ru", "Russian (Русский)"),
         ] {
             assert_eq!(guest_language(code), Some((code, name)), "{code}");
         }
@@ -247,6 +248,6 @@ mod tests {
         let json = serde_json::to_value(&no_key).unwrap();
         assert_eq!(json["refusal"], "noKey");
         assert_eq!(json["maxLanguages"], 4);
-        assert_eq!(json["languages"][3]["name"], "Українська");
+        assert_eq!(json["languages"][3]["name"], "Ukrainian (Українська)");
     }
 }
