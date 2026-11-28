@@ -1,9 +1,12 @@
 //! One language's translation session (#999 L1, DESIGN D1): ONE task per
 //! ACTIVE language, shared by every guest listening to it. It reads the source
-//! mic's 16 kHz frames, sends them to Gemini Live only while the preacher
-//! speaks (a frame above −50 dBFS opens the gate, [`HANGOVER`] of quiet after
-//! the last one closes it; the last [`PRE_ROLL_FRAMES`] are sent first on
-//! every onset), and hands the translated audio and text to the listeners.
+//! mic's 16 kHz audio in 20 ms chunks (#999 L6e: the mic's chunk channel, so
+//! an onset never waits for a 100 ms frame to fill — measured 60–100 ms sooner
+//! speech on the live model), sends them to Gemini Live only while the
+//! preacher speaks (a chunk above −50 dBFS opens the gate, [`HANGOVER`] of
+//! quiet after the last one closes it; the last [`PRE_ROLL_CHUNKS`] are sent
+//! first on every onset), and hands the translated audio and text to the
+//! listeners.
 //!
 //! Connections: the first one opens with the session; Gemini cuts an idle one
 //! after 120 s ("client inactivity") and it is reopened at once with the
@@ -30,18 +33,18 @@ use super::stats::{DayMeter, MinuteStats, SegmentTimes, STALL_AFTER};
 use super::wire::{audio_message, classify_close, setup_message, CloseClass, ServerMessage};
 use super::{GuestPacket, Language, SessionState, StopReason, TARGET};
 use crate::listen::soniox::conn::Connector;
-use crate::listen::{should_log_event, MicFrame};
+use crate::listen::{should_log_event, MicChunk};
 
-/// Quiet after the last voiced frame before the send pauses: the model hears
+/// Quiet after the last voiced chunk before the send pauses: the model hears
 /// the end of the phrase (and its pause) before nothing more arrives.
 pub const HANGOVER: Duration = Duration::from_secs(2);
-/// A voiced frame after this much quiet is a new onset (latency is measured
+/// A voiced chunk after this much quiet is a new onset (latency is measured
 /// from it).
 pub const ONSET_GAP: Duration = Duration::from_millis(1_500);
-/// The frames before an onset sent with it (1 s).
-pub const PRE_ROLL_FRAMES: usize = 10;
-/// Frames held while a connection is not ready yet (5 s), oldest dropped.
-pub const PENDING_FRAMES: usize = 50;
+/// The chunks before an onset sent with it (1 s).
+pub const PRE_ROLL_CHUNKS: usize = 50;
+/// Chunks held while a connection is not ready yet (5 s), oldest dropped.
+pub const PENDING_CHUNKS: usize = 250;
 /// How long a replaced connection may still deliver its last output.
 pub const DRAIN: Duration = Duration::from_secs(4);
 const RETRY_CAP: Duration = Duration::from_secs(30);
@@ -54,7 +57,9 @@ pub const NO_ANSWER: Duration = Duration::from_secs(10);
 /// trusted as idle: it backs off like any other end, so a server that cuts at
 /// once can never make the session loop on connects.
 pub const IDLE_CUT_MIN_AGE: Duration = Duration::from_secs(60);
-const FRAME_MS: u64 = 100;
+/// One input chunk's audio (`resample::CHUNK_OUT` samples at 16 kHz): what
+/// `sent_ms` and the day's cap count per chunk that goes out.
+const CHUNK_MS: u64 = 20;
 /// Output above this RMS is translated speech (#999 L6a). The model streams
 /// audio all the time: on the R2 runs (3 × 1258 chunks of 250 ms) its pauses
 /// sit at or below −50 dBFS (digital silence −120), speech at −40 … −15 and
@@ -84,7 +89,7 @@ pub struct SessionDeps {
 
 /// The session's channels to its listeners.
 pub struct SessionIo {
-    pub frames: broadcast::Receiver<MicFrame>,
+    pub chunks: broadcast::Receiver<MicChunk>,
     pub out: broadcast::Sender<GuestPacket>,
     pub state: watch::Sender<SessionState>,
     pub stop: watch::Receiver<bool>,
@@ -128,8 +133,8 @@ struct Session {
     failures: u32,
     retry_at: Option<Instant>,
     stopped: Option<StopReason>,
-    pre_roll: VecDeque<MicFrame>,
-    pending: VecDeque<MicFrame>,
+    pre_roll: VecDeque<MicChunk>,
+    pending: VecDeque<MicChunk>,
     last_voiced: Option<Instant>,
     gate_open: bool,
     /// When the gate last opened (the "no answer" rule counts from here, so a
@@ -151,7 +156,7 @@ struct Session {
 
 pub async fn run(language: Language, deps: SessionDeps, io: SessionIo) {
     let SessionIo {
-        mut frames,
+        mut chunks,
         out,
         state,
         mut stop,
@@ -183,8 +188,8 @@ pub async fn run(language: Language, deps: SessionDeps, io: SessionIo) {
                 Some(event) => session.on_event(event),
                 None => break,
             },
-            frame = frames.recv() => match frame {
-                Ok(frame) => session.on_frame(frame),
+            chunk = chunks.recv() => match chunk {
+                Ok(chunk) => session.on_chunk(chunk),
                 Err(RecvError::Lagged(missed)) => session.on_lagged(missed),
                 Err(RecvError::Closed) => break,
             },
@@ -261,7 +266,7 @@ impl Session {
             failures: 0,
             retry_at: None,
             stopped: None,
-            pre_roll: VecDeque::with_capacity(PRE_ROLL_FRAMES),
+            pre_roll: VecDeque::with_capacity(PRE_ROLL_CHUNKS),
             pending: VecDeque::new(),
             last_voiced: None,
             gate_open: false,
@@ -355,18 +360,18 @@ impl Session {
     }
 
     fn on_lagged(&mut self, missed: u64) {
-        self.stats.dropped_frames += missed;
-        if should_log_event(self.stats.dropped_frames) {
-            tracing::warn!(target: TARGET, language = self.language.code, missed, "guest translation fell behind the mic — frames lost");
+        self.stats.dropped_chunks += missed;
+        if should_log_event(self.stats.dropped_chunks) {
+            tracing::warn!(target: TARGET, language = self.language.code, missed, "guest translation fell behind the mic — chunks lost");
         }
     }
 
-    fn on_frame(&mut self, frame: MicFrame) {
+    fn on_chunk(&mut self, chunk: MicChunk) {
         if self.stopped.is_some() {
             return;
         }
         let now = Instant::now();
-        if is_voiced(rms_dbfs(&frame)) {
+        if is_voiced(rms_dbfs(&chunk)) {
             if self.last_voiced.is_none_or(|at| now - at >= ONSET_GAP) {
                 self.stats.onsets += 1;
                 if self.onsets.len() == MAX_PENDING_ONSETS {
@@ -389,50 +394,50 @@ impl Session {
         }
         self.gate_open = open;
         if open {
-            self.send(frame, Some(now));
+            self.send(chunk, Some(now));
         } else {
-            if self.pre_roll.len() == PRE_ROLL_FRAMES {
+            if self.pre_roll.len() == PRE_ROLL_CHUNKS {
                 self.pre_roll.pop_front();
             }
-            self.pre_roll.push_back(frame);
+            self.pre_roll.push_back(chunk);
             self.refresh_live_state();
         }
     }
 
-    /// One frame to the ready connection, counted against the day's cap
+    /// One chunk to the ready connection, counted against the day's cap
     /// (charged only when it really goes out). `false` = the cap is reached.
-    fn deliver(&mut self, frame: &MicFrame, heard: Option<Instant>) -> bool {
+    fn deliver(&mut self, chunk: &MicChunk, heard: Option<Instant>) -> bool {
         let Some(conn) = self.current.as_ref().filter(|conn| conn.ready) else {
             return true;
         };
-        if !self.deps.meter.spend((self.deps.today)(), FRAME_MS) {
+        if !self.deps.meter.spend((self.deps.today)(), CHUNK_MS) {
             return false;
         }
         let message = Outgoing {
-            text: audio_message(frame),
+            text: audio_message(chunk),
             heard,
         };
         if conn.tx.send(message).is_ok() {
-            self.stats.sent_ms += FRAME_MS;
+            self.stats.sent_ms += CHUNK_MS;
         }
         true
     }
 
-    /// `heard` = when a live frame reached the session (timed to the socket).
-    fn send(&mut self, frame: MicFrame, heard: Option<Instant>) {
+    /// `heard` = when a live chunk reached the session (timed to the socket).
+    fn send(&mut self, chunk: MicChunk, heard: Option<Instant>) {
         match self.current.as_ref().filter(|conn| conn.ready) {
             Some(_) => {
-                if !self.deliver(&frame, heard) {
+                if !self.deliver(&chunk, heard) {
                     self.stop(StopReason::DailyCap);
                     return;
                 }
             }
             None => {
-                if self.pending.len() == PENDING_FRAMES {
+                if self.pending.len() == PENDING_CHUNKS {
                     self.pending.pop_front();
-                    self.stats.dropped_frames += 1;
+                    self.stats.dropped_chunks += 1;
                 }
-                self.pending.push_back(frame);
+                self.pending.push_back(chunk);
                 // A scheduled retry keeps its back-off; it sends what waits here.
                 if self.retry_at.is_none() {
                     self.connect();
@@ -448,14 +453,14 @@ impl Session {
         }
         let held = std::mem::take(&mut self.pending);
         let count = held.len();
-        for frame in held {
-            if !self.deliver(&frame, None) {
+        for chunk in held {
+            if !self.deliver(&chunk, None) {
                 self.stop(StopReason::DailyCap);
                 return;
             }
         }
         if count > 0 {
-            tracing::debug!(target: TARGET, language = self.language.code, frames = count, "held audio sent to the new connection");
+            tracing::debug!(target: TARGET, language = self.language.code, chunks = count, "held audio sent to the new connection");
         }
     }
 

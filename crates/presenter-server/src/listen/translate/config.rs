@@ -4,7 +4,7 @@
 //! decision — a preview model id churns, so it is a setting),
 //! `PRESENTER_LISTEN_GEMINI_URL` (default [`DEFAULT_URL`]; tests and E2E point
 //! it at a fake, `ws://` allowed) and `PRESENTER_LISTEN_GUEST_MIC` (the mic id
-//! whose frames are translated, default [`DEFAULT_SOURCE_MIC`] = the preacher's
+//! whose audio is translated, default [`DEFAULT_SOURCE_MIC`] = the preacher's
 //! handheld on Dante), `PRESENTER_GUEST_PORT` (the guest listener: a second
 //! TCP port that serves ONLY the guest surface — the public no-login tunnel
 //! points there, so a missing setting means no listener, never the app; unset =

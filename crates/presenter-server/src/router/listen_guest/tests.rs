@@ -66,8 +66,9 @@ async fn next_text(client: &mut Client) -> GuestWsMessage {
     }
 }
 
-fn voiced_frame() -> crate::listen::MicFrame {
-    (0..1_600)
+/// A voiced 20 ms chunk, what the mic chain hands the session (#999 L6e).
+fn voiced_chunk() -> crate::listen::MicChunk {
+    (0..320)
         .map(|i| if i % 20 < 10 { 8_000 } else { -8_000 })
         .collect::<Vec<i16>>()
         .into()
@@ -96,12 +97,13 @@ async fn a_guest_gets_hello_state_speech_and_text() {
         ),
         "{session:?}"
     );
-    let frames = state.listen_service().frame_sender("dante-mic-1");
+    let chunks = state.listen_service().chunk_sender("dante-mic-1");
     let mut speech = 0;
     let mut texts = Vec::new();
-    for _ in 0..3 {
-        let _ = frames.send(voiced_frame());
-        tokio::time::sleep(Duration::from_millis(30)).await;
+    // 300 ms of audio: the fake answers each 100 ms as it starts
+    for _ in 0..15 {
+        let _ = chunks.send(voiced_chunk());
+        tokio::time::sleep(Duration::from_millis(6)).await;
     }
     while speech < 3 || texts.len() < 3 {
         match next(&mut client).await {

@@ -66,8 +66,8 @@ pub fn request(env: &GeminiEnv) -> Result<Request, ConnectError> {
     Ok(req)
 }
 
-/// One message for Gemini; `heard` = when its mic frame reached the session
-/// (a live frame; `None` for the pre-roll and held frames), timed to the
+/// One message for Gemini; `heard` = when its mic chunk reached the session
+/// (a live chunk; `None` for the pre-roll and held chunks), timed to the
 /// socket write as [`SegmentTimes::to_gemini`].
 #[derive(Debug)]
 pub struct Outgoing {

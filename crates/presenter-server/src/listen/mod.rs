@@ -77,6 +77,12 @@ pub(crate) type MicFrame = Arc<[i16]>;
 /// and is told how many (`RecvError::Lagged`): no consumer can slow a chain.
 /// tokio rounds a broadcast capacity up to a power of two, so this is one.
 pub(crate) const FRAME_CHANNEL_CAPACITY: usize = 128;
+/// One 20 ms chunk of a mic: 320 samples of 16 kHz mono s16, the same stream
+/// as its frames, sent the moment it is complete (#999 L6e: the guests'
+/// translation sends these, so an onset never waits for a 100 ms frame).
+pub(crate) type MicChunk = Arc<[i16]>;
+/// The chunk channel's capacity: 512 chunks (10.24 s, a power of two).
+pub(crate) const CHUNK_CHANNEL_CAPACITY: usize = 512;
 
 /// The listen state every `AppState` clone shares.
 #[derive(Clone)]
@@ -96,6 +102,8 @@ struct Inner {
     /// chain of a mic (a save that changes its stream starts a new one) sends
     /// into the same channel, so a consumer never re-subscribes (#852 C1b).
     frames: Mutex<HashMap<String, broadcast::Sender<MicFrame>>>,
+    /// The same per mic for the 20 ms chunks (#999 L6e), kept the same way.
+    chunks: Mutex<HashMap<String, broadcast::Sender<MicChunk>>>,
     /// Where the recorder writes and what time it is (#852 C1b).
     recorder_env: Mutex<RecorderEnv>,
     /// The day the recorder records (`listen.recorder`); `None` = off.
@@ -145,6 +153,7 @@ impl ListenService {
                 started: AtomicBool::new(false),
                 save_lock: tokio::sync::Mutex::new(()),
                 frames: Mutex::new(HashMap::new()),
+                chunks: Mutex::new(HashMap::new()),
                 recorder_env: Mutex::new(RecorderEnv::from_env()),
                 recorder,
                 recorder_cleared,
@@ -345,6 +354,24 @@ impl ListenService {
     /// A consumer's receiver of the mic's frames (the recorder; C3: the ASR).
     fn subscribe_frames(&self, mic_id: &str) -> broadcast::Receiver<MicFrame> {
         self.frame_sender(mic_id).subscribe()
+    }
+
+    /// The mic's 20 ms chunk channel, created on first use (#999 L6e).
+    pub(crate) fn chunk_sender(&self, mic_id: &str) -> broadcast::Sender<MicChunk> {
+        let mut chunks = self
+            .inner
+            .chunks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        chunks
+            .entry(mic_id.to_string())
+            .or_insert_with(|| broadcast::Sender::new(CHUNK_CHANNEL_CAPACITY))
+            .clone()
+    }
+
+    /// A consumer's receiver of the mic's 20 ms chunks (the guests' translation).
+    fn subscribe_chunks(&self, mic_id: &str) -> broadcast::Receiver<MicChunk> {
+        self.chunk_sender(mic_id).subscribe()
     }
 
     fn recorder_receiver(&self) -> watch::Receiver<Option<NaiveDate>> {

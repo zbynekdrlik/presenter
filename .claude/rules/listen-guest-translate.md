@@ -42,9 +42,12 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   `sent_ms=0`): "any output chunk" is never a latency or stall signal — only output above −45 dBFS
   (`session::OUTPUT_VOICED_DBFS`; R2: pauses ≤ −50, the first chunk after a pause ≥ −41.8).
 - No fast / latency mode exists (doc 27.11.2026: `translationConfig` = `targetLanguageCode` +
-  `echoTargetLanguage` only). The doc's 100 ms input chunks are what we send; 20 ms chunks measured
-  60–100 ms sooner (3.32 vs 3.38 s, 3.33 vs 3.43 s, 5 runs each) — the 100 ms frame is the whole
-  listen pipeline's unit, so that is a separate change, not done.
+  `echoTargetLanguage` only). We send **20 ms** input chunks (#999 L6e; the doc shows 100 ms): they
+  measured 60–100 ms sooner speech (3.32 vs 3.38 s, 3.33 vs 3.43 s, 5 runs each). They come from the
+  mic's CHUNK channel (`ListenService::chunk_sender`, 320 samples, cut by `Resampler16k` the moment
+  each is complete); the 100 ms frame stays the unit of everything else (Soniox, recorder, health) —
+  never move the translate session back onto the frame channel, and never split frames into chunks
+  inside the session (that still waits for the frame to fill).
 - `systemInstruction` (setup-only) IS honoured: `config::DEFAULT_CONTEXT` (override
   `PRESENTER_LISTEN_GEMINI_CONTEXT`) took "Newlevel Church" from 0/36 to 36/36 on Slovak TTS clips and
   removed "veríme" → "in Rome" and "zbor" → "choir" (#999 comment "FINDING L6c"). It also improves the
@@ -59,11 +62,14 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   listener starts it, it ends `LINGER` (60 s) after the last left (a reload keeps it). ≤ 4
   languages (`MAX_LANGUAGES`; a running language takes more guests when full). Cost scales with
   languages, never listeners.
-- Source = `PRESENTER_LISTEN_GUEST_MIC` (default `dante-mic-1`), its 16 kHz broadcast frames. A box
+- Source = `PRESENTER_LISTEN_GUEST_MIC` (default `dante-mic-1`), its 16 kHz 20 ms chunks. A box
   without that mic refuses (`noSource`) — PP until #991, PRBA, CI.
-- Audio goes out only while the mic is voiced: a frame > −50 dBFS opens the gate, `HANGOVER` 2 s of
-  quiet closes it, the last 1 s (`PRE_ROLL_FRAMES`) is sent with every onset. A silent mic = no
-  messages = no cost. Frames before a connection is ready wait in `pending` (≤ 5 s, oldest dropped);
+- Audio goes out only while the mic is voiced: a chunk > −50 dBFS opens the gate, `HANGOVER` 2 s of
+  quiet closes it, the last 1 s (`PRE_ROLL_CHUNKS` = 50) is sent with every onset. A silent mic = no
+  messages = no cost. Chunks before a connection is ready wait in `pending` (≤ 5 s = 250, oldest
+  dropped); `CHUNK_MS` = 20 is what `sent_ms` and the cap count per chunk sent. The gate judges
+  each 20 ms chunk on its own (#999 comment "FINDING L6e": on 17 min of sermon audio no extra gate
+  opens vs 100 ms frames, onsets seen 60–80 ms sooner; a rolling 100 ms window gained less);
   a send NEVER opens a connection while a retry is scheduled (the back-off would be bypassed).
 - `goAway` opens the next connection with the newest handle; at its `setupComplete` the audio moves
   there and the old one drains `DRAIN` 4 s — but its speech is DROPPED once the new connection spoke
@@ -75,7 +81,7 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   promoted, not-yet-ready successor shows `reconnecting`.
 - Daily cap: `DAILY_CAP_MINUTES` = 480 audio minutes SENT per local day over every language
   (`DayMeter`, in memory — a restart starts the count again), charged only when a frame really goes
-  out (`deliver`), never for one dropped from `pending`.
+  out (`deliver`, 20 ms per chunk), never for one dropped from `pending`.
 - `MAX_LISTENERS` = 300 over every language (`busy`); no per-IP cap — every guest on the church Wi-Fi
   shares one public address. A linger timer carries the entry's `epoch` (bumped by every join), so a
   leave → rejoin → leave ends the session 60 s after the LAST leave. Reached → the language stops
@@ -84,10 +90,11 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
   ready / close (code + reason + class), goAway, back-off WARN (power-of-two), stall WARN, and ONE
   INFO `guest translation minute summary` per language (listeners, sent_ms, output_ms,
   `first_voiced_timed` + `first_voiced_ms` median/max, stalls = 6 s without translated SPEECH while
-  the preacher spoke, reconnects, dropped frames, and our own segments in µs: `to_gemini_us_*` = a live
-  mic frame reaching the session → written to Gemini's socket, `to_guest_us_*` = a Gemini frame read →
+  the preacher spoke, reconnects, `dropped_chunks`, and our own segments in µs: `to_gemini_us_*` = a
+  live 20 ms mic chunk reaching the session → written to Gemini's socket (`to_gemini_chunks` of them;
+  both renamed from `*_frames` at L6e, when the unit changed), `to_guest_us_*` = a Gemini frame read →
   written to each guest's WebSocket). A silent minute logs nothing.
-- `first_voiced_ms` (#999 L6a): EVERY onset (a voiced input frame after `ONSET_GAP` 1.5 s quiet) waits
+- `first_voiced_ms` (#999 L6a): EVERY onset (a voiced input chunk after `ONSET_GAP` 1.5 s quiet) waits
   in `Session::onsets` for the first VOICED output chunk that follows the model's own pause
   (`OUTPUT_GAP` 750 ms of unvoiced output audio, or 750 ms with no voiced output); speech before such a
   pause is the previous phrase's backlog. 750 ms from replaying R2 (0 ms read 0.0–0.2 s backlog, 500 ms
@@ -157,9 +164,14 @@ engine: "FINDING R2" (`gemini-3.5-live-translate-preview`, 3.2–3.6 s phrase-en
 ## Tests
 
 - Rust: `listen/translate/test_fake.rs` = the scripted fake Gemini (duplex `Connector`, records
-  headers / setups / audio count, answers 100 ms of audio + `w<n> ` + a handle per audio message;
-  `Script` = close on setup, goAway after n, close after n, idle cut after a time, deaf after n,
-  late speech after a goAway). Session tests on the paused clock; the session's 1 s tick starts with
+  headers / setups / audio SAMPLES per connection and every message's size + arrival; counts in
+  100 ms "units" of input whatever the chunk size: answers 100 ms of audio + `w<n> ` + a handle the
+  moment unit n STARTS, `Script` triggers (goAway / close after n, deaf after n, `quiet` ranges)
+  count units, goAway / close fire once unit n is fully heard; idle cut after a time, late speech
+  after a goAway). The session tests `feed` 20 ms chunks every 20 ms (`count` = 100 ms steps) and
+  assert exact SAMPLES (`ms100(n)`), never whole units (a floor hides up to 4 extra chunks); a wait
+  for audio is a `timeout` around a `sleep` loop (the paused clock moves, a regression fails instead
+  of spinning). Session tests on the paused clock; the session's 1 s tick starts with
   the session, so a time rule (`NO_ANSWER`, stalls) fires on the first WHOLE second past its bound —
   feed past it (the deaf test feeds 12.5 s for a 10 s rule + 1 s retry), never shorten the rule;
   router tests (`router/listen_guest/tests.rs`) on a real loopback server, incl. the guest

@@ -1,9 +1,13 @@
 //! A scripted fake Gemini Live server over `tokio::io::duplex` (#999 L1),
 //! shared by the session tests and the guest stream's router tests: every
 //! connection takes the next [`Script`], the upgrade headers and the setup are
-//! kept, every audio message is counted and answered with 100 ms of 24 kHz
-//! audio (speech level, or the model's near-silence for the messages a
-//! [`Script::quiet`] range names), a text fragment and a new resumption handle.
+//! kept, and the audio it hears is counted in SAMPLES (every message's size
+//! and arrival kept too). Like the model, it answers in audio time, whatever
+//! the chunk size: every 100 ms of input ("unit", 1600 samples) is answered the
+//! moment its first sample arrives with 100 ms of 24 kHz audio (speech level,
+//! or the model's near-silence for the units a [`Script::quiet`] range names),
+//! a text fragment and a new resumption handle (#999 L6e: the session sends
+//! 20 ms chunks, the scenarios keep their 100 ms numbers).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,19 +38,19 @@ use crate::listen::soniox::conn::{handshake, ConnectError, Connector, WsStream};
 pub(crate) struct Script {
     /// Close right after the setup with this code + reason (a refused key).
     pub(crate) close_on_setup: Option<(u16, &'static str)>,
-    /// After this many audio messages, send a `goAway`.
+    /// After this many units of audio (100 ms each) heard, send a `goAway`.
     pub(crate) go_away_after: Option<usize>,
-    /// After this many audio messages, close with code + reason.
+    /// After this many units heard, close with code + reason.
     pub(crate) close_after: Option<(usize, u16, &'static str)>,
     /// Gemini's idle cut: `1008 "Session closed due to client inactivity."`
     /// this long after the setup when no audio came since (or ever).
     pub(crate) idle_cut_after: Option<Duration>,
-    /// After this many audio messages, read on but never answer again.
+    /// After this many units, read on but never answer again.
     pub(crate) deaf_after: Option<usize>,
     /// After a `goAway`, this long later send 5 more speech chunks (first
     /// sample 30 000) — a replaced connection still speaking its backlog.
     pub(crate) late_speech_after_go_away: Option<Duration>,
-    /// The audio messages (1-based) answered with near-silence, as the real
+    /// The units (1-based) answered with near-silence, as the real
     /// model streams between phrases (#999 L6a): its latency to speech.
     pub(crate) quiet: Vec<std::ops::Range<usize>>,
 }
@@ -60,9 +64,14 @@ pub(crate) struct FakeGemini {
     connects: AtomicUsize,
     pub(crate) headers: Mutex<Vec<HeaderMap>>,
     setups: Mutex<Vec<serde_json::Value>>,
-    /// Audio messages per connection (index = connection).
+    /// Audio samples heard per connection (index = connection).
     audio: Mutex<Vec<usize>>,
+    /// Every audio message: its samples and when it arrived.
+    messages: Mutex<Vec<(usize, tokio::time::Instant)>>,
 }
+
+/// One 100 ms unit of 16 kHz input.
+const UNIT: usize = 1_600;
 
 impl FakeGemini {
     pub(crate) fn new(scripts: Vec<Script>) -> Arc<Self> {
@@ -77,8 +86,13 @@ impl FakeGemini {
     pub(crate) fn setups(&self) -> Vec<serde_json::Value> {
         self.setups.lock().unwrap().clone()
     }
-    pub(crate) fn audio(&self) -> Vec<usize> {
+    /// The samples heard per connection.
+    pub(crate) fn audio_samples(&self) -> Vec<usize> {
         self.audio.lock().unwrap().clone()
+    }
+    /// Every audio message's samples and arrival, in order.
+    pub(crate) fn messages(&self) -> Vec<(usize, tokio::time::Instant)> {
+        self.messages.lock().unwrap().clone()
     }
 }
 
@@ -113,7 +127,7 @@ pub(crate) fn pcm(mark: i16, voiced: bool) -> Vec<u8> {
     samples.iter().flat_map(|s| s.to_le_bytes()).collect()
 }
 
-/// The fake's answer to the `n`-th audio message: 100 ms of 24 kHz audio
+/// The fake's answer to the `n`-th unit of input: 100 ms of 24 kHz audio
 /// whose first sample is `n`, the text `w<n> ` and a new handle.
 fn answer(conn: usize, n: usize, voiced: bool) -> Vec<Message> {
     let pcm = pcm(i16::try_from(n).unwrap_or(i16::MAX), voiced);
@@ -152,7 +166,7 @@ async fn serve(fake: Arc<FakeGemini>, conn: usize, io: DuplexStream, script: Scr
     let _ = ws
         .send(Message::binary(b"{\"setupComplete\":{}}".to_vec()))
         .await;
-    let mut n = 0;
+    let mut heard = 0;
     let mut late_at: Option<tokio::time::Instant> = None;
     let mut idle_at = script
         .idle_cut_after
@@ -176,39 +190,71 @@ async fn serve(fake: Arc<FakeGemini>, conn: usize, io: DuplexStream, script: Scr
         };
         let Some(Ok(frame)) = frame else { return };
         let Message::Text(text) = frame else { continue };
-        if !text.as_str().contains("realtimeInput") {
+        let Some(samples) = audio_samples(text.as_str()) else {
             continue;
-        }
-        n += 1;
-        fake.audio.lock().unwrap()[conn] += 1;
+        };
+        fake.audio.lock().unwrap()[conn] += samples;
+        fake.messages
+            .lock()
+            .unwrap()
+            .push((samples, tokio::time::Instant::now()));
         idle_at = script
             .idle_cut_after
             .map(|after| tokio::time::Instant::now() + after);
-        if script.deaf_after.is_some_and(|after| n > after) {
-            continue;
-        }
-        let voiced = !script.quiet.iter().any(|range| range.contains(&n));
-        for message in answer(conn, n, voiced) {
-            if ws.send(message).await.is_err() {
-                return;
+        let before = heard;
+        heard += samples;
+        // every unit this message starts is answered now
+        for n in before.div_ceil(UNIT) + 1..=heard.div_ceil(UNIT) {
+            if script.deaf_after.is_some_and(|after| n > after) {
+                continue;
+            }
+            let voiced = !script.quiet.iter().any(|range| range.contains(&n));
+            for message in answer(conn, n, voiced) {
+                if ws.send(message).await.is_err() {
+                    return;
+                }
             }
         }
-        if script.go_away_after == Some(n) {
-            let away = serde_json::json!({"goAway": {"timeLeft": "10s"}});
-            let _ = ws
-                .send(Message::binary(away.to_string().into_bytes()))
-                .await;
-            late_at = script
-                .late_speech_after_go_away
-                .map(|after| tokio::time::Instant::now() + after);
-        }
-        if let Some((after, code, reason)) = script.close_after {
-            if after == n {
-                let _ = ws.send(close(code, reason)).await;
+        // the triggers fire once a unit is fully heard
+        for n in before / UNIT + 1..=heard / UNIT {
+            if !unit_heard(&mut ws, &script, n, &mut late_at).await {
                 return;
             }
         }
     }
+}
+
+/// The script's reaction to `n` units fully heard: a `goAway`, a close.
+/// `false` = the connection ends.
+async fn unit_heard(
+    ws: &mut tokio_tungstenite::WebSocketStream<DuplexStream>,
+    script: &Script,
+    n: usize,
+    late_at: &mut Option<tokio::time::Instant>,
+) -> bool {
+    if script.go_away_after == Some(n) {
+        let away = serde_json::json!({"goAway": {"timeLeft": "10s"}});
+        let _ = ws
+            .send(Message::binary(away.to_string().into_bytes()))
+            .await;
+        *late_at = script
+            .late_speech_after_go_away
+            .map(|after| tokio::time::Instant::now() + after);
+    }
+    if let Some((after, code, reason)) = script.close_after {
+        if after == n {
+            let _ = ws.send(close(code, reason)).await;
+            return false;
+        }
+    }
+    true
+}
+
+/// The samples of a `realtimeInput` audio message (`None`: not audio).
+fn audio_samples(text: &str) -> Option<usize> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let data = value["realtimeInput"]["audio"]["data"].as_str()?;
+    Some(BASE64.decode(data).ok()?.len() / 2)
 }
 
 async fn sleep_until(at: Option<tokio::time::Instant>) {

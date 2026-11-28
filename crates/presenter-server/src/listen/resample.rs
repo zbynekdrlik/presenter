@@ -15,8 +15,12 @@
 //! - mono in, mono out (`mic_chain` picks the channel first).
 //!
 //! 16 kHz passes through; every other rate of the VBAN list whose 20 ms is a
-//! whole number of frames is converted (all but 11 025 Hz, refused). Output:
-//! 100 ms frames of 1600 samples, `f32_to_int16` (songplayer's symmetric scale).
+//! whole number of frames is converted (all but 11 025 Hz, refused). Output
+//! (`f32_to_int16`, songplayer's symmetric scale), cut from ONE 16 kHz stream:
+//! every 20 ms chunk of 320 samples the moment it is complete (#999 L6e: the
+//! guests' translation sends these, so an onset never waits for a 100 ms
+//! frame), and every 5 chunks the 100 ms frame of 1600 samples they make up
+//! (everything else — the ASR, the recorder, the mic health — reads these).
 
 use presenter_core::audio::vban::f32_to_int16;
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
@@ -27,7 +31,16 @@ const OUTPUT_RATE_HZ: u32 = 16_000;
 /// One 100 ms frame at 16 kHz.
 const FRAME_SAMPLES: usize = 1_600;
 const CHUNKS_PER_SECOND: u32 = 50;
-const CHUNK_OUT: usize = (OUTPUT_RATE_HZ / CHUNKS_PER_SECOND) as usize;
+/// One 20 ms chunk at 16 kHz (320 samples); 5 make a frame.
+pub(crate) const CHUNK_OUT: usize = (OUTPUT_RATE_HZ / CHUNKS_PER_SECOND) as usize;
+
+/// What one push completed: the 20 ms chunks and the 100 ms frames, both in
+/// stream order (a frame is the concatenation of its 5 chunks).
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Converted {
+    pub(crate) chunks: Vec<Vec<i16>>,
+    pub(crate) frames: Vec<Vec<i16>>,
+}
 
 pub(crate) struct Resampler16k {
     /// `None` = a 16 kHz stream, passed through.
@@ -35,7 +48,10 @@ pub(crate) struct Resampler16k {
     chunk_in: usize,
     pending_in: Vec<f32>,
     chunk_out: Vec<f32>,
+    /// Output samples not yet in a chunk (< 320 after a push).
     pending_out: Vec<i16>,
+    /// The chunks of the frame being filled (< 1600 samples after a push).
+    frame_fill: Vec<i16>,
 }
 
 impl Resampler16k {
@@ -45,12 +61,14 @@ impl Resampler16k {
             chunk_in: (rate_hz / CHUNKS_PER_SECOND) as usize,
             pending_in: Vec::new(),
             chunk_out: vec![0.0; CHUNK_OUT],
-            pending_out: Vec::with_capacity(2 * FRAME_SAMPLES),
+            pending_out: Vec::with_capacity(2 * CHUNK_OUT),
+            frame_fill: Vec::with_capacity(FRAME_SAMPLES),
         })
     }
 
-    /// Mono samples at the input rate in; every completed 100 ms frame out.
-    pub(crate) fn push(&mut self, mono: &[f32]) -> Vec<Vec<i16>> {
+    /// Mono samples at the input rate in; every completed 20 ms chunk and
+    /// 100 ms frame out.
+    pub(crate) fn push(&mut self, mono: &[f32]) -> Converted {
         match self.fft.as_mut() {
             None => self
                 .pending_out
@@ -72,7 +90,7 @@ impl Resampler16k {
                 self.pending_in.drain(..used);
             }
         }
-        self.take_frames()
+        self.take_converted()
     }
 
     /// The converter's delay in 16 kHz samples (0 when passing through).
@@ -81,11 +99,21 @@ impl Resampler16k {
         self.fft.as_ref().map_or(0, |fft| fft.output_delay())
     }
 
-    fn take_frames(&mut self) -> Vec<Vec<i16>> {
-        let whole = self.pending_out.len() / FRAME_SAMPLES;
-        (0..whole)
-            .map(|_| self.pending_out.drain(..FRAME_SAMPLES).collect())
-            .collect()
+    fn take_converted(&mut self) -> Converted {
+        let mut out = Converted::default();
+        let whole = self.pending_out.len() / CHUNK_OUT;
+        let mut taken = self.pending_out.drain(..whole * CHUNK_OUT);
+        for _ in 0..whole {
+            let chunk: Vec<i16> = taken.by_ref().take(CHUNK_OUT).collect();
+            self.frame_fill.extend_from_slice(&chunk);
+            out.chunks.push(chunk);
+            if self.frame_fill.len() == FRAME_SAMPLES {
+                let frame =
+                    std::mem::replace(&mut self.frame_fill, Vec::with_capacity(FRAME_SAMPLES));
+                out.frames.push(frame);
+            }
+        }
+        out
     }
 }
 
@@ -145,14 +173,14 @@ mod tests {
     fn convert(resampler: &mut Resampler16k, input: &[f32]) -> Vec<Vec<i16>> {
         input
             .chunks(256)
-            .flat_map(|piece| resampler.push(piece))
+            .flat_map(|piece| resampler.push(piece).frames)
             .collect()
     }
 
     #[test]
     fn a_16k_stream_passes_through_unconverted() {
         let mut resampler = Resampler16k::new(16_000).unwrap();
-        let frames = resampler.push(&[0.5; 3_200]);
+        let frames = resampler.push(&[0.5; 3_200]).frames;
         assert_eq!(frames.len(), 2);
         assert!(frames.iter().flatten().all(|&s| s == 16_384));
         assert_eq!(resampler.delay_frames(), 0);
@@ -251,8 +279,56 @@ mod tests {
         let input = sine(48_000, 440.0, 0.5, 0.5);
         let frames: Vec<Vec<i16>> = input
             .chunks(97)
-            .flat_map(|piece| resampler.push(piece))
+            .flat_map(|piece| resampler.push(piece).frames)
             .collect();
         assert_eq!(frames.len(), 5);
+    }
+
+    /// #999 L6e: a 20 ms chunk leaves the moment its 320 samples exist —
+    /// never held for the 100 ms frame — and the frames are exactly their
+    /// chunks, so every 100 ms consumer reads what it read before.
+    #[test]
+    fn a_chunk_leaves_as_soon_as_it_is_complete_and_five_make_a_frame() {
+        for rate in [16_000, 48_000] {
+            let mut resampler = Resampler16k::new(rate).unwrap();
+            let per_chunk = (rate / CHUNKS_PER_SECOND) as usize;
+            let input = sine(rate, 440.0, 0.5, 0.2);
+            let mut chunks = Vec::new();
+            let mut frames = Vec::new();
+            for (k, piece) in input.chunks(per_chunk).enumerate() {
+                let out = resampler.push(piece);
+                assert_eq!(
+                    out.chunks.len(),
+                    1,
+                    "{rate} Hz: 20 ms in, one chunk out at once"
+                );
+                assert_eq!(out.chunks[0].len(), CHUNK_OUT);
+                assert_eq!(
+                    out.frames.len(),
+                    usize::from(k % 5 == 4),
+                    "{rate} Hz: a frame per 5 chunks"
+                );
+                chunks.extend(out.chunks);
+                frames.extend(out.frames);
+            }
+            assert_eq!(chunks.len(), 10);
+            assert_eq!(frames.len(), 2);
+            assert_eq!(
+                frames.concat(),
+                chunks.concat(),
+                "{rate} Hz: the same stream"
+            );
+        }
+        let mut resampler = Resampler16k::new(16_000).unwrap();
+        assert_eq!(
+            resampler.push(&[0.5; 319]),
+            Converted::default(),
+            "319 samples: nothing yet"
+        );
+        assert_eq!(
+            resampler.push(&[0.5; 1]).chunks.len(),
+            1,
+            "the 320th completes the chunk"
+        );
     }
 }
